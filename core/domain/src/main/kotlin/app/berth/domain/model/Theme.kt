@@ -60,6 +60,39 @@ data class TerminalTheme(
 
     fun toJson(): String = json.encodeToString(serializer(), this)
 
+    /** The colour in [slot]; null only for [ThemeSlot.Bold] when it inherits. */
+    fun color(slot: ThemeSlot): Int? = when (slot) {
+        is ThemeSlot.Ansi -> ansi[slot.index]
+        ThemeSlot.Background -> background
+        ThemeSlot.Foreground -> foreground
+        ThemeSlot.Cursor -> cursor
+        ThemeSlot.CursorText -> cursorText
+        ThemeSlot.Selection -> selection
+        ThemeSlot.Bold -> bold
+        ThemeSlot.Links -> links
+    }
+
+    /** A copy with [slot] set to [rgb]; null clears [ThemeSlot.Bold] back to inherit and is ignored elsewhere. */
+    fun with(slot: ThemeSlot, rgb: Int?): TerminalTheme {
+        val v = rgb?.and(0xFFFFFF)
+        return when (slot) {
+            is ThemeSlot.Ansi -> if (v == null) this else copy(ansi = ansi.toMutableList().also { it[slot.index] = v })
+            ThemeSlot.Background -> if (v == null) this else copy(background = v)
+            ThemeSlot.Foreground -> if (v == null) this else copy(foreground = v)
+            ThemeSlot.Cursor -> if (v == null) this else copy(cursor = v)
+            ThemeSlot.CursorText -> if (v == null) this else copy(cursorText = v)
+            ThemeSlot.Selection -> if (v == null) this else copy(selection = v)
+            ThemeSlot.Bold -> copy(bold = v)
+            ThemeSlot.Links -> if (v == null) this else copy(links = v)
+        }
+    }
+
+    /** An editable copy under a fresh id; stock themes are duplicated rather than edited (UX spec C19). */
+    fun duplicate(newId: String, newName: String = "$name copy"): TerminalTheme = copy(id = newId, name = newName, builtIn = false)
+
+    /** True when the background is dark enough that light text reads on it. */
+    val isDark: Boolean get() = ColorMath.luminance(background) < 0.4
+
     companion object {
         private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
 
@@ -67,6 +100,10 @@ data class TerminalTheme(
 
         const val BERTH_DARK_ID = "berth-dark"
         const val BERTH_LIGHT_ID = "berth-light"
+        const val CATPPUCCIN_MOCHA_ID = "catppuccin-mocha"
+        const val GRUVBOX_DARK_ID = "gruvbox-dark"
+        const val NORD_ID = "nord"
+        const val SOLARIZED_DARK_ID = "solarized-dark"
 
         val BERTH_DARK = TerminalTheme(
             id = BERTH_DARK_ID,
@@ -102,7 +139,181 @@ data class TerminalTheme(
             builtIn = true,
         )
 
-        val builtIns: List<TerminalTheme> = listOf(BERTH_DARK, BERTH_LIGHT)
+        val CATPPUCCIN_MOCHA = TerminalTheme(
+            id = CATPPUCCIN_MOCHA_ID,
+            name = "Catppuccin Mocha",
+            ansi = listOf(
+                0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
+                0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
+            ),
+            background = 0x1E1E2E,
+            foreground = 0xCDD6F4,
+            cursor = 0xF5E0DC,
+            cursorText = 0x1E1E2E,
+            selection = 0x585B70,
+            links = 0x89B4FA,
+            suggestedAccent = 0xCBA6F7,
+            builtIn = true,
+        )
+
+        val GRUVBOX_DARK = TerminalTheme(
+            id = GRUVBOX_DARK_ID,
+            name = "Gruvbox Dark",
+            ansi = listOf(
+                0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
+                0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
+            ),
+            background = 0x282828,
+            foreground = 0xEBDBB2,
+            cursor = 0xEBDBB2,
+            cursorText = 0x282828,
+            selection = 0x504945,
+            links = 0x83A598,
+            suggestedAccent = 0xFE8019,
+            builtIn = true,
+        )
+
+        val NORD = TerminalTheme(
+            id = NORD_ID,
+            name = "Nord",
+            ansi = listOf(
+                0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
+                0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
+            ),
+            background = 0x2E3440,
+            foreground = 0xD8DEE9,
+            cursor = 0xD8DEE9,
+            cursorText = 0x2E3440,
+            selection = 0x434C5E,
+            links = 0x88C0D0,
+            suggestedAccent = 0x88C0D0,
+            builtIn = true,
+        )
+
+        val SOLARIZED_DARK = TerminalTheme(
+            id = SOLARIZED_DARK_ID,
+            name = "Solarized Dark",
+            ansi = listOf(
+                0x073642, 0xDC322F, 0x859900, 0xB58900, 0x268BD2, 0xD33682, 0x2AA198, 0xEEE8D5,
+                0x002B36, 0xCB4B16, 0x586E75, 0x657B83, 0x839496, 0x6C71C4, 0x93A1A1, 0xFDF6E3,
+            ),
+            background = 0x002B36,
+            foreground = 0x839496,
+            cursor = 0x839496,
+            cursorText = 0x002B36,
+            selection = 0x073642,
+            links = 0x268BD2,
+            suggestedAccent = 0xB58900,
+            builtIn = true,
+        )
+
+        /** Stock themes: Berth's own pair plus a small curated set. They cannot be deleted, only duplicated. */
+        val builtIns: List<TerminalTheme> = listOf(BERTH_DARK, BERTH_LIGHT, CATPPUCCIN_MOCHA, GRUVBOX_DARK, NORD, SOLARIZED_DARK)
+    }
+}
+
+/** One editable colour of a [TerminalTheme]; the palette has sixteen, the rest are named. */
+sealed interface ThemeSlot {
+    val title: String
+
+    data class Ansi(val index: Int) : ThemeSlot {
+        init {
+            require(index in 0..15)
+        }
+        override val title: String get() = ANSI_NAMES[index]
+    }
+
+    data object Background : ThemeSlot { override val title = "Background" }
+    data object Foreground : ThemeSlot { override val title = "Foreground" }
+    data object Cursor : ThemeSlot { override val title = "Cursor" }
+    data object CursorText : ThemeSlot { override val title = "Cursor text" }
+    data object Selection : ThemeSlot { override val title = "Selection" }
+    data object Bold : ThemeSlot { override val title = "Bold" }
+    data object Links : ThemeSlot { override val title = "Links" }
+
+    companion object {
+        val ANSI_NAMES = listOf(
+            "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White",
+            "Bright black", "Bright red", "Bright green", "Bright yellow", "Bright blue", "Bright magenta", "Bright cyan", "Bright white",
+        )
+        val named: List<ThemeSlot> = listOf(Background, Foreground, Cursor, CursorText, Selection, Bold, Links)
+    }
+}
+
+/** sRGB helpers for the colour panel: HSL round-trips, relative luminance and WCAG contrast. */
+object ColorMath {
+    fun red(rgb: Int): Int = (rgb shr 16) and 0xFF
+    fun green(rgb: Int): Int = (rgb shr 8) and 0xFF
+    fun blue(rgb: Int): Int = rgb and 0xFF
+
+    fun rgb(r: Int, g: Int, b: Int): Int = (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+
+    /** Hue 0..360, saturation and lightness 0..1. */
+    fun toHsl(rgb: Int): FloatArray {
+        val r = red(rgb) / 255f
+        val g = green(rgb) / 255f
+        val b = blue(rgb) / 255f
+        val max = maxOf(r, g, b)
+        val min = minOf(r, g, b)
+        val l = (max + min) / 2f
+        if (max == min) return floatArrayOf(0f, 0f, l)
+        val d = max - min
+        val s = if (l > 0.5f) d / (2f - max - min) else d / (max + min)
+        var h = when (max) {
+            r -> (g - b) / d + (if (g < b) 6f else 0f)
+            g -> (b - r) / d + 2f
+            else -> (r - g) / d + 4f
+        }
+        h *= 60f
+        return floatArrayOf(h, s, l)
+    }
+
+    fun fromHsl(h: Float, s: Float, l: Float): Int {
+        val hh = ((h % 360f) + 360f) % 360f / 360f
+        val ss = s.coerceIn(0f, 1f)
+        val ll = l.coerceIn(0f, 1f)
+        if (ss == 0f) {
+            val v = Math.round(ll * 255f)
+            return rgb(v, v, v)
+        }
+        val q = if (ll < 0.5f) ll * (1f + ss) else ll + ss - ll * ss
+        val p = 2f * ll - q
+        fun channel(t0: Float): Int {
+            var t = t0
+            if (t < 0f) t += 1f
+            if (t > 1f) t -= 1f
+            val v = when {
+                t < 1f / 6f -> p + (q - p) * 6f * t
+                t < 1f / 2f -> q
+                t < 2f / 3f -> p + (q - p) * (2f / 3f - t) * 6f
+                else -> p
+            }
+            return Math.round(v * 255f)
+        }
+        return rgb(channel(hh + 1f / 3f), channel(hh), channel(hh - 1f / 3f))
+    }
+
+    /** WCAG relative luminance, 0 (black) to 1 (white). */
+    fun luminance(rgb: Int): Double {
+        fun lin(c: Int): Double {
+            val v = c / 255.0
+            return if (v <= 0.03928) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(red(rgb)) + 0.7152 * lin(green(rgb)) + 0.0722 * lin(blue(rgb))
+    }
+
+    /** WCAG contrast ratio between two colours, 1..21. */
+    fun contrast(a: Int, b: Int): Double {
+        val la = luminance(a) + 0.05
+        val lb = luminance(b) + 0.05
+        return if (la > lb) la / lb else lb / la
+    }
+
+    /** Linear blend of [a] toward [b] by [t] in 0..1, per channel. */
+    fun mix(a: Int, b: Int, t: Float): Int {
+        val tt = t.coerceIn(0f, 1f)
+        fun ch(x: Int, y: Int) = Math.round(x * (1f - tt) + y * tt)
+        return rgb(ch(red(a), red(b)), ch(green(a), green(b)), ch(blue(a), blue(b)))
     }
 }
 
@@ -130,9 +341,29 @@ data class InterfaceTheme(
     val contrast: InterfaceContrast = InterfaceContrast.STANDARD,
     val density: Density = Density.COMFORTABLE,
     val useSystemFont: Boolean = false,
+    /** Multiplies every entry of the radius scale (A5); nested radii stay concentric because all scale together. */
+    val radiusScale: Float = 1f,
 ) {
+    fun toJson(): String = json.encodeToString(serializer(), this)
+
     companion object {
+        private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
+
+        fun fromJson(text: String): InterfaceTheme = json.decodeFromString(serializer(), text)
+
         val DEFAULT = InterfaceTheme()
+
+        const val MIN_RADIUS_SCALE = 0.5f
+        const val MAX_RADIUS_SCALE = 1.4f
+
+        /** Starting points for the appearance editor; each is the full set of interface choices. */
+        val presets: List<Pair<String, InterfaceTheme>> = listOf(
+            "Graphite" to InterfaceTheme(),
+            "Slate" to InterfaceTheme(tone = 0.85f, accent = AccentPreset.SLATE.rgb),
+            "Black" to InterfaceTheme(variant = InterfaceVariant.TRUE_BLACK, tone = 0.15f, accent = AccentPreset.COPPER.rgb),
+            "Moss" to InterfaceTheme(tone = 0.3f, accent = AccentPreset.MOSS.rgb, radiusScale = 0.7f),
+            "Paper" to InterfaceTheme(variant = InterfaceVariant.LIGHT, tone = 0.1f, accent = AccentPreset.COPPER.rgb),
+        )
     }
 }
 

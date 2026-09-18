@@ -11,6 +11,8 @@ data class Workspace(
     val monogram: String,
     /** Optional interface accent for this workspace as 0xRRGGBB; null inherits. */
     val accentRgb: Int? = null,
+    /** Terminal theme for sessions in this workspace; a host's own override wins, null inherits the app default. */
+    val terminalThemeId: String? = null,
     val sortOrder: Int = 0,
     /** Reconnect Live sessions at launch instead of restoring frames only. */
     val reconnectAtLaunch: Boolean = false,
