@@ -212,12 +212,7 @@ class TerminalSession(
         for (tunnel in pending.toList()) {
             if (conn == null || !conn.isConnected) break
             val slot = try {
-                val handle = when (tunnel.type) {
-                    TunnelType.LOCAL -> conn.startLocalForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
-                    TunnelType.REMOTE -> conn.startRemoteForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
-                    TunnelType.DYNAMIC -> conn.startDynamicForward(tunnel.bindAddress, tunnel.bindPort)
-                }
-                Slot(tunnel, handle, null)
+                Slot(tunnel, startForward(conn, tunnel), null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -235,6 +230,28 @@ class TerminalSession(
             publishTunnels(pending)
         }
         publishTunnels(emptyList())
+    }
+
+    /**
+     * Binds one forward. A port still held by the session that just handed the role over, or by
+     * this session's own previous connection, frees up within moments, so one bind failure gets a
+     * second try before it is reported.
+     */
+    private suspend fun startForward(conn: SshConnection, tunnel: Tunnel): ForwardHandle {
+        repeat(BIND_RETRIES) {
+            try {
+                return openForward(conn, tunnel)
+            } catch (e: BindException) {
+                delay(BIND_RETRY_DELAY_MS)
+            }
+        }
+        return openForward(conn, tunnel)
+    }
+
+    private suspend fun openForward(conn: SshConnection, tunnel: Tunnel): ForwardHandle = when (tunnel.type) {
+        TunnelType.LOCAL -> conn.startLocalForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
+        TunnelType.REMOTE -> conn.startRemoteForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
+        TunnelType.DYNAMIC -> conn.startDynamicForward(tunnel.bindAddress, tunnel.bindPort)
     }
 
     private fun publishTunnels(starting: List<Tunnel>) {
@@ -572,6 +589,8 @@ class TerminalSession(
     companion object {
         private const val CONNECT_TIMEOUT_MS = 45_000L
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
+        private const val BIND_RETRIES = 2
+        private const val BIND_RETRY_DELAY_MS = 250L
         private const val FRAME_VERSION = 1
         private const val MAX_FRAME_LINE = 4096
     }
