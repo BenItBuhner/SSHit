@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,15 +40,18 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedback
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -92,7 +96,9 @@ fun Deck(
     val layer = layers[index]
     var strip by remember { mutableStateOf<List<DeckKeyCode>?>(null) }
     val haptics = LocalHapticFeedback.current
-    val height = layout.heightDp.coerceIn(40, 52).dp
+    // The setting is the key height (A9: 44, range 40 to 52); the strip adds the 4 dp gap above and below.
+    val keyHeight = layout.heightDp.coerceIn(40, 52).dp
+    val rowHeight = keyHeight + DeckGap * 2
 
     Column(
         modifier
@@ -104,10 +110,10 @@ fun Deck(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(height)
+                    .height(rowHeight)
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 22.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .padding(horizontal = DeckEdge + GripWidth + DeckGap, vertical = DeckGap),
+                horizontalArrangement = Arrangement.spacedBy(DeckGap),
             ) {
                 for (k in keys) {
                     DeckKeyView(
@@ -125,9 +131,9 @@ fun Deck(
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(height)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .height(rowHeight)
+                .padding(horizontal = DeckEdge, vertical = DeckGap),
+            horizontalArrangement = Arrangement.spacedBy(DeckGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Grip(
@@ -197,13 +203,22 @@ private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
     return copy(display = name.take(12))
 }
 
+/** Gap between Deck keys and between the keys and the strip's edges (A11). */
+private val DeckGap = 4.dp
+
+/** Deck strip side padding. */
+private val DeckEdge = 8.dp
+
+/** Touch column of the Grip; the 6 × 24 pill is centred in it. */
+private val GripWidth = 20.dp
+
 @Composable
 private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit) {
     val c = Berth.colors
     val color by animateColorAsState(if (accent) c.accent else c.text3, tween(120), label = "grip")
     Box(
         Modifier
-            .width(14.dp)
+            .width(GripWidth)
             .fillMaxHeight()
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -249,6 +264,7 @@ fun DeckKeyView(
     labelPadding: Dp = 0.dp,
 ) {
     val c = Berth.colors
+    val patterns = rememberDeckHaptics(haptics)
     var pressed by remember { mutableStateOf(false) }
     var swipe by remember { mutableStateOf(0) }
     val modifierAction = key.tap as? DeckAction.Modifier
@@ -308,14 +324,14 @@ fun DeckKeyView(
                                     holdFired = true
                                     val hold = k.hold
                                     if (hold != null) {
-                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        patterns.hold()
                                         currentOnHold(hold)
                                     } else if (repeating) {
                                         k.tap?.let(currentOnAction)
                                     }
                                 } else if (repeating) {
                                     k.tap?.let(currentOnAction)
-                                    haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                                    patterns.repeatTick()
                                 }
                                 continue
                             }
@@ -328,10 +344,9 @@ fun DeckKeyView(
                                         else -> k.tap
                                     }
                                     if (action != null) {
-                                        haptics.performHapticFeedback(
-                                            if (action is DeckAction.Modifier) HapticFeedbackType.Confirm else HapticFeedbackType.VirtualKey,
-                                        )
                                         currentOnAction(action)
+                                        // The latch has settled by now, so the pattern can tell one-shot from lock.
+                                        if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
                                     }
                                 }
                                 break
@@ -354,30 +369,33 @@ fun DeckKeyView(
             },
     ) {
         val secondary = key.secondaryLabel
-        val mono = key.tap is DeckAction.Text && key.label.length <= 2
+        val previewing = swipe == 1 && secondary != null
+        val shown = if (previewing) secondary!! else key.label
         Text(
-            text = if (swipe == 1 && secondary != null) secondary else key.label,
-            style = if (mono) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
+            text = shown,
+            style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
             color = labelColor,
             maxLines = 1,
             modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
         )
-        if (secondary != null && swipe != 1) {
+        if (secondary != null && !previewing) {
+            // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
             Text(
                 text = secondary,
-                style = BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp),
+                style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
                 color = secondaryColor,
                 maxLines = 1,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 3.dp, end = 5.dp),
+                    .padding(top = 3.dp, end = 6.dp),
             )
         }
         if (latchState == LatchState.LOCKED) {
+            // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
             Box(
                 Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 6.dp)
+                    .align(Alignment.Center)
+                    .offset(y = LockBarOffset)
                     .size(16.dp, 2.dp)
                     .clip(CircleShape)
                     .background(c.onAccent),
@@ -385,6 +403,12 @@ fun DeckKeyView(
         }
     }
 }
+
+/** Label-centre to lock-bar-centre distance: half the 13 sp label's cap height plus the 3 dp gap plus half the bar. */
+private val LockBarOffset = 9.dp
+
+/** Symbols and key chords (`|`, `\`, `^C`, `M-x`) set in Mono; words (`Esc`, `S-Tab`, `Home`) stay in Plex. */
+private fun String.isSymbolLabel(): Boolean = length <= 2 || startsWith('^') || startsWith("M-") || none { it.isLetter() }
 
 /** The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed. */
 @Composable
@@ -395,6 +419,7 @@ fun Nub(
     onArrow: (TerminalKey) -> Unit,
 ) {
     val c = Berth.colors
+    val patterns = rememberDeckHaptics(haptics)
     var active by remember { mutableStateOf<TerminalKey?>(null) }
     var pressed by remember { mutableStateOf(false) }
     val currentOnArrow by rememberUpdatedState(onArrow)
@@ -422,14 +447,14 @@ fun Nub(
                                 if (event == null) {
                                     direction?.let {
                                         currentOnArrow(it)
-                                        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                                        patterns.nubStep()
                                     }
                                     continue
                                 }
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) {
                                     if (!everMoved) {
-                                        haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                                        patterns.keyTap()
                                         currentOnArrow(TerminalKey.UP)
                                     }
                                     break
@@ -448,7 +473,7 @@ fun Nub(
                                     active = next
                                     if (next != null) {
                                         currentOnArrow(next)
-                                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                        patterns.nubStep()
                                     }
                                 }
                                 change.consume()
@@ -498,6 +523,7 @@ private fun LayerKey(
     onPrevious: () -> Unit,
 ) {
     val c = Berth.colors
+    val patterns = rememberDeckHaptics(haptics)
     var pressed by remember { mutableStateOf(false) }
     // The gesture block only restarts when `enabled` changes; the callbacks close over the current layer index.
     val currentOnNext by rememberUpdatedState(onNext)
@@ -518,7 +544,7 @@ private fun LayerKey(
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) {
-                                haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                                patterns.keyTap()
                                 if (up) currentOnPrevious() else currentOnNext()
                                 break
                             }
@@ -532,11 +558,14 @@ private fun LayerKey(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text("\u22EF", style = BerthType.label, color = c.text2)
+        BerthIcon(BerthIcons.moreHoriz, tint = c.text2)
     }
 }
 
-/** Visible when a hardware keyboard is attached: layer name plus latched modifiers, 20 dp tall. */
+/**
+ * The collapsed Deck (C4 "hardware keyboard attached", also the hidden-Deck state in either
+ * orientation): layer name plus latched modifiers on a 20 dp strip; tap to expand.
+ */
 @Composable
 fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, modifier: Modifier = Modifier) {
     val c = Berth.colors
@@ -550,8 +579,12 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .fillMaxWidth()
             .height(20.dp)
             .background(c.surface1)
+            .semantics {
+                contentDescription = "Deck collapsed, tap to show it"
+                role = Role.Button
+            }
             .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(); onExpand() } }
-            .padding(horizontal = 22.dp),
+            .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption, color = c.text3)

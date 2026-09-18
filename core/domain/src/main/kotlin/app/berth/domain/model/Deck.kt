@@ -97,6 +97,8 @@ data class DeckKey(
             is DeckAction.Key -> keyLabel(u.key)
             is DeckAction.Text -> u.text
             is DeckAction.Combo -> u.combo.replace("CTRL ", "^").replace("SHIFT TAB", "S-Tab").replace("ALT ", "M-")
+                // Chords on a single letter read as `^C`, `M-X` (UX spec C4), whatever case the target was typed in.
+                .let { if (it.length >= 2 && it.last().isLetter() && (it.length == 2 || it.startsWith("M-") && it.length == 3)) it.uppercase() else it }
             is DeckAction.Macro -> u.macro.replace("PREFIX", "Pfx")
             null -> null
             else -> "..."

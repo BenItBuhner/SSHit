@@ -26,7 +26,7 @@ class DomainModelTest {
         assertEquals(listOf("Base", "Symbols", "Nav/Fn", "tmux", "Snippets"), layout.layers.map { it.name })
         val base = layout.layers[0]
         assertEquals(listOf("Esc", "Tab", "Ctrl", "Alt", "-", "/", "Nub"), base.keys.map { it.label })
-        assertEquals(listOf("`", "S-Tab", "^c", "^r", "|", "\\", null), base.keys.map { it.secondaryLabel })
+        assertEquals(listOf("`", "S-Tab", "^C", "^R", "|", "\\", null), base.keys.map { it.secondaryLabel })
         assertEquals("CTRL b", layout.layers[3].prefix)
 
         val json = layout.toJson()

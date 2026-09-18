@@ -433,10 +433,11 @@ class BerthScreenshotTest {
         settle(1_500)
         capture("stage-live-ls-color")
 
-        // One tap arms Ctrl for the next key; a second tap locks it, a third releases it.
+        // One tap arms Ctrl for the next key; a second tap locks it (the bar under the label), a third releases it.
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
         capture("stage-live-ctrl-latched")
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
+        capture("stage-live-ctrl-locked")
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
 
         session.sendText("clear && htop\n")

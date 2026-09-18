@@ -1,5 +1,6 @@
 package app.berth.android.ui.stage
 
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -7,6 +8,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,15 +17,20 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -40,18 +48,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
-import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.Swatch
@@ -70,8 +86,9 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
- * The terminal on stage: ribbon, cell-accurate terminal, state pill and the Deck. The Deck sits on
- * the keyboard's top edge through insets so it never jumps during IME animations.
+ * The terminal on stage: ribbon, cell-accurate terminal, state pill and the Deck. The ribbon owns
+ * the status-bar inset and the bottom chrome owns the keyboard and navigation-bar insets, so both
+ * surfaces run edge to edge (A4) and the Deck rides the keyboard's top edge without jumping.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -100,14 +117,27 @@ fun StageScreen(
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
     val imeVisible = WindowInsets.isImeVisible
-    val landscape = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
     val snippets by vm.snippets.collectAsState()
     val pinnedSnippets = remember(snippets, record.hostId, record.workspaceId) {
         snippets.filter { it.pinnedToDeck && it.visibleFor(record.hostId, record.workspaceId) }.sortedBy { it.name.lowercase() }
     }
     var pendingSnippet by remember { mutableStateOf<PendingSnippet?>(null) }
+    val configuration = LocalConfiguration.current
+    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
+        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    val patterns = rememberDeckHaptics()
+    val now = ageTicker()
 
-    var deckVisible by rememberSaveable { mutableStateOf(true) }
+    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
+    // and the user's own choice survives otherwise.
+    var deckVisible by rememberSaveable { mutableStateOf(!hardwareKeyboard) }
+    var seenHardwareKeyboard by rememberSaveable { mutableStateOf(hardwareKeyboard) }
+    LaunchedEffect(hardwareKeyboard) {
+        if (hardwareKeyboard != seenHardwareKeyboard) {
+            seenHardwareKeyboard = hardwareKeyboard
+            deckVisible = !hardwareKeyboard
+        }
+    }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = remember(session.id) { TerminalViewport() }
@@ -125,7 +155,10 @@ fun StageScreen(
             onAppAction = { action ->
                 when (action) {
                     DeckAppAction.HIDE_KEYBOARD -> keyboard?.hide()
-                    DeckAppAction.PASTE -> clipboard.getText()?.text?.let { session.paste(it) }
+                    DeckAppAction.PASTE -> clipboard.getText()?.text?.let {
+                        session.paste(it)
+                        patterns.paste()
+                    }
                     DeckAppAction.NEXT_SESSION -> onNextSession()
                     DeckAppAction.PREVIOUS_SESSION -> onPreviousSession()
                     DeckAppAction.DETACH -> vm.detach(session.id)
@@ -143,6 +176,11 @@ fun StageScreen(
         session.markSeen()
         viewport.scrollOffset = 0
     }
+    // Bell while on stage is haptic only (C2), unless the host mutes it.
+    LaunchedEffect(session.id, host.muteBell) {
+        if (host.muteBell) return@LaunchedEffect
+        session.bell.collect { patterns.bell() }
+    }
 
     BackHandler(enabled = imeVisible) { keyboard?.hide() }
 
@@ -152,18 +190,18 @@ fun StageScreen(
         SessionState.CONNECTING, SessionState.IDLE -> 0.6f
         else -> 0.8f
     }
+    val deckStateOk = record.state != SessionState.DETACHED && record.state != SessionState.FAILED && record.state != SessionState.CLOSED
+    val deckAllowed = deckVisible && deckStateOk
 
     Column(
         modifier
             .fillMaxSize()
-            .background(c.surface0)
-            .statusBarsPadding()
-            .imePadding()
-            .navigationBarsPadding(),
+            .background(c.surface0),
     ) {
         Ribbon(
             session = session,
             attention = attention,
+            now = now,
             onOpenRail = onOpenRail,
             onTitleTap = onOpenSessionSheet,
             onSwipe = { forward -> if (forward) onNextSession() else onPreviousSession() },
@@ -192,9 +230,12 @@ fun StageScreen(
                 showCursor = live,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 4.dp)
+                    .padding(start = 4.dp, top = 4.dp, end = 4.dp)
                     .alpha(frameAlpha),
-                onFontSizeStep = { step -> vm.setFontSize(font.sizeSp + step) },
+                onFontSizeStep = { step ->
+                    patterns.fontStep()
+                    vm.setFontSize(font.sizeSp + step)
+                },
             )
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
@@ -213,44 +254,57 @@ fun StageScreen(
             state = record.state,
             retryIn = retryIn,
             lastLiveAt = record.lastLiveAt,
+            now = now,
             onReconnect = { vm.reconnect(session.id) },
             onDetach = { vm.detach(session.id) },
             onClose = { vm.close(session.id) },
         )
 
-        val deckAllowed = deckVisible && record.state != SessionState.DETACHED && record.state != SessionState.FAILED && record.state != SessionState.CLOSED
-        AnimatedVisibility(visible = deckAllowed) {
-            Deck(
-                layout = deckLayout,
-                layerIndex = layerIndex,
-                onLayerIndexChange = { layerIndex = it },
-                input = input,
-                enabled = live,
-                onGripTap = onOpenSessionSheet,
-                onGripSwipeDown = {
-                    keyboard?.hide()
-                    deckVisible = false
-                },
-                snippets = pinnedSnippets,
-            )
-        }
-        if (!deckVisible && !landscape) {
-            DeckStrip(
-                layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
-                latch = latch,
-                onExpand = { deckVisible = true },
-            )
+        // The bottom chrome takes the larger of the keyboard and navigation-bar insets, so the Deck
+        // sits on the keyboard when it is up and its surface runs under the bar when it is not.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(if (deckStateOk) c.surface1 else c.surface0)
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
+        ) {
+            AnimatedVisibility(visible = deckAllowed) {
+                Deck(
+                    layout = deckLayout,
+                    layerIndex = layerIndex,
+                    onLayerIndexChange = { layerIndex = it },
+                    input = input,
+                    enabled = live,
+                    onGripTap = onOpenSessionSheet,
+                    onGripSwipeDown = {
+                        keyboard?.hide()
+                        deckVisible = false
+                    },
+                    snippets = pinnedSnippets,
+                )
+            }
+            if (!deckVisible && deckStateOk) {
+                DeckStrip(
+                    layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
+                    latch = latch,
+                    onExpand = { deckVisible = true },
+                )
+            }
         }
     }
 
     pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
 }
 
-/** 40 dp strip over the Stage: swatch, title, state, "needs you" pill, overflow. Swipe switches sessions. */
+/**
+ * 40 dp strip over the Stage on surface.1, drawn under the status bar: rail glyph, swatch, title,
+ * state, "needs you" pill, overflow. Swipe switches sessions.
+ */
 @Composable
 private fun Ribbon(
     session: TerminalSession,
     attention: Int,
+    now: Long,
     onOpenRail: () -> Unit,
     onTitleTap: () -> Unit,
     onSwipe: (forward: Boolean) -> Unit,
@@ -274,7 +328,7 @@ private fun Ribbon(
         SessionState.LIVE -> null
         SessionState.IDLE, SessionState.CONNECTING -> "Connecting\u2026"
         SessionState.RECONNECTING -> if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026"
-        SessionState.DETACHED -> "Detached \u00B7 ${ageText(record.lastLiveAt)}"
+        SessionState.DETACHED -> "Detached \u00B7 ${ageText(record.lastLiveAt, now)}"
         SessionState.FAILED -> "Couldn't connect"
         SessionState.CLOSED -> "Closed"
     }
@@ -282,8 +336,9 @@ private fun Ribbon(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(40.dp)
             .background(c.surface1)
+            .statusBarsPadding()
+            .height(40.dp)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -300,13 +355,13 @@ private fun Ribbon(
                     }
                 }
             }
-            .padding(start = 8.dp, end = 4.dp),
+            .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconAction(onClick = onOpenRail, description = "Open the rail", modifier = Modifier.width(36.dp)) {
-            Glyph("\u2261", color = c.text2, size = 22)
+        IconAction(onClick = onOpenRail, description = "Open the rail") {
+            BerthIcon(BerthIcons.workspace)
         }
-        Spacer(Modifier.width(4.dp))
+        Spacer(Modifier.width(2.dp))
         Swatch(host.color, host.monogram, 24.dp, state = record.state.takeIf { it != SessionState.LIVE }, attention = record.needsAttention)
         Spacer(Modifier.width(10.dp))
         Column(
@@ -322,12 +377,20 @@ private fun Ribbon(
             if (subtitle != null) Text(subtitle, style = BerthType.caption, color = c.text3, maxLines = 1)
         }
         if (scrolled) {
-            Pill("scrolled", modifier = Modifier.clickable(onClick = onReturnToBottom))
-            Spacer(Modifier.width(4.dp))
+            // The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target.
+            val interaction = remember { MutableInteractionSource() }
+            Box(
+                Modifier
+                    .clickable(interactionSource = interaction, indication = null, onClick = onReturnToBottom)
+                    .semantics { role = Role.Button }
+                    .padding(horizontal = 4.dp, vertical = 9.dp),
+            ) {
+                Pill("scrolled", textColor = c.accent)
+            }
         }
         Box {
             IconAction(onClick = { menu = true }, description = "More") {
-                Glyph("\u22EE", color = c.text2, size = 20)
+                BerthIcon(BerthIcons.moreVert)
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                 @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
@@ -346,12 +409,19 @@ private fun Ribbon(
     }
 }
 
-/** The pill row under the terminal for non-live states; nothing when Live. */
+/** Visible height of the state pill; its touch target is the full 44 dp row around it. */
+private val StatePillHeight = 32.dp
+
+/**
+ * One floating pill for the non-live states (C2, A9): `Detached · 4 min ago · Reconnect · Close`,
+ * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live.
+ */
 @Composable
 private fun StatePill(
     state: SessionState,
     retryIn: Int?,
     lastLiveAt: Long?,
+    now: Long,
     onReconnect: () -> Unit,
     onDetach: () -> Unit,
     onClose: () -> Unit,
@@ -359,21 +429,66 @@ private fun StatePill(
     val c = Berth.colors
     val (text, actions) = when (state) {
         SessionState.RECONNECTING -> (if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
-        SessionState.DETACHED -> "Detached ${ageText(lastLiveAt)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
+        SessionState.DETACHED -> "Detached \u00B7 ${ageText(lastLiveAt, now)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
         else -> return
     }
-    Row(
+    Box(
         Modifier
             .fillMaxWidth()
-            .background(c.surface1)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(top = 4.dp, bottom = 12.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = BerthType.label, color = c.text2, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        actions.forEachIndexed { i, (label, action) ->
-            BerthButton(label, onClick = action, kind = if (i == 0 && state == SessionState.DETACHED) ButtonKind.PRIMARY else ButtonKind.SECONDARY, modifier = Modifier.height(36.dp))
+        Row(
+            Modifier
+                .height(44.dp)
+                .drawBehind {
+                    val h = StatePillHeight.toPx()
+                    drawRoundRect(
+                        color = c.surface3,
+                        topLeft = Offset(0f, (size.height - h) / 2),
+                        size = Size(size.width, h),
+                        cornerRadius = CornerRadius(h / 2),
+                    )
+                }
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
+            for ((label, action) in actions) {
+                // The neighbours' own 8 dp insets space the dot; it carries none itself.
+                Text("\u00B7", style = BerthType.caption, color = c.text3)
+                PillAction(label, onClick = action)
+            }
         }
+    }
+}
+
+/** An action segment inside the state pill: accent Caption, pressed shows a concentric surface.4 pill. */
+@Composable
+private fun PillAction(label: String, onClick: () -> Unit) {
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        Modifier
+            .fillMaxHeight()
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .semantics { role = Role.Button }
+            .drawBehind {
+                if (pressed) {
+                    val h = (StatePillHeight - 8.dp).toPx()
+                    drawRoundRect(
+                        color = c.surface4,
+                        topLeft = Offset(0f, (size.height - h) / 2),
+                        size = Size(size.width, h),
+                        cornerRadius = CornerRadius(h / 2),
+                    )
+                }
+            }
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = BerthType.caption, color = c.accent, maxLines = 1)
     }
 }
 
