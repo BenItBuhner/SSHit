@@ -1,6 +1,7 @@
 package app.berth.ssh
 
 import app.berth.domain.model.KeyAlgorithm
+import com.hierynomus.sshj.userauth.keyprovider.bcrypt.BCrypt
 import net.schmizz.sshj.common.Buffer
 import net.schmizz.sshj.common.Ed25519KeyFactory
 import net.schmizz.sshj.common.KeyType
@@ -26,11 +27,15 @@ import java.security.interfaces.RSAPrivateCrtKey
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Key generation, OpenSSH serialization and fingerprinting. Private keys are handled as OpenSSH
- * `openssh-key-v1` text, unencrypted: at-rest encryption is the data layer's job (Keystore-wrapped),
- * and the format stays importable by `ssh-keygen` and every other client.
+ * `openssh-key-v1` text; at-rest encryption is the data layer's job (Keystore-wrapped), and an
+ * optional passphrase adds the same bcrypt/aes256-ctr protection `ssh-keygen -p` would, so the
+ * format stays importable by `ssh-keygen` and every other client.
  */
 object SshKeys {
     private val random = SecureRandom()
@@ -99,8 +104,12 @@ object SshKeys {
 
     fun parsePublicKeyBlob(base64: String): PublicKey = Buffer.PlainBuffer(Base64.getDecoder().decode(base64)).readPublicKey()
 
-    /** Serializes a key pair as an unencrypted `openssh-key-v1` private key file. */
-    fun openSshPrivate(pair: KeyPair, comment: String = ""): String {
+    /**
+     * Serializes a key pair as an `openssh-key-v1` private key file. With a [passphrase] the private
+     * section is protected the way `ssh-keygen` does it: bcrypt KDF (16 rounds) and aes256-ctr.
+     */
+    fun openSshPrivate(pair: KeyPair, comment: String = "", passphrase: CharArray? = null): String {
+        val encrypted = passphrase != null && passphrase.isNotEmpty()
         val pub = pair.public
         val pubBlob = publicKeyBlob(pub)
         val check = random.nextInt()
@@ -110,18 +119,38 @@ object SshKeys {
             .putString(keyTypeName(pub))
         putPrivateSection(private, pair)
         private.putString(comment)
+        val blockSize = if (encrypted) 16 else 8
         var pad = 1
-        while (private.compactData.size % 8 != 0) private.putRawBytes(byteArrayOf(pad++.toByte()))
+        while (private.compactData.size % blockSize != 0) private.putRawBytes(byteArrayOf(pad++.toByte()))
 
         val file = Buffer.PlainBuffer()
             .putRawBytes("openssh-key-v1".toByteArray(Charsets.US_ASCII))
             .putRawBytes(byteArrayOf(0))
-            .putString("none")
-            .putString("none")
-            .putString(ByteArray(0))
-            .putUInt32(1)
+        val section: ByteArray
+        if (encrypted) {
+            val salt = ByteArray(16).also(random::nextBytes)
+            val rounds = 16
+            val keyAndIv = ByteArray(48)
+            val passBytes = String(passphrase!!).toByteArray(Charsets.UTF_8)
+            try {
+                BCrypt().pbkdf(passBytes, salt, rounds, keyAndIv)
+            } finally {
+                passBytes.fill(0)
+            }
+            val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyAndIv.copyOfRange(0, 32), "AES"), IvParameterSpec(keyAndIv.copyOfRange(32, 48)))
+            section = cipher.doFinal(private.compactData)
+            keyAndIv.fill(0)
+            file.putString("aes256-ctr")
+                .putString("bcrypt")
+                .putString(Buffer.PlainBuffer().putString(salt).putUInt32(rounds.toLong()).compactData)
+        } else {
+            section = private.compactData
+            file.putString("none").putString("none").putString(ByteArray(0))
+        }
+        file.putUInt32(1)
             .putString(pubBlob)
-            .putString(private.compactData)
+            .putString(section)
 
         val body = Base64.getEncoder().encodeToString(file.compactData).chunked(70).joinToString("\n")
         return "-----BEGIN OPENSSH PRIVATE KEY-----\n$body\n-----END OPENSSH PRIVATE KEY-----\n"

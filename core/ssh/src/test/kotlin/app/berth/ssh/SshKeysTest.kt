@@ -90,6 +90,34 @@ class SshKeysTest {
         }
     }
 
+    @Test
+    fun `passphrase protected keys load with the passphrase and nowhere else`() {
+        val pair = SshKeys.generate(KeyAlgorithm.ED25519)
+        val pem = SshKeys.openSshPrivate(pair, "berth", "correct horse".toCharArray())
+        assertTrue(SshKeys.isEncrypted(pem))
+        assertTrue(pem.contains("BEGIN OPENSSH PRIVATE KEY"))
+
+        val loaded = SshKeys.load(pem, passphrase = "correct horse".toCharArray())
+        assertEquals(SshKeys.publicKeyBase64(pair.public), SshKeys.publicKeyBase64(loaded.public))
+        assertTrue(samePrivateKey(pair.private, loaded.private))
+
+        val wrong = runCatching { SshKeys.load(pem, passphrase = "wrong".toCharArray()).private }
+        assertTrue(wrong.isFailure, "a wrong passphrase must not yield a key")
+
+        val keygen = listOf("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen").map(::File).firstOrNull { it.canExecute() }
+        assumeTrue("ssh-keygen not available", keygen != null)
+        val dir = Files.createTempDirectory("berth-keys").toFile()
+        try {
+            val keyFile = File(dir, "id")
+            keyFile.writeText(pem)
+            Files.setPosixFilePermissions(keyFile.toPath(), PosixFilePermissions.fromString("rw-------"))
+            val derived = run(keygen!!.path, "-y", "-P", "correct horse", "-f", keyFile.path)
+            assertEquals(SshKeys.openSshPublic(pair.public, "berth"), derived.trim())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     private fun run(vararg command: String): String {
         val process = ProcessBuilder(*command).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText()
