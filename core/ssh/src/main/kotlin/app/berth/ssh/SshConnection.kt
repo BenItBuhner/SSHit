@@ -88,6 +88,17 @@ class ShellChannel internal constructor(
     /** Exit status once the remote shell has ended; null while running or when the server sent none. */
     val exitStatus: Int? get() = (shell as? Session.Command)?.exitStatus
 
+    /**
+     * Waits for the channel itself to close. EOF on [output] can arrive a moment before the
+     * server's `exit-status` request, so callers that need [exitStatus] wait here first.
+     */
+    fun awaitClose(timeoutMillis: Long): Boolean = try {
+        shell.join(timeoutMillis, TimeUnit.MILLISECONDS)
+        true
+    } catch (_: ConnectionException) {
+        false
+    }
+
     /** Remote output as it arrives. Completes when the channel reaches EOF. */
     fun output(bufferSize: Int = 32 * 1024): Flow<ByteArray> = flow {
         val input = shell.inputStream

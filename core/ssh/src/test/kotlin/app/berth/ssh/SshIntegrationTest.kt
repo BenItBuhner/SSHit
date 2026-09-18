@@ -64,6 +64,7 @@ class SshIntegrationTest {
 
             shell.write("exit\n")
             collector.awaitEof()
+            assertTrue(shell.awaitClose(5_000), "channel should close after exit")
             assertEquals(0, shell.exitStatus)
         } finally {
             collector.close()
