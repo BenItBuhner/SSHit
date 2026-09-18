@@ -35,6 +35,7 @@ import app.berth.domain.repository.SecretStore
 import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
+import app.berth.domain.repository.WorkspaceRepository
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshConfigParseResult
 import app.berth.ssh.SshConfigParser
@@ -66,6 +67,7 @@ class AppViewModel @Inject constructor(
     val prompts: PromptCenter,
     private val tunnelRepository: TunnelRepository,
     private val snippetRepository: SnippetRepository,
+    private val workspaceRepository: WorkspaceRepository,
 ) : ViewModel() {
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -100,10 +102,8 @@ class AppViewModel @Inject constructor(
         list.count { it.needsAttention && it.id != active }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
-    fun themeFor(host: Host): TerminalTheme {
-        val id = host.appearance.terminalThemeId ?: return defaultTerminalTheme.value
-        return terminalThemes.value.firstOrNull { it.id == id } ?: defaultTerminalTheme.value
-    }
+    fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
+        resolveTerminalTheme(terminalThemes.value, defaultTerminalTheme.value, host, workspaces.value.byId(workspaceId))
 
     fun fontFor(host: Host): TerminalFont {
         val base = terminalFont.value
@@ -423,7 +423,50 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { settings.setDeckLayout(layout) }
     }
 
+    // ---- terminal themes ----------------------------------------------------------------------------
+
+    /** Stores a custom theme; a stock id is never overwritten because the repository refuses built-ins. */
+    fun saveTerminalTheme(theme: TerminalTheme) {
+        viewModelScope.launch { settings.upsertTerminalTheme(theme.copy(builtIn = false)) }
+    }
+
+    /** Removes a custom theme and points anything that used it back at the app default. */
+    fun deleteTerminalTheme(id: String) {
+        viewModelScope.launch {
+            settings.deleteTerminalTheme(id)
+            if (settings.defaultTerminalThemeId.first() == id) settings.setDefaultTerminalTheme(TerminalTheme.BERTH_DARK_ID)
+            hostRepository.observeAll().first().filter { it.appearance.terminalThemeId == id }.forEach { h ->
+                hostRepository.upsert(h.copy(appearance = h.appearance.copy(terminalThemeId = null)))
+            }
+            workspaces.value.filter { it.terminalThemeId == id }.forEach { ws -> workspaceRepository.upsert(ws.copy(terminalThemeId = null)) }
+        }
+    }
+
+    /** Per-host assignment; null returns the host to inheriting. */
+    fun setHostTerminalTheme(hostId: String, themeId: String?) {
+        viewModelScope.launch {
+            val h = hostRepository.get(hostId) ?: return@launch
+            hostRepository.upsert(h.copy(appearance = h.appearance.copy(terminalThemeId = themeId)))
+        }
+    }
+
+    /** Per-workspace assignment; null returns the workspace to inheriting. */
+    fun setWorkspaceTerminalTheme(workspaceId: String, themeId: String?) {
+        viewModelScope.launch {
+            val ws = workspaceRepository.get(workspaceId) ?: return@launch
+            workspaceRepository.upsert(ws.copy(terminalThemeId = themeId))
+        }
+    }
+
     companion object {
+        /** Host override first, then the workspace's theme, then the app default. */
+        fun resolveTerminalTheme(themes: List<TerminalTheme>, default: TerminalTheme, host: Host, workspace: Workspace?): TerminalTheme {
+            fun find(id: String?) = id?.let { wanted -> themes.firstOrNull { it.id == wanted } }
+            return find(host.appearance.terminalThemeId) ?: find(workspace?.terminalThemeId) ?: default
+        }
+
+        fun newThemeId(): String = "theme-" + UUID.randomUUID().toString().take(8)
+
         private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/@]+)(?::(\d{1,5}))?/?$""")
 
         /** Returns (user, address, port) or null when [spec] is not an address. */

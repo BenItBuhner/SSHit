@@ -59,15 +59,21 @@ data class BerthColors(
     }
 }
 
-/** Radius scale (A5); each component class has its own entry. */
+/** Multiplier applied to every radius; set by [BerthTheme] from [InterfaceTheme.radiusScale]. */
+val LocalRadiusScale = staticCompositionLocalOf { 1f }
+
+/**
+ * Radius scale (A5); each component class has its own entry. Every value is multiplied by the
+ * interface theme's radius scale, so nested corners stay concentric at any setting.
+ */
 object BerthRadius {
-    val sheet: Dp = 28.dp
-    val panel: Dp = 20.dp
-    val row: Dp = 12.dp
-    val key: Dp = 10.dp
-    val swatch: Dp = 8.dp
-    val swatchSmall: Dp = 6.dp
-    val indicator: Dp = 4.dp
+    val sheet: Dp @Composable get() = 28.dp * LocalRadiusScale.current
+    val panel: Dp @Composable get() = 20.dp * LocalRadiusScale.current
+    val row: Dp @Composable get() = 12.dp * LocalRadiusScale.current
+    val key: Dp @Composable get() = 10.dp * LocalRadiusScale.current
+    val swatch: Dp @Composable get() = 8.dp * LocalRadiusScale.current
+    val swatchSmall: Dp @Composable get() = 6.dp * LocalRadiusScale.current
+    val indicator: Dp @Composable get() = 4.dp * LocalRadiusScale.current
 }
 
 /** Spacing scale (A4). */
@@ -211,7 +217,8 @@ private fun BerthColors.toMaterial(): ColorScheme {
     )
 }
 
-val BerthShapes = Shapes(
+@Composable
+fun berthShapes(): Shapes = Shapes(
     extraSmall = RoundedCornerShape(BerthRadius.swatch),
     small = RoundedCornerShape(BerthRadius.row),
     medium = RoundedCornerShape(BerthRadius.panel),
@@ -225,11 +232,14 @@ fun BerthTheme(
     content: @Composable () -> Unit,
 ) {
     val colors = rememberBerthColors(theme)
-    CompositionLocalProvider(LocalBerthColors provides colors) {
+    CompositionLocalProvider(
+        LocalBerthColors provides colors,
+        LocalRadiusScale provides theme.radiusScale.coerceIn(InterfaceTheme.MIN_RADIUS_SCALE, InterfaceTheme.MAX_RADIUS_SCALE),
+    ) {
         MaterialTheme(
             colorScheme = colors.toMaterial(),
             typography = berthTypography(useSystemFont = theme.useSystemFont),
-            shapes = BerthShapes,
+            shapes = berthShapes(),
             content = content,
         )
     }

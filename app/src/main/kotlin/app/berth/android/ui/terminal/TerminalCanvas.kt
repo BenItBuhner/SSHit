@@ -22,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -39,10 +38,8 @@ import app.berth.android.session.TerminalSession
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.Attr
-import app.berth.terminal.CursorShape
 import app.berth.terminal.MouseButton
 import app.berth.terminal.MouseTracking
-import app.berth.terminal.TermColor
 import app.berth.terminal.TerminalKey
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -143,13 +140,10 @@ fun TerminalCanvas(
     val currentSink by rememberUpdatedState(sink)
     val emulator = session.emulator
 
-    LaunchedEffect(session.id, theme.id) {
+    // Keyed on the theme itself so live edits from the theme editor reach the Stage behind it.
+    LaunchedEffect(session.id, theme) {
         emulator.applyTheme(theme.ansi.toIntArray(), theme.foreground, theme.background)
     }
-    // A thin trailing accessor so the draw lambda reads the version and subscribes to it.
-    val palette = emulator.palette
-    val defaultBg = theme.background
-    val defaultFg = theme.foreground
     val stepPx = with(density) { 40.dp.toPx() }
 
     Canvas(
@@ -238,132 +232,20 @@ fun TerminalCanvas(
             },
     ) {
         @Suppress("UNUSED_EXPRESSION") version
-        drawRect(Color(0xFF000000.toInt() or defaultBg))
         drawIntoCanvas { canvas ->
-            val nc = canvas.nativeCanvas
-            val cw = paints.cellWidth
-            val ch = paints.cellHeight
-            synchronized(emulator.lock) {
-                val rows = emulator.rows
-                val cols = emulator.cols
-                val offset = viewport.scrollOffset.coerceIn(0, emulator.scrollbackSize)
-                if (offset != viewport.scrollOffset) viewport.scrollOffset = offset
-                val reverse = emulator.reverseVideo
-                val screenBg = if (reverse) defaultFg else defaultBg
-                val screenFg = if (reverse) defaultBg else defaultFg
-                if (reverse) {
-                    paints.fill.color = opaque(screenBg)
-                    nc.drawRect(0f, 0f, size.width, size.height, paints.fill)
-                }
-                val sb = StringBuilder()
-                for (y in 0 until rows) {
-                    val line = emulator.viewLine(y, offset)
-                    val top = y * ch
-                    val lineCols = minOf(cols, line.cols)
-
-                    // Backgrounds, in runs.
-                    var x = 0
-                    while (x < lineCols) {
-                        val bg = cellBg(line.fg[x], line.bg[x], line.attrs[x], palette, screenFg, screenBg)
-                        var end = x + 1
-                        while (end < lineCols && cellBg(line.fg[end], line.bg[end], line.attrs[end], palette, screenFg, screenBg) == bg) end++
-                        if (bg != screenBg) {
-                            paints.fill.color = opaque(bg)
-                            nc.drawRect(x * cw, top, end * cw, top + ch, paints.fill)
-                        }
-                        x = end
-                    }
-
-                    // Text, in runs of the same style made of plain single-width characters.
-                    x = 0
-                    while (x < lineCols) {
-                        val cp = line.chars[x]
-                        val attrs = line.attrs[x]
-                        if (cp == 0 || attrs and Attr.WIDE_TAIL != 0 || attrs and Attr.INVISIBLE != 0) {
-                            x++
-                            continue
-                        }
-                        val fg = cellFg(line.fg[x], line.bg[x], attrs, palette, screenFg, screenBg, font.boldAsBright)
-                        val styleKey = attrs and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH)
-                        val paint = paints.forAttrs(attrs)
-                        paint.color = opaque(fg)
-                        sb.setLength(0)
-                        var end = x
-                        val simple = isSimple(cp, line, x)
-                        if (simple) {
-                            while (end < lineCols) {
-                                val c2 = line.chars[end]
-                                val a2 = line.attrs[end]
-                                if (a2 and Attr.WIDE_TAIL != 0 || a2 and Attr.INVISIBLE != 0) break
-                                if (a2 and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH) != styleKey) break
-                                if (cellFg(line.fg[end], line.bg[end], a2, palette, screenFg, screenBg, font.boldAsBright) != fg) break
-                                if (c2 == 0) {
-                                    sb.append(' ')
-                                    end++
-                                    continue
-                                }
-                                if (!isSimple(c2, line, end)) break
-                                sb.append(c2.toChar())
-                                end++
-                            }
-                            // Trailing blanks carry no glyphs; trim them from the draw call.
-                            var len = sb.length
-                            while (len > 0 && sb[len - 1] == ' ') len--
-                            if (len > 0) nc.drawText(sb, 0, len, x * cw, top + paints.baseline, paint)
-                        } else {
-                            val text = line.cellText(x)
-                            val wide = attrs and Attr.WIDE != 0
-                            nc.drawText(text, x * cw, top + paints.baseline, paint)
-                            end = x + if (wide) 2 else 1
-                        }
-                        if (attrs and Attr.UNDERLINE != 0) {
-                            paints.line.color = opaque(fg)
-                            val uy = top + paints.baseline + paints.line.strokeWidth * 1.5f
-                            nc.drawLine(x * cw, uy, end * cw, uy, paints.line)
-                        }
-                        if (attrs and Attr.STRIKETHROUGH != 0) {
-                            paints.line.color = opaque(fg)
-                            val sy = top + ch * 0.55f
-                            nc.drawLine(x * cw, sy, end * cw, sy, paints.line)
-                        }
-                        x = maxOf(end, x + 1)
-                    }
-                }
-
-                // Cursor, only on the live screen.
-                if (showCursor && offset == 0 && emulator.cursorVisible) {
-                    val cx = emulator.cursorX
-                    val cy = emulator.cursorY
-                    if (cy in 0 until rows && cx in 0 until cols) {
-                        val left = cx * cw
-                        val top = cy * ch
-                        val line = emulator.line(cy)
-                        val wide = line.attrs[cx] and Attr.WIDE != 0
-                        val w = if (wide) cw * 2 else cw
-                        val shape = emulator.cursorStyle.shape
-                        paints.fill.color = opaque(theme.cursor)
-                        when {
-                            !focused -> {
-                                paints.line.color = opaque(theme.cursor)
-                                val s = paints.line.strokeWidth
-                                nc.drawRect(left + s / 2, top + s / 2, left + w - s / 2, top + ch - s / 2, paints.line.apply { style = Paint.Style.STROKE })
-                                paints.line.style = Paint.Style.FILL
-                            }
-                            shape == CursorShape.BLOCK -> {
-                                nc.drawRect(left, top, left + w, top + ch, paints.fill)
-                                val cp = line.chars[cx]
-                                if (cp != 0) {
-                                    val paint = paints.forAttrs(line.attrs[cx])
-                                    paint.color = opaque(theme.cursorText)
-                                    nc.drawText(line.cellText(cx), left, top + paints.baseline, paint)
-                                }
-                            }
-                            shape == CursorShape.UNDERLINE -> nc.drawRect(left, top + ch - paints.line.strokeWidth * 2, left + w, top + ch, paints.fill)
-                            else -> nc.drawRect(left, top, left + paints.line.strokeWidth * 1.5f, top + ch, paints.fill)
-                        }
-                    }
-                }
-            }
+            val used = TerminalRenderer.draw(
+                nc = canvas.nativeCanvas,
+                emulator = emulator,
+                paints = paints,
+                theme = theme,
+                boldAsBright = font.boldAsBright,
+                width = size.width,
+                height = size.height,
+                scrollOffset = viewport.scrollOffset,
+                showCursor = showCursor,
+                focused = focused,
+            )
+            if (used != viewport.scrollOffset) viewport.scrollOffset = used
         }
     }
 }
@@ -384,42 +266,6 @@ private fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines
         return
     }
     viewport.scrollOffset = (viewport.scrollOffset + lines).coerceIn(0, em.scrollbackSize)
-}
-
-private fun isSimple(cp: Int, line: app.berth.terminal.TerminalLine, x: Int): Boolean =
-    cp in 0x20..0x7E || (cp in 0xA0..0x24FF && line.attrs[x] and Attr.WIDE == 0 && line.combining?.containsKey(x) != true)
-
-private fun opaque(rgb: Int): Int = 0xFF000000.toInt() or (rgb and 0xFFFFFF)
-
-private fun resolve(color: Int, isFg: Boolean, attrs: Int, palette: IntArray, screenFg: Int, screenBg: Int, boldAsBright: Boolean): Int =
-    when (TermColor.kind(color)) {
-        TermColor.KIND_INDEXED -> {
-            var i = TermColor.index(color)
-            if (isFg && boldAsBright && attrs and Attr.BOLD != 0 && i < 8) i += 8
-            palette[i]
-        }
-        TermColor.KIND_RGB -> TermColor.rgbValue(color)
-        else -> if (isFg) screenFg else screenBg
-    }
-
-private fun cellBg(fg: Int, bg: Int, attrs: Int, palette: IntArray, screenFg: Int, screenBg: Int): Int {
-    val inverse = attrs and Attr.INVERSE != 0
-    return if (inverse) resolve(fg, true, attrs, palette, screenFg, screenBg, false) else resolve(bg, false, attrs, palette, screenFg, screenBg, false)
-}
-
-private fun cellFg(fg: Int, bg: Int, attrs: Int, palette: IntArray, screenFg: Int, screenBg: Int, boldAsBright: Boolean): Int {
-    val inverse = attrs and Attr.INVERSE != 0
-    var c = if (inverse) resolve(bg, false, attrs, palette, screenFg, screenBg, false) else resolve(fg, true, attrs, palette, screenFg, screenBg, boldAsBright)
-    if (attrs and Attr.DIM != 0) {
-        val back = if (inverse) resolve(fg, true, attrs, palette, screenFg, screenBg, false) else resolve(bg, false, attrs, palette, screenFg, screenBg, false)
-        c = mix(c, back, 0.4f)
-    }
-    return c
-}
-
-private fun mix(a: Int, b: Int, t: Float): Int {
-    fun ch(shift: Int) = (((a shr shift) and 0xFF) * (1 - t) + ((b shr shift) and 0xFF) * t).roundToInt().coerceIn(0, 255)
-    return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
 }
 
 /** Position of a cell for a point inside the canvas; used by the Stage for tap-to-place features later. */

@@ -1,0 +1,270 @@
+package app.berth.android.ui.themes
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.Glyph
+import app.berth.android.ui.components.IconAction
+import app.berth.android.ui.components.Pill
+import app.berth.android.ui.components.ScreenHeader
+import app.berth.android.ui.components.SheetHandle
+import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.shareText
+import app.berth.android.ui.terminal.PreviewScript
+import app.berth.android.ui.terminal.TerminalPreview
+import app.berth.android.ui.theme.Berth
+import app.berth.android.ui.theme.BerthRadius
+import app.berth.android.ui.theme.BerthSpace
+import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.TerminalTheme
+import app.berth.domain.model.TerminalThemes
+
+/**
+ * The terminal theme gallery (UX spec C19): every theme as a tile that is a live mini-render of
+ * its own colours. Tap opens the editor; long-press offers default, duplicate, export and delete.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThemesScreen(
+    vm: AppViewModel,
+    onBack: () -> Unit,
+    onOpen: (themeId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = Berth.colors
+    val context = LocalContext.current
+    val themes by vm.terminalThemes.collectAsState()
+    val default by vm.defaultTerminalTheme.collectAsState()
+    val font by vm.terminalFont.collectAsState()
+    var menu by remember { mutableStateOf(false) }
+    var pasteSheet by remember { mutableStateOf(false) }
+    var importNote by remember { mutableStateOf<String?>(null) }
+
+    fun importText(text: String) {
+        val imported = TerminalThemes.importAll(text)
+        importNote = when {
+            imported.isEmpty() -> "That text is not a terminal theme Berth can read."
+            else -> {
+                imported.forEach { t ->
+                    // Never overwrite a stock theme on import; a clash gets a fresh id.
+                    val id = if (themes.any { it.id == t.id && it.builtIn }) AppViewModel.newThemeId() else t.id
+                    vm.saveTerminalTheme(t.copy(id = id))
+                }
+                if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
+            }
+        }
+    }
+    val openFile = rememberOpenTextFile(::importText)
+
+    fun newTheme() {
+        val id = AppViewModel.newThemeId()
+        vm.saveTerminalTheme(default.duplicate(id, "${default.name} copy"))
+        onOpen(id)
+    }
+
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(c.surface0)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        ScreenHeader("Terminal themes", onBack = onBack) {
+            IconAction(onClick = ::newTheme, description = "New theme") { Glyph("+", size = 24) }
+            Box {
+                IconAction(onClick = { menu = true }, description = "More") { Glyph("\u22EE") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                    MenuItem("Import file") { menu = false; openFile() }
+                    MenuItem("Paste theme text") { menu = false; pasteSheet = true }
+                    MenuItem("Export custom themes") {
+                        menu = false
+                        val custom = themes.filter { !it.builtIn }
+                        val text = if (custom.isEmpty()) default.toJson() else "[\n" + custom.joinToString(",\n") { it.toJson() } + "\n]"
+                        shareText(context, "Berth terminal themes", text)
+                    }
+                }
+            }
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, top = 4.dp, bottom = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
+            verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
+        ) {
+            items(themes, key = { it.id }) { theme ->
+                ThemeTile(
+                    theme = theme,
+                    font = font,
+                    isDefault = theme.id == default.id,
+                    onOpen = { onOpen(theme.id) },
+                    onSetDefault = { vm.setDefaultTerminalTheme(theme.id) },
+                    onDuplicate = {
+                        val id = AppViewModel.newThemeId()
+                        vm.saveTerminalTheme(theme.duplicate(id))
+                        onOpen(id)
+                    },
+                    onExport = { shareText(context, "${theme.name}.json", theme.toJson()) },
+                    onDelete = if (theme.builtIn) null else ({ vm.deleteTerminalTheme(theme.id) }),
+                )
+            }
+            item(span = { GridItemSpan(2) }) {
+                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Import file", onClick = openFile)
+                        BerthButton("Paste theme text", onClick = { pasteSheet = true })
+                    }
+                    Text(
+                        importNote ?: "Berth theme JSON, Windows Terminal schemes and Gogh exports import as they are. Stock themes cannot be deleted; duplicate one to edit it.",
+                        style = BerthType.caption,
+                        color = if (importNote != null) c.text1 else c.text3,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    if (pasteSheet) {
+        PasteTextSheet(
+            title = "Paste theme text",
+            caption = "Berth theme JSON, a Windows Terminal scheme, or a Gogh export",
+            action = "Import",
+            onDismiss = { pasteSheet = false },
+            onSubmit = { text ->
+                importText(text)
+                pasteSheet = false
+            },
+        )
+    }
+}
+
+/** One gallery tile: the theme's own background, a live mini-render, then the name and state. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ThemeTile(
+    theme: TerminalTheme,
+    font: app.berth.domain.model.TerminalFont,
+    isDefault: Boolean,
+    onOpen: () -> Unit,
+    onSetDefault: () -> Unit,
+    onDuplicate: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    val c = Berth.colors
+    var menu by remember { mutableStateOf(false) }
+    val fg = theme.foreground.toColor()
+    Box {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(BerthRadius.panel))
+                .background(theme.background.toColor())
+                .combinedClickable(onClick = onOpen, onLongClick = { menu = true })
+                .semantics { contentDescription = "Theme ${theme.name}" + if (isDefault) ", app default" else "" }
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            TerminalPreview(theme = theme, font = font.copy(sizeSp = 9), script = PreviewScript.TILE, showCursor = false)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(theme.name, style = BerthType.label, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (isDefault) Pill("Default", color = fg.copy(alpha = 0.14f), textColor = fg)
+                else if (!theme.builtIn) Pill("Custom", color = fg.copy(alpha = 0.10f), textColor = fg.copy(alpha = 0.8f))
+            }
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+            if (!isDefault) MenuItem("Set as app default") { menu = false; onSetDefault() }
+            MenuItem("Duplicate") { menu = false; onDuplicate() }
+            MenuItem("Export") { menu = false; onExport() }
+            if (onDelete != null) MenuItem("Delete", destructive = true) { menu = false; onDelete() }
+        }
+    }
+}
+
+@Composable
+internal fun MenuItem(text: String, destructive: Boolean = false, onClick: () -> Unit) {
+    val c = Berth.colors
+    DropdownMenuItem(text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) }, onClick = onClick)
+}
+
+/** A sheet with one multi-line field for pasted JSON or Termux text and a single action. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PasteTextSheet(
+    title: String,
+    caption: String,
+    action: String,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit,
+    error: String? = null,
+) {
+    val c = Berth.colors
+    var text by remember { mutableStateOf("") }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = c.surface1,
+        scrimColor = c.scrim,
+        dragHandle = { SheetHandle() },
+        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = BerthSpace.screenMargin)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            SheetTitle(title, caption)
+            BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = "{ ... }", helper = error, isError = error != null)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BerthButton(action, onClick = { onSubmit(text) }, kind = ButtonKind.PRIMARY, enabled = text.isNotBlank())
+                BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}
