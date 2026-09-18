@@ -26,6 +26,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(project(":core:terminal"))
     testRuntimeOnly(libs.slf4j.nop)
 }
 
@@ -36,6 +37,9 @@ tasks.withType<Test>().configureEach {
     environment("SSH_TEST_USER", System.getenv("SSH_TEST_USER") ?: "")
     environment("SSH_TEST_PASSWORD", System.getenv("SSH_TEST_PASSWORD") ?: "")
     environment("SSH_TEST_KEY_FILE", System.getenv("SSH_TEST_KEY_FILE") ?: "")
+    // The headless terminal demo writes PNG frames here when set; see TerminalDemoHarness.
+    environment("BERTH_DEMO_OUT", System.getenv("BERTH_DEMO_OUT") ?: "")
+    environment("BERTH_DEMO_FONT", System.getenv("BERTH_DEMO_FONT") ?: "")
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true
