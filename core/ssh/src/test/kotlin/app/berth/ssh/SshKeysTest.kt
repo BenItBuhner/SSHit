@@ -118,6 +118,83 @@ class SshKeysTest {
         }
     }
 
+    @Test
+    fun `importing OpenSSH keys keeps the comment and reports protection`() {
+        val pair = SshKeys.generate(KeyAlgorithm.ECDSA_P256)
+        val plain = SshKeys.importPrivate(SshKeys.openSshPrivate(pair, "ben@pixel"))
+        assertEquals("OpenSSH", plain.format)
+        assertEquals("ben@pixel", plain.comment)
+        assertEquals(KeyAlgorithm.ECDSA_P256, plain.algorithm)
+        assertTrue(samePrivateKey(pair.private, plain.pair.private))
+
+        val encrypted = SshKeys.openSshPrivate(pair, "ben@pixel", "correct horse".toCharArray())
+        assertTrue(runCatching { SshKeys.importPrivate(encrypted) }.exceptionOrNull() is SshKeys.ImportError.PassphraseNeeded)
+        assertTrue(runCatching { SshKeys.importPrivate(encrypted, "wrong".toCharArray()) }.exceptionOrNull() is SshKeys.ImportError.WrongPassphrase)
+        val unlocked = SshKeys.importPrivate(encrypted, "correct horse".toCharArray())
+        assertEquals("ben@pixel", unlocked.comment, "the comment is read from the decrypted section")
+        assertEquals(SshKeys.publicKeyBase64(pair.public), SshKeys.publicKeyBase64(unlocked.pair.public))
+
+        val rsa = SshKeys.generate(KeyAlgorithm.RSA_3072)
+        assertEquals("rsa comment", SshKeys.importPrivate(SshKeys.openSshPrivate(rsa, "rsa comment")).comment)
+        val ed = SshKeys.generate(KeyAlgorithm.ED25519)
+        assertEquals("", SshKeys.importPrivate(SshKeys.openSshPrivate(ed)).comment)
+    }
+
+    @Test
+    fun `junk is refused with a clear reason`() {
+        assertTrue(runCatching { SshKeys.importPrivate("ssh-ed25519 AAAA... not a private key") }.exceptionOrNull() is SshKeys.ImportError.NotAKey)
+        assertTrue(runCatching { SshKeys.importPrivate("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----") }.exceptionOrNull() is SshKeys.ImportError.Unsupported)
+    }
+
+    @Test
+    fun `PKCS8 keys written by openssl import`() {
+        val openssl = listOf("/usr/bin/openssl", "/usr/local/bin/openssl").map(::File).firstOrNull { it.canExecute() }
+        assumeTrue("openssl not available", openssl != null)
+        val dir = Files.createTempDirectory("berth-keys").toFile()
+        try {
+            for ((algorithm, options) in listOf("RSA" to listOf("-pkeyopt", "rsa_keygen_bits:2048"), "EC" to listOf("-pkeyopt", "ec_paramgen_curve:P-256"))) {
+                val file = File(dir, "$algorithm.pem")
+                run(openssl!!.path, "genpkey", "-algorithm", algorithm, *options.toTypedArray(), "-out", file.path)
+                val text = file.readText()
+                assertTrue(text.startsWith("-----BEGIN PRIVATE KEY-----"), "openssl should write PKCS#8 for $algorithm")
+                val imported = SshKeys.importPrivate(text)
+                assertEquals("PKCS#8", imported.format)
+                val expectedType = if (algorithm == "RSA") "ssh-rsa" else "ecdsa-sha2-nistp256"
+                assertEquals(expectedType, SshKeys.keyTypeName(imported.pair.public))
+                // The imported pair must serialize back into a valid OpenSSH key Berth can use.
+                val stored = SshKeys.importPrivate(SshKeys.openSshPrivate(imported.pair, "converted"))
+                assertEquals("converted", stored.comment)
+                assertEquals(SshKeys.publicKeyBase64(imported.pair.public), SshKeys.publicKeyBase64(stored.pair.public))
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy PEM keys written by ssh-keygen import, with and without a passphrase`() {
+        val keygen = listOf("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen").map(::File).firstOrNull { it.canExecute() }
+        assumeTrue("ssh-keygen not available", keygen != null)
+        val dir = Files.createTempDirectory("berth-keys").toFile()
+        try {
+            run(keygen!!.path, "-q", "-t", "rsa", "-b", "2048", "-m", "PEM", "-N", "", "-C", "pem", "-f", File(dir, "plain").path)
+            val plain = SshKeys.importPrivate(File(dir, "plain").readText())
+            assertEquals("PEM", plain.format)
+            assertEquals(File(dir, "plain.pub").readText().trim(), SshKeys.openSshPublic(plain.pair.public, "pem"))
+
+            run(keygen.path, "-q", "-t", "ecdsa", "-m", "PEM", "-N", "correct horse", "-f", File(dir, "locked").path)
+            val text = File(dir, "locked").readText()
+            assertTrue(SshKeys.isEncrypted(text))
+            assertTrue(runCatching { SshKeys.importPrivate(text) }.exceptionOrNull() is SshKeys.ImportError.PassphraseNeeded)
+            assertTrue(runCatching { SshKeys.importPrivate(text, "nope".toCharArray()) }.exceptionOrNull() is SshKeys.ImportError.WrongPassphrase)
+            val unlocked = SshKeys.importPrivate(text, "correct horse".toCharArray())
+            assertEquals(KeyAlgorithm.ECDSA_P256, unlocked.algorithm)
+            assertEquals(File(dir, "locked.pub").readText().trim().substringBeforeLast(' '), SshKeys.openSshPublic(unlocked.pair.public))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     private fun run(vararg command: String): String {
         val process = ProcessBuilder(*command).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText()
