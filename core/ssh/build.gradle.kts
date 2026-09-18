@@ -35,6 +35,7 @@ tasks.withType<Test>().configureEach {
     environment("SSH_TEST_PORT", System.getenv("SSH_TEST_PORT") ?: "")
     environment("SSH_TEST_USER", System.getenv("SSH_TEST_USER") ?: "")
     environment("SSH_TEST_PASSWORD", System.getenv("SSH_TEST_PASSWORD") ?: "")
+    environment("SSH_TEST_KEY_FILE", System.getenv("SSH_TEST_KEY_FILE") ?: "")
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true
