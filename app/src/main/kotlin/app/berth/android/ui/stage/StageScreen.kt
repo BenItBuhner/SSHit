@@ -55,6 +55,8 @@ import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.snippets.PendingSnippet
+import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
 import app.berth.android.ui.theme.Berth
@@ -99,6 +101,11 @@ fun StageScreen(
     val clipboard = LocalClipboardManager.current
     val imeVisible = WindowInsets.isImeVisible
     val landscape = LocalConfiguration.current.screenWidthDp > LocalConfiguration.current.screenHeightDp
+    val snippets by vm.snippets.collectAsState()
+    val pinnedSnippets = remember(snippets, record.hostId, record.workspaceId) {
+        snippets.filter { it.pinnedToDeck && it.visibleFor(record.hostId, record.workspaceId) }.sortedBy { it.name.lowercase() }
+    }
+    var pendingSnippet by remember { mutableStateOf<PendingSnippet?>(null) }
 
     var deckVisible by rememberSaveable { mutableStateOf(true) }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -109,6 +116,12 @@ fun StageScreen(
         StageInput(
             session = { session },
             latch = latch,
+            // A Deck key bound to a snippet lands here: run it, or ask for its placeholders first.
+            onSnippet = { id ->
+                vm.snippets.value.firstOrNull { it.id == id }?.let { s ->
+                    if (s.hasPlaceholders) pendingSnippet = PendingSnippet(s, s.defaultAction) else vm.runSnippet(session, s)
+                }
+            },
             onAppAction = { action ->
                 when (action) {
                     DeckAppAction.HIDE_KEYBOARD -> keyboard?.hide()
@@ -218,16 +231,19 @@ fun StageScreen(
                     keyboard?.hide()
                     deckVisible = false
                 },
+                snippets = pinnedSnippets,
             )
         }
         if (!deckVisible && !landscape) {
             DeckStrip(
-                layerName = deckLayout.usableLayers().getOrNull(layerIndex)?.name ?: "Base",
+                layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
                 latch = latch,
                 onExpand = { deckVisible = true },
             )
         }
     }
+
+    pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
 }
 
 /** 40 dp strip over the Stage: swatch, title, state, "needs you" pill, overflow. Swipe switches sessions. */

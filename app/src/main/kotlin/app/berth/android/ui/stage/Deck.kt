@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.ui.theme.Berth
@@ -56,16 +57,20 @@ import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.Snippet
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
-/** Layers that can be shown: the snippets layer waits for a snippets screen. */
-fun DeckLayout.usableLayers(): List<DeckLayer> = layers.filter { layer -> !(layer.keys.size == 1 && layer.keys[0].snippets) }
+/** Layers that can be shown: a layer that is only the snippets slot needs pinned snippets to show. */
+fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
+    layers.filter { layer -> hasSnippets || !(layer.keys.size == 1 && layer.keys[0].snippets) }
 
 /**
  * The keyboard accessory bar, rendered from [DeckLayout] rather than a hardcoded row. Each key has
  * tap, swipe-up and hold gestures; modifiers latch one-shot or locked; the Nub sends arrows.
+ * [snippets] are the pinned snippets for the session on stage: the snippets slot expands to one
+ * key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
  */
 @Composable
 fun Deck(
@@ -78,9 +83,10 @@ fun Deck(
     predictiveText: Boolean = false,
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
+    snippets: List<Snippet> = emptyList(),
 ) {
     val c = Berth.colors
-    val layers = layout.usableLayers()
+    val layers = layout.usableLayers(hasSnippets = snippets.isNotEmpty())
     if (layers.isEmpty()) return
     val index = layerIndex.coerceIn(0, layers.lastIndex)
     val layer = layers[index]
@@ -137,9 +143,30 @@ fun Deck(
                         modifier = Modifier.weight(1f).widthIn(min = 40.dp),
                         onArrow = { input.onKey(it) },
                     )
-                    key.snippets -> Unit
+                    key.snippets -> if (snippets.isNotEmpty()) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            for (s in snippets) {
+                                DeckKeyView(
+                                    key = DeckKey(tap = DeckAction.Snippet(s.id), display = s.name.take(16)),
+                                    latch = input.latch,
+                                    enabled = enabled,
+                                    haptics = haptics,
+                                    modifier = Modifier.widthIn(min = 56.dp).fillMaxHeight(),
+                                    onAction = { input.dispatch(it, layer) },
+                                    onHold = {},
+                                    labelPadding = 12.dp,
+                                )
+                            }
+                        }
+                    }
                     else -> DeckKeyView(
-                        key = key,
+                        key = key.withSnippetName(snippets),
                         latch = input.latch,
                         enabled = enabled,
                         haptics = haptics,
@@ -160,6 +187,14 @@ fun Deck(
             )
         }
     }
+}
+
+/** A key bound to a snippet without a display label takes the snippet's name; the editor's hook. */
+private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
+    if (display != null) return this
+    val id = (tap as? DeckAction.Snippet)?.snippetId ?: return this
+    val name = snippets.firstOrNull { it.id == id }?.name ?: return this
+    return copy(display = name.take(12))
 }
 
 @Composable
@@ -211,6 +246,7 @@ fun DeckKeyView(
     modifier: Modifier = Modifier,
     onAction: (DeckAction) -> Unit,
     onHold: (DeckAction) -> Unit,
+    labelPadding: Dp = 0.dp,
 ) {
     val c = Berth.colors
     var pressed by remember { mutableStateOf(false) }
@@ -324,7 +360,7 @@ fun DeckKeyView(
             style = if (mono) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
             color = labelColor,
             maxLines = 1,
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
         )
         if (secondary != null && swipe != 1) {
             Text(

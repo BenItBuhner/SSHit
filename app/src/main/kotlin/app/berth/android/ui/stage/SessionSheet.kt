@@ -2,6 +2,8 @@ package app.berth.android.ui.stage
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,10 +14,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
+import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.snippets.SnippetPickerSheet
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Panel
@@ -33,7 +41,7 @@ import app.berth.domain.model.SessionState
  * The session sheet from the Grip or the ribbon title: this session's facts and actions, then the
  * other sessions in the workspace for a quick switch.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SessionSheet(
     vm: AppViewModel,
@@ -42,12 +50,19 @@ fun SessionSheet(
     onSwitch: (String) -> Unit,
     onEditHost: (String) -> Unit,
     onNewSession: () -> Unit,
+    onOpenTunnels: (String) -> Unit = {},
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
     val others by vm.workspaceSessions.collectAsState()
+    val tunnels by vm.tunnels.collectAsState()
+    val tunnelStatuses by vm.tunnelStatuses.collectAsState()
     val now = ageTicker()
     val host = record.hostSnapshot
+    val hostTunnels = record.hostId?.let { id -> tunnels.filter { it.hostId == id } } ?: emptyList()
+    val up = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Up }
+    val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
+    var snippets by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -79,10 +94,26 @@ fun SessionSheet(
                         PersistenceLayer.TMUX -> "tmux on the server"
                     },
                 )
+                if (hostTunnels.isNotEmpty()) {
+                    val enabled = hostTunnels.count { it.enabled }
+                    Fact(
+                        "Tunnels",
+                        buildList {
+                            if (up > 0) add("$up up")
+                            if (failed > 0) add("$failed failed")
+                            if (up == 0 && failed == 0) add(if (enabled == 0) "${hostTunnels.size} off" else if (record.state.isActive) "starting" else "$enabled waiting")
+                        }.joinToString(" \u00B7 "),
+                        valueColor = if (failed > 0) c.danger else c.text1,
+                    )
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!record.state.isActive) BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() })
                 if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() })
+                record.hostId?.let { hostId ->
+                    BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() })
+                }
+                if (record.state == SessionState.LIVE) BerthButton("Snippets", onClick = { snippets = true })
                 if (record.hostId != null) BerthButton("Host", onClick = { onEditHost(record.hostId!!); onDismiss() })
                 BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(session.id); onDismiss() })
             }
@@ -106,14 +137,17 @@ fun SessionSheet(
             BerthButton("New session", kind = ButtonKind.TEXT, onClick = { onNewSession(); onDismiss() })
         }
     }
+    if (snippets) {
+        SnippetPickerSheet(vm, session, onDismiss = { snippets = false })
+    }
 }
 
 @Composable
-private fun Fact(label: String, value: String) {
+private fun Fact(label: String, value: String, valueColor: Color = Berth.colors.text1) {
     val c = Berth.colors
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text(label, style = BerthType.body, color = c.text2, modifier = Modifier.weight(1f))
-        Text(value, style = BerthType.body, color = c.text1)
+        Text(value, style = BerthType.body, color = valueColor)
     }
 }
 

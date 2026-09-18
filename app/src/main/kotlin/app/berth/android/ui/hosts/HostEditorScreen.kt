@@ -50,6 +50,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.tunnels.TunnelsPanelContent
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
@@ -64,6 +65,7 @@ fun HostEditorScreen(
     hostId: String?,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenTunnels: (String) -> Unit = {},
 ) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
@@ -248,6 +250,12 @@ fun HostEditorScreen(
                 CyclePicker("tmux", TmuxMode.entries, tmux, { it.label() }) { tmux = it }
                 if (tmux != TmuxMode.OFF) {
                     BerthField(tmuxPrefix, { tmuxPrefix = it }, label = "Prefix", mono = true, helper = "Session name berth-${(name.ifBlank { address }).lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}")
+                }
+            }
+
+            original?.let { saved ->
+                Panel(label = "Tunnels") {
+                    TunnelsPanelContent(vm, saved, onOpenAll = { onOpenTunnels(saved.id) })
                 }
             }
 
