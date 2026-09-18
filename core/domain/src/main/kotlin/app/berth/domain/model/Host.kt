@@ -109,9 +109,31 @@ data class KnownHostKey(
     val fingerprintSha256: String,
     val firstSeenAt: Long,
     val lastSeenAt: Long,
-)
+    /**
+     * A pinned key is the only acceptable key of its type for this endpoint: a different key is
+     * refused outright instead of raising the "key changed" sheet, and no new key types are
+     * accepted on first use.
+     */
+    val pinned: Boolean = false,
+) {
+    val endpoint: String get() = if (port == 22) host else "$host:$port"
 
-enum class TunnelType { LOCAL, REMOTE, DYNAMIC }
+    /** `ED25519`, `RSA`, `ECDSA P-256`: the algorithm the way the UI names it. */
+    val algorithmLabel: String get() = algorithmLabelFor(keyType)
+
+    companion object {
+        fun algorithmLabelFor(keyType: String): String = when {
+            keyType == "ssh-ed25519" -> "ED25519"
+            keyType == "ssh-rsa" || keyType.startsWith("rsa-sha2") -> "RSA"
+            keyType == "ssh-dss" -> "DSA"
+            keyType.startsWith("ecdsa-sha2-nistp") -> "ECDSA P-" + keyType.removePrefix("ecdsa-sha2-nistp")
+            keyType.startsWith("sk-") -> "FIDO " + algorithmLabelFor(keyType.removePrefix("sk-").substringBefore('@'))
+            else -> keyType
+        }
+    }
+}
+
+enum class TunnelType(val label: String) { LOCAL("Local"), REMOTE("Remote"), DYNAMIC("Dynamic") }
 
 @Serializable
 data class Tunnel(
@@ -124,7 +146,64 @@ data class Tunnel(
     val destinationHost: String = "localhost",
     val destinationPort: Int = 0,
     val enabled: Boolean = true,
-)
+) {
+    /** The row's Mono line: `127.0.0.1:8080 → localhost:80`, `remote:9000 → 127.0.0.1:3000`, `SOCKS5 on 127.0.0.1:1080`. */
+    val spec: String
+        get() = when (type) {
+            TunnelType.LOCAL -> "${listenLabel()} \u2192 $destinationHost:$destinationPort"
+            TunnelType.REMOTE -> "remote:${if (bindAddress.isDefaultBind()) "" else "$bindAddress:"}$bindPort \u2192 $destinationHost:$destinationPort"
+            TunnelType.DYNAMIC -> "SOCKS5 on ${listenLabel()}"
+        }
+
+    /** True when the listener accepts connections from other devices. */
+    val exposed: Boolean get() = type != TunnelType.REMOTE && (bindAddress == "0.0.0.0" || bindAddress == "::" || bindAddress == "*")
+
+    /** A browser URL for local forwards whose destination looks like a web port; null otherwise. */
+    val openUrl: String?
+        get() {
+            if (type != TunnelType.LOCAL) return null
+            val scheme = when (destinationPort) {
+                443, 8443 -> "https"
+                80, 8080, 8000, 8008, 8888, 3000, 4200, 5000, 5173, 8081, 9000, 9090 -> "http"
+                else -> return null
+            }
+            return "$scheme://${if (exposed) "127.0.0.1" else bindAddress}:$bindPort/"
+        }
+
+    private fun listenLabel(): String = "${if (exposed) "0.0.0.0" else bindAddress}:$bindPort"
+
+    /**
+     * A reason this tunnel cannot be saved, or null. [others] are the host's other tunnels plus
+     * every enabled tunnel elsewhere, so listeners on the same device port are caught too.
+     */
+    fun validate(others: List<Tunnel>): String? {
+        if (bindPort !in 1..65535) return "Port must be between 1 and 65535."
+        if (bindAddress.isBlank()) return "Bind address is needed."
+        if (type != TunnelType.DYNAMIC) {
+            if (destinationHost.isBlank()) return "Destination host is needed."
+            if (destinationPort !in 1..65535) return "Destination port must be between 1 and 65535."
+        }
+        val clash = others.firstOrNull { other ->
+            other.id != id && other.enabled && other.bindPort == bindPort && other.listensLikelySame(this)
+        }
+        if (clash != null) {
+            return if (clash.hostId == hostId) "Port $bindPort is already used by another tunnel on this host."
+            else "Port $bindPort is already used by a tunnel on another host."
+        }
+        return null
+    }
+
+    private fun listensLikelySame(other: Tunnel): Boolean {
+        val local = type != TunnelType.REMOTE
+        val otherLocal = other.type != TunnelType.REMOTE
+        if (local != otherLocal) return false
+        // Remote listeners live on the server, so they only clash with the same host's tunnels.
+        if (!local) return hostId == other.hostId && bindAddress == other.bindAddress
+        return exposed || other.exposed || bindAddress == other.bindAddress
+    }
+
+    private fun String.isDefaultBind() = this == "127.0.0.1" || this == "localhost" || this.isEmpty()
+}
 
 enum class SnippetAction { RUN, PASTE }
 
@@ -139,11 +218,28 @@ data class Snippet(
     val defaultAction: SnippetAction = SnippetAction.RUN,
     val runOnConnect: Boolean = false,
     val pinnedToDeck: Boolean = false,
+    /** Workspace this snippet belongs to; null means it shows everywhere. */
+    val workspaceId: String? = null,
 ) {
     /** `{{name}}` and `{{name:default}}` placeholders, in order of first appearance. */
     fun placeholders(): List<Pair<String, String?>> =
         PLACEHOLDER.findAll(body).map { it.groupValues[1] to it.groupValues.getOrNull(2)?.ifEmpty { null } }
             .distinctBy { it.first }.toList()
+
+    val hasPlaceholders: Boolean get() = PLACEHOLDER.containsMatchIn(body)
+
+    /** The body with placeholders filled from [values], falling back to each placeholder's default. */
+    fun render(values: Map<String, String> = emptyMap()): String = PLACEHOLDER.replace(body) { match ->
+        val name = match.groupValues[1]
+        values[name] ?: match.groupValues.getOrNull(2)?.ifEmpty { null } ?: ""
+    }
+
+    /** First line of the body, for list rows. */
+    val preview: String get() = body.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: ""
+
+    /** True when this snippet should be offered for [hostId] in [workspaceId]. */
+    fun visibleFor(hostId: String?, workspaceId: String?): Boolean =
+        (this.hostId == null || this.hostId == hostId) && (this.workspaceId == null || this.workspaceId == workspaceId)
 
     companion object {
         val PLACEHOLDER = Regex("\\{\\{([A-Za-z0-9_]+)(?::([^}]*))?}}")

@@ -95,6 +95,7 @@ class RoomKnownHostRepository(private val db: BerthDatabase) : KnownHostReposito
     override suspend fun find(host: String, port: Int): List<KnownHostKey> = db.knownHosts().find(host, port).map { it.toDomain() }
     override suspend fun upsert(key: KnownHostKey) = db.knownHosts().upsert(key.toEntity())
     override suspend fun delete(id: String) = db.knownHosts().delete(id)
+    override suspend fun setPinned(id: String, pinned: Boolean) = db.knownHosts().setPinned(id, pinned)
 }
 
 class RoomWorkspaceRepository(private val db: BerthDatabase) : WorkspaceRepository {
@@ -134,13 +135,17 @@ class RoomSessionRepository(private val db: BerthDatabase) : SessionRepository {
 }
 
 class RoomTunnelRepository(private val db: BerthDatabase) : TunnelRepository {
+    override fun observeAll(): Flow<List<Tunnel>> = db.tunnels().observeAll().map { list -> list.map { it.toDomain() } }
     override fun observeForHost(hostId: String): Flow<List<Tunnel>> = db.tunnels().observeForHost(hostId).map { list -> list.map { it.toDomain() } }
+    override suspend fun get(id: String): Tunnel? = db.tunnels().get(id)?.toDomain()
     override suspend fun upsert(tunnel: Tunnel) = db.tunnels().upsert(tunnel.toEntity())
     override suspend fun delete(id: String) = db.tunnels().delete(id)
+    override suspend fun setEnabled(id: String, enabled: Boolean) = db.tunnels().setEnabled(id, enabled)
 }
 
 class RoomSnippetRepository(private val db: BerthDatabase) : SnippetRepository {
     override fun observeAll(): Flow<List<Snippet>> = db.snippets().observeAll().map { list -> list.map { it.toDomain() } }
+    override suspend fun get(id: String): Snippet? = db.snippets().get(id)?.toDomain()
     override suspend fun upsert(snippet: Snippet) = db.snippets().upsert(snippet.toEntity())
     override suspend fun delete(id: String) = db.snippets().delete(id)
 }
