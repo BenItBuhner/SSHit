@@ -199,6 +199,10 @@ class RoomRepositoriesTest {
                 "INSERT INTO snippets (id, name, body, hostId, tagsJson, defaultAction, runOnConnect, pinnedToDeck) " +
                     "VALUES ('s1', 'disk', 'df -h', NULL, '[]', 'RUN', 0, 0)",
             )
+            connection.execSQL(
+                "INSERT INTO workspaces (id, name, color, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt) " +
+                    "VALUES ('w1', 'Home', 'OCHRE', 'HO', NULL, 0, 1, 1)",
+            )
         }
         helper.runMigrationsAndValidate(2, emptyList()).use { connection ->
             connection.prepare("SELECT pinned, host FROM known_hosts WHERE id = 'k1'").use { statement ->
@@ -210,6 +214,11 @@ class RoomRepositoriesTest {
                 assertTrue(statement.step())
                 assertTrue(statement.isNull(0), "existing snippets stay global")
                 assertEquals("df -h", statement.getText(1))
+            }
+            connection.prepare("SELECT terminalThemeId, name FROM workspaces WHERE id = 'w1'").use { statement ->
+                assertTrue(statement.step())
+                assertTrue(statement.isNull(0), "existing workspaces inherit the app default theme")
+                assertEquals("Home", statement.getText(1))
             }
         }
     }

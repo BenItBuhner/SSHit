@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "1e3caf81859f7f0f11291639c8126749",
+    "identityHash": "00075645b908985f9428641c5eaf077c",
     "entities": [
       {
         "tableName": "hosts",
@@ -353,7 +353,7 @@
       },
       {
         "tableName": "workspaces",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `color` TEXT NOT NULL, `monogram` TEXT NOT NULL, `accentRgb` INTEGER, `sortOrder` INTEGER NOT NULL, `reconnectAtLaunch` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `color` TEXT NOT NULL, `monogram` TEXT NOT NULL, `accentRgb` INTEGER, `sortOrder` INTEGER NOT NULL, `reconnectAtLaunch` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `terminalThemeId` TEXT DEFAULT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -401,6 +401,12 @@
             "columnName": "createdAt",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "terminalThemeId",
+            "columnName": "terminalThemeId",
+            "affinity": "TEXT",
+            "defaultValue": "NULL"
           }
         ],
         "primaryKey": {
@@ -755,7 +761,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1e3caf81859f7f0f11291639c8126749')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '00075645b908985f9428641c5eaf077c')"
     ]
   }
 }

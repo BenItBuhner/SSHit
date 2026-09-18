@@ -182,10 +182,19 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override val defaultTerminalThemeId: Flow<String> =
         document(KEY_DEFAULT_THEME, String.serializer()) { TerminalTheme.BERTH_DARK_ID }
 
-    override suspend fun upsertTerminalTheme(theme: TerminalTheme) {
+    private suspend fun customThemesNow(): List<TerminalTheme> {
         val serializer = ListSerializer(TerminalTheme.serializer())
-        val current = db.preferences().get(KEY_CUSTOM_THEMES)?.let { runCatching { dataJson.decodeFromString(serializer, it) }.getOrNull() } ?: emptyList()
-        write(KEY_CUSTOM_THEMES, serializer, current.filter { it.id != theme.id } + theme.copy(builtIn = false))
+        return db.preferences().get(KEY_CUSTOM_THEMES)?.let { runCatching { dataJson.decodeFromString(serializer, it) }.getOrNull() } ?: emptyList()
+    }
+
+    override suspend fun upsertTerminalTheme(theme: TerminalTheme) {
+        val current = customThemesNow()
+        write(KEY_CUSTOM_THEMES, ListSerializer(TerminalTheme.serializer()), current.filter { it.id != theme.id } + theme.copy(builtIn = false))
+    }
+
+    override suspend fun deleteTerminalTheme(id: String) {
+        if (TerminalTheme.builtIns.any { it.id == id }) return
+        write(KEY_CUSTOM_THEMES, ListSerializer(TerminalTheme.serializer()), customThemesNow().filter { it.id != id })
     }
 
     override suspend fun setDefaultTerminalTheme(id: String) = write(KEY_DEFAULT_THEME, String.serializer(), id)
