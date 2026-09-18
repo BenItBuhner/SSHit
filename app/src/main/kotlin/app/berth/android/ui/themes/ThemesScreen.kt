@@ -231,7 +231,7 @@ internal fun MenuItem(text: String, destructive: Boolean = false, onClick: () ->
     DropdownMenuItem(text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) }, onClick = onClick)
 }
 
-/** A sheet with one multi-line field for pasted JSON or Termux text and a single action. */
+/** A sheet with one multi-line field for pasted JSON or Termux text, a single action and an optional second one. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PasteTextSheet(
@@ -241,6 +241,7 @@ internal fun PasteTextSheet(
     onDismiss: () -> Unit,
     onSubmit: (String) -> Unit,
     error: String? = null,
+    secondary: Pair<String, () -> Unit>? = null,
 ) {
     val c = Berth.colors
     var text by remember { mutableStateOf("") }
@@ -262,6 +263,7 @@ internal fun PasteTextSheet(
             BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = "{ ... }", helper = error, isError = error != null)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton(action, onClick = { onSubmit(text) }, kind = ButtonKind.PRIMARY, enabled = text.isNotBlank())
+                if (secondary != null) BerthButton(secondary.first, onClick = secondary.second)
                 BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
             }
             Spacer(Modifier.height(4.dp))

@@ -77,6 +77,11 @@ class DeckHaptics(
         if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
     }
 
+    /** A dragged Deck key crossed a neighbour in the editor: a light tick. */
+    fun reorderStep() {
+        if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+    }
+
     /** Terminal bell while this session is on stage: a short buzz. */
     fun bell() {
         if (level != HapticLevel.OFF) haptics.performHapticFeedback(HapticFeedbackType.LongPress)

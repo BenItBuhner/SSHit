@@ -66,6 +66,7 @@ import app.berth.domain.model.ColorMath
 import app.berth.domain.model.HexColorSerializer
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.ThemeSlot
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 
 /** What the editor's primary action applies the theme to. */
@@ -100,7 +101,12 @@ fun TerminalThemeEditorScreen(
     val workspaces by vm.workspaces.collectAsState()
     val stored = themes.firstOrNull { it.id == themeId }
     if (stored == null) {
-        LaunchedEffect(themeId) { onDone() }
+        // A theme saved a moment ago may still be on its way to disk; only a theme that stays
+        // missing (deleted, or never existed) sends the editor back.
+        LaunchedEffect(themeId) {
+            delay(1_500)
+            onDone()
+        }
         return
     }
 
@@ -449,9 +455,20 @@ private fun HslSlider(title: String, value: Float, range: ClosedFloatingPointRan
     }
 }
 
+/** One field and one action; renames by default, and serves any short text prompt such as a tmux prefix. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RenameSheet(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
+internal fun RenameSheet(
+    current: String,
+    onDismiss: () -> Unit,
+    title: String = "Rename",
+    label: String = "Name",
+    caption: String? = null,
+    action: String = "Rename",
+    allowBlank: Boolean = false,
+    mono: Boolean = false,
+    onRename: (String) -> Unit,
+) {
     val c = Berth.colors
     var name by remember { mutableStateOf(current) }
     ModalBottomSheet(
@@ -468,10 +485,10 @@ internal fun RenameSheet(current: String, onDismiss: () -> Unit, onRename: (Stri
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            SheetTitle("Rename")
-            BerthField(name, { name = it }, label = "Name")
+            SheetTitle(title, caption)
+            BerthField(name, { name = it }, label = label, mono = mono)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BerthButton("Rename", onClick = { onRename(name.trim()) }, kind = ButtonKind.PRIMARY, enabled = name.isNotBlank())
+                BerthButton(action, onClick = { onRename(name.trim()) }, kind = ButtonKind.PRIMARY, enabled = allowBlank || name.isNotBlank())
                 BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
             }
         }
