@@ -26,6 +26,7 @@ import app.berth.android.ui.rail.SessionRow
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionState
 
 /**
@@ -70,7 +71,14 @@ fun SessionSheet(
                 record.cwd?.let { Fact("Directory", it) }
                 record.lastCommand?.let { Fact("Running", it) }
                 Fact("Size", "${session.emulator.cols} \u00D7 ${session.emulator.rows}")
-                Fact("Layer", record.layer.name.lowercase().replaceFirstChar(Char::uppercase))
+                Fact(
+                    "Layer",
+                    when (record.layer) {
+                        PersistenceLayer.LOCAL_FRAME -> "Saved frame"
+                        PersistenceLayer.IN_APP -> "Live socket in Berth"
+                        PersistenceLayer.TMUX -> "tmux on the server"
+                    },
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!record.state.isActive) BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() })

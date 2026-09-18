@@ -38,14 +38,11 @@ import javax.crypto.spec.SecretKeySpec
  * format stays importable by `ssh-keygen` and every other client.
  */
 object SshKeys {
-    init {
-        SshSecurity.ensureProviders()
-    }
-
     private val random = SecureRandom()
 
     fun generate(algorithm: KeyAlgorithm): KeyPair = when (algorithm) {
         KeyAlgorithm.ED25519 -> {
+            SshSecurity.ensureProviders()
             val gen = Ed25519KeyPairGenerator().apply { init(Ed25519KeyGenerationParameters(random)) }
             val pair = gen.generateKeyPair()
             val priv = (pair.private as Ed25519PrivateKeyParameters).encoded
@@ -206,6 +203,7 @@ object SshKeys {
      * when the file is encrypted.
      */
     fun load(privateKeyText: String, publicKeyText: String? = null, passphrase: CharArray? = null): KeyProvider {
+        SshSecurity.ensureProviders()
         val format = KeyProviderUtil.detectKeyFileFormat(privateKeyText, publicKeyText != null)
         val provider = SshFactories.fileKeyProvider(format)
         val finder: PasswordFinder? = passphrase?.let { PasswordUtils.createOneOff(it) }

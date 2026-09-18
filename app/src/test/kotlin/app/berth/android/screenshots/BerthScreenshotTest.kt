@@ -5,12 +5,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.HostKeyChangedDecision
@@ -254,8 +258,10 @@ class BerthScreenshotTest {
         settle(1_500)
         capture("stage-live-ls-color")
 
+        // One tap arms Ctrl for the next key; a second tap locks it, a third releases it.
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
         capture("stage-live-ctrl-latched")
+        compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
 
         session.sendText("clear && htop\n")
@@ -267,10 +273,10 @@ class BerthScreenshotTest {
         compose.onNodeWithText("Berth test box").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detach")).fetchSemanticsNodes().isNotEmpty() }
         capture("session-sheet")
-        compose.onNodeWithContentDescription("Close sheet").performClick()
-        compose.waitForIdle()
+        dismissSheet()
 
         // Second session on the ask-each-time host: the password prompt comes from the transport.
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Open the rail").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Open the rail").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("New session")).fetchSemanticsNodes().isNotEmpty() }
         capture("rail-live")
@@ -287,6 +293,13 @@ class BerthScreenshotTest {
         capture("rail-two-live-sessions")
 
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+    }
+
+    /** Taps the modal sheet's scrim near the top of the screen, where the sheet itself is not. */
+    private fun dismissSheet() {
+        compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(width / 2f, 60f)) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
+        compose.waitForIdle()
     }
 
     /** Real time passes for the remote shell while the compose clock keeps ticking. */

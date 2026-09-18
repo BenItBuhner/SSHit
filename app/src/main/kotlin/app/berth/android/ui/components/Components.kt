@@ -53,6 +53,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -577,7 +581,12 @@ fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Mo
             .size(44.dp)
             .clip(CircleShape)
             .background(if (pressed) Berth.colors.surface3 else Color.Transparent)
-            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick, onClickLabel = description),
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+            // The glyph is decoration; screen readers get the action's name, not the character.
+            .clearAndSetSemantics {
+                contentDescription = description
+                role = Role.Button
+            },
         contentAlignment = Alignment.Center,
         content = content,
     )

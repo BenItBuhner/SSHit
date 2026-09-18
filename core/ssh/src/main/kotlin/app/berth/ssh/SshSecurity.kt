@@ -27,23 +27,23 @@ object SshSecurity {
     @Volatile
     private var installed = false
 
+    /**
+     * Cheap and idempotent: re-checks the chain order on every call because test harnesses
+     * (Robolectric) and some OEM builds re-insert Conscrypt at the front after startup.
+     */
     fun ensureProviders() {
-        if (installed) return
         synchronized(this) {
-            if (installed) return
             val existing = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME)
-            if (existing != null && existing !is BouncyCastleProvider) {
+            val bc = if (existing is BouncyCastleProvider) existing else BouncyCastleProvider()
+            if (Security.getProviders().firstOrNull() !== bc) {
                 Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
-                Security.insertProviderAt(BouncyCastleProvider(), 1)
-            } else if (existing == null) {
-                Security.insertProviderAt(BouncyCastleProvider(), 1)
-            } else if (Security.getProviders().firstOrNull() !== existing) {
-                Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
-                Security.insertProviderAt(existing, 1)
+                Security.insertProviderAt(bc, 1)
             }
-            SecurityUtils.setRegisterBouncyCastle(false)
-            SecurityUtils.setSecurityProvider(null)
-            installed = true
+            if (!installed) {
+                SecurityUtils.setRegisterBouncyCastle(false)
+                SecurityUtils.setSecurityProvider(null)
+                installed = true
+            }
         }
     }
 }
