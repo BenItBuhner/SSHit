@@ -1,16 +1,23 @@
 package app.berth.ssh
 
+import net.schmizz.sshj.common.SecurityUtils
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 
 /**
- * Makes sure the full BouncyCastle provider is what sshj sees.
+ * Makes sure the full BouncyCastle provider is what sshj sees, and that sshj resolves JCA
+ * primitives through the normal provider chain rather than pinning them to "BC".
  *
  * Android ships a stripped-down provider registered under the same "BC" name. sshj checks for a
  * provider called "BC" and, finding Android's, never registers the real one; several algorithms it
  * needs (Ed25519 signatures, bcrypt-pbkdf for OpenSSH keys, some ciphers) are then missing at
  * runtime. Swapping the provider is the documented workaround and is harmless on a plain JVM,
  * where the check simply finds no provider and installs ours.
+ *
+ * Leaving the provider unpinned matters for hardware-backed identities: an AndroidKeyStore
+ * private key can only sign inside the Keystore provider, and `Signature.getInstance(alg)` without
+ * a provider defers the choice to `initSign`, where the Keystore provider is the one that accepts
+ * the key. Everything else still lands on BouncyCastle, which we insert at the front.
  */
 object SshSecurity {
     @Volatile
@@ -27,6 +34,8 @@ object SshSecurity {
             } else if (existing == null) {
                 Security.addProvider(BouncyCastleProvider())
             }
+            SecurityUtils.setRegisterBouncyCastle(false)
+            SecurityUtils.setSecurityProvider(null)
             installed = true
         }
     }
