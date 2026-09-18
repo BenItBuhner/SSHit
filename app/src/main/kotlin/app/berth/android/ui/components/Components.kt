@@ -3,6 +3,7 @@ package app.berth.android.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -12,6 +13,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -44,7 +50,11 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,12 +64,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -76,6 +95,7 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import kotlin.math.abs
 
 // ---- Swatch, dots, rings ------------------------------------------------------------------------
 
@@ -330,6 +350,97 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
         },
     )
 }
+
+// ---- Slider ---------------------------------------------------------------------------------------
+
+/**
+ * Slider re-skinned with the tokens (A1; C19 draws Tone as `warm ────o──── cool`): a 2 dp track on
+ * surface.4, a 16 dp accent knob cut out of the track by a 2 dp ring in the panel's [surface], and
+ * a 44 dp touch row. With [neutral] set the slider is bipolar: a notch marks the neutral point and
+ * the accent fill runs from there to the knob; without it the fill runs from the start of the range.
+ */
+@Composable
+fun BerthSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    neutral: Float? = null,
+    enabled: Boolean = true,
+    surface: Color = Berth.colors.surface2,
+) {
+    val c = Berth.colors
+    val span = valueRange.endInclusive - valueRange.start
+    val insetPx = with(LocalDensity.current) { SliderInset.toPx() }
+    var widthPx by remember { mutableIntStateOf(0) }
+    var dragging by remember { mutableStateOf(false) }
+    var rawX by remember { mutableFloatStateOf(0f) }
+    val knob by animateDpAsState(if (dragging) 10.dp else 8.dp, label = "slider knob")
+    val alpha = if (enabled) 1f else 0.5f
+
+    fun fraction(v: Float) = if (span == 0f) 0f else ((v - valueRange.start) / span).coerceIn(0f, 1f)
+    fun setFromX(x: Float) {
+        val usable = widthPx - 2 * insetPx
+        if (usable <= 0f) return
+        onValueChange(valueRange.start + ((x - insetPx) / usable).coerceIn(0f, 1f) * span)
+    }
+    val drag = rememberDraggableState { delta ->
+        rawX += delta
+        setFromX(rawX)
+    }
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .onSizeChanged { widthPx = it.width }
+            .focusable(enabled)
+            .semantics {
+                if (!enabled) disabled()
+                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
+                setProgress { onValueChange(it.coerceIn(valueRange)); true }
+            }
+            .pointerInput(enabled) { if (enabled) detectTapGestures(onTap = { setFromX(it.x) }) }
+            .draggable(
+                state = drag,
+                orientation = Orientation.Horizontal,
+                enabled = enabled,
+                onDragStarted = { start ->
+                    rawX = start.x
+                    dragging = true
+                    setFromX(start.x)
+                },
+                onDragStopped = { dragging = false },
+            )
+            .drawBehind {
+                val y = size.height / 2
+                val x0 = insetPx
+                val x1 = size.width - insetPx
+                fun xAt(f: Float) = x0 + (x1 - x0) * f
+                val track = 2.dp.toPx()
+                drawLine(c.surface4.copy(alpha = alpha), Offset(x0, y), Offset(x1, y), track, StrokeCap.Round)
+                val kx = xAt(fraction(value))
+                val from = xAt(fraction(neutral ?: valueRange.start))
+                if (abs(kx - from) > 0.5f) {
+                    drawLine(c.accent.copy(alpha = alpha), Offset(from, y), Offset(kx, y), track, StrokeCap.Round)
+                }
+                if (neutral != null) {
+                    drawRoundRect(
+                        color = c.text3.copy(alpha = alpha),
+                        topLeft = Offset(from - 1.dp.toPx(), y - 4.dp.toPx()),
+                        size = Size(2.dp.toPx(), 8.dp.toPx()),
+                        cornerRadius = CornerRadius(1.dp.toPx()),
+                    )
+                }
+                val r = knob.toPx()
+                drawCircle(surface, r + 2.dp.toPx(), Offset(kx, y))
+                drawCircle(c.accent.copy(alpha = alpha), r, Offset(kx, y))
+            },
+    )
+}
+
+/** Horizontal inset of the slider track so the 20 dp pressed knob stays inside the row. */
+private val SliderInset = 10.dp
 
 /** 22 dp pill on surface.3 with Caption text; ports use Mono. */
 @Composable

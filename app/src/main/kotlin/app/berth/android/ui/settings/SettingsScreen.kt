@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -31,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
@@ -90,11 +89,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 Text("Tone", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Warm", style = BerthType.caption, color = c.text3)
-                    Slider(
+                    // Bipolar: the notch is neutral graphite, the fill shows how far warm or cool.
+                    BerthSlider(
                         value = theme.tone,
                         onValueChange = { vm.setInterfaceTheme(theme.copy(tone = it)) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                        colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.surface4),
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                        neutral = 0.5f,
                     )
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
