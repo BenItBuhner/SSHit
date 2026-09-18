@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
-        android:name=".SshApp"
+        android:name=".BerthApp"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"

@@ -11,12 +11,12 @@ val appVersionName: String = providers.gradleProperty("app.versionName").get()
 val appVersionCode: Int = providers.gradleProperty("app.versionCode").get().toInt()
 
 android {
-    namespace = "dev.sshclient"
+    namespace = "app.berth.android"
     compileSdk = 37
 
     defaultConfig {
         applicationId = appApplicationId
-        minSdk = 26
+        minSdk = 29
         targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
@@ -27,7 +27,6 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
             resValue("string", "app_name", "$appName (debug)")
         }
         release {

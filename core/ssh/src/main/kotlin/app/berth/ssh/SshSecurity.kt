@@ -1,4 +1,4 @@
-package dev.sshclient.ssh
+package app.berth.ssh
 
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security

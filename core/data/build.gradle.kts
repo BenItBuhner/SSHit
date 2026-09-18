@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.sshclient.data"
+    namespace = "app.berth.data"
     compileSdk = 37
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 29
         consumerProguardFiles("consumer-rules.pro")
     }
 

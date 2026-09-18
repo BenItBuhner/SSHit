@@ -20,7 +20,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ssh-client"
+rootProject.name = "berth"
 
 include(":app")
 include(":core:domain")

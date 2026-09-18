@@ -1,11 +1,11 @@
-package dev.sshclient
+package app.berth.android
 
 import android.app.Application
 import dagger.hilt.android.HiltAndroidApp
-import dev.sshclient.ssh.SshSecurity
+import app.berth.ssh.SshSecurity
 
 @HiltAndroidApp
-class SshApp : Application() {
+class BerthApp : Application() {
     override fun onCreate() {
         super.onCreate()
         SshSecurity.ensureProviders()
