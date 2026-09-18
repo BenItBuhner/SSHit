@@ -247,7 +247,7 @@ class AppViewModel @Inject constructor(
     }
 
     companion object {
-        private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/]+)(?::(\d{1,5}))?/?$""")
+        private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/@]+)(?::(\d{1,5}))?/?$""")
 
         /** Returns (user, address, port) or null when [spec] is not an address. */
         fun parseQuickConnect(spec: String): Triple<String, String, Int>? {
