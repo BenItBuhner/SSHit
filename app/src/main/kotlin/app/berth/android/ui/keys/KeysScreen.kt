@@ -38,9 +38,10 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
-import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.ScreenHeader
@@ -82,9 +83,9 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
             .navigationBarsPadding(),
     ) {
         ScreenHeader(title = "Keys", onBack = onBack, actions = {
-            IconAction(onClick = { generate = true }, description = "New key") { Glyph("+", size = 24) }
+            IconAction(onClick = { generate = true }, description = "New key") { BerthIcon(BerthIcons.add) }
             Box {
-                IconAction(onClick = { headerMenu = true }, description = "More") { Glyph("\u22EE") }
+                IconAction(onClick = { headerMenu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
                 DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                     DropdownMenuItem(text = { Text("Import key", style = BerthType.body, color = c.text1) }, onClick = { headerMenu = false; importKey = true })
                 }

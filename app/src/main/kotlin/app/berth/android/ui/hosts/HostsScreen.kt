@@ -36,9 +36,10 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
-import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.PickerRow
@@ -91,11 +92,11 @@ fun HostsScreen(
             onBack = onBack,
             actions = {
                 if (onOpenRail != null && onBack == null) {
-                    IconAction(onClick = onOpenRail, description = "Open the rail") { Glyph("\u2261", size = 22) }
+                    IconAction(onClick = onOpenRail, description = "Open the rail") { BerthIcon(BerthIcons.workspace) }
                 }
-                IconAction(onClick = onAddHost, description = "Add host") { Glyph("+", size = 24) }
+                IconAction(onClick = onAddHost, description = "Add host") { BerthIcon(BerthIcons.add) }
                 Box {
-                    IconAction(onClick = { menu = true }, description = "More") { Glyph("\u22EE") }
+                    IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                         DropdownMenuItem(text = { Text("Quick connect", style = BerthType.body, color = c.text1) }, onClick = { menu = false; quickConnect = true })
                         DropdownMenuItem(text = { Text("Import ssh config", style = BerthType.body, color = c.text1) }, onClick = { menu = false; importConfig = true })

@@ -37,6 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.annotation.DrawableRes
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -53,6 +55,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -65,6 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.berth.android.R
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -295,7 +299,7 @@ fun PickerRow(title: String, value: String, onClick: () -> Unit, modifier: Modif
         modifier = modifier,
         trailing = {
             Text(value, style = BerthType.body, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("\u203A", style = BerthType.body, color = c.text3)
+            BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp)
         },
     )
 }
@@ -565,7 +569,7 @@ fun ScreenHeader(
     ) {
         if (onBack != null) {
             IconAction(onClick = onBack, description = "Back") {
-                Text("\u2039", style = BerthType.title.copy(fontSize = 26.sp), color = Berth.colors.text2)
+                BerthIcon(BerthIcons.back)
             }
             Spacer(Modifier.width(4.dp))
         } else {
@@ -597,10 +601,30 @@ fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Mo
     )
 }
 
-/** Text glyph used as an icon: Material Symbols are not bundled, so header actions use type. */
+/** Text glyph used as an icon; kept for callers that still pass characters. Prefer [BerthIcon]. */
 @Composable
 fun Glyph(text: String, color: Color = Berth.colors.text2, size: Int = 20) {
     Text(text, style = BerthType.label.copy(fontSize = size.sp, lineHeight = (size + 4).sp), color = color)
+}
+
+/**
+ * The glyph set (A8): custom marks drawn on a 24 dp grid with a 1.75 dp round-capped stroke, shipped
+ * as vector drawables so no icon font or Material icon pack is bundled.
+ */
+object BerthIcons {
+    /** Three stacked rounded rectangles offset by 2 dp; opens the rail. */
+    @DrawableRes val workspace: Int = R.drawable.glyph_workspace
+    @DrawableRes val moreVert: Int = R.drawable.glyph_more_vert
+    @DrawableRes val moreHoriz: Int = R.drawable.glyph_more_horiz
+    @DrawableRes val back: Int = R.drawable.glyph_back
+    @DrawableRes val add: Int = R.drawable.glyph_add
+    @DrawableRes val chevronRight: Int = R.drawable.glyph_chevron_right
+}
+
+/** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */
+@Composable
+fun BerthIcon(@DrawableRes icon: Int, modifier: Modifier = Modifier, tint: Color = Berth.colors.text2, size: Dp = 24.dp) {
+    Icon(painter = painterResource(icon), contentDescription = null, tint = tint, modifier = modifier.size(size))
 }
 
 object Paddings {
