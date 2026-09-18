@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark: a bracket open to the right (the berth) holding a block cursor. Copper on graphite. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E0A458"
+        android:pathData="M72,30 L40,30 A12,12 0 0 0 28,42 L28,66 A12,12 0 0 0 40,78 L72,78 L72,71 L40,71 A5,5 0 0 1 35,66 L35,42 A5,5 0 0 1 40,37 L72,37 Z" />
+    <path
+        android:fillColor="#E0A458"
+        android:pathData="M45,43 h14 v23.5 h-14 z" />
+</vector>
