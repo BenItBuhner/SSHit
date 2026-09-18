@@ -6,4 +6,15 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+
+    <!--
+      Launch: the launcher's graphite with the monogram in the middle and nothing else. The splash
+      background matches the adaptive icon's background, so the system's icon disc disappears into
+      it and only the copper "BE" remains until the first frame of the Stage.
+    -->
+    <style name="Theme.App.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="postSplashScreenTheme">@style/Theme.App</item>
+    </style>
 </resources>

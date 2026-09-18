@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The mark: a bracket open to the right (the berth) holding a block cursor. Copper on graphite. -->
+<!--
+  Launcher foreground: the monogram treatment from the UX spec (A8) applied to the app itself, no
+  invented mark. "BE" set in IBM Plex Sans Medium (outlines from the bundled font, 30 dp on the
+  108 dp adaptive canvas, optically centred in the 66 dp safe zone), copper on graphite.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -7,8 +11,8 @@
     android:viewportHeight="108">
     <path
         android:fillColor="#E0A458"
-        android:pathData="M72,30 L40,30 A12,12 0 0 0 28,42 L28,66 A12,12 0 0 0 40,78 L72,78 L72,71 L40,71 A5,5 0 0 1 35,66 L35,42 A5,5 0 0 1 40,37 L72,37 Z" />
+        android:pathData="M37.41 43.53H46.68Q49.29 43.53 50.77 45Q52.26 46.47 52.26 48.93Q52.26 50.1 51.93 50.92Q51.6 51.75 51.09 52.27Q50.58 52.8 49.92 53.05Q49.26 53.31 48.63 53.37V53.55Q49.26 53.58 50.02 53.85Q50.79 54.12 51.45 54.7Q52.11 55.29 52.56 56.2Q53.01 57.12 53.01 58.44Q53.01 59.7 52.61 60.81Q52.2 61.92 51.48 62.73Q50.76 63.54 49.77 64Q48.78 64.47 47.61 64.47H37.41ZM40.8 61.56H46.62Q47.94 61.56 48.69 60.87Q49.44 60.18 49.44 58.89V57.87Q49.44 56.58 48.69 55.89Q47.94 55.2 46.62 55.2H40.8ZM40.8 52.38H46.05Q47.31 52.38 48 51.73Q48.69 51.09 48.69 49.89V48.93Q48.69 47.73 48 47.09Q47.31 46.44 46.05 46.44H40.8Z" />
     <path
         android:fillColor="#E0A458"
-        android:pathData="M45,43 h14 v23.5 h-14 z" />
+        android:pathData="M57.18 64.47V43.53H70.59V46.53H60.57V52.35H69.66V55.35H60.57V61.47H70.59V64.47Z" />
 </vector>
