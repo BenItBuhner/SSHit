@@ -11,8 +11,12 @@ import java.security.Security
  * Android ships a stripped-down provider registered under the same "BC" name. sshj checks for a
  * provider called "BC" and, finding Android's, never registers the real one; several algorithms it
  * needs (Ed25519 signatures, bcrypt-pbkdf for OpenSSH keys, some ciphers) are then missing at
- * runtime. Swapping the provider is the documented workaround and is harmless on a plain JVM,
- * where the check simply finds no provider and installs ours.
+ * runtime. Swapping the provider is the documented workaround.
+ *
+ * The real provider always goes to the front of the chain. Conscrypt (Android's default provider,
+ * also what Robolectric installs) hands out Ed25519 keys whose `getAlgorithm()` is the bare OID,
+ * which sshj cannot classify, so key objects must come from BouncyCastle wherever that provider
+ * is present.
  *
  * Leaving the provider unpinned matters for hardware-backed identities: an AndroidKeyStore
  * private key can only sign inside the Keystore provider, and `Signature.getInstance(alg)` without
@@ -32,7 +36,10 @@ object SshSecurity {
                 Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
                 Security.insertProviderAt(BouncyCastleProvider(), 1)
             } else if (existing == null) {
-                Security.addProvider(BouncyCastleProvider())
+                Security.insertProviderAt(BouncyCastleProvider(), 1)
+            } else if (Security.getProviders().firstOrNull() !== existing) {
+                Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
+                Security.insertProviderAt(existing, 1)
             }
             SecurityUtils.setRegisterBouncyCastle(false)
             SecurityUtils.setSecurityProvider(null)

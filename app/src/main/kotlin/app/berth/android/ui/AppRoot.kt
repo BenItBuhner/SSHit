@@ -63,8 +63,7 @@ sealed interface Screen : NavKey {
 }
 
 @Composable
-fun AppRoot() {
-    val vm: AppViewModel = hiltViewModel()
+fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
     BerthTheme(theme) {
         Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {

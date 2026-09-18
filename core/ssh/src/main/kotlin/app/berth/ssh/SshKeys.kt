@@ -38,6 +38,10 @@ import javax.crypto.spec.SecretKeySpec
  * format stays importable by `ssh-keygen` and every other client.
  */
 object SshKeys {
+    init {
+        SshSecurity.ensureProviders()
+    }
+
     private val random = SecureRandom()
 
     fun generate(algorithm: KeyAlgorithm): KeyPair = when (algorithm) {
