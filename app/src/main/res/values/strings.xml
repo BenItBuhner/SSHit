@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app_name is generated from gradle.properties (app.name); do not define it here. -->
+    <string name="notification_channel_sessions">Sessions</string>
+    <string name="notification_channel_sessions_description">Shown while terminal sessions are connected</string>
+    <string name="notification_one_session">1 session live</string>
+    <string name="notification_sessions">%1$d sessions live</string>
+    <string name="notification_detach_all">Detach all</string>
+</resources>
