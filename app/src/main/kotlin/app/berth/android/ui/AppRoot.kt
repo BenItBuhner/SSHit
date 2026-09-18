@@ -8,11 +8,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import app.berth.android.ui.theme.AppTheme
+import app.berth.android.ui.theme.BerthTheme
 
 @Composable
 fun AppRoot() {
-    AppTheme {
+    BerthTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Bootstrapping", style = MaterialTheme.typography.titleMedium)
