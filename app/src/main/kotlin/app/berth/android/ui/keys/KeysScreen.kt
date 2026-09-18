@@ -31,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -46,6 +47,9 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.importer.ImportKeySheet
+import app.berth.android.ui.importer.rememberPublicKeySaver
+import app.berth.android.ui.importer.sharePublicKey
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -62,9 +66,13 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
     var generate by remember { mutableStateOf(false) }
+    var importKey by remember { mutableStateOf(false) }
+    var headerMenu by remember { mutableStateOf(false) }
     var blocked by remember { mutableStateOf<Pair<Identity, List<String>>?>(null) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val savePublicKey = rememberPublicKeySaver()
 
     Column(
         modifier
@@ -75,6 +83,12 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
     ) {
         ScreenHeader(title = "Keys", onBack = onBack, actions = {
             IconAction(onClick = { generate = true }, description = "New key") { Glyph("+", size = 24) }
+            Box {
+                IconAction(onClick = { headerMenu = true }, description = "More") { Glyph("\u22EE") }
+                DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                    DropdownMenuItem(text = { Text("Import key", style = BerthType.body, color = c.text1) }, onClick = { headerMenu = false; importKey = true })
+                }
+            }
         })
         if (identities.isEmpty()) {
             Spacer(Modifier.height(48.dp))
@@ -83,6 +97,7 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
                 body = "Keys are generated on this device and never leave it unencrypted. Hardware-backed keys never leave the secure hardware at all.",
             ) {
                 BerthButton("New key", onClick = { generate = true }, kind = ButtonKind.PRIMARY)
+                BerthButton("Import key", onClick = { importKey = true })
             }
         } else {
             LazyColumn(
@@ -106,6 +121,14 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
                                 onClick = { menu = false; clipboard.setText(AnnotatedString(identity.publicKeyOpenSsh)) },
                             )
                             DropdownMenuItem(
+                                text = { Text("Share public key", style = BerthType.body, color = c.text1) },
+                                onClick = { menu = false; sharePublicKey(context, identity) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Save public key\u2026", style = BerthType.body, color = c.text1) },
+                                onClick = { menu = false; savePublicKey(identity) },
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Delete", style = BerthType.body, color = c.danger) },
                                 onClick = {
                                     menu = false
@@ -123,6 +146,7 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
     }
 
     if (generate) GenerateKeySheet(vm, onDismiss = { generate = false })
+    if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
     blocked?.let { (identity, names) ->
         InfoSheet(
             title = "${identity.name} is still in use",
