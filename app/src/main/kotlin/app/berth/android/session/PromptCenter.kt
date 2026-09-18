@@ -38,6 +38,19 @@ sealed interface Prompt {
         fun decide(decision: HostKeyChangedDecision) = answer.complete(decision)
     }
 
+    /**
+     * The server offered a key that a pinned entry rules out. There is nothing to decide: the
+     * connection is refused, and this explains why and where to unpin.
+     */
+    class PinnedKeyRefused(
+        override val host: Host,
+        val request: HostKeyRequest,
+        val pinned: KnownHostKey,
+        internal val answer: CompletableDeferred<Unit>,
+    ) : Prompt {
+        fun acknowledge() = answer.complete(Unit)
+    }
+
     class Password(
         override val host: Host,
         /** Server-provided prompt for keyboard-interactive, or null for a plain password. */
@@ -86,6 +99,10 @@ class PromptCenter @Inject constructor() {
 
     suspend fun hostKeyChanged(host: Host, request: HostKeyRequest, saved: KnownHostKey): HostKeyChangedDecision =
         ask { Prompt.HostKeyChanged(host, request, saved, it) }
+
+    suspend fun pinnedKeyRefused(host: Host, request: HostKeyRequest, pinned: KnownHostKey) {
+        ask { Prompt.PinnedKeyRefused(host, request, pinned, it) }
+    }
 
     suspend fun password(host: Host, serverPrompt: String? = null, instruction: String? = null): CharArray? =
         ask { Prompt.Password(host, serverPrompt, instruction, it) }

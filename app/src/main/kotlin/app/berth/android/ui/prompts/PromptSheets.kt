@@ -51,6 +51,7 @@ fun PromptHost(prompts: PromptCenter) {
         null -> Unit
         is Prompt.TrustHostKey -> TrustHostKeySheet(p)
         is Prompt.HostKeyChanged -> HostKeyChangedSheet(p)
+        is Prompt.PinnedKeyRefused -> PinnedKeyRefusedSheet(p)
         is Prompt.Password -> SecretSheet(
             title = "Password for ${p.host.userAtHost}",
             caption = p.instruction ?: p.serverPrompt,
@@ -145,6 +146,26 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
             BerthButton("Connect once without saving", onClick = { p.decide(HostKeyChangedDecision.TRUST_ONCE) }, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
             BerthButton("Replace the saved key", onClick = { p.decide(HostKeyChangedDecision.REPLACE_SAVED) }, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
         }
+    }
+}
+
+/** No decision here: a pinned key rules the offered one out, so the connection was refused. */
+@Composable
+private fun PinnedKeyRefusedSheet(p: Prompt.PinnedKeyRefused) {
+    val c = Berth.colors
+    PromptSheet(onDismiss = p::acknowledge) {
+        SheetTitle("Connection refused", "This server has a pinned key and offered a different one.", color = c.danger)
+        HostLine(p)
+        Text("Pinned", style = BerthType.caption, color = c.text2)
+        Fingerprint(p.pinned.keyType, p.pinned.fingerprintSha256)
+        Text("Offered now", style = BerthType.caption, color = c.text2)
+        Fingerprint(p.request.keyType, p.request.fingerprintSha256)
+        Text(
+            "Pinning means no other key is ever accepted for this server, not even once. If the server really changed its key, unpin or forget the saved key under Known hosts and connect again.",
+            style = BerthType.body,
+            color = c.text2,
+        )
+        BerthButton("OK", onClick = p::acknowledge, kind = ButtonKind.SECONDARY, modifier = Modifier.fillMaxWidth())
     }
 }
 

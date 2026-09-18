@@ -13,6 +13,9 @@ import java.util.UUID
  * Trust-on-first-use against the known hosts table, asking the user through [PromptCenter] when
  * something is new or different. sshj calls this on its transport thread during key exchange, so
  * blocking here is expected and holds the handshake until the user decides.
+ *
+ * A pinned key removes the decision: while an endpoint has a pinned key, any key that is not
+ * one of its saved keys is refused without a choice, whether it is a new type or a changed one.
  */
 class KnownHostsPolicy(
     private val host: Host,
@@ -26,14 +29,23 @@ class KnownHostsPolicy(
 
     override fun onUnknownHost(request: HostKeyRequest): Boolean = runBlocking {
         val others = knownHosts.find(request.host, request.port)
+        others.firstOrNull { it.pinned }?.let { pinned ->
+            prompts.pinnedKeyRefused(host, request, pinned)
+            return@runBlocking false
+        }
         val accepted = prompts.trustHostKey(host, request, others)
         if (accepted) save(request)
         accepted
     }
 
     override fun onChangedHostKey(request: HostKeyRequest, known: List<TrustedHostKey>): Boolean = runBlocking {
-        val saved = knownHosts.find(request.host, request.port).firstOrNull { it.keyType == request.keyType }
+        val all = knownHosts.find(request.host, request.port)
+        val saved = all.firstOrNull { it.keyType == request.keyType }
             ?: return@runBlocking onUnknownHost(request)
+        (all.firstOrNull { it.pinned && it.keyType == request.keyType } ?: all.firstOrNull { it.pinned })?.let { pinned ->
+            prompts.pinnedKeyRefused(host, request, pinned)
+            return@runBlocking false
+        }
         when (prompts.hostKeyChanged(host, request, saved)) {
             HostKeyChangedDecision.DISCONNECT -> false
             HostKeyChangedDecision.TRUST_ONCE -> true

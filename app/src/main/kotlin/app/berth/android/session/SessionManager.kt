@@ -9,11 +9,14 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.KnownHostRepository
 import app.berth.domain.repository.SessionRepository
 import app.berth.domain.repository.SettingsRepository
+import app.berth.domain.repository.SnippetRepository
+import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
@@ -57,6 +60,8 @@ class SessionManager @Inject constructor(
     private val authResolver: AuthResolver,
     private val prompts: PromptCenter,
     private val network: NetworkMonitor,
+    private val tunnelRepository: TunnelRepository,
+    private val snippetRepository: SnippetRepository,
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -70,6 +75,14 @@ class SessionManager @Inject constructor(
     val records: Flow<List<SessionRecord>> = sessions.flatMapLatest { list ->
         if (list.isEmpty()) MutableStateFlow(emptyList()) else combine(list.map { it.record }) { it.toList() }
     }
+
+    /** Status of every tunnel any session is carrying, by tunnel id. */
+    val tunnelStatuses: StateFlow<Map<String, TunnelStatus>> = sessions.flatMapLatest { list ->
+        if (list.isEmpty()) MutableStateFlow(emptyMap()) else combine(list.map { it.tunnels }) { maps -> maps.fold(emptyMap<String, TunnelStatus>()) { acc, m -> acc + m } }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    /** Which host each tunnel-carrying session serves; sticky while that session stays Live. */
+    private val carrierByHost = HashMap<String, String>()
 
     val workspaces: StateFlow<List<Workspace>> = workspaceRepository.observeAll().stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -93,20 +106,51 @@ class SessionManager @Inject constructor(
             val clipboard = context.getSystemService(ClipboardManager::class.java)
             clipboard.setPrimaryClip(ClipData.newPlainText("terminal", text))
         }
+        override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
+        override suspend fun connectCommands(host: Host, workspaceId: String): List<String> =
+            snippetRepository.observeAll().first()
+                .filter { it.runOnConnect && it.hostId == host.id && (it.workspaceId == null || it.workspaceId == workspaceId) }
+                .map { it.render() }
     }
 
     init {
         scope.launch { restore() }
         scope.launch {
-            records.map { list -> list.count { it.state.keepsService } }.distinctUntilChanged().collect { active ->
-                if (active > 0) SessionService.start(context, active) else SessionService.stop(context)
+            combine(
+                records.map { list -> list.count { it.state.keepsService } },
+                tunnelStatuses.map { statuses -> statuses.count { it.value is TunnelStatus.Up } },
+            ) { active, tunnels -> active to tunnels }.distinctUntilChanged().collect { (active, tunnels) ->
+                if (active > 0) SessionService.start(context, active, tunnels) else SessionService.stop(context)
             }
         }
         scope.launch {
             // Keep the stage flag on the session that is showing so attention is raised correctly.
             _activeSessionId.collect { id -> _sessions.value.values.forEach { it.onStage = it.id == id } }
         }
+        scope.launch { records.collect { electCarriers(it) } }
     }
+
+    /**
+     * One session per host carries its tunnels. The current carrier keeps the role while Live;
+     * otherwise the first Live session takes it, or the first connecting one so the forwards start
+     * the moment it comes up. Sessions that lose the role release their ports first.
+     */
+    private fun electCarriers(records: List<SessionRecord>) {
+        val byHost = records.filter { it.hostId != null && it.state.isActive }.groupBy { it.hostId!! }
+        val chosen = HashMap<String, String>()
+        for ((hostId, candidates) in byHost) {
+            val current = carrierByHost[hostId]?.let { id -> candidates.firstOrNull { it.id == id && it.state == SessionState.LIVE } }
+            chosen[hostId] = (current ?: candidates.firstOrNull { it.state == SessionState.LIVE } ?: candidates.first()).id
+        }
+        carrierByHost.clear()
+        carrierByHost.putAll(chosen)
+        val carriers = chosen.values.toSet()
+        val live = _sessions.value.values
+        live.filter { it.id !in carriers }.forEach { it.carriesTunnels.value = false }
+        live.filter { it.id in carriers }.forEach { it.carriesTunnels.value = true }
+    }
+
+    fun retryTunnel(id: String) = _sessions.value.values.forEach { it.retryTunnel(id) }
 
     /** Loads persisted sessions as detached frames. Safe to call more than once. */
     suspend fun restore() = restored.withLock {
