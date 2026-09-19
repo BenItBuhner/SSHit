@@ -350,12 +350,12 @@ class SecurityScreenshotTest {
         // Opening a host whose key lives in the Keystore asks before anything is sent to the server.
         graph.viewModel.open(pihole)
         compose.waitUntil(10_000) { graph.prompts.current.value is Prompt.UnlockKey }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Unlock this phone").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Sign in to pi-hole").fetchSemanticsNodes().isNotEmpty() }
         val session = graph.sessions.activeSession.value!!
         assertEquals(SessionState.CONNECTING, session.state)
         val request = graph.authenticator.requests.single()
-        assertEquals("Unlock this phone", request.title)
-        assertEquals("Signing in to pi@192.168.1.2", request.subtitle)
+        assertEquals("Sign in to pi-hole", request.title)
+        assertEquals("Confirm to sign with the key \u201Cthis phone\u201D", request.subtitle)
         assertNotNull("the prompt carries the Signature that will sign", request.signature)
         settle(300)
         capture("connect-biometric-step")
@@ -363,7 +363,7 @@ class SecurityScreenshotTest {
         // Cancel on the sheet withdraws the system prompt; the tab fails plainly, naming the key and the host.
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(10_000) { session.state == SessionState.FAILED }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Unlocking this phone was cancelled, so pi-hole was not signed in to.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Cancelled before the key \u201Cthis phone\u201D could sign, so Berth did not sign in to pi-hole.").fetchSemanticsNodes().isNotEmpty() }
         assertFalse(graph.authenticator.pending)
         assertNull(graph.prompts.current.value)
         settle(300)
@@ -379,9 +379,9 @@ class SecurityScreenshotTest {
         settle(300)
         capture("prompt-key-invalidated")
 
-        compose.onNodeWithText("Regenerate this phone").performClick()
+        compose.onNodeWithText("Regenerate key").performClick()
         compose.waitUntil(10_000) { session.state == SessionState.FAILED && graph.prompts.current.value == null }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("this phone has a new key pair. Add its public key to pi-hole (Keys, Copy public key), then connect again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("The key \u201Cthis phone\u201D has a new key pair. Add its public key to pi-hole (Keys, Copy public key), then connect again.").fetchSemanticsNodes().isNotEmpty() }
         val after = runBlocking { graph.identities.get("id-phone") }!!
         assertNotEquals(before.publicKeyOpenSsh, after.publicKeyOpenSsh)
         assertEquals(SshKeys.openSshPublic(keystore.pair.public, "berth@pixel"), after.publicKeyOpenSsh)
@@ -419,7 +419,7 @@ class SecurityScreenshotTest {
         compose.waitUntil(10_000) { graph.sessions.restored.value }
         graph.viewModel.open(box)
         compose.waitUntil(10_000) { graph.prompts.current.value is Prompt.UnlockKey }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Unlock this phone").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Sign in to Berth test box").fetchSemanticsNodes().isNotEmpty() }
         settle(300)
         capture("connect-biometric-step-live")
 

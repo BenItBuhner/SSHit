@@ -134,8 +134,8 @@ class KeyUnlockerTest {
         assertEquals("this phone", prompt.identityName)
         assertEquals(host, prompt.host)
         val request = graph.authenticator.requests.single()
-        assertEquals("Unlock this phone", request.title)
-        assertEquals("Signing in to pi@192.168.1.2", request.subtitle)
+        assertEquals("Sign in to pi-hole", request.title)
+        assertEquals("Confirm to sign with the key \u201Cthis phone\u201D", request.subtitle)
         assertNotNull("the CryptoObject", request.signature)
 
         graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
@@ -178,7 +178,7 @@ class KeyUnlockerTest {
             authFor()
             fail("expected the plain failure")
         } catch (e: IllegalStateException) {
-            assertEquals("this phone stayed locked after unlocking. Try connecting again.", e.message)
+            assertEquals("The key \u201Cthis phone\u201D stayed locked after the unlock. Try connecting again.", e.message)
         }
         assertEquals(2, keystore.beginSignCalls)
         assertEquals(1, graph.authenticator.requests.size)
@@ -191,7 +191,7 @@ class KeyUnlockerTest {
             authFor()
             fail("expected the plain failure")
         } catch (e: IllegalStateException) {
-            assertEquals("Unlocking this phone was cancelled, so pi-hole was not signed in to.", e.message)
+            assertEquals("Cancelled before the key \u201Cthis phone\u201D could sign, so Berth did not sign in to pi-hole.", e.message)
         }
         assertNull(graph.prompts.current.value)
     }
@@ -203,7 +203,7 @@ class KeyUnlockerTest {
         assertTrue(graph.authenticator.pending)
         prompt.cancel()
         assertFalse("the system prompt was taken down", graph.authenticator.pending)
-        assertEquals("Unlocking this phone was cancelled, so pi-hole was not signed in to.", attempt.error?.message)
+        assertEquals("Cancelled before the key \u201Cthis phone\u201D could sign, so Berth did not sign in to pi-hole.", attempt.error?.message)
         assertNull(graph.prompts.current.value)
     }
 
@@ -214,7 +214,7 @@ class KeyUnlockerTest {
             authFor()
             fail("expected the plain failure")
         } catch (e: IllegalStateException) {
-            assertEquals("this phone could not be unlocked: Too many attempts. Try again later.", e.message)
+            assertEquals("The key \u201Cthis phone\u201D could not be unlocked: Too many attempts. Try again later.", e.message)
         }
     }
 
@@ -236,7 +236,7 @@ class KeyUnlockerTest {
         assertEquals(SshKeys.fingerprintSha256(keystore.pair.public), updated.fingerprintSha256)
         assertEquals("berth-id-phone", updated.keystoreAlias)
         assertEquals(
-            "this phone has a new key pair. Add its public key to pi-hole (Keys, Copy public key), then connect again.",
+            "The key \u201Cthis phone\u201D has a new key pair. Add its public key to pi-hole (Keys, Copy public key), then connect again.",
             attempt.error?.message,
         )
         assertNull(graph.prompts.current.value)
@@ -247,7 +247,7 @@ class KeyUnlockerTest {
         keystore.failures += KeyPermanentlyInvalidatedException()
         val attempt = attempt()
         (graph.prompts.current.value as Prompt.KeyInvalidated).cancel()
-        assertEquals("this phone can no longer sign: this device's fingerprints or face changed since the key was made.", attempt.error?.message)
+        assertEquals("The key \u201Cthis phone\u201D can no longer sign: this device's fingerprints or face changed since the key was made.", attempt.error?.message)
         assertTrue(keystore.regenerated.isEmpty())
         assertEquals(identity, runBlocking { graph.identities.get("id-phone") })
     }
@@ -272,7 +272,7 @@ class KeyUnlockerTest {
         // The unlock consumes the first answer; the key prompt that follows straight after it, the second.
         graph.authenticator.queue(FakeAuthenticator.SUCCEEDED, FakeAuthenticator.SUCCEEDED)
         runBlocking { graph.appLock.unlock() }
-        assertEquals(listOf("Unlock Berth", "Unlock this phone"), graph.authenticator.requests.map { it.title })
+        assertEquals(listOf("Unlock Berth", "Sign in to pi-hole"), graph.authenticator.requests.map { it.title })
         assertTrue(signs(attempt.result!!))
     }
 

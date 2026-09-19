@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.berth.android.security.KeyUnlocker
 import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.Prompt
 import app.berth.android.session.PromptCenter
@@ -123,7 +124,7 @@ internal fun HostLine(host: Host) {
 private fun UnlockKeySheet(p: Prompt.UnlockKey) {
     val c = Berth.colors
     PromptSheet(onDismiss = p::cancel) {
-        SheetTitle("Unlock ${p.identityName}", "This key signs in only after you confirm it is you.")
+        SheetTitle(KeyUnlocker.promptTitle(p.host), KeyUnlocker.promptSubtitle(p.identityName))
         HostLine(p)
         Text("Confirm with your fingerprint, face or screen lock when the system asks. Cancelling leaves ${p.host.name} unconnected.", style = BerthType.body, color = c.text2)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -138,7 +139,7 @@ private fun UnlockKeySheet(p: Prompt.UnlockKey) {
 private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
     val c = Berth.colors
     PromptSheet(onDismiss = p::cancel) {
-        SheetTitle("Key no longer usable", "${p.identity.name} cannot sign any more.", color = c.danger)
+        SheetTitle("Key no longer usable", "${KeyUnlocker.keyName(p.identity)} cannot sign any more.", color = c.danger)
         HostLine(p)
         Fingerprint(p.identity.algorithm.sshName, p.identity.fingerprintSha256, label = "Key")
         Text(
@@ -147,7 +148,7 @@ private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
             color = c.text2,
         )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            BerthButton("Regenerate ${p.identity.name}", onClick = p::regenerate, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            BerthButton("Regenerate key", onClick = p::regenerate, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
             BerthButton("Not now", onClick = p::cancel, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
         }
     }

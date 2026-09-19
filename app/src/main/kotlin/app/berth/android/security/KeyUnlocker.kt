@@ -66,8 +66,8 @@ class KeyUnlocker @Inject constructor(
         val fresh = keystore.beginSign(alias)
         return when (val outcome = prompt(host, identity, fresh)) {
             is AuthOutcome.Succeeded -> outcome.signature ?: fresh
-            AuthOutcome.Cancelled -> throw IllegalStateException("Unlocking ${identity.name} was cancelled, so ${host.name} was not signed in to.")
-            is AuthOutcome.Failed -> throw IllegalStateException("${identity.name} could not be unlocked: ${outcome.message}")
+            AuthOutcome.Cancelled -> throw IllegalStateException(cancelledMessage(host, identity))
+            is AuthOutcome.Failed -> throw IllegalStateException("${keyName(identity)} could not be unlocked: ${outcome.message}")
         }
     }
 
@@ -79,13 +79,13 @@ class KeyUnlocker @Inject constructor(
         }
         when (val outcome = prompt(host, identity, signature = null)) {
             is AuthOutcome.Succeeded -> Unit
-            AuthOutcome.Cancelled -> throw IllegalStateException("Unlocking ${identity.name} was cancelled, so ${host.name} was not signed in to.")
-            is AuthOutcome.Failed -> throw IllegalStateException("${identity.name} could not be unlocked: ${outcome.message}")
+            AuthOutcome.Cancelled -> throw IllegalStateException(cancelledMessage(host, identity))
+            is AuthOutcome.Failed -> throw IllegalStateException("${keyName(identity)} could not be unlocked: ${outcome.message}")
         }
         return try {
             keystore.beginSign(alias)
         } catch (e: UserNotAuthenticatedException) {
-            throw IllegalStateException("${identity.name} stayed locked after unlocking. Try connecting again.", e)
+            throw IllegalStateException("${keyName(identity)} stayed locked after the unlock. Try connecting again.", e)
         }
     }
 
@@ -96,7 +96,7 @@ class KeyUnlocker @Inject constructor(
     }
 
     private suspend fun authenticate(prompt: Prompt.UnlockKey, host: Host, identity: Identity, signature: Signature?): AuthOutcome = coroutineScope {
-        val auth = async { authenticator.authenticate("Unlock ${identity.name}", "Signing in to ${host.userAtHost}", signature) }
+        val auth = async { authenticator.authenticate(promptTitle(host), promptSubtitle(identity.name), signature) }
         val watcher = launch {
             prompt.cancelled.await()
             auth.cancel()
@@ -113,7 +113,7 @@ class KeyUnlocker @Inject constructor(
     private suspend fun invalidated(host: Host, identity: Identity, alias: String): Nothing {
         appLock.awaitUnlocked()
         val regenerate = prompts.keyInvalidated(host, identity)
-        if (!regenerate) throw IllegalStateException("${identity.name} can no longer sign: this device's fingerprints or face changed since the key was made.")
+        if (!regenerate) throw IllegalStateException("${keyName(identity)} can no longer sign: this device's fingerprints or face changed since the key was made.")
         val public = keystore.regenerate(alias, identity.protection)
         identities.update(
             identity.copy(
@@ -121,6 +121,24 @@ class KeyUnlocker @Inject constructor(
                 fingerprintSha256 = SshKeys.fingerprintSha256(public),
             ),
         )
-        throw IllegalStateException("${identity.name} has a new key pair. Add its public key to ${host.name} (Keys, Copy public key), then connect again.")
+        throw IllegalStateException("${keyName(identity)} has a new key pair. Add its public key to ${host.name} (Keys, Copy public key), then connect again.")
+    }
+
+    companion object {
+        /**
+         * A key's name is free text (`Pixel`, `work`, `this phone`), so a sentence never leads with it
+         * bare: it is always quoted and framed as a key.
+         */
+        fun keyName(name: String): String = "The key \u201C$name\u201D"
+
+        fun keyName(identity: Identity): String = keyName(identity.name)
+
+        /** The sheet's and the system prompt's title: what the user is doing, not the key's name. */
+        fun promptTitle(host: Host): String = "Sign in to ${host.name}"
+
+        fun promptSubtitle(keyName: String): String = "Confirm to sign with the key \u201C$keyName\u201D"
+
+        fun cancelledMessage(host: Host, identity: Identity): String =
+            "Cancelled before the key \u201C${identity.name}\u201D could sign, so Berth did not sign in to ${host.name}."
     }
 }
