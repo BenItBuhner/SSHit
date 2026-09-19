@@ -48,6 +48,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
@@ -68,6 +69,8 @@ fun SettingsScreen(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val deck by vm.deckLayout.collectAsState()
     val haptics by vm.hapticLevel.collectAsState()
+    val tabSwipe by vm.tabSwipeGesture.collectAsState()
+    val ctrlTabKeys by vm.ctrlTabKeysReachTerminal.collectAsState()
     val known by vm.knownHosts.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
@@ -151,6 +154,16 @@ fun SettingsScreen(
                 Text("Hold the Deck's layer key on the Stage to open the editor from a session.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
             }
 
+            Panel(label = "Gestures") {
+                CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
+                Text("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+            }
+
+            Panel(label = "Hardware keyboard") {
+                ToggleRow("Ctrl+T and Ctrl+W go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline's transpose and delete word")
+                Text("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+            }
+
             Panel(label = "Trust") {
                 ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
             }
@@ -172,3 +185,9 @@ fun SettingsScreen(
 }
 
 private val ACCENTS = listOf(0xE0A458, 0xD9776B, 0x7AD3C6, 0x8FB573, 0x89A7E0, 0xC79BD8)
+
+private fun swipeLabel(gesture: TabSwipeGesture): String = when (gesture) {
+    TabSwipeGesture.TWO_FINGER -> "Two-finger swipe"
+    TabSwipeGesture.RIGHT_EDGE -> "Right edge swipe"
+    TabSwipeGesture.NONE -> "Off"
+}

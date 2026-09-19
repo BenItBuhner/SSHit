@@ -50,6 +50,9 @@ enum class TabSwipeGesture {
 
     /** A one-finger drag that starts in the 24 dp zone at the right edge. */
     RIGHT_EDGE,
+
+    /** No touch gesture switches tabs; the strip, the switcher and the keyboard do. */
+    NONE,
 }
 
 /**
