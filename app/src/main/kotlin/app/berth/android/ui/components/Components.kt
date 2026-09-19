@@ -53,6 +53,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -65,6 +66,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -87,6 +90,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -615,6 +619,61 @@ fun BerthField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    // The same bridge BasicTextField's String overload uses: selection and composition live here,
+    // the text is the caller's, and the caller only hears about changes to the text.
+    var fieldState by remember { mutableStateOf(TextFieldValue(text = value)) }
+    val fieldValue = fieldState.copy(text = value)
+    SideEffect {
+        if (fieldValue.selection != fieldState.selection || fieldValue.composition != fieldState.composition) fieldState = fieldValue
+    }
+    var lastText by remember(value) { mutableStateOf(value) }
+    BerthField(
+        value = fieldValue,
+        onValueChange = { next ->
+            fieldState = next
+            val changed = lastText != next.text
+            lastText = next.text
+            if (changed) onValueChange(next.text)
+        },
+        modifier = modifier,
+        label = label,
+        placeholder = placeholder,
+        helper = helper,
+        isError = isError,
+        mono = mono,
+        password = password,
+        singleLine = singleLine,
+        minLines = minLines,
+        enabled = enabled,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        trailing = trailing,
+    )
+}
+
+/**
+ * [BerthField] with the caller owning selection as well as text, for fields that open with part of
+ * the value selected (a file's stem under Rename); [focusRequester] lets a sheet focus it on open.
+ */
+@Composable
+fun BerthField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String? = null,
+    helper: String? = null,
+    isError: Boolean = false,
+    mono: Boolean = false,
+    password: Boolean = false,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    enabled: Boolean = true,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    trailing: (@Composable () -> Unit)? = null,
+    focusRequester: FocusRequester? = null,
+) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
@@ -636,7 +695,9 @@ fun BerthField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
                 textStyle = style,
                 singleLine = singleLine,
                 minLines = minLines,
@@ -648,7 +709,7 @@ fun BerthField(
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty() && placeholder != null) {
+                        if (value.text.isEmpty() && placeholder != null) {
                             Text(placeholder, style = style, color = c.text3, maxLines = if (singleLine) 1 else Int.MAX_VALUE)
                         }
                         inner()
@@ -710,13 +771,18 @@ fun EmptyState(
     }
 }
 
-/** Screen header: title at the leading edge, actions trailing; 56 tall with the screen margin. */
+/**
+ * Screen header: title at the leading edge, actions trailing; 56 tall with the screen margin. The
+ * leading slot is the back action when [onBack] is given, or [navigation] when a screen has another
+ * way out of a mode (a selection header's close), so every header state shares one geometry.
+ */
 @Composable
 fun ScreenHeader(
     title: String,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    navigation: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -725,13 +791,18 @@ fun ScreenHeader(
             .padding(horizontal = BerthSpace.screenMargin - 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (onBack != null) {
-            IconAction(onClick = onBack, description = "Back") {
-                BerthIcon(BerthIcons.back)
+        when {
+            navigation != null -> {
+                navigation()
+                Spacer(Modifier.width(4.dp))
             }
-            Spacer(Modifier.width(4.dp))
-        } else {
-            Spacer(Modifier.width(8.dp))
+            onBack != null -> {
+                IconAction(onClick = onBack, description = "Back") {
+                    BerthIcon(BerthIcons.back)
+                }
+                Spacer(Modifier.width(4.dp))
+            }
+            else -> Spacer(Modifier.width(8.dp))
         }
         Text(title, style = BerthType.title, color = Berth.colors.text1, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), content = actions)
@@ -784,7 +855,6 @@ object BerthIcons {
     @DrawableRes val folder: Int = R.drawable.glyph_folder
     @DrawableRes val file: Int = R.drawable.glyph_file
     @DrawableRes val link: Int = R.drawable.glyph_link
-    @DrawableRes val sort: Int = R.drawable.glyph_sort
     @DrawableRes val close: Int = R.drawable.glyph_close
     @DrawableRes val check: Int = R.drawable.glyph_check
     @DrawableRes val edit: Int = R.drawable.glyph_edit
