@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -208,13 +209,14 @@ fun Panel(
 /**
  * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
  * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
+ * The subtitle takes a plain String or an [AnnotatedString] (mixed Mono and Caption, accent spans).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ListRow(
     title: String,
     modifier: Modifier = Modifier,
-    subtitle: String? = null,
+    subtitle: CharSequence? = null,
     selected: Boolean = false,
     surface: Color = Berth.colors.surface2,
     minHeight: Dp = 56.dp,
@@ -223,6 +225,7 @@ fun ListRow(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
     titleColor: Color = Berth.colors.text1,
+    titleStyle: TextStyle = BerthType.bodyMedium,
     subtitleStyle: TextStyle = BerthType.caption,
 ) {
     val c = Berth.colors
@@ -265,9 +268,11 @@ fun ListRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = BerthType.bodyMedium, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (subtitle != null) {
-                Text(subtitle, style = subtitleStyle, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            when (subtitle) {
+                null -> Unit
+                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else -> Text(subtitle.toString(), style = subtitleStyle, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         if (trailing != null) {
