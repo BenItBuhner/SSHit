@@ -621,11 +621,18 @@ class BerthScreenshotTest {
             graph.secrets.put(AuthResolver.passwordSecretId(box.id), sshPassword.toByteArray())
             graph.hosts.upsert(box)
             graph.hosts.upsert(askBox)
+            // The tab that was on stage when the process died, as the phone has it.
+            graph.settings.setLastActiveSessionId("s-homelab")
         }
 
         compose.setContent { AppRoot(graph.viewModel) }
-        // A cold start: the detached tabs come back onto the strip with nothing active, so the Stage is the empty state.
-        compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 }
+        // A cold start: the detached tabs come back onto the strip and the last active one is on stage with its
+        // frozen frame before anything connects (spec C3, Persistence). A missing or stale id lands on the same
+        // tab through the manager's fallback (SessionManagerTest); "No tabs" is only ever the zero-tab state.
+        compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 && graph.viewModel.activeTabId.value == "s-homelab" }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText("No tabs").assertCountEquals(0)
+        settle(300)
         capture("app-cold-start")
 
         openNewTabSheet()

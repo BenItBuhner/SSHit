@@ -101,6 +101,9 @@ class AppViewModel @Inject constructor(
     val currentWorkspaceId: StateFlow<String?> = sessions.currentWorkspaceId
     val activeTabId: StateFlow<String?> = sessions.activeTabId
 
+    /** Whether the persisted tabs are loaded; before that the Stage shows nothing rather than an empty state it cannot vouch for. */
+    val restored: StateFlow<Boolean> = sessions.restored
+
     /** The tab on stage, whatever it runs. */
     val activeTab: StateFlow<ManagedTab?> = sessions.activeTab
 

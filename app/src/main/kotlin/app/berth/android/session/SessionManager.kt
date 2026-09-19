@@ -137,8 +137,12 @@ class SessionManager @Inject constructor(
      */
     val activeTransfers = MutableStateFlow(0)
 
-    private val restored = Mutex()
+    private val restoreLock = Mutex()
     private var didRestore = false
+    private val _restored = MutableStateFlow(false)
+
+    /** Whether the persisted tabs have been loaded; until then nothing is known about the strip, not even that it is empty. */
+    val restored: StateFlow<Boolean> = _restored.asStateFlow()
 
     private val environment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
@@ -211,7 +215,7 @@ class SessionManager @Inject constructor(
     fun retryTunnel(id: String) = _sessions.value.values.forEach { it.retryTunnel(id) }
 
     /** Loads persisted tabs as detached frames, in their saved order. Safe to call more than once. */
-    suspend fun restore() = restored.withLock {
+    suspend fun restore() = restoreLock.withLock {
         if (didRestore) return@withLock
         didRestore = true
         val defaultWorkspace = workspaceRepository.ensureDefault()
@@ -250,13 +254,20 @@ class SessionManager @Inject constructor(
         }
         _sessions.value = map
         _filesTabs.value = files
-        val last = settings.lastActiveSessionId.first()?.takeIf { map.containsKey(it) || files.containsKey(it) }
+        val persisted = settings.lastActiveSessionId.first()?.takeIf { map.containsKey(it) || files.containsKey(it) }
+        val currentGroup = settings.currentWorkspaceId.first()?.takeIf { id -> groups.any { it.id == id } } ?: defaultWorkspace.id
+        // The persisted active tab comes back on stage. A missing or stale id is a real state (the first
+        // launch after the tabs migration, a tab closed from the notification while the app was dead, a
+        // settings write that never landed), and the Stage must still open on a tab rather than on "No
+        // tabs" over a strip that has them (spec C3, Launch and Persistence): the current group's first
+        // tab, else the strip's first.
+        val last = persisted ?: finalRecords.firstOrNull { it.workspaceId == currentGroup }?.id ?: finalRecords.firstOrNull()?.id
         _activeTabId.value = last
-        _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId }
-            ?: settings.currentWorkspaceId.first()?.takeIf { id -> groups.any { it.id == id } }
-            ?: defaultWorkspace.id
+        _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId } ?: currentGroup
+        if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
         map.values.filter { it.record.value.workspaceId in reconnectWorkspaces }.forEach { it.connect() }
+        _restored.value = true
     }
 
     /** Every tab right now, from the maps rather than the (asynchronous) flows. */
@@ -447,10 +458,15 @@ class SessionManager @Inject constructor(
 
     fun tab(id: String): ManagedTab? = tabNow(id)
 
-    /** Puts [id] on stage; the current group follows the active tab. */
+    /**
+     * Puts [id] on stage; the current group follows the active tab. An id no tab answers to is
+     * ignored rather than staged, so the active id always names an open tab (or nothing), whatever
+     * a caller working from a frame-old strip asks for.
+     */
     fun setActive(id: String?) {
-        _activeTabId.value = id
         val tab = id?.let { tabNow(it) }
+        if (id != null && tab == null) return
+        _activeTabId.value = id
         tab?.markSeen()
         tab?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
         scope.launch { settings.setLastActiveSessionId(id) }

@@ -126,6 +126,7 @@ fun StageScreen(
     val slots by vm.stripSlots.collectAsState()
     val groups by vm.workspaces.collectAsState()
     val activeId by vm.activeTabId.collectAsState()
+    val restored by vm.restored.collectAsState()
     val attention by vm.attentionCount.collectAsState()
     val ctrlTabKeysReachTerminal by vm.ctrlTabKeysReachTerminal.collectAsState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
@@ -196,10 +197,8 @@ fun StageScreen(
             },
         )
         val body = Modifier.weight(1f).fillMaxWidth()
-        if (tab == null) {
-            EmptyStage(onNewTab = actions::newTab, modifier = body)
-        } else {
-            holder.SaveableStateProvider(tab.id) {
+        when {
+            tab != null -> holder.SaveableStateProvider(tab.id) {
                 when (tab) {
                     is TerminalSession -> StageBody(
                         vm = vm,
@@ -217,6 +216,17 @@ fun StageScreen(
                     else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
                 }
             }
+            // The tab flows run a frame behind the manager: while an active id is set but its tab has not
+            // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
+            // that has them (spec C3, Persistence: restore is instant).
+            activeId != null || !restored -> Spacer(body)
+            slots.isNotEmpty() -> {
+                // Tabs but no active id: never the empty state; the first tab goes on stage (the manager
+                // ignores an id that no longer resolves, so a strip a frame old cannot re-stage a closed tab).
+                Spacer(body)
+                LaunchedEffect(slots) { vm.setActive(slots.first().id) }
+            }
+            else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
         }
     }
 }
