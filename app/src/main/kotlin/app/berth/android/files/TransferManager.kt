@@ -3,16 +3,26 @@ package app.berth.android.files
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import app.berth.android.session.SessionManager
 import app.berth.android.session.TerminalSession
+import app.berth.domain.model.SessionState
+import app.berth.sftp.ConflictChoice
+import app.berth.sftp.ConflictResolution
+import app.berth.sftp.FileTree
+import app.berth.sftp.FolderConflict
+import app.berth.sftp.FolderProgress
+import app.berth.sftp.FolderTransfer
+import app.berth.sftp.LinkPolicy
+import app.berth.sftp.LocalTree
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpError
+import app.berth.sftp.SftpFileSystem
 import app.berth.sftp.SftpPaths
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,12 +48,20 @@ enum class TransferKind {
 }
 
 enum class TransferState {
-    QUEUED, RUNNING, DONE, FAILED, CANCELLED;
+    QUEUED, RUNNING, DONE, FAILED, CANCELLED,
+    /** A single file left alone on a Skip answer: the one at the destination stays, nothing moved. */
+    SKIPPED;
 
     val isActive: Boolean get() = this == QUEUED || this == RUNNING
 }
 
-/** One file moving in one direction; the sheet renders these and the notification counts them. */
+/**
+ * One file, or one folder, moving in one direction; the sheet renders these and the notification
+ * counts them. A folder carries its [folder] progress: counts, the file moving now, what failed,
+ * and the conflict it waits on. For a folder [bytes] and [total] are the aggregate, so the strip's
+ * line and speed read the same either way. A single file copied into a folder that already holds
+ * its name waits on [conflict] the same way, and once over says in [note] what became of it.
+ */
 data class Transfer(
     val id: String,
     val sessionId: String,
@@ -59,16 +77,33 @@ data class Transfer(
     val error: String? = null,
     val startedAt: Long = 0L,
     val finishedAt: Long = 0L,
+    val folder: FolderProgress? = null,
+    /** Set while a single file waits for the user's answer about the one already at its destination. */
+    val conflict: FolderConflict? = null,
+    /** For a finished single file whose destination had something: what was there and what was done about it. */
+    val note: String? = null,
 ) {
-    /** 0..1 when the size is known; null for an indeterminate transfer. */
-    val fraction: Float? get() = if (total > 0) (bytes.toDouble() / total).coerceIn(0.0, 1.0).toFloat() else null
+    val isFolder: Boolean get() = folder != null
+
+    /** 0..1 when the size is known; null for an indeterminate transfer or a folder still being scanned. */
+    val fraction: Float? get() = folder?.fraction ?: if (total > 0) (bytes.toDouble() / total).coerceIn(0.0, 1.0).toFloat() else null
+
+    /** The question the copy waits on, whether it is a folder's or a single file's own. */
+    val pendingConflict: FolderConflict? get() = folder?.conflict ?: conflict
+
+    /** True while the copy waits for the user to say what to do with a file that exists already. */
+    val waiting: Boolean get() = state == TransferState.RUNNING && pendingConflict != null
 }
 
 /**
  * The transfer queue: downloads to SAF documents or the share cache and uploads from picked
  * documents, one at a time per session, each on its own `sftp` channel so the browser's listing
- * never waits behind a copy. Lives in the session scope, so leaving the Files screen changes
- * nothing; the foreground notification names the count through [SessionManager.activeTransfers].
+ * never waits behind a copy. Folders go the same way as one transfer each, walked and copied by
+ * [FolderTransfer] into or out of the tree the user picked; a conflict inside one pauses it until
+ * [resolveConflict] answers, and what failed can go again with [retryFailed]. Lives in the session
+ * scope, so leaving the Files screen changes nothing; the foreground notification names the count
+ * through [SessionManager.activeTransfers] and how many wait on the user through
+ * [SessionManager.waitingTransfers].
  */
 class TransferManager(
     private val context: Context,
@@ -82,38 +117,133 @@ class TransferManager(
     private val _changedFolders = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 16)
     val changedFolders: SharedFlow<Pair<String, String>> = _changedFolders.asSharedFlow()
 
+    /** Opens the channel a transfer runs on; tests point this at a fake file system. */
+    internal var channelFor: suspend (TerminalSession) -> SftpFileSystem = { it.openSftp() }
+
+    /** How links inside a folder are treated; see [LinkPolicy]. */
+    var linkPolicy: LinkPolicy = LinkPolicy.FOLLOW_FILE_LINKS
+
     private val jobs = HashMap<String, Job>()
     private val lanes = HashMap<String, Mutex>()
+    private val conflicts = HashMap<String, CompletableDeferred<ConflictResolution>>()
+    /** Answers that arrived in the moment between a conflict showing and the copy asking for it. */
+    private val answers = HashMap<String, ConflictResolution>()
+    private val folders = HashMap<String, FolderSpec>()
 
-    /** Copies [entry] into the document at [target], which the SAF create-document flow produced. */
-    fun download(session: TerminalSession, entry: SftpEntry, target: Uri): String =
-        enqueue(session, TransferKind.DOWNLOAD, entry.name, entry.path, entry.size) { t, progress ->
-            val fs = session.openSftp()
+    /** What a folder transfer was, so a retry can run the failed part of it again. */
+    private class FolderSpec(val session: TerminalSession, val kind: TransferKind, val entry: SftpEntry?, val remoteDir: String, val tree: Uri)
+
+    /**
+     * Copies [entry] into the document at [target], which the SAF create-document flow produced.
+     * The row is named after that document, since the picker may have given it another name.
+     */
+    fun download(session: TerminalSession, entry: SftpEntry, target: Uri): String {
+        val saved = describe(target).first ?: entry.name
+        return enqueue(session, TransferKind.DOWNLOAD, saved, entry.path, entry.size) { h ->
+            val fs = channelFor(session)
             try {
-                context.contentResolver.openOutputStream(target, "wt")?.use { out -> fs.download(entry.path, out, progress) }
+                context.contentResolver.openOutputStream(target, "wt")?.use { out -> fs.download(entry.path, out, h.bytes) }
                     ?: throw IOException("Couldn't open the destination.")
             } finally {
                 fs.close()
             }
-            t
+        }
+    }
+
+    /**
+     * Copies [entries] into the folder the SAF tree picker returned: each file as one transfer,
+     * each folder as one folder transfer. A file whose name the folder already holds asks through
+     * the transfer's [Transfer.conflict], the way a file inside a folder does; Apply to all there
+     * covers the selection's other files, while each folder asks for its own.
+     */
+    fun downloadInto(session: TerminalSession, entries: List<SftpEntry>, tree: Uri): List<String> {
+        val files = entries.count { it.isRegularFile }
+        val batch = Batch()
+        var placed = 0
+        return entries.mapNotNull { entry ->
+            when {
+                entry.isDirectory -> downloadFolder(session, entry, tree)
+                entry.isRegularFile -> downloadFile(session, entry, tree, batch, remaining = files - ++placed)
+                else -> null
+            }
+        }
+    }
+
+    /** The answer one file of a selection made for the rest of them. */
+    private class Batch {
+        @Volatile var sticky: ConflictChoice? = null
+    }
+
+    private fun downloadFile(session: TerminalSession, entry: SftpEntry, tree: Uri, batch: Batch, remaining: Int): String =
+        enqueue(session, TransferKind.DOWNLOAD, entry.name, entry.path, entry.size) { h ->
+            val local = treeFor(tree)
+            val present = withContext(Dispatchers.IO) { local.children(local.root) }.associateBy { it.name }
+            var target = present[entry.name]
+            var name = entry.name
+            if (target != null) {
+                val choice = batch.sticky ?: run {
+                    // The path names the picked folder, so the sheet can say where the file is going.
+                    val conflict = FolderConflict(
+                        "${local.root.name}/${entry.name}",
+                        incomingSize = entry.size,
+                        existingSize = target.size,
+                        remaining = remaining,
+                        incomingModified = entry.modifiedAt.takeIf { it > 0 },
+                        existingModified = target.modifiedAt,
+                    )
+                    patch(h.id) { it.copy(conflict = conflict) }
+                    val answer = try {
+                        awaitAnswer(h.id)
+                    } finally {
+                        patch(h.id) { it.copy(conflict = null) }
+                    }
+                    if (answer.applyToAll) batch.sticky = answer.choice
+                    answer.choice
+                }
+                when (choice) {
+                    ConflictChoice.SKIP -> throw Skipped("${entry.name} was there \u00B7 left as it was")
+                    ConflictChoice.OVERWRITE -> patch(h.id) { it.copy(note = "${entry.name} was there \u00B7 replaced") }
+                    ConflictChoice.KEEP_BOTH -> {
+                        name = SftpPaths.keepBothName(entry.name, present.keys)
+                        target = null
+                        // The row is named after what is saved before a byte moves, so it never claims a name the folder does not hold.
+                        patch(h.id) { it.copy(name = name, note = "${entry.name} was there \u00B7 saved as $name") }
+                    }
+                }
+            }
+            val fs = channelFor(session)
+            try {
+                val out = withContext(Dispatchers.IO) { local.openWrite(target ?: local.createFile(local.root, name)) }
+                out.use { fs.download(entry.path, it, h.bytes) }
+            } finally {
+                fs.close()
+            }
         }
 
-    /** Copies every file in [entries] into the folder the SAF tree picker returned; folders inside are skipped. */
-    fun downloadInto(session: TerminalSession, entries: List<SftpEntry>, tree: Uri): List<String> {
-        val dir = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-        return entries.filter { it.isRegularFile }.map { entry ->
-            enqueue(session, TransferKind.DOWNLOAD, entry.name, entry.path, entry.size) { t, progress ->
-                val doc = withContext(Dispatchers.IO) {
-                    DocumentsContract.createDocument(context.contentResolver, dir, mimeFor(entry.name), entry.name)
-                } ?: throw IOException("Couldn't create ${entry.name} in the chosen folder.")
-                val fs = session.openSftp()
-                try {
-                    context.contentResolver.openOutputStream(doc, "wt")?.use { out -> fs.download(entry.path, out, progress) }
-                        ?: throw IOException("Couldn't open the destination.")
-                } finally {
-                    fs.close()
-                }
-                t
+    /** Ends a single file's run as [TransferState.SKIPPED], with the line its row shows. */
+    private class Skipped(val note: String) : Exception(note)
+
+    /**
+     * Copies the folder [entry] and everything under it into the picked [tree], as a folder of the
+     * same name there. Files already in place ask through the conflict on the transfer; folders merge.
+     */
+    fun downloadFolder(session: TerminalSession, entry: SftpEntry, tree: Uri, only: Set<String>? = null): String {
+        val spec = FolderSpec(session, TransferKind.DOWNLOAD, entry, entry.path, tree)
+        return enqueueFolder(spec, entry.name) { h, fs, local ->
+            FolderTransfer(fs, local, linkPolicy, onProgress = h.folder, resolve = { awaitAnswer(h.id) }).download(entry.path, only)
+        }
+    }
+
+    /** Copies the picked [tree] into [dir] on the server, as a folder of the tree's name, making folders as needed. */
+    fun uploadFolder(session: TerminalSession, tree: Uri, dir: String, only: Set<String>? = null): String {
+        val local = treeFor(tree)
+        val name = local.root.name
+        val spec = FolderSpec(session, TransferKind.UPLOAD, null, dir, tree)
+        return enqueueFolder(spec, name, local) { h, fs, tree ->
+            try {
+                FolderTransfer(fs, tree, linkPolicy, onProgress = h.folder, resolve = { awaitAnswer(h.id) }).upload(dir, only)
+            } finally {
+                _changedFolders.tryEmit(session.id to dir)
             }
         }
     }
@@ -122,10 +252,10 @@ class TransferManager(
     fun share(session: TerminalSession, entry: SftpEntry): String {
         val cacheDir = File(context.cacheDir, SHARE_DIR).apply { mkdirs() }
         val file = File(cacheDir, entry.name.ifBlank { "file" })
-        return enqueue(session, TransferKind.DOWNLOAD, entry.name, entry.path, entry.size) { t, progress ->
-            val fs = session.openSftp()
+        return enqueue(session, TransferKind.DOWNLOAD, entry.name, entry.path, entry.size) { h ->
+            val fs = channelFor(session)
             try {
-                file.outputStream().use { out -> fs.download(entry.path, out, progress) }
+                file.outputStream().use { out -> fs.download(entry.path, out, h.bytes) }
             } finally {
                 fs.close()
             }
@@ -138,39 +268,115 @@ class TransferManager(
             }
             val chooser = Intent.createChooser(send, entry.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { context.startActivity(chooser) }
-            t
         }
     }
 
     /** Uploads the picked documents into [dir] on the server, named as the picker reported them. */
     fun upload(session: TerminalSession, uris: List<Uri>, dir: String): List<String> = uris.map { uri ->
-        val (name, size) = describe(uri)
+        val (described, size) = describe(uri)
+        val name = described ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { SftpPaths.isValidName(it) } ?: "upload"
         val remote = SftpPaths.join(dir, name)
-        enqueue(session, TransferKind.UPLOAD, name, remote, size) { t, progress ->
-            val fs = session.openSftp()
+        enqueue(session, TransferKind.UPLOAD, name, remote, size) { h ->
+            val fs = channelFor(session)
             try {
-                context.contentResolver.openInputStream(uri)?.use { input -> fs.upload(input, size, remote, progress) }
+                context.contentResolver.openInputStream(uri)?.use { input -> fs.upload(input, size, remote, h.bytes) }
                     ?: throw IOException("Couldn't read $name.")
             } finally {
                 fs.close()
             }
             _changedFolders.tryEmit(session.id to dir)
-            t
+        }
+    }
+
+    /** Answers the conflict a transfer waits on, a folder's or a single file's; nothing happens when it is not waiting. */
+    fun resolveConflict(id: String, choice: ConflictChoice, applyToAll: Boolean) {
+        val answer = ConflictResolution(choice, applyToAll)
+        val asked = synchronized(conflicts) {
+            conflicts[id] ?: run {
+                // The row shows the question a moment before the copy starts waiting on it; an answer in that moment is kept for it.
+                if (_transfers.value.any { it.id == id && it.waiting }) answers[id] = answer
+                null
+            }
+        }
+        asked?.complete(answer)
+    }
+
+    /**
+     * Runs the failed part of a finished folder transfer again as a new transfer: the files and
+     * folders that failed, nothing else. Null when there is nothing to retry or the session is
+     * closed; one that is merely down runs and fails as not connected, the way any transfer would.
+     */
+    fun retryFailed(id: String): String? {
+        val transfer = _transfers.value.firstOrNull { it.id == id } ?: return null
+        val failed = transfer.folder?.failures?.filter { it.retryable }?.mapTo(LinkedHashSet()) { it.relativePath } ?: return null
+        if (failed.isEmpty() || transfer.state.isActive) return null
+        val spec = synchronized(folders) { folders[id] } ?: return null
+        if (spec.session.state == SessionState.CLOSED) return null
+        // The folder itself failing means everything under it goes again.
+        val only = if ("" in failed) null else failed
+        return when (spec.kind) {
+            TransferKind.DOWNLOAD -> downloadFolder(spec.session, spec.entry!!, spec.tree, only)
+            TransferKind.UPLOAD -> uploadFolder(spec.session, spec.tree, spec.remoteDir, only)
         }
     }
 
     fun cancel(id: String) {
-        jobs[id]?.cancel()
+        synchronized(jobs) { jobs[id] }?.cancel()
     }
 
     fun cancelAll() {
-        jobs.values.toList().forEach { it.cancel() }
+        synchronized(jobs) { jobs.values.toList() }.forEach { it.cancel() }
     }
 
     /** Drops finished, failed and cancelled rows from the sheet. */
     fun clearFinished() {
         _transfers.update { list -> list.filter { it.state.isActive } }
+        val kept = _transfers.value.mapTo(HashSet()) { it.id }
+        synchronized(folders) { folders.keys.retainAll(kept) }
     }
+
+    /** The tree behind a picked URI: a plain directory for `file:` (tests), the documents provider otherwise. */
+    private fun treeFor(uri: Uri): LocalTree = if (uri.scheme == "file") FileTree(File(uri.path!!)) else SafTree(context, uri)
+
+    private fun enqueueFolder(spec: FolderSpec, name: String, local: LocalTree? = null, run: suspend (Handle, SftpFileSystem, LocalTree) -> FolderProgress): String {
+        val remotePath = spec.entry?.path ?: SftpPaths.join(spec.remoteDir, name)
+        // The picker's grant is tied to the activity that asked; the copy may outlive it, so the grant is kept until the copy ends.
+        val persisted = spec.tree.scheme == "content" && runCatching {
+            context.contentResolver.takePersistableUriPermission(spec.tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }.isSuccess
+        val id = enqueue(spec.session, spec.kind, name, remotePath, total = -1L, folder = FolderProgress()) { h ->
+            val tree = local ?: treeFor(spec.tree)
+            val fs = channelFor(spec.session)
+            try {
+                run(h, fs, tree)
+            } finally {
+                fs.close()
+                if (persisted) {
+                    runCatching {
+                        context.contentResolver.releasePersistableUriPermission(spec.tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    }
+                }
+            }
+        }
+        synchronized(folders) { folders[id] = spec }
+        return id
+    }
+
+    private suspend fun awaitAnswer(id: String): ConflictResolution {
+        val deferred = CompletableDeferred<ConflictResolution>()
+        synchronized(conflicts) {
+            answers.remove(id)?.let { return it }
+            conflicts[id] = deferred
+        }
+        try {
+            return deferred.await()
+        } finally {
+            synchronized(conflicts) { conflicts.remove(id) }
+        }
+    }
+
+    /** What a running transfer reports through: bytes for a file, the whole picture for a folder. */
+    private class Handle(val id: String, val bytes: (Long, Long) -> Unit, val folder: (FolderProgress) -> Unit)
 
     private fun enqueue(
         session: TerminalSession,
@@ -178,10 +384,11 @@ class TransferManager(
         name: String,
         remotePath: String,
         total: Long,
-        run: suspend (Transfer, (Long, Long) -> Unit) -> Transfer,
+        folder: FolderProgress? = null,
+        run: suspend (Handle) -> Unit,
     ): String {
         val id = UUID.randomUUID().toString()
-        val transfer = Transfer(id, session.id, session.host.name, kind, name, remotePath, total)
+        val transfer = Transfer(id, session.id, session.host.name, kind, name, remotePath, total, folder = folder)
         _transfers.update { it + transfer }
         publishCount()
         val lane = synchronized(lanes) { lanes.getOrPut(session.id) { Mutex() } }
@@ -191,20 +398,40 @@ class TransferManager(
                 publishCount()
                 val meter = SpeedMeter()
                 var lastPublish = 0L
-                val progress: (Long, Long) -> Unit = { bytes, size ->
+                val bytes: (Long, Long) -> Unit = { copied, size ->
                     val now = System.nanoTime()
-                    val speed = meter.update(bytes, now)
-                    if (now - lastPublish > PUBLISH_INTERVAL_NANOS || bytes == size) {
+                    val speed = meter.update(copied, now)
+                    if (now - lastPublish > PUBLISH_INTERVAL_NANOS || copied == size) {
                         lastPublish = now
-                        patch(id) { it.copy(bytes = bytes, total = if (size > 0) size else it.total, bytesPerSecond = speed) }
+                        patch(id) { it.copy(bytes = copied, total = if (size > 0) size else it.total, bytesPerSecond = speed) }
+                    }
+                }
+                var lastFolder: FolderProgress? = null
+                val folderProgress: (FolderProgress) -> Unit = { p ->
+                    val now = System.nanoTime()
+                    val speed = meter.update(p.bytesDone, now)
+                    // Chunks are throttled like bytes; a change of shape (a file done, a conflict, a failure) goes out at once.
+                    if (lastFolder?.sameShape(p) != true || now - lastPublish > PUBLISH_INTERVAL_NANOS) {
+                        lastPublish = now
+                        lastFolder = p
+                        patch(id) { it.copy(folder = p, bytes = p.bytesDone, total = p.bytesTotal, bytesPerSecond = speed) }
                     }
                 }
                 try {
-                    run(transfer, progress)
-                    patch(id) { it.copy(state = TransferState.DONE, bytes = if (it.total > 0) it.total else it.bytes, finishedAt = System.currentTimeMillis()) }
+                    run(Handle(id, bytes, folderProgress))
+                    patch(id) { t ->
+                        val f = t.folder
+                        when {
+                            f == null -> t.copy(state = TransferState.DONE, bytes = if (t.total > 0) t.total else t.bytes, finishedAt = System.currentTimeMillis())
+                            f.filesFailed > 0 -> t.copy(state = TransferState.FAILED, error = folderOutcome(f), finishedAt = System.currentTimeMillis())
+                            else -> t.copy(state = TransferState.DONE, finishedAt = System.currentTimeMillis())
+                        }
+                    }
                 } catch (e: CancellationException) {
                     patch(id) { it.copy(state = TransferState.CANCELLED, finishedAt = System.currentTimeMillis()) }
                     throw e
+                } catch (e: Skipped) {
+                    patch(id) { it.copy(state = TransferState.SKIPPED, note = e.note, finishedAt = System.currentTimeMillis()) }
                 } catch (e: Throwable) {
                     val reason = when (e) {
                         is SftpError -> e.message ?: "The transfer failed."
@@ -214,6 +441,7 @@ class TransferManager(
                     patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = System.currentTimeMillis()) }
                 } finally {
                     synchronized(jobs) { jobs.remove(id) }
+                    synchronized(conflicts) { answers.remove(id) }
                     publishCount()
                 }
             }
@@ -222,16 +450,24 @@ class TransferManager(
         return id
     }
 
+    private fun FolderProgress.sameShape(other: FolderProgress): Boolean =
+        phase == other.phase && filesTotal == other.filesTotal && filesDone == other.filesDone && filesCopied == other.filesCopied &&
+            current == other.current && conflict == other.conflict && failures.size == other.failures.size
+
     private fun patch(id: String, change: (Transfer) -> Transfer) {
         _transfers.update { list -> list.map { if (it.id == id) change(it) else it } }
+        // A conflict comes and goes through here; the notification says when a copy waits on the user.
+        sessions.waitingTransfers.value = _transfers.value.count { it.waiting }
     }
 
     private fun publishCount() {
-        sessions.activeTransfers.value = _transfers.value.count { it.state.isActive }
+        val list = _transfers.value
+        sessions.activeTransfers.value = list.count { it.state.isActive }
+        sessions.waitingTransfers.value = list.count { it.waiting }
     }
 
-    /** Display name and size of a picked document; the size is -1 when the provider does not say. */
-    private fun describe(uri: Uri): Pair<String, Long> {
+    /** Display name and size of a picked document: the name null when nothing usable is known, the size -1 when the provider does not say. */
+    private fun describe(uri: Uri): Pair<String?, Long> {
         var name: String? = null
         var size = -1L
         runCatching {
@@ -244,7 +480,7 @@ class TransferManager(
                 }
             }
         }
-        return (name?.takeIf { SftpPaths.isValidName(it) } ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { SftpPaths.isValidName(it) } ?: "upload") to size
+        return name?.takeIf { SftpPaths.isValidName(it) } to size
     }
 
     /** Bytes per second smoothed over the last second or so, so the number does not flicker. */
@@ -277,6 +513,16 @@ class TransferManager(
         fun mimeFor(name: String): String {
             val ext = name.substringAfterLast('.', "").lowercase()
             return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        }
+
+        /** The one line a finished folder with failures carries: how many, and of what. */
+        fun folderOutcome(p: FolderProgress): String {
+            val files = p.failures.count { it.retryable && !it.isDirectory }
+            val dirs = p.failures.count { it.retryable && it.isDirectory }
+            return buildList {
+                if (files > 0) add(if (files == 1) "1 file" else "$files files")
+                if (dirs > 0) add(if (dirs == 1) "1 folder" else "$dirs folders")
+            }.joinToString(" and ") + " didn't copy."
         }
     }
 }

@@ -52,7 +52,7 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
 
     override suspend fun mkdir(path: String) = io(path, "creating a folder") {
         try {
-            raw.mkdir(path)
+            raw.sftpEngine.makeDir(path, DIRECTORY_ATTRIBUTES)
         } catch (e: SFTPException) {
             // Protocol 3 servers report "exists" as a plain failure; say what actually happened.
             if (e.statusCode == Response.StatusCode.FAILURE && raw.statExistence(path) != null) throw SftpError.AlreadyExists(path)
@@ -107,7 +107,7 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
     }
 
     override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (Long, Long) -> Unit) = io(path, "uploading") {
-        val file = raw.open(path, EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC))
+        val file = raw.open(path, EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC), FILE_ATTRIBUTES)
         try {
             val out = file.RemoteFileOutputStream(0L, WRITE_AHEAD_PACKETS)
             val buffer = ByteArray(CHUNK_BYTES)
@@ -220,6 +220,14 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
         private const val BINARY_SNIFF_BYTES = 8 * 1024
         /** Symlinks per listing whose target is looked up; the rest resolve on tap. */
         private const val MAX_LINKS_RESOLVED = 24
+
+        /**
+         * The mode a new file or folder asks for, sent with the create so it costs no round trip:
+         * 644 and 755, the same on every server whatever its umask leaves as the default (a
+         * stricter umask still takes bits away, as it should).
+         */
+        private val FILE_ATTRIBUTES: FileAttributes = FileAttributes.Builder().withPermissions(0b110_100_100).build()
+        private val DIRECTORY_ATTRIBUTES: FileAttributes = FileAttributes.Builder().withPermissions(0b111_101_101).build()
 
         /** Opens the sftp subsystem on [connection]; throws [SftpError.NotConnected] when it has no live client. */
         suspend fun open(connection: SshConnection): SftpClient {

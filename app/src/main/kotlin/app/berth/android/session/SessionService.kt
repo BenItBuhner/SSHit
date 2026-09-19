@@ -44,7 +44,8 @@ class SessionService : Service() {
         val count = intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1
         val tunnels = intent?.getIntExtra(EXTRA_TUNNELS, 0) ?: 0
         val transfers = intent?.getIntExtra(EXTRA_TRANSFERS, 0) ?: 0
-        val notification = buildNotification(count, tunnels, transfers)
+        val waiting = intent?.getIntExtra(EXTRA_WAITING, 0) ?: 0
+        val notification = buildNotification(count, tunnels, transfers, waiting)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -58,7 +59,12 @@ class SessionService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(count: Int, tunnels: Int, transfers: Int): Notification {
+    /**
+     * `1 session live · 1 tunnel · 2 transfers · 1 waiting on you`: [waiting] is how many of the
+     * transfers have stopped for an answer only the Files tab can give, so a copy that stalled
+     * while the app was in the background does not read as one that is running.
+     */
+    private fun buildNotification(count: Int, tunnels: Int, transfers: Int, waiting: Int): Notification {
         val open = PendingIntent.getActivity(
             this, 0, SessionManager.openAppIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -77,8 +83,15 @@ class SessionService : Service() {
             }
             when (transfers) {
                 0 -> Unit
-                1 -> append(" \u00B7 ").append(getString(R.string.notification_one_transfer))
-                else -> append(" \u00B7 ").append(getString(R.string.notification_transfers, transfers))
+                1 -> append(" \u00B7 ").append(getString(if (waiting > 0) R.string.notification_one_transfer_waiting else R.string.notification_one_transfer))
+                else -> {
+                    append(" \u00B7 ").append(getString(R.string.notification_transfers, transfers))
+                    when (waiting) {
+                        0 -> Unit
+                        1 -> append(" \u00B7 ").append(getString(R.string.notification_one_waiting))
+                        else -> append(" \u00B7 ").append(getString(R.string.notification_waiting, waiting))
+                    }
+                }
             }
         }
         return Notification.Builder(this, CHANNEL_ID)
@@ -112,12 +125,14 @@ class SessionService : Service() {
         private const val EXTRA_COUNT = "count"
         private const val EXTRA_TUNNELS = "tunnels"
         private const val EXTRA_TRANSFERS = "transfers"
+        private const val EXTRA_WAITING = "waiting"
 
-        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0, transferCount: Int = 0) {
+        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0, transferCount: Int = 0, waitingCount: Int = 0) {
             val intent = Intent(context, SessionService::class.java)
                 .putExtra(EXTRA_COUNT, activeCount)
                 .putExtra(EXTRA_TUNNELS, tunnelCount)
                 .putExtra(EXTRA_TRANSFERS, transferCount)
+                .putExtra(EXTRA_WAITING, waitingCount)
             runCatching { context.startForegroundService(intent) }
         }
 

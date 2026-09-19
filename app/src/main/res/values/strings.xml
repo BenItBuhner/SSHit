@@ -9,5 +9,9 @@
     <string name="notification_tunnels">%1$d tunnels</string>
     <string name="notification_one_transfer">1 transfer</string>
     <string name="notification_transfers">%1$d transfers</string>
+    <!-- A transfer stopped for an answer (a file already at its destination) that only the Files tab can give. -->
+    <string name="notification_one_transfer_waiting">1 transfer · waiting on you</string>
+    <string name="notification_one_waiting">1 waiting on you</string>
+    <string name="notification_waiting">%1$d waiting on you</string>
     <string name="notification_detach_all">Detach all</string>
 </resources>

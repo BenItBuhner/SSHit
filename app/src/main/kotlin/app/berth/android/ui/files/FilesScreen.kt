@@ -80,6 +80,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -115,6 +116,7 @@ import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.FilesSort
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.SessionState
+import app.berth.sftp.ConflictChoice
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpPaths
@@ -126,14 +128,16 @@ import app.berth.sftp.TextRead
  * the pane below only calls them.
  */
 class FilesActions(
-    /** Regular files among [entries] go to a document (one) or a picked folder (several). */
+    /** Files and folders among [entries]: one file goes to a document, anything else into a picked folder. */
     val download: (entries: List<SftpEntry>) -> Unit,
     val share: (entry: SftpEntry) -> Unit,
     /** Picks documents and uploads them into the folder being shown. */
     val upload: () -> Unit,
+    /** Picks a folder on the device and uploads it, as a folder of its name, into the folder being shown. */
+    val uploadFolder: () -> Unit = {},
 ) {
     companion object {
-        val None = FilesActions({}, {}, {})
+        val None = FilesActions({}, {}, {}, {})
     }
 }
 
@@ -179,25 +183,39 @@ fun FilesTabBody(vm: AppViewModel, tab: FilesTab, onLendOverflow: (OverflowRows?
         val session = tab.ride.value
         if (uris.isNotEmpty() && session != null) queue.upload(session, uris, browser.state.value.path)
     }
+    // The folder being shown when the picker opened, so the upload lands there even if the listing moved on.
+    var pendingUploadDir by remember { mutableStateOf<String?>(null) }
+    val openTreeToUpload = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val dir = pendingUploadDir
+        pendingUploadDir = null
+        val session = tab.ride.value
+        if (uri != null && dir != null && session != null) queue.uploadFolder(session, uri, dir)
+    }
     val actions = FilesActions(
         download = { entries ->
-            val files = entries.filter { it.isRegularFile }
+            val wanted = entries.filter { it.isRegularFile || it.isDirectory }
             when {
-                files.isEmpty() -> browser.post(Notice("Only files can be downloaded.", isError = true))
+                wanted.isEmpty() -> browser.post(Notice("Only files and folders can be downloaded.", isError = true))
                 login() == null -> Unit
-                files.size == 1 -> {
-                    val file = files.single()
+                wanted.size == 1 && wanted.single().isRegularFile -> {
+                    val file = wanted.single()
                     pendingDocument = file
                     createDocument.launch(file.name to TransferManager.mimeFor(file.name))
                 }
                 else -> {
-                    pendingBatch = files
+                    pendingBatch = wanted
                     openTree.launch(null)
                 }
             }
         },
         share = { entry -> login()?.let { queue.share(it, entry) } },
         upload = { if (login() != null) openDocuments.launch(arrayOf("*/*")) },
+        uploadFolder = {
+            if (login() != null) {
+                pendingUploadDir = browser.state.value.path
+                openTreeToUpload.launch(null)
+            }
+        },
     )
 
     FilesPane(
@@ -209,6 +227,8 @@ fun FilesTabBody(vm: AppViewModel, tab: FilesTab, onLendOverflow: (OverflowRows?
         transfers = transfers,
         onCancelTransfer = queue::cancel,
         onClearFinished = queue::clearFinished,
+        onResolveConflict = queue::resolveConflict,
+        onRetryFailed = { id -> if (queue.retryFailed(id) == null) browser.post(Notice("That session is gone.", isError = true)) },
         terminalCwd = rideRecord?.cwd,
         recent = prefs.recentFor(tab.host.id),
         actions = actions,
@@ -285,11 +305,13 @@ private enum class Foot { TRANSFER, ACTIONS }
  * the end of the breadcrumb row, and while rows are selected the breadcrumb row itself becomes the
  * selection bar (same height), so the host's top row stays alone and nothing below moves. A host
  * with an overflow of its own passes [folderMenuHost]: the pane then draws no ⋮ at all and hands
- * the host its five folder rows every composition (withdrawn when the pane leaves), so the screen
+ * the host its six folder rows every composition (withdrawn when the pane leaves), so the screen
  * has one ⋮ and the breadcrumb row keeps Upload and Transfers; without it the headerless pane
  * keeps a Folder options ⋮ of its own. The navigation-bar inset is the pane's own either way; a
  * host adds none. [noSession] says the tab has no terminal at all to ride, so the disconnected
- * state offers Connect rather than Reconnect.
+ * state offers Connect rather than Reconnect. A copy waiting on a file that exists already, inside
+ * a folder or a single file of a selection, asks through [onResolveConflict]; what failed in a
+ * finished folder goes again through [onRetryFailed].
  */
 @Composable
 fun FilesPane(
@@ -311,6 +333,8 @@ fun FilesPane(
     header: Boolean = true,
     noSession: Boolean = false,
     folderMenuHost: ((OverflowRows?) -> Unit)? = null,
+    onResolveConflict: (id: String, choice: ConflictChoice, applyToAll: Boolean) -> Unit = { _, _, _ -> },
+    onRetryFailed: (id: String) -> Unit = {},
 ) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
@@ -357,6 +381,22 @@ fun FilesPane(
     var viewerPath by rememberSaveable { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
 
+    // A copy waiting on a file that exists already, a folder's or a single file's, asks through its
+    // own sheet once whatever sheet is open closes. Dismissed, that question is put aside and the copy
+    // keeps waiting; with several waiting, the first not put aside is asked, so one put aside never
+    // keeps another unasked. A tap on the strip or on a row brings that transfer's question back first.
+    var conflictsPutAside by remember { mutableStateOf(emptySet<Pair<String, String>>()) }
+    var askFirst by remember { mutableStateOf<String?>(null) }
+    val waiting = transfers.filter { it.waiting && (it.id to it.pendingConflict!!.relativePath) !in conflictsPutAside }
+        .let { open -> open.firstOrNull { it.id == askFirst } ?: open.firstOrNull() }
+    val conflictKey = waiting?.let { it.id to it.pendingConflict!!.relativePath }
+    val asking = waiting != null && sheet == null && viewerPath == null
+    fun askAgain(id: String) {
+        conflictsPutAside = conflictsPutAside.filterTo(HashSet()) { it.first != id }
+        askFirst = id
+        sheet = null
+    }
+
     BackHandler(enabled = selection.isNotEmpty()) { selection = emptySet() }
     BackHandler(enabled = selection.isEmpty() && state.canGoBack) { goBack() }
 
@@ -380,9 +420,10 @@ fun FilesPane(
         selection = entries.mapTo(HashSet()) { it.path }
     }
 
-    // The five folder rows, wherever the menu that holds them lives; each closes that menu, then acts.
+    // The six folder rows, wherever the menu that holds them lives; each closes that menu, then acts.
     val folderRows: OverflowRows = { dismiss ->
         MenuItem("New folder", enabled = connected && state.error == null) { dismiss(); sheet = FilesSheetKind.NewFolder }
+        MenuItem("Upload folder", enabled = connected && state.error == null) { dismiss(); actions.uploadFolder() }
         if (terminalCwd != null) {
             MenuItem("Terminal directory", enabled = terminalCwd != state.path) { dismiss(); go(terminalCwd) }
         }
@@ -501,9 +542,15 @@ fun FilesPane(
                         onChmod = { sheet = FilesSheetKind.Chmod(selected.map { it.path }) },
                         onCopyPath = { selected.singleOrNull()?.let { copyPath(it.path) } },
                         onDelete = { sheet = FilesSheetKind.Delete(selected.map { it.path }) },
+                        onHint = { browser.post(Notice(it, isError = false)) },
                     )
                     Foot.TRANSFER, null -> lastMoving.value?.let { t ->
-                        TransferStrip(t, others = transfers.count { it.state.isActive } - 1, onCancel = { onCancelTransfer(t.id) }, onClick = { sheet = FilesSheetKind.Transfers })
+                        TransferStrip(
+                            t,
+                            others = transfers.count { it.state.isActive } - 1,
+                            onCancel = { onCancelTransfer(t.id) },
+                            onClick = { if (t.waiting) askAgain(t.id) else sheet = FilesSheetKind.Transfers },
+                        )
                     }
                 }
             }
@@ -562,6 +609,16 @@ fun FilesPane(
             onCancel = onCancelTransfer,
             onClearFinished = onClearFinished,
             onDismiss = { sheet = null },
+            onRetryFailed = onRetryFailed,
+            onAnswer = ::askAgain,
+        )
+    }
+    if (asking && waiting != null && conflictKey != null) {
+        FolderConflictSheet(
+            transfer = waiting,
+            now = now,
+            onChoose = { choice, applyToAll -> onResolveConflict(waiting.id, choice, applyToAll) },
+            onDismiss = { conflictsPutAside = conflictsPutAside + conflictKey },
         )
     }
     viewerPath?.let { path ->
@@ -1009,7 +1066,10 @@ private val FootHeight = 64.dp
 /**
  * The transfer that is moving, as a full-width band like the action band, with the 2 dp progress
  * line as its top edge: direction glyph, name, one Caption line of bytes, speed and how many wait,
- * the percentage, and Cancel. A tap anywhere else opens the sheet.
+ * the percentage, and Cancel. A folder keeps the percentage, the line's own measure, and its Caption
+ * reads files done of total and speed; bytes of total belong to the sheet, so no line here carries
+ * two `X of Y` pairs. A tap anywhere else opens the sheet, or brings back the question a waiting copy
+ * is stopped on.
  */
 @Composable
 private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit, onClick: () -> Unit) {
@@ -1040,7 +1100,7 @@ private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit,
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(transfer.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0)), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0), compact = true), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(12.dp))
             Text(transferTrailing(transfer), style = BerthType.caption, color = c.text2)
@@ -1050,7 +1110,13 @@ private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit,
     }
 }
 
-/** The contextual actions for the selected rows, one glyph over one Caption each; Delete in danger. */
+/**
+ * The contextual actions for the selected rows, one glyph over one Caption each; Delete in danger.
+ * Download takes files and folders alike. Share takes one file and nothing else: a folder has no
+ * single document to hand to another app. It keeps its name when it is off, as Rename and Copy path
+ * do for two rows; the reason goes where the bar already tells reasons, a [Notice] on a tap of the
+ * disabled item, through [onHint].
+ */
 @Composable
 private fun SelectionActions(
     selected: List<SftpEntry>,
@@ -1061,10 +1127,16 @@ private fun SelectionActions(
     onChmod: () -> Unit,
     onCopyPath: () -> Unit,
     onDelete: () -> Unit,
+    onHint: (String) -> Unit,
 ) {
     val c = Berth.colors
     val single = selected.size == 1
     val files = selected.count { it.isRegularFile }
+    val folders = selected.count { it.isDirectory }
+    val shareHint = when {
+        folders > 0 -> "Share takes one file; a folder has no single document to hand on. Download takes folders."
+        else -> "Share takes one file at a time."
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1073,8 +1145,8 @@ private fun SelectionActions(
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ActionItem(BerthIcons.download, "Download", enabled = files > 0, onClick = onDownload, modifier = Modifier.weight(1f))
-        ActionItem(BerthIcons.link, "Share", enabled = single && files == 1, onClick = onShare, modifier = Modifier.weight(1f))
+        ActionItem(BerthIcons.download, "Download", enabled = files + folders > 0, onClick = onDownload, modifier = Modifier.weight(1f))
+        ActionItem(BerthIcons.link, "Share", enabled = single && files == 1, onClick = onShare, modifier = Modifier.weight(1f), onDisabledClick = { onHint(shareHint) })
         ActionItem(BerthIcons.edit, "Rename", enabled = single && canWrite, onClick = onRename, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.lock, "Mode", enabled = selected.isNotEmpty() && canWrite, onClick = onChmod, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.copy, "Copy path", enabled = single, onClick = onCopyPath, modifier = Modifier.weight(1f))
@@ -1082,8 +1154,21 @@ private fun SelectionActions(
     }
 }
 
+/**
+ * One action of the bar. Off, it is drawn muted and does nothing, unless [onDisabledClick] is given:
+ * then a tap on it still lands and says why it is off, while the item itself stays disabled to
+ * assistive tech through its state.
+ */
 @Composable
-private fun ActionItem(icon: Int, label: String, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, danger: Boolean = false) {
+private fun ActionItem(
+    icon: Int,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+    onDisabledClick: (() -> Unit)? = null,
+) {
     val c = Berth.colors
     val tint = when {
         !enabled -> c.text3.copy(alpha = 0.6f)
@@ -1093,7 +1178,8 @@ private fun ActionItem(icon: Int, label: String, enabled: Boolean, onClick: () -
     Column(
         modifier
             .clip(RoundedCornerShape(BerthRadius.row))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled || onDisabledClick != null, onClick = { if (enabled) onClick() else onDisabledClick?.invoke() })
+            .then(if (!enabled && onDisabledClick != null) Modifier.semantics { disabled() } else Modifier)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),

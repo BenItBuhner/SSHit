@@ -140,6 +140,23 @@ object SftpPaths {
     }
 
     fun isValidName(name: String): Boolean = name.isNotEmpty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\u0000')
+
+    /**
+     * The name a copy takes beside the original when both are kept: `report (1).pdf`, then
+     * `report (2).pdf`, the counter before the last extension; a dotfile or a name without a dot
+     * takes it at the end. The first not in [taken] wins.
+     */
+    fun keepBothName(name: String, taken: Set<String>): String {
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (true) {
+            val candidate = "$stem ($i)$ext"
+            if (candidate !in taken) return candidate
+            i++
+        }
+    }
 }
 
 /** Everything the file browser can hit, so the screen can say something useful instead of a code. */

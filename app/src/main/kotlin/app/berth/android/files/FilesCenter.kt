@@ -14,6 +14,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -29,8 +30,9 @@ import javax.inject.Singleton
  * tab or session does rather than the screen, so a browser keeps its folder and a copy keeps
  * running while the user is on another tab. The browser follows the tab's ride: a new ride means
  * a fresh channel, a ride coming back means a re-list, and every folder that lists is written to
- * the tab for its title and for reopening after a restart. Preferences are the JSON document in
- * settings.
+ * the tab for its title and for reopening after a restart. A transfer stopped on a question is
+ * told to the Files tab of its session, which raises attention while the user is elsewhere.
+ * Preferences are the JSON document in settings.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -75,6 +77,14 @@ class FilesCenter @Inject constructor(
             transfers.changedFolders.collect { (sessionId, dir) ->
                 val affected = synchronized(slots) { slots.values.filter { sessions.filesTab(it.browser.tabId)?.ride?.value?.id == sessionId }.map { it.browser } }
                 affected.filter { it.state.value.path == dir }.forEach { it.refresh() }
+            }
+        }
+        scope.launch {
+            // A copy stopped on a question marks the Files tab riding its session, so the stall shows on the strip and the tile, not only in the pane.
+            // Re-checked on any record change too, since that is when a Files tab re-elects its ride; the calls are idempotent, so the round the mark itself causes settles at once.
+            val waitingSessions = transfers.transfers.map { list -> list.filter { it.waiting }.mapTo(HashSet()) { it.sessionId } as Set<String> }.distinctUntilChanged()
+            combine(waitingSessions, sessions.records, sessions.tabs) { waiting, _, tabs -> waiting to tabs.filterIsInstance<FilesTab>() }.collect { (waiting, filesTabs) ->
+                filesTabs.forEach { tab -> tab.waitingOnUser(tab.ride.value?.id in waiting) }
             }
         }
     }

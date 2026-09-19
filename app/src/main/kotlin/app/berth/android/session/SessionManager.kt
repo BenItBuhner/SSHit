@@ -137,6 +137,9 @@ class SessionManager @Inject constructor(
      */
     val activeTransfers = MutableStateFlow(0)
 
+    /** Of [activeTransfers], how many wait for an answer only the Files pane can give; the notification says so. */
+    val waitingTransfers = MutableStateFlow(0)
+
     private val restoreLock = Mutex()
     private var didRestore = false
     private val _restored = MutableStateFlow(false)
@@ -167,8 +170,9 @@ class SessionManager @Inject constructor(
                 records.map { list -> list.count { it.kind == TabKind.Ssh && it.state.keepsService } },
                 tunnelStatuses.map { statuses -> statuses.count { it.value is TunnelStatus.Up } },
                 activeTransfers,
-            ) { active, tunnels, transfers -> Triple(active, tunnels, transfers) }.distinctUntilChanged().collect { (active, tunnels, transfers) ->
-                if (active > 0) SessionService.start(context, active, tunnels, transfers) else SessionService.stop(context)
+                waitingTransfers,
+            ) { active, tunnels, transfers, waiting -> ServiceCounts(active, tunnels, transfers, waiting) }.distinctUntilChanged().collect { (active, tunnels, transfers, waiting) ->
+                if (active > 0) SessionService.start(context, active, tunnels, transfers, waiting) else SessionService.stop(context)
             }
         }
         scope.launch {
@@ -614,6 +618,9 @@ class SessionManager @Inject constructor(
     }
 
     fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }
+
+    /** What the foreground notification counts: live sessions, tunnels up, transfers in flight and, of those, the ones waiting on the user. */
+    private data class ServiceCounts(val active: Int, val tunnels: Int, val transfers: Int, val waiting: Int)
 
     companion object {
         fun openAppIntent(context: Context): Intent =
