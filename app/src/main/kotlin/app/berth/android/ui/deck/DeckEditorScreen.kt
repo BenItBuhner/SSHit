@@ -80,6 +80,7 @@ import app.berth.android.ui.themes.MenuItem
 import app.berth.android.ui.themes.PasteTextSheet
 import app.berth.android.ui.themes.RenameSheet
 import app.berth.android.ui.themes.snappedTo
+import app.berth.domain.model.DECK_MAX_KEYS_PER_LAYER
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckGesture
 import app.berth.domain.model.DeckKey
@@ -185,13 +186,16 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             selectedSlot = slotIndex,
             onSelectSlot = { slot = it },
             onMoveKey = { from, to -> edit(draft.moveKey(layerIndex, from, to)); slot = to },
-            onAddKey = {
-                edit(draft.insertKey(layerIndex, Int.MAX_VALUE))
-                slot = draft.layers[layerIndex].keys.lastIndex
-                gesture = DeckGesture.TAP
-            },
         )
     }
+
+    /** Appends an empty key to the shown layer, selects it and opens the catalogue for its tap. */
+    fun addKey() {
+        edit(draft.insertKey(layerIndex, Int.MAX_VALUE))
+        slot = draft.layers[layerIndex].keys.lastIndex
+        gesture = DeckGesture.TAP
+    }
+    val canAddKey = current != null && keys.size < DECK_MAX_KEYS_PER_LAYER
 
     Column(
         modifier
@@ -288,7 +292,13 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             Panel(label = if (key != null) "Slot ${slotIndex!! + 1} \u00B7 ${key.label.ifBlank { "empty" }}" else "Slot") {
                 when {
                     // The empty state carries the discoverability hints, so the screen itself stays quiet.
-                    key == null -> Text("Tap a key in the preview to edit it, or the + slot to add one. The current layer's chip opens its menu.", style = BerthType.body, color = c.text2)
+                    key == null -> {
+                        Text("Tap a key in the preview to edit it. The current layer's chip opens its menu.", style = BerthType.body, color = c.text2)
+                        if (canAddKey) {
+                            Spacer(Modifier.height(8.dp))
+                            BerthButton("Add key", onClick = ::addKey)
+                        }
+                    }
                     key.nub -> {
                         Text("The Nub. Tap sends Up; drag sends the arrow for the dominant axis, faster the further you pull. The Arrows setting below swaps it for four keys or shows both.", style = BerthType.body, color = c.text2)
                         Spacer(Modifier.height(8.dp))
@@ -304,7 +314,8 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                         }
                         PickerRow("Label", key.display ?: "From the tap action", onClick = { labelling = true })
                         Spacer(Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (canAddKey) BerthButton("Add key", onClick = ::addKey)
                             if (keys.none { it.nub }) BerthButton("Make it the Nub", onClick = { edit(draft.setKey(layerIndex, slotIndex!!, DeckKey(nub = true))) })
                             BerthButton("Remove key", onClick = { edit(draft.removeKey(layerIndex, slotIndex!!)); slot = null }, kind = ButtonKind.DESTRUCTIVE)
                         }

@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -69,7 +68,6 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
-import app.berth.domain.model.DECK_MAX_KEYS_PER_LAYER
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckKey
@@ -89,14 +87,14 @@ fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
 
 /**
  * Hooks the Deck editor passes so the very same composable becomes the editing surface: a tap
- * selects a slot instead of sending, a long-press or a horizontal pull lifts a key and drags it
- * past its neighbours, and a trailing "+" slot appends a key. Slots index the shown layer's keys.
+ * selects a slot instead of sending, and a long-press or a horizontal pull lifts a key and drags
+ * it past its neighbours. Nothing is added to the strip, so its keys measure exactly as the
+ * Stage's do. Slots index the shown layer's keys.
  */
 class DeckEditing(
     val selectedSlot: Int?,
     val onSelectSlot: (Int) -> Unit,
     val onMoveKey: (from: Int, to: Int) -> Unit,
-    val onAddKey: (() -> Unit)? = null,
 )
 
 /**
@@ -221,7 +219,7 @@ private val DeckEdge = 8.dp
 /** Touch column of the Grip; the 6 × 24 pill is centred in it. */
 private val GripWidth = 20.dp
 
-/** One row of the Deck: grip or its spacer, the layer's slots, the add-key slot when editing, the layer key. */
+/** One row of the Deck: grip or its spacer, the layer's slots, the layer key. */
 @Composable
 private fun DeckRow(
     layout: DeckLayout,
@@ -294,21 +292,6 @@ private fun DeckRow(
                             .background(c.accent),
                     )
                 }
-            }
-        }
-        val onAdd = editing?.onAddKey
-        if (onAdd != null && layer.keys.size < DECK_MAX_KEYS_PER_LAYER) {
-            Box(
-                Modifier
-                    .width(36.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(BerthRadius.key))
-                    .background(c.surface2.copy(alpha = 0.55f))
-                    .clickable(onClick = onAdd)
-                    .semantics { contentDescription = "Add key" },
-                contentAlignment = Alignment.Center,
-            ) {
-                BerthIcon(BerthIcons.add, tint = c.text2, size = 20.dp)
             }
         }
         LayerKey(
@@ -568,112 +551,117 @@ fun DeckKeyView(
         key.secondaryLabel?.let { append(", swipe up for $it") }
     }
 
-    Box(
-        modifier
-            .clip(RoundedCornerShape(BerthRadius.key))
-            .background(bg)
-            .semantics { contentDescription = description }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    pressed = true
-                    swipe = 0
-                    var moved = false
-                    var holdFired = false
-                    val threshold = 24.dp.toPx()
-                    val slop = viewConfiguration.touchSlop
-                    val k = currentKey
-                    val repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true
-                    try {
-                        while (true) {
-                            val timeout = when {
-                                holdFired && repeating -> 55L
-                                !holdFired && !moved && (k.hold != null || repeating) -> 400L
-                                else -> Long.MAX_VALUE
-                            }
-                            val event = withTimeoutOrNull(timeout) { awaitPointerEvent() }
-                            if (event == null) {
-                                if (!holdFired) {
-                                    holdFired = true
-                                    val hold = k.hold
-                                    if (hold != null) {
-                                        patterns.hold()
-                                        currentOnHold(hold)
+    // Left reach mirrors the strip by flipping its layout direction; the inside of a key is not
+    // mirrored, or `^C` would reorder to `C^` under bidi rules and the alternate would jump to the
+    // top-left. The weight the Row gave [modifier] still applies: the provider emits no node.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Box(
+            modifier
+                .clip(RoundedCornerShape(BerthRadius.key))
+                .background(bg)
+                .semantics { contentDescription = description }
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        pressed = true
+                        swipe = 0
+                        var moved = false
+                        var holdFired = false
+                        val threshold = 24.dp.toPx()
+                        val slop = viewConfiguration.touchSlop
+                        val k = currentKey
+                        val repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true
+                        try {
+                            while (true) {
+                                val timeout = when {
+                                    holdFired && repeating -> 55L
+                                    !holdFired && !moved && (k.hold != null || repeating) -> 400L
+                                    else -> Long.MAX_VALUE
+                                }
+                                val event = withTimeoutOrNull(timeout) { awaitPointerEvent() }
+                                if (event == null) {
+                                    if (!holdFired) {
+                                        holdFired = true
+                                        val hold = k.hold
+                                        if (hold != null) {
+                                            patterns.hold()
+                                            currentOnHold(hold)
+                                        } else if (repeating) {
+                                            k.tap?.let(currentOnAction)
+                                        }
                                     } else if (repeating) {
                                         k.tap?.let(currentOnAction)
+                                        patterns.repeatTick()
                                     }
-                                } else if (repeating) {
-                                    k.tap?.let(currentOnAction)
-                                    patterns.repeatTick()
+                                    continue
                                 }
-                                continue
-                            }
-                            val change: PointerInputChange = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                if (!holdFired) {
-                                    val action = when (swipe) {
-                                        1 -> k.up ?: k.tap
-                                        -1 -> k.down ?: k.tap
-                                        else -> k.tap
+                                val change: PointerInputChange = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    if (!holdFired) {
+                                        val action = when (swipe) {
+                                            1 -> k.up ?: k.tap
+                                            -1 -> k.down ?: k.tap
+                                            else -> k.tap
+                                        }
+                                        if (action != null) {
+                                            currentOnAction(action)
+                                            // The latch has settled by now, so the pattern can tell one-shot from lock.
+                                            if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
+                                        }
                                     }
-                                    if (action != null) {
-                                        currentOnAction(action)
-                                        // The latch has settled by now, so the pattern can tell one-shot from lock.
-                                        if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
-                                    }
+                                    break
                                 }
-                                break
+                                val dy = change.position.y - down.position.y
+                                val dx = change.position.x - down.position.x
+                                if (abs(dy) > slop || abs(dx) > slop) moved = true
+                                swipe = when {
+                                    dy < -threshold -> 1
+                                    dy > threshold -> -1
+                                    else -> 0
+                                }
+                                change.consume()
                             }
-                            val dy = change.position.y - down.position.y
-                            val dx = change.position.x - down.position.x
-                            if (abs(dy) > slop || abs(dx) > slop) moved = true
-                            swipe = when {
-                                dy < -threshold -> 1
-                                dy > threshold -> -1
-                                else -> 0
-                            }
-                            change.consume()
+                        } finally {
+                            pressed = false
+                            swipe = 0
                         }
-                    } finally {
-                        pressed = false
-                        swipe = 0
                     }
-                }
-            },
-    ) {
-        val secondary = key.secondaryLabel
-        val previewing = swipe == 1 && secondary != null
-        val shown = if (previewing) secondary!! else key.label
-        Text(
-            text = shown,
-            style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
-            color = labelColor,
-            maxLines = 1,
-            modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
-        )
-        if (secondary != null && !previewing) {
-            // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
+                },
+        ) {
+            val secondary = key.secondaryLabel
+            val previewing = swipe == 1 && secondary != null
+            val shown = if (previewing) secondary!! else key.label
             Text(
-                text = secondary,
-                style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
-                color = secondaryColor,
+                text = shown,
+                style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
+                color = labelColor,
                 maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 3.dp, end = 6.dp),
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
             )
-        }
-        if (latchState == LatchState.LOCKED) {
-            // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
-            Box(
-                Modifier
-                    .align(Alignment.Center)
-                    .offset(y = LockBarOffset)
-                    .size(16.dp, 2.dp)
-                    .clip(CircleShape)
-                    .background(c.onAccent),
-            )
+            if (secondary != null && !previewing) {
+                // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
+                Text(
+                    text = secondary,
+                    style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
+                    color = secondaryColor,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 3.dp, end = 6.dp),
+                )
+            }
+            if (latchState == LatchState.LOCKED) {
+                // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .offset(y = LockBarOffset)
+                        .size(16.dp, 2.dp)
+                        .clip(CircleShape)
+                        .background(c.onAccent),
+                )
+            }
         }
     }
 }

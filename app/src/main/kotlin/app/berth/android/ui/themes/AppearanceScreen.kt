@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -236,6 +237,8 @@ internal fun Float.snappedTo(range: ClosedFloatingPointRange<Float>, step: Float
 /**
  * A Stage in miniature: the ribbon's anatomy with the drawn rail glyph, a detached terminal frame,
  * the real [StatePill] and the real Deck, so the preview cannot drift from what the Stage draws.
+ * The Deck sits flush at the bottom as it does on the Stage, so the mock is cut at the row radius:
+ * a panel's 20 dp arc would run through the outer keys' corners.
  */
 @Composable
 private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font: app.berth.domain.model.TerminalFont, deck: app.berth.domain.model.DeckLayout) {
@@ -245,7 +248,7 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(BerthRadius.panel))
+            .clip(RoundedCornerShape(BerthRadius.row))
             .background(c.surface0)
             .semantics { contentDescription = "Interface preview" },
     ) {
@@ -253,14 +256,15 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
             Modifier.fillMaxWidth().height(40.dp).background(c.surface1).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.workspace) }
+            // The ribbon's IconActions are 44 dp wide inside the 40 dp strip.
+            Box(Modifier.width(44.dp).fillMaxHeight(), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.workspace) }
             Spacer(Modifier.width(2.dp))
             Swatch(SwatchColor.VERDIGRIS, "HL", 24.dp)
             Spacer(Modifier.width(10.dp))
             Text("homelab", style = BerthType.label, color = c.text1, modifier = Modifier.weight(1f))
             Pill("1 needs you", color = c.attention.copy(alpha = 0.18f), textColor = c.attention)
             Spacer(Modifier.width(8.dp))
-            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.moreVert) }
+            Box(Modifier.width(44.dp).fillMaxHeight(), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.moreVert) }
         }
         Box(Modifier.fillMaxWidth().background(terminalTheme.background.toColor()).padding(horizontal = 10.dp, vertical = 8.dp)) {
             TerminalPreview(theme = terminalTheme, font = font.copy(sizeSp = 10), script = PreviewScript.TILE, showCursor = true)
