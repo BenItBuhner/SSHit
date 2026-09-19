@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -120,6 +121,7 @@ fun Deck(
     snippets: List<Snippet> = emptyList(),
     onOpenDeckEditor: (() -> Unit)? = null,
     editing: DeckEditing? = null,
+    surface: Color = Berth.colors.surface1,
 ) {
     val c = Berth.colors
     val layers = layout.usableLayers(hasSnippets = snippets.isNotEmpty())
@@ -140,7 +142,7 @@ fun Deck(
         Column(
             modifier
                 .fillMaxWidth()
-                .background(c.surface1)
+                .background(surface)
                 .alpha(if (enabled) 1f else 0.5f),
         ) {
             strip?.let { keys ->

@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -134,64 +137,62 @@ private fun EntryRow(entry: CatalogueEntry, selected: Boolean, onClick: () -> Un
     ListRow(entry.title, subtitle = entry.caption, surface = Color.Transparent, minHeight = 44.dp, selected = selected, onClick = onClick)
 }
 
+// Each composer is one field and one button; whatever needs saying is the field's helper line.
+
 @Composable
 private fun TextComposer(current: DeckAction.Text?, onPick: (DeckAction) -> Unit) {
-    val c = Berth.colors
     var text by remember { mutableStateOf(current?.text ?: "") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BerthField(text, { text = it }, label = "Text", mono = true, placeholder = "ls -la", helper = "Sent exactly as typed. To run a command, use a macro ending in ENTER.")
+        BerthField(text, { text = it }, label = "Text", mono = true, placeholder = "ls -la", helper = "Sent as typed; a macro ending in ENTER runs a command.")
         BerthButton("Use \u201C${text.take(18)}\u201D".takeIf { text.isNotEmpty() } ?: "Use", onClick = { onPick(DeckAction.Text(text)) }, kind = ButtonKind.PRIMARY, enabled = text.isNotEmpty())
-        Text(
-            "Labels longer than two characters show in the interface font; one or two characters use the terminal's mono font.",
-            style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp),
-        )
     }
 }
 
+/** Modifiers and the key on one line, so the chord is composed where it is read. */
 @Composable
 private fun ComboComposer(current: DeckAction.Combo?, onPick: (DeckAction) -> Unit) {
-    val c = Berth.colors
     var mods by remember { mutableStateOf(current?.modifiers ?: setOf(DeckModifier.CTRL)) }
     var target by remember { mutableStateOf(current?.target ?: "") }
     val combo = DeckCatalogue.combo(mods, target)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (m in DeckModifier.entries) {
                 Chip(m.title(), selected = m in mods) { mods = if (m in mods) mods - m else mods + m }
             }
+            Spacer(Modifier.width(2.dp))
+            BerthField(
+                value = target,
+                onValueChange = { target = it },
+                modifier = Modifier.weight(1f),
+                mono = true,
+                placeholder = "c, TAB, F5",
+                isError = target.isNotBlank() && combo == null,
+            )
         }
-        BerthField(
-            value = target,
-            onValueChange = { target = it },
-            label = "Key",
-            mono = true,
-            placeholder = "c, TAB, F5",
-            helper = combo?.pretty() ?: "One character or a key name such as TAB, ENTER or F5",
-            isError = target.isNotBlank() && combo == null,
+        Text(
+            combo?.pretty() ?: "One character or a key name such as TAB, ENTER or F5",
+            style = BerthType.caption,
+            color = if (target.isNotBlank() && combo == null) Berth.colors.danger else Berth.colors.text3,
+            modifier = Modifier.padding(start = 4.dp),
         )
         BerthButton(combo?.let { "Use ${it.pretty()}" } ?: "Use", onClick = { combo?.let(onPick) }, kind = ButtonKind.PRIMARY, enabled = combo != null)
-        Text("Combos send the chord once without latching a modifier.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
     }
 }
 
 @Composable
 private fun MacroComposer(current: DeckAction.Macro?, onPick: (DeckAction) -> Unit) {
-    val c = Berth.colors
     var text by remember { mutableStateOf(current?.macro ?: "") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BerthField(text, { text = it }, label = "Macro", mono = true, placeholder = "PREFIX c", helper = "Space-separated. PREFIX becomes the layer's tmux prefix; ENTER, TAB and other key names are sent as keys; anything else is typed.")
+        BerthField(text, { text = it }, label = "Macro", mono = true, placeholder = "PREFIX c", helper = "Space-separated: PREFIX is the layer's tmux prefix, ENTER and TAB are keys, anything else is typed.")
         BerthButton("Use", onClick = { onPick(DeckAction.Macro(text.trim())) }, kind = ButtonKind.PRIMARY, enabled = text.isNotBlank())
-        Text("Examples: `PREFIX d` detaches tmux, `:w ENTER` saves in Vim, `git status ENTER` runs a command.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
     }
 }
 
 @Composable
 private fun SnippetComposer(current: DeckAction.Snippet?, onPick: (DeckAction) -> Unit) {
-    val c = Berth.colors
     var id by remember { mutableStateOf(current?.snippetId ?: "") }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BerthField(id, { id = it }, label = "Snippet id", mono = true, placeholder = "restart-nginx", helper = "The key sends the snippet with this id when tapped.")
+        BerthField(id, { id = it }, label = "Snippet id", mono = true, placeholder = "restart-nginx", helper = "The key sends the snippet with this id.")
         BerthButton("Use", onClick = { onPick(DeckAction.Snippet(id.trim())) }, kind = ButtonKind.PRIMARY, enabled = id.isNotBlank())
-        Text("Snippets are stored by id so a Deck can be shared before the snippets themselves; the snippets screen arrives later.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
     }
 }

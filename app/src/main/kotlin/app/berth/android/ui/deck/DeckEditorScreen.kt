@@ -1,10 +1,14 @@
 package app.berth.android.ui.deck
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,11 +16,13 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,8 +30,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -39,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -46,6 +51,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.Panel
@@ -71,6 +79,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.themes.MenuItem
 import app.berth.android.ui.themes.PasteTextSheet
 import app.berth.android.ui.themes.RenameSheet
+import app.berth.android.ui.themes.snappedTo
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckGesture
 import app.berth.domain.model.DeckKey
@@ -96,6 +105,10 @@ import app.berth.domain.model.withAction
 import kotlin.math.roundToInt
 
 private const val UNDO_DEPTH = 60
+
+/** Deck heights the spec allows (A11: 44, 40–52) and the step the Height slider snaps to. */
+private val HEIGHTS = 40f..52f
+private const val HEIGHT_STEP = 4f
 
 /**
  * The Deck editor (UX spec C5). The preview is the real [Deck] composable in editing mode, so what
@@ -124,7 +137,6 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     var labelling by remember { mutableStateOf(false) }
     var addingLayer by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
-    var heightBefore by remember { mutableStateOf<DeckLayout?>(null) }
     val saver = rememberSaveTextFile()
     val previewInput = remember { StageInput(session = { null }, latch = ModifierLatch(), onAppAction = {}) }
 
@@ -189,7 +201,8 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             .navigationBarsPadding(),
     ) {
         ScreenHeader("Deck", onBack = onBack) {
-            BerthButton("Undo", onClick = ::undo, kind = ButtonKind.TEXT, enabled = history.isNotEmpty())
+            // Done is the one accent action in the header; Undo reads as a quiet neighbour in text.2.
+            QuietAction("Undo", onClick = ::undo, enabled = history.isNotEmpty())
             BerthButton("Done", onClick = onBack, kind = ButtonKind.TEXT)
         }
 
@@ -204,10 +217,12 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             // ---- preview ------------------------------------------------------------------------
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionLabel("Preview", Modifier.padding(start = 4.dp))
+                // A strip, not a panel: clipped at `row` so the corner arcs end before the outer
+                // keys begin (they sit `DeckEdge` in) instead of slicing them as `panel` did.
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(BerthRadius.panel))
+                        .clip(RoundedCornerShape(BerthRadius.row))
                         .background(c.surface0)
                         .semantics { contentDescription = "Deck preview" },
                 ) {
@@ -231,8 +246,9 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                         )
                     }
                 }
+                // The screen's one line of help; a note about the last edit takes its place.
                 Text(
-                    note ?: "Tap a key to edit it. Hold and drag to reorder. The Stage updates as you go.",
+                    note ?: "Tap a key to edit it, hold to reorder; the Stage follows along.",
                     style = BerthType.caption,
                     color = if (note != null) c.text1 else c.text3,
                     modifier = Modifier.padding(start = 4.dp),
@@ -264,15 +280,15 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                             }
                         }
                     }
-                    Chip("+", onClick = { addingLayer = true }, modifier = Modifier.semantics { contentDescription = "Add layer" })
+                    AddLayerChip(onClick = { addingLayer = true })
                 }
-                Text("Tap the current layer again for rename, reorder, prefix, reset and delete.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
             }
 
             // ---- slot ---------------------------------------------------------------------------
             Panel(label = if (key != null) "Slot ${slotIndex!! + 1} \u00B7 ${key.label.ifBlank { "empty" }}" else "Slot") {
                 when {
-                    key == null -> Text("Tap a key in the preview to edit its gestures, or the + slot to add one.", style = BerthType.body, color = c.text2)
+                    // The empty state carries the discoverability hints, so the screen itself stays quiet.
+                    key == null -> Text("Tap a key in the preview to edit it, or the + slot to add one. The current layer's chip opens its menu.", style = BerthType.body, color = c.text2)
                     key.nub -> {
                         Text("The Nub. Tap sends Up; drag sends the arrow for the dominant axis, faster the further you pull. The Arrows setting below swaps it for four keys or shows both.", style = BerthType.body, color = c.text2)
                         Spacer(Modifier.height(8.dp))
@@ -310,51 +326,33 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("40", style = BerthType.caption, color = c.text3)
-                    Slider(
+                    // Snaps to the four spec heights; each step the knob lands on is one edit, so Undo
+                    // walks back a drag a step at a time and the Stage's Deck follows the knob.
+                    BerthSlider(
                         value = draft.heightDp.toFloat(),
-                        onValueChange = { v ->
-                            if (heightBefore == null) heightBefore = draft
-                            draft = draft.copy(heightDp = v.roundToInt().coerceIn(40, 52))
-                        },
-                        onValueChangeFinished = {
-                            val before = heightBefore
-                            heightBefore = null
-                            if (before != null && before != draft) {
-                                history.add(before)
-                                vm.setDeckLayout(draft)
-                            }
-                        },
-                        valueRange = 40f..52f,
-                        steps = 2,
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { contentDescription = "Deck height" },
-                        colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.surface4),
+                        onValueChange = { v -> edit(draft.copy(heightDp = v.snappedTo(HEIGHTS, HEIGHT_STEP).roundToInt())) },
+                        valueRange = HEIGHTS,
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp).semantics { contentDescription = "Deck height" },
                     )
                     Text("52", style = BerthType.caption, color = c.text3)
                 }
-                Text("Two rows give the second row its own layer, Nav/Fn by default. Left reach mirrors the row for the left thumb.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
             }
 
             // ---- actions ------------------------------------------------------------------------
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BerthButton("Presets", onClick = { presets = true })
-                    BerthButton("Import", onClick = { importError = null; importing = true })
-                    Box {
-                        BerthButton("Export", onClick = { exportMenu = true })
-                        DropdownMenu(expanded = exportMenu, onDismissRequest = { exportMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                            MenuItem("Share Berth JSON") { exportMenu = false; shareText(context, "berth-deck.json", draft.toJson()) }
-                            MenuItem("Save JSON to file") { exportMenu = false; saver.save("berth-deck.json", draft.toJson()) }
-                            MenuItem("Share as Termux extra-keys") { exportMenu = false; shareText(context, "termux.properties", TermuxExtraKeys.export(draft), mime = "text/plain") }
-                        }
+            // What each accepts is said where it is asked for: the import sheet's caption and the
+            // export menu's entries, not in a paragraph under the buttons.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                BerthButton("Presets", onClick = { presets = true })
+                BerthButton("Import", onClick = { importError = null; importing = true })
+                Box {
+                    BerthButton("Export", onClick = { exportMenu = true })
+                    DropdownMenu(expanded = exportMenu, onDismissRequest = { exportMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                        MenuItem("Share Berth JSON") { exportMenu = false; shareText(context, "berth-deck.json", draft.toJson()) }
+                        MenuItem("Save JSON to file") { exportMenu = false; saver.save("berth-deck.json", draft.toJson()) }
+                        MenuItem("Share as Termux extra-keys") { exportMenu = false; shareText(context, "termux.properties", TermuxExtraKeys.export(draft), mime = "text/plain") }
                     }
-                    if (current != null) BerthButton("Reset layer", onClick = { edit(draft.resetLayer(layerIndex)); slot = null })
                 }
-                Text(
-                    "Import reads Berth Deck JSON and Termux extra-keys. Export writes both. Presets replace every layer; Undo brings the previous Deck back.",
-                    style = BerthType.caption,
-                    color = c.text3,
-                    modifier = Modifier.padding(start = 4.dp),
-                )
+                if (current != null) BerthButton("Reset layer", onClick = { edit(draft.resetLayer(layerIndex)); slot = null })
             }
         }
     }
@@ -435,6 +433,28 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     }
 }
 
+/**
+ * A text action in text.2 for the header: the same 44 dp footprint and press fill as a text
+ * [BerthButton], without its accent, so the one accent action beside it stays the one to look at.
+ */
+@Composable
+private fun QuietAction(text: String, onClick: () -> Unit, enabled: Boolean = true) {
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        Modifier
+            .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
+            .clip(RoundedCornerShape(BerthRadius.row))
+            .background(if (pressed && enabled) c.surface2 else Color.Transparent)
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = BerthType.label, color = c.text2.copy(alpha = if (enabled) 1f else 0.5f), maxLines = 1)
+    }
+}
+
 /** A chip that also takes a long-press, for the layer row's rename, reorder and delete menu. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -459,7 +479,28 @@ private fun Caption(text: String, top: androidx.compose.ui.unit.Dp = 0.dp, modif
     Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 4.dp, top = top, bottom = 6.dp))
 }
 
-/** The four presets, each rendered by the real Deck so the choice is made on what it will look like. */
+/** The `+` at the end of the layer chips: a chip-sized target with the drawn add glyph. */
+@Composable
+private fun AddLayerChip(onClick: () -> Unit) {
+    val c = Berth.colors
+    Box(
+        Modifier
+            .size(width = 36.dp, height = 28.dp)
+            .clip(RoundedCornerShape(BerthRadius.swatch))
+            .background(c.surface2)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Add layer" },
+        contentAlignment = Alignment.Center,
+    ) {
+        BerthIcon(BerthIcons.add, tint = c.text1, size = 18.dp)
+    }
+}
+
+/**
+ * The four presets, each rendered by the real Deck so the choice is made on what it will look like.
+ * Nothing is boxed: name and caption are plain text over the Deck, which sits on the sheet's own
+ * surface and lifts to surface.2 while pressed; empty space keeps the presets apart.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PresetsSheet(previewInput: StageInput, onPick: (DeckPreset) -> Unit, onDismiss: () -> Unit) {
@@ -477,30 +518,39 @@ private fun PresetsSheet(previewInput: StageInput, onPick: (DeckPreset) -> Unit,
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = BerthSpace.screenMargin)
                 .padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(BerthSpace.sectionGap),
         ) {
             SheetTitle("Presets", "Each replaces every layer; Undo brings the previous Deck back")
             for (preset in DeckPresets.all) {
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val lift by animateColorAsState(if (pressed) c.surface2 else c.surface1, tween(120), label = "preset")
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(BerthRadius.row))
-                        .background(c.surface2)
-                        .clickable { onPick(preset) }
+                        .clickable(interactionSource = interaction, indication = null) { onPick(preset) }
                         .semantics { contentDescription = "Preset ${preset.name}" },
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(preset.name, style = BerthType.bodyMedium, color = c.text1)
                         Text(preset.caption, style = BerthType.caption, color = c.text2)
                     }
                     Box {
-                        Deck(layout = preset.layout, layerIndex = 0, onLayerIndexChange = {}, input = previewInput)
-                        // The preview is for looking at; a tap anywhere on the row picks the preset.
-                        Box(Modifier.matchParentSize().clickable { onPick(preset) })
+                        Deck(
+                            layout = preset.layout,
+                            layerIndex = 0,
+                            onLayerIndexChange = {},
+                            input = previewInput,
+                            modifier = Modifier.clip(RoundedCornerShape(BerthRadius.row)),
+                            surface = lift,
+                        )
+                        // The preview is for looking at; a tap anywhere on it picks the preset, and
+                        // it shares the interaction so the strip lifts whichever part is pressed.
+                        Box(Modifier.matchParentSize().clickable(interactionSource = interaction, indication = null) { onPick(preset) })
                     }
                 }
             }
-            Text("Custom layers are kept in Undo, and any Deck can be exported before switching.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
         }
     }
 }
