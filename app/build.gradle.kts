@@ -27,9 +27,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        // One debug key for every machine, so a debug build from any of them installs over the one already on a
+        // phone instead of failing with INSTALL_FAILED_UPDATE_INCOMPATIBLE. Same credentials as an auto-generated
+        // Android debug keystore; it is a debug key, not a secret.
+        getByName("debug") {
+            storeFile = file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
             resValue("string", "app_name", "$appName (debug)")
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = true

@@ -58,8 +58,9 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 
 /**
- * The host library. Tap connects into the current workspace; long-press edits or deletes.
- * [picker] mode is the "New session" flow from the rail: same list, back returns to the Stage.
+ * The host library. Tap opens a tab on the host in the current group (spec C3); long-press offers
+ * Files (the host's Files tab, opened or brought on stage, when [onFiles] is given), Edit and Delete.
+ * [picker] mode titles the screen "New tab"; back returns to the Stage.
  */
 @Composable
 fun HostsScreen(
@@ -68,9 +69,10 @@ fun HostsScreen(
     onAddHost: () -> Unit,
     onEditHost: (String) -> Unit,
     onBack: (() -> Unit)?,
-    onOpenRail: (() -> Unit)?,
+    onOpenDrawer: (() -> Unit)?,
     onKnownHosts: () -> Unit,
     picker: Boolean = false,
+    onFiles: ((Host) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
@@ -88,11 +90,11 @@ fun HostsScreen(
             .navigationBarsPadding(),
     ) {
         ScreenHeader(
-            title = if (picker) "New session" else "Hosts",
+            title = if (picker) "New tab" else "Hosts",
             onBack = onBack,
             actions = {
-                if (onOpenRail != null && onBack == null) {
-                    IconAction(onClick = onOpenRail, description = "Open the rail") { BerthIcon(BerthIcons.workspace) }
+                if (onOpenDrawer != null && onBack == null) {
+                    IconAction(onClick = onOpenDrawer, description = "Open the drawer") { BerthIcon(BerthIcons.workspace) }
                 }
                 IconAction(onClick = onAddHost, description = "Add host") { BerthIcon(BerthIcons.add) }
                 Box {
@@ -127,12 +129,12 @@ fun HostsScreen(
                 if (recent.isNotEmpty()) {
                     item { SectionLabel("Recent", Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp)) }
                     items(recent, key = { "recent-" + it.id }) { host ->
-                        HostRow(host, now, onTap = { onConnect(host) }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
+                        HostRow(host, now, onTap = { onConnect(host) }, onFiles = onFiles?.let { open -> { open(host) } }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
                     }
                     item { SectionLabel("All", Modifier.padding(start = 4.dp, top = 20.dp, bottom = 6.dp)) }
                 }
                 items(all, key = { it.id }) { host ->
-                    HostRow(host, now, onTap = { onConnect(host) }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
+                    HostRow(host, now, onTap = { onConnect(host) }, onFiles = onFiles?.let { open -> { open(host) } }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
                 }
             }
         }
@@ -147,7 +149,7 @@ fun HostsScreen(
 }
 
 @Composable
-private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onFiles: (() -> Unit)?, onEdit: () -> Unit, onDelete: () -> Unit) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
     Box {
@@ -162,6 +164,7 @@ private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onEdit: () -> Unit
             },
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+            if (onFiles != null) DropdownMenuItem(text = { Text("Files", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onFiles() })
             DropdownMenuItem(text = { Text("Edit", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onEdit() })
             DropdownMenuItem(text = { Text("Delete", style = BerthType.body, color = c.danger) }, onClick = { menu = false; onDelete() })
         }

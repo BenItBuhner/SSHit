@@ -14,10 +14,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -26,11 +28,13 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import app.berth.android.R
@@ -41,6 +45,9 @@ import app.berth.terminal.Attr
 import app.berth.terminal.MouseButton
 import app.berth.terminal.MouseTracking
 import app.berth.terminal.TerminalKey
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -129,6 +136,7 @@ fun TerminalCanvas(
     showCursor: Boolean = true,
     onFontSizeStep: (Int) -> Unit = {},
     onTap: () -> Unit = {},
+    onTwoFingerSwipe: ((forward: Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -139,27 +147,41 @@ fun TerminalCanvas(
     val focused by interaction.collectIsFocusedAsState()
     val currentSink by rememberUpdatedState(sink)
     val emulator = session.emulator
+    val frame = remember(session.id) { TerminalFrame() }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
     // Keyed on the theme itself so live edits from the theme editor reach the Stage behind it.
     LaunchedEffect(session.id, theme) {
         emulator.applyTheme(theme.ansi.toIntArray(), theme.foreground, theme.background)
     }
+    // The grid follows the canvas, the font and the session. The first size for a session or a font
+    // lands at once; later ones settle first, because the keyboard and the Deck animate the canvas
+    // through a dozen sizes and only the last is worth a resize of the PTY and a reflow of history.
+    LaunchedEffect(session.id, paints) {
+        var first = true
+        snapshotFlow { canvasSize }.filter { it.width > 0 && it.height > 0 }.collectLatest { size ->
+            if (!first) delay(RESIZE_SETTLE_MS)
+            first = false
+            val cols = (size.width / paints.cellWidth).toInt()
+            val rows = (size.height / paints.cellHeight).toInt()
+            if (cols >= 2 && rows >= 2) {
+                viewport.cols = cols
+                viewport.rows = rows
+                emulator.cellWidthPx = paints.cellWidth.roundToInt()
+                emulator.cellHeightPx = paints.cellHeight.roundToInt()
+                session.resize(cols, rows)
+            }
+        }
+    }
     val stepPx = with(density) { 40.dp.toPx() }
+    val swipeTravelPx = with(density) { 24.dp.toPx() }
+    val swipeSpanPx = with(density) { 12.dp.toPx() }
+    val currentSwipe by rememberUpdatedState(onTwoFingerSwipe)
 
     Canvas(
         modifier
             .fillMaxSize()
-            .onSizeChanged { size ->
-                val cols = (size.width / paints.cellWidth).toInt()
-                val rows = (size.height / paints.cellHeight).toInt()
-                if (cols >= 2 && rows >= 2) {
-                    viewport.cols = cols
-                    viewport.rows = rows
-                    emulator.cellWidthPx = paints.cellWidth.roundToInt()
-                    emulator.cellHeightPx = paints.cellHeight.roundToInt()
-                    session.resize(cols, rows)
-                }
-            }
+            .onSizeChanged { canvasSize = it }
             .terminalInput(sink)
             .focusRequester(focusRequester)
             .focusable(interactionSource = interaction)
@@ -172,11 +194,17 @@ fun TerminalCanvas(
                     var acc = 0f
                     var lastDist = 0f
                     var zoomAcc = 0f
+                    var zoomed = false
+                    // Two-finger swipe (spec C3, Switching): where each finger went down and their span then.
+                    val starts = HashMap<PointerId, Offset>()
+                    var startSpan = 0f
+                    var swipeForward = false
                     val slop = viewConfiguration.touchSlop
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
                         val pressed = event.changes.filter { it.pressed }
                         if (pressed.isEmpty()) {
+                            if (mode == GestureMode.SWIPE) currentSwipe?.invoke(swipeForward)
                             if (mode == GestureMode.NONE) {
                                 val col = (down.position.x / paints.cellWidth).toInt()
                                 val row = (down.position.y / paints.cellHeight).toInt()
@@ -191,22 +219,39 @@ fun TerminalCanvas(
                             break
                         }
                         if (pressed.size >= 2) {
-                            val dist = (pressed[0].position - pressed[1].position).getDistance()
-                            if (mode != GestureMode.PINCH) {
+                            val a = pressed[0]
+                            val b = pressed[1]
+                            val dist = (a.position - b.position).getDistance()
+                            if (mode != GestureMode.PINCH && mode != GestureMode.SWIPE) {
                                 mode = GestureMode.PINCH
                                 lastDist = dist
-                            } else {
-                                zoomAcc += dist - lastDist
-                                lastDist = dist
-                                while (zoomAcc > stepPx) { onFontSizeStep(1); zoomAcc -= stepPx }
-                                while (zoomAcc < -stepPx) { onFontSizeStep(-1); zoomAcc += stepPx }
+                                startSpan = dist
+                                starts.clear()
+                                starts[a.id] = a.position
+                                starts[b.id] = b.position
+                            } else if (mode == GestureMode.PINCH) {
+                                // Both fingers travelling the same way with the span held is a swipe, not a pinch;
+                                // once a zoom step has fired the gesture stays a pinch.
+                                val da = starts[a.id]?.let { a.position.x - it.x }
+                                val db = starts[b.id]?.let { b.position.x - it.x }
+                                val together = da != null && db != null && (da > 0) == (db > 0) &&
+                                    minOf(abs(da), abs(db)) >= swipeTravelPx && abs(dist - startSpan) < swipeSpanPx
+                                if (!zoomed && currentSwipe != null && together) {
+                                    mode = GestureMode.SWIPE
+                                    swipeForward = da!! < 0
+                                } else {
+                                    zoomAcc += dist - lastDist
+                                    lastDist = dist
+                                    while (zoomAcc > stepPx) { onFontSizeStep(1); zoomAcc -= stepPx; zoomed = true }
+                                    while (zoomAcc < -stepPx) { onFontSizeStep(-1); zoomAcc += stepPx; zoomed = true }
+                                }
                             }
                             event.changes.forEach { it.consume() }
                             continue
                         }
                         val c = pressed[0]
                         when (mode) {
-                            GestureMode.PINCH, GestureMode.HORIZONTAL -> Unit
+                            GestureMode.PINCH, GestureMode.HORIZONTAL, GestureMode.SWIPE -> Unit
                             GestureMode.NONE -> {
                                 if (abs(c.position.y - down.position.y) > slop) {
                                     mode = GestureMode.SCROLL
@@ -231,26 +276,39 @@ fun TerminalCanvas(
                 }
             },
     ) {
-        @Suppress("UNUSED_EXPRESSION") version
         drawIntoCanvas { canvas ->
-            val used = TerminalRenderer.draw(
-                nc = canvas.nativeCanvas,
-                emulator = emulator,
-                paints = paints,
-                theme = theme,
-                boldAsBright = font.boldAsBright,
-                width = size.width,
-                height = size.height,
-                scrollOffset = viewport.scrollOffset,
-                showCursor = showCursor,
-                focused = focused,
-            )
-            if (used != viewport.scrollOffset) viewport.scrollOffset = used
+            // A fresh copy of the screen only when it changed or the view moved; a redraw for focus or
+            // size alone draws the frame already held.
+            val wanted = viewport.scrollOffset
+            if (frame.version != version || frame.offset != wanted) {
+                val used = frame.capture(emulator, wanted, version)
+                if (used != wanted) viewport.scrollOffset = used
+            }
+            val nc = canvas.nativeCanvas
+            val ch = paints.cellHeight
+            // While the canvas is animating to a new height and the grid has not settled yet, the rows
+            // are drawn where the coming resize will put them, so the picture slides with the keyboard
+            // or the Deck instead of clipping at the bottom and jumping when the grid catches up.
+            val targetRows = (size.height / ch).toInt()
+            val shift = if (frame.offset == 0 && targetRows >= 2) frame.rowShiftFor(targetRows) else 0
+            if (shift != 0) {
+                paints.fill.color = 0xFF000000.toInt() or ((if (frame.reverseVideo) theme.foreground else theme.background) and 0xFFFFFF)
+                nc.drawRect(0f, 0f, size.width, size.height, paints.fill)
+                val saved = nc.save()
+                nc.translate(0f, shift * ch)
+                TerminalRenderer.draw(nc, frame, paints, theme, font.boldAsBright, size.width, frame.rows * ch, showCursor, focused)
+                nc.restoreToCount(saved)
+            } else {
+                TerminalRenderer.draw(nc, frame, paints, theme, font.boldAsBright, size.width, size.height, showCursor, focused)
+            }
         }
     }
 }
 
-private enum class GestureMode { NONE, SCROLL, HORIZONTAL, PINCH }
+/** How long the canvas must hold a size before the grid follows it; a few frames of any animation. */
+private const val RESIZE_SETTLE_MS = 80L
+
+private enum class GestureMode { NONE, SCROLL, HORIZONTAL, PINCH, SWIPE }
 
 /** Scrolls history when there is any; otherwise gives full-screen applications wheel or arrow events. */
 private fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines: Int, col: Int, row: Int) {

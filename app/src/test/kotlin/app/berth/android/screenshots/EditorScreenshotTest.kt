@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,9 +26,12 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.android.ui.themes.TerminalThemeEditorScreen
@@ -106,6 +110,13 @@ class EditorScreenshotTest {
                 Box(Modifier.fillMaxSize()) { content() }
             }
         }
+    }
+
+    /** The Stage as the shell mounts it, with tab actions that reach the manager but no navigation. */
+    @Composable
+    private fun Stage(session: TerminalSession) {
+        val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+        StageScreen(graph.viewModel, session, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
     }
 
     /** Taps the modal sheet's scrim near the top of the screen, where the sheet itself is not. */
@@ -252,7 +263,7 @@ class EditorScreenshotTest {
         var themeId by mutableStateOf(TerminalTheme.BERTH_DARK_ID)
         themed {
             if (onStage) {
-                StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
+                Stage(session)
             } else {
                 TerminalThemeEditorScreen(graph.viewModel, themeId = themeId, scope = ThemeScope.AppDefault, onDone = { onStage = true }, onOpenTheme = { themeId = it })
             }
@@ -289,9 +300,7 @@ class EditorScreenshotTest {
         }
         val session = graph.sessions.get("s-homelab")!!
         graph.sessions.setActive(session.id)
-        themed {
-            StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
-        }
+        themed { Stage(session) }
         capture("stage-workspace-theme")
     }
 

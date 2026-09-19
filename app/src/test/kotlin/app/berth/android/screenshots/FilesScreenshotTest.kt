@@ -13,11 +13,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnySibling
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -74,10 +78,11 @@ import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 
 /**
- * The Files screen in Berth Dark on a Pixel-class phone. Offline cases drive [FilesPane] over an
- * in-memory server so every state the screen has is photographed deterministically; `files live
- * flow` opens the real app against the local sshd, browses through the session sheet's Files
- * button, reads a file, downloads one through the transfer queue and uploads another.
+ * The Files pane in Berth Dark on a Pixel-class phone. Offline cases drive [FilesPane] over an
+ * in-memory server so every state the pane has is photographed deterministically; `files live
+ * flow` opens the real app against the local sshd, opens the host's Files tab from the session
+ * sheet's Files button, reads a file, downloads one through the transfer queue and uploads
+ * another. The Files tab on the Stage with seeded data is in `BerthScreenshotTest`.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -129,7 +134,7 @@ class FilesScreenshotTest {
         compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(centerX, 12f)) }
     }
 
-    private fun browser(fs: SftpFileSystem, start: String?): FilesBrowser = FilesBrowser("s-demo", scope, open = { fs }).also { it.start(start) }
+    private fun browser(fs: SftpFileSystem, start: String?): FilesBrowser = FilesBrowser("f-demo", scope, open = { fs }).also { it.start(start) }
 
     private val recent = listOf("/home/demo", "/var/log", "/home/demo/projects/berth", "/etc/nginx/sites-enabled")
 
@@ -201,6 +206,8 @@ class FilesScreenshotTest {
         capture("files-breadcrumb-deep")
 
         compose.onNodeWithText("projects").performClick()
+        // "berth" is a crumb before the jump and the one row after it, so the listing itself is what to wait for.
+        compose.waitUntil(10_000) { b.state.value.path == "/home/demo/projects" && !b.state.value.loading }
         waitForText("berth")
         assertEquals("/home/demo/projects", b.state.value.path)
 
@@ -284,7 +291,7 @@ class FilesScreenshotTest {
         val b = browser(fs, "/home/demo")
         themed { Pane(b) }
         waitForText("deploy.sh")
-        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithContentDescription("Folder options").performClick()
         waitForText("New folder")
         capture("files-more-menu")
         compose.onNodeWithText("New folder").performClick()
@@ -328,11 +335,20 @@ class FilesScreenshotTest {
         assertTrue(compose.onAllNodes(hasText("Files \u00B7 prod-web")).fetchSemanticsNodes().isEmpty())
         compose.onNodeWithContentDescription("Upload").assertExists()
         compose.onNodeWithContentDescription("Transfers").assertExists()
+        val crumbs = compose.onNodeWithContentDescription("Edit path").fetchSemanticsNode().boundsInRoot
+        val firstRow = compose.onNodeWithText("deploy.sh").fetchSemanticsNode().boundsInRoot
         capture("files-headerless")
-        // The selection header still comes and goes with the selection.
+        // A selection takes over the breadcrumb row at the same height, so a strip above stays alone and the listing holds still.
         compose.onNodeWithContentDescription("Select notes.txt").performClick()
         waitForText("1 selected")
+        assertTrue(compose.onAllNodes(hasContentDescription("Edit path")).fetchSemanticsNodes().isEmpty())
+        val bar = compose.onNodeWithContentDescription("Clear selection").fetchSemanticsNode().boundsInRoot
+        assertTrue("selection bar at ${bar.top}..${bar.bottom}, crumbs were at ${crumbs.top}..${crumbs.bottom}", bar.top >= crumbs.top - 1f && bar.bottom <= crumbs.bottom + 1f)
+        assertEquals(firstRow.top, compose.onNodeWithText("deploy.sh").fetchSemanticsNode().boundsInRoot.top, 1f)
         capture("files-headerless-selected")
+        compose.onNodeWithContentDescription("Clear selection").performClick()
+        waitForNoText("1 selected")
+        compose.onNodeWithContentDescription("Edit path").assertExists()
     }
 
     @Test
@@ -475,6 +491,9 @@ class FilesScreenshotTest {
 
         compose.setContent { AppRoot(graph.viewModel) }
         compose.waitUntil(10_000) { graph.viewModel.workspaces.value.isNotEmpty() }
+        // A cold start with no tabs is the empty Stage; the plus tab's sheet lists the host.
+        compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
+        waitForText("Berth test box", 5_000)
         compose.onNodeWithText("Berth test box").performClick()
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         compose.onNodeWithText("Trust and connect").performClick()
@@ -508,18 +527,34 @@ class FilesScreenshotTest {
         session.sendText("PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\e\\\\\\\\\" \"\$HOSTNAME\" \"\$PWD\"' && cd $dir/logs && clear\n")
         compose.waitUntil(10_000) { session.cwd == "$dir/logs" }
 
-        compose.onNodeWithText("Berth test box").performClick()
+        // The Session sheet sits behind the Stage overflow; its Files button, beside Detach, opens the host's Files tab riding this terminal.
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Session").performClick()
         waitForText("Detach", 5_000)
         capture("files-live-session-sheet")
-        // The rail's library link is composed off screen with the same label; the sheet's button sits beside Detach.
         compose.onNode(hasText("Files") and hasAnySibling(hasText("Detach"))).performClick()
-        // The browser opens where the shell is.
+        // The browser opens where the shell is, as a second tab after the terminal's, named for the folder and live with it.
         waitForText("app.log", 20_000)
+        val filesTab = graph.sessions.filesTabFor(box.id)!!
+        assertEquals(filesTab.id, graph.sessions.activeTabId.value)
+        assertEquals(session.id, filesTab.ride.value?.id)
+        assertEquals(listOf(session.id, filesTab.id), graph.viewModel.tabs.value.map { it.id })
+        compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 logs, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         capture("files-live-opened")
 
         compose.onNodeWithText("berth-files-demo").performClick()
         waitForText("README.txt", 15_000)
+        compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth-files-demo, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         capture("files-live-folder")
+
+        // The terminal is one tap away on the strip (its title is the shell's, so the tab is found by its slot) and the browser is where it was left on the way back.
+        compose.onNode(hasContentDescription(", live, tab 1 of 2", substring = true)).performClick()
+        compose.waitUntil(5_000) { graph.sessions.activeTabId.value == session.id }
+        waitForNoText("README.txt", 5_000)
+        compose.onNode(hasContentDescription("Files \u00B7 berth-files-demo, live", substring = true)).performClick()
+        compose.waitUntil(5_000) { graph.sessions.activeTabId.value == filesTab.id }
+        waitForText("README.txt", 5_000)
+        assertEquals(dir, filesTab.folder)
 
         compose.onNodeWithText("README.txt").performClick()
         waitForText("Everything in it is disposable.", 10_000, substring = true)
@@ -552,11 +587,15 @@ class FilesScreenshotTest {
         assertEquals(local.length(), uploaded.size)
         capture("files-live-uploaded")
 
-        // The shell moves on; the screen follows it through the menu into the empty releases folder.
+        // The shell moves on; the pane follows it into the empty releases folder through the Stage's one overflow,
+        // which hosts the folder rows ahead of the tab's own (the pane draws no ⋮ of its own under the strip).
         session.sendText("cd $dir/releases\n")
         compose.waitUntil(10_000) { session.cwd == "$dir/releases" }
+        compose.onAllNodesWithContentDescription("Folder options").assertCountEquals(0)
         compose.onNodeWithContentDescription("More").performClick()
         waitForText("Terminal directory", 5_000)
+        compose.onNodeWithText("Terminal").assertExists()
+        capture("files-live-overflow")
         compose.onNodeWithText("Terminal directory").performClick()
         waitForText("Empty folder.", 15_000)
         capture("files-live-terminal-directory")

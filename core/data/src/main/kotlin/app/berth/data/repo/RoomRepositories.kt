@@ -18,6 +18,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
@@ -104,6 +105,9 @@ class RoomWorkspaceRepository(private val db: BerthDatabase) : WorkspaceReposito
     override fun observeAll(): Flow<List<Workspace>> = db.workspaces().observeAll().map { list -> list.map { it.toDomain() } }
     override suspend fun get(id: String): Workspace? = db.workspaces().get(id)?.toDomain()
     override suspend fun upsert(workspace: Workspace) = db.workspaces().upsert(workspace.toEntity())
+    override suspend fun upsertAll(workspaces: List<Workspace>) {
+        if (workspaces.isNotEmpty()) db.workspaces().upsertAll(workspaces.map { it.toEntity() })
+    }
     override suspend fun delete(id: String) = db.workspaces().delete(id)
 
     override suspend fun ensureDefault(): Workspace {
@@ -124,6 +128,9 @@ class RoomSessionRepository(private val db: BerthDatabase) : SessionRepository {
     override fun observeAll(): Flow<List<SessionRecord>> = db.sessions().observeAll().map { list -> list.mapNotNull { it.toDomain() } }
     override suspend fun getAll(): List<SessionRecord> = db.sessions().getAll().mapNotNull { it.toDomain() }
     override suspend fun upsert(record: SessionRecord) = db.sessions().upsert(record.toEntity())
+    override suspend fun upsertAll(records: List<SessionRecord>) {
+        if (records.isNotEmpty()) db.sessions().upsertAll(records.map { it.toEntity() })
+    }
 
     override suspend fun delete(id: String) {
         db.sessions().delete(id)
@@ -213,6 +220,12 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override val filesPrefs: Flow<FilesPrefs> = document(KEY_FILES, FilesPrefs.serializer()) { FilesPrefs() }
     override suspend fun setFilesPrefs(prefs: FilesPrefs) = write(KEY_FILES, FilesPrefs.serializer(), prefs)
 
+    override val tabSwipeGesture: Flow<TabSwipeGesture> = document(KEY_TAB_SWIPE, TabSwipeGesture.serializer()) { TabSwipeGesture.TWO_FINGER }
+    override suspend fun setTabSwipeGesture(gesture: TabSwipeGesture) = write(KEY_TAB_SWIPE, TabSwipeGesture.serializer(), gesture)
+
+    override val ctrlTabKeysReachTerminal: Flow<Boolean> = document(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer()) { false }
+    override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) = write(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer(), enabled)
+
     companion object {
         const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
@@ -223,5 +236,7 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_DEFAULT_THEME = "terminal_theme_default"
         const val KEY_LAST_SESSION = "last_active_session"
         const val KEY_CURRENT_WORKSPACE = "current_workspace"
+        const val KEY_TAB_SWIPE = "tab_swipe_gesture"
+        const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
     }
 }
