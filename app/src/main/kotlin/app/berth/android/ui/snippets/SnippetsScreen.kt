@@ -380,8 +380,9 @@ fun SnippetRunSheet(vm: AppViewModel, session: TerminalSession, pending: Pending
     val record by session.record.collectAsState()
     val placeholders = remember(snippet.id) { snippet.placeholders() }
     val values = remember(snippet.id) { mutableStateOf(placeholders.associate { (n, d) -> n to (d ?: "") }) }
-    val rendered = snippet.render(values.value)
     val missing = placeholders.filter { (n, _) -> values.value[n].isNullOrEmpty() }.map { it.first }
+    // The preview keeps an unfilled placeholder as its accent token instead of a hole in the command.
+    val rendered = snippet.render(values.value + missing.associateWith { "{{$it}}" })
 
     fun send(action: SnippetAction) {
         vm.runSnippet(session, snippet, values.value, action)
