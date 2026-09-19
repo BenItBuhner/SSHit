@@ -93,6 +93,9 @@ interface WorkspaceDao {
     @Upsert
     suspend fun upsert(workspace: WorkspaceEntity)
 
+    @Upsert
+    suspend fun upsertAll(workspaces: List<WorkspaceEntity>)
+
     @Query("DELETE FROM workspaces WHERE id = :id")
     suspend fun delete(id: String)
 }
@@ -107,6 +110,10 @@ interface SessionDao {
 
     @Upsert
     suspend fun upsert(session: SessionEntity)
+
+    /** One transaction for the tabs a reorder shifted, so an observer never sees a half-moved strip. */
+    @Upsert
+    suspend fun upsertAll(sessions: List<SessionEntity>)
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun delete(id: String)

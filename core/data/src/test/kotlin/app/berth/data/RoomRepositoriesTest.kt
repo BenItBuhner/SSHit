@@ -34,6 +34,8 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
@@ -224,6 +226,67 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun `a version 2 database migrates to version 3 with tabs defaulting to ssh in expanded groups`() {
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(),
+            File.createTempFile("berth-migration-v3", ".db").also { it.delete(); it.deleteOnExit() },
+            AndroidSQLiteDriver(),
+            BerthDatabase::class,
+            { BerthDatabase_Impl() },
+            emptyList(),
+        )
+        helper.createDatabase(2).use { connection ->
+            connection.execSQL(
+                "INSERT INTO workspaces (id, name, color, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt, terminalThemeId) " +
+                    "VALUES ('w1', 'Home', 'OCHRE', 'HO', NULL, 0, 0, 1, NULL)",
+            )
+            connection.execSQL(
+                "INSERT INTO sessions (id, workspaceId, hostId, hostSnapshotJson, state, layer, title, cwd, lastCommand, needsAttention, attentionReason, sortOrder, createdAt, lastLiveAt, frameKey) " +
+                    "VALUES ('s1', 'w1', 'h1', '{}', 'DETACHED', 'LOCAL_FRAME', 'demo@box', NULL, NULL, 0, NULL, 2, 5, NULL, NULL)",
+            )
+        }
+        helper.runMigrationsAndValidate(3, emptyList()).use { connection ->
+            connection.prepare("SELECT kind, customTitle, sortOrder, workspaceId FROM sessions WHERE id = 's1'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals("ssh", statement.getText(0), "existing sessions are SSH tabs")
+                assertTrue(statement.isNull(1), "existing tabs keep their automatic title")
+                assertEquals(2L, statement.getLong(2), "positions survive")
+                assertEquals("w1", statement.getText(3), "the group survives")
+            }
+            connection.prepare("SELECT collapsed FROM workspaces WHERE id = 'w1'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(0L, statement.getLong(0), "existing groups start expanded")
+            }
+        }
+    }
+
+    @Test
+    fun `tabs round trip their kind, custom title and group state, and reorder in one write`() = runTest {
+        val workspaces = RoomWorkspaceRepository(db)
+        val home = workspaces.ensureDefault()
+        val work = Workspace(id = "w2", name = "Work", color = SwatchColor.SLATE, monogram = "WK", sortOrder = 1, createdAt = 2, collapsed = true)
+        workspaces.upsert(work)
+        assertEquals(listOf(home, work), workspaces.observeAll().first())
+        assertTrue(assertNotNull(workspaces.get("w2")).collapsed)
+
+        val sessions = RoomSessionRepository(db)
+        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", user = "demo", createdAt = 1)
+        val a = SessionRecord(id = "a", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 0, createdAt = 1, customTitle = "deploy")
+        val b = SessionRecord(id = "b", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 1, createdAt = 2)
+        sessions.upsertAll(listOf(a, b))
+        assertEquals(listOf(a, b), sessions.getAll())
+        assertEquals("deploy", assertNotNull(sessions.getAll().first()).displayTitle)
+        assertEquals(TabKind.Ssh, sessions.getAll().first().kind)
+
+        sessions.upsertAll(listOf(a.copy(sortOrder = 1, workspaceId = "w2"), b.copy(sortOrder = 0)))
+        assertEquals(listOf("b", "a"), sessions.getAll().map { it.id })
+        assertEquals("w2", sessions.getAll().last().workspaceId)
+
+        workspaces.upsertAll(listOf(home.copy(sortOrder = 1), work.copy(sortOrder = 0, collapsed = false)))
+        assertEquals(listOf("w2", home.id), workspaces.observeAll().first().map { it.id })
+    }
+
+    @Test
     fun `default workspace is created once and sessions carry their host snapshot and frame`() = runTest {
         val workspaces = RoomWorkspaceRepository(db)
         val first = workspaces.ensureDefault()
@@ -277,5 +340,12 @@ class RoomRepositoriesTest {
         assertEquals("s1", settings.lastActiveSessionId.first())
         settings.setLastActiveSessionId(null)
         assertNull(settings.lastActiveSessionId.first())
+
+        assertEquals(TabSwipeGesture.TWO_FINGER, settings.tabSwipeGesture.first())
+        settings.setTabSwipeGesture(TabSwipeGesture.RIGHT_EDGE)
+        assertEquals(TabSwipeGesture.RIGHT_EDGE, settings.tabSwipeGesture.first())
+        assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
+        settings.setCtrlTabKeysReachTerminal(true)
+        assertTrue(settings.ctrlTabKeysReachTerminal.first())
     }
 }

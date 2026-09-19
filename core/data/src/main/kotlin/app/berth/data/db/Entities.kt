@@ -82,8 +82,11 @@ data class WorkspaceEntity(
     val createdAt: Long,
     /** Added in schema version 2; null inherits the app default. */
     @ColumnInfo(defaultValue = "NULL") val terminalThemeId: String? = null,
+    /** Added in schema version 3: the group's run is folded into its chip in the tab strip. */
+    @ColumnInfo(defaultValue = "0") val collapsed: Boolean = false,
 )
 
+/** One tab (UX spec C3): [workspaceId] is its group and [sortOrder] its position within the group. */
 @Entity(tableName = "sessions", indices = [Index("workspaceId"), Index("hostId")])
 data class SessionEntity(
     @PrimaryKey val id: String,
@@ -101,6 +104,10 @@ data class SessionEntity(
     val createdAt: Long,
     val lastLiveAt: Long?,
     val frameKey: String?,
+    /** Added in schema version 3: the tab's runtime kind; every earlier row is an SSH session. */
+    @ColumnInfo(defaultValue = "ssh") val kind: String = "ssh",
+    /** Added in schema version 3: a title the user set; null shows the automatic one. */
+    @ColumnInfo(defaultValue = "NULL") val customTitle: String? = null,
 )
 
 /** Frozen terminal frame (scrollback plus screen) for a detached or restored session. */

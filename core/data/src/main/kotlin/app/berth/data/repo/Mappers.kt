@@ -23,6 +23,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
@@ -121,7 +122,7 @@ internal fun KnownHostKey.toEntity() = KnownHostEntity(id, host, port, keyType, 
 
 internal fun KnownHostEntity.toDomain() = KnownHostKey(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
-internal fun Workspace.toEntity() = WorkspaceEntity(id, name, color.name, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt, terminalThemeId)
+internal fun Workspace.toEntity() = WorkspaceEntity(id, name, color.name, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt, terminalThemeId, collapsed)
 
 internal fun WorkspaceEntity.toDomain() = Workspace(
     id = id,
@@ -133,6 +134,7 @@ internal fun WorkspaceEntity.toDomain() = Workspace(
     sortOrder = sortOrder,
     reconnectAtLaunch = reconnectAtLaunch,
     createdAt = createdAt,
+    collapsed = collapsed,
 )
 
 internal fun SessionRecord.toEntity() = SessionEntity(
@@ -151,6 +153,8 @@ internal fun SessionRecord.toEntity() = SessionEntity(
     createdAt = createdAt,
     lastLiveAt = lastLiveAt,
     frameKey = frameKey,
+    kind = kind.id,
+    customTitle = customTitle,
 )
 
 internal fun SessionEntity.toDomain(): SessionRecord? {
@@ -171,6 +175,8 @@ internal fun SessionEntity.toDomain(): SessionRecord? {
         createdAt = createdAt,
         lastLiveAt = lastLiveAt,
         frameKey = frameKey,
+        kind = TabKind.fromId(kind),
+        customTitle = customTitle,
     )
 }
 

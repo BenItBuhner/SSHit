@@ -19,9 +19,9 @@ import androidx.room.RoomDatabase
         SnippetEntity::class,
         PreferenceEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
 )
 abstract class BerthDatabase : RoomDatabase() {
     abstract fun hosts(): HostDao

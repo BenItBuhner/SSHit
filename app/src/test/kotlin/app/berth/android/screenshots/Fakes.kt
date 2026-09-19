@@ -18,6 +18,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
@@ -105,6 +106,10 @@ class InMemoryWorkspaces : WorkspaceRepository {
     override fun observeAll(): Flow<List<Workspace>> = items.map { list -> list.sortedBy { it.sortOrder } }
     override suspend fun get(id: String): Workspace? = items.value.firstOrNull { it.id == id }
     override suspend fun upsert(workspace: Workspace) = items.update { list -> list.filter { it.id != workspace.id } + workspace }
+    override suspend fun upsertAll(workspaces: List<Workspace>) {
+        val ids = workspaces.map { it.id }.toSet()
+        items.update { list -> list.filter { it.id !in ids } + workspaces }
+    }
     override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
     override suspend fun ensureDefault(): Workspace {
         items.value.firstOrNull { it.id == Workspace.DEFAULT_ID }?.let { return it }
@@ -120,6 +125,10 @@ class InMemorySessions : SessionRepository {
     override fun observeAll(): Flow<List<SessionRecord>> = items.map { list -> list.sortedBy { it.sortOrder } }
     override suspend fun getAll(): List<SessionRecord> = items.value.sortedBy { it.sortOrder }
     override suspend fun upsert(record: SessionRecord) = items.update { list -> list.filter { it.id != record.id } + record }
+    override suspend fun upsertAll(records: List<SessionRecord>) {
+        val ids = records.map { it.id }.toSet()
+        items.update { list -> list.filter { it.id !in ids } + records }
+    }
     override suspend fun delete(id: String) { items.update { list -> list.filter { it.id != id } }; frames.remove(id) }
     override suspend fun saveFrame(sessionId: String, frame: ByteArray) { frames[sessionId] = frame }
     override suspend fun loadFrame(sessionId: String): ByteArray? = frames[sessionId]
@@ -134,6 +143,8 @@ class InMemorySettings : SettingsRepository {
     private val defaultTheme = MutableStateFlow(TerminalTheme.BERTH_DARK_ID)
     private val lastActive = MutableStateFlow<String?>(null)
     private val currentWorkspace = MutableStateFlow<String?>(null)
+    private val tabSwipe = MutableStateFlow(TabSwipeGesture.TWO_FINGER)
+    private val ctrlTabKeys = MutableStateFlow(false)
 
     override val deckLayout: Flow<DeckLayout> = deck
     override suspend fun setDeckLayout(layout: DeckLayout) { deck.value = layout }
@@ -155,6 +166,11 @@ class InMemorySettings : SettingsRepository {
     private val files = MutableStateFlow(FilesPrefs())
     override val filesPrefs: Flow<FilesPrefs> = files
     override suspend fun setFilesPrefs(prefs: FilesPrefs) { files.value = prefs }
+
+    override val tabSwipeGesture: Flow<TabSwipeGesture> = tabSwipe
+    override suspend fun setTabSwipeGesture(gesture: TabSwipeGesture) { tabSwipe.value = gesture }
+    override val ctrlTabKeysReachTerminal: Flow<Boolean> = ctrlTabKeys
+    override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) { ctrlTabKeys.value = enabled }
 }
 
 /**
