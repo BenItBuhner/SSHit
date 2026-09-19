@@ -431,6 +431,8 @@ fun TerminalCanvas(
                                         synchronized(emulator.lock) { sel.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.LINE) }
                                         currentSelectionStarted()
                                         c.consume()
+                                        // The move that crossed the slop is part of the drag: a finger already two rows down selects them now.
+                                        place(c.position)
                                         dragSelection(emulator, viewport, size.height.toFloat(), place)
                                         return@awaitEachGesture
                                     }

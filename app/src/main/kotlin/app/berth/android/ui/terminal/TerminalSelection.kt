@@ -56,7 +56,7 @@ class TerminalSelection {
     /** The end a finger is dragging, while it is. */
     var dragging by mutableStateOf<SelectionHandle?>(null)
 
-    /** How much is selected, for the bar: `24 chars` for one row, `3 lines` for more. */
+    /** How much Copy would give, for the bar: `24 chars` for one line, `3 lines` for more; a path wrapped over two rows is still one line. */
     var summary by mutableStateOf("")
         private set
 
@@ -158,11 +158,13 @@ class TerminalSelection {
     private fun apply(emulator: TerminalEmulator, range: CellRange) {
         anchor = BufferAnchor.of(emulator)
         this.range = range
-        summary = if (range.rowCount == 1) {
-            val n = TerminalText.charCount(TerminalText.extract(emulator.grid, range))
+        val text = TerminalText.extract(emulator.grid, range)
+        val lines = text.count { it == '\n' } + 1
+        summary = if (lines == 1) {
+            val n = TerminalText.charCount(text)
             if (n == 1) "1 char" else "$n chars"
         } else {
-            "${range.rowCount} lines"
+            "$lines lines"
         }
     }
 }
