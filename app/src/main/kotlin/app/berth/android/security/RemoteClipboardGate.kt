@@ -54,6 +54,9 @@ class RemoteClipboardGate(
             clipboard.copy(text, label = "terminal")
             return true
         }
+        // A host the user has set to Block gets no notice: that write was refused on purpose. The
+        // notice is for the app-wide switch standing in the way of a host nobody has decided about.
+        if (current.remoteClipboardPolicy(host.id) == RemoteClipboardPolicy.DENY) return false
         val firstTime = synchronized(told) { told.add(host.id) } && host.id !in current.remoteClipboardNoticed
         if (firstTime) {
             settings.updateSecuritySettings { it.copy(remoteClipboardNoticed = it.remoteClipboardNoticed + host.id) }
