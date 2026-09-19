@@ -155,11 +155,16 @@ class TransferManagerTest {
         assertMonotonic("bytes done inside the folder", snapshots.map { it.folder!!.bytesDone })
         val moving = snapshots.firstOrNull { it.state == TransferState.RUNNING && it.folder?.phase == FolderPhase.COPYING && it.folder.current != null }
         assertNotNull("a running snapshot in the copying phase", moving)
-        // The sheet's row reads files done of total, then bytes of total; the strip's one line puts the files where a file's percentage goes and keeps the bytes of total in the short form.
+        // The sheet's row reads files done of total, then bytes of total, each pair held together so a wrap falls on a dot; the trailing slot
+        // is the percentage, the line's own measure, on the strip and in the sheet alike. The strip's one line keeps the files and the speed
+        // and leaves the bytes of total to the sheet, so no line carries two X of Y pairs.
         val done = moving!!.folder!!.filesDone
-        assertTrue(transferCaption(moving), transferCaption(moving).startsWith("prod-web \u00B7 $done of 4 files \u00B7 ${formatSize(moving.bytes)} of 3 MB"))
-        assertEquals("$done of 4", transferTrailing(moving, compact = true))
-        assertTrue(transferCaption(moving, showHost = false, compact = true), transferCaption(moving, showHost = false, compact = true).startsWith(formatSizeOf(moving.bytes, moving.total)))
+        val percent = "${(moving.fraction!! * 100).toInt()}%"
+        assertTrue(transferCaption(moving), transferCaption(moving).startsWith("prod-web \u00B7 ${nb("$done of 4 files")} \u00B7 ${nb("${formatSize(moving.bytes)} of 3 MB")}"))
+        assertEquals(percent, transferTrailing(moving))
+        val strip = transferCaption(moving, showHost = false, compact = true)
+        assertTrue(strip, strip.startsWith(nb("$done of 4 files")))
+        assertFalse("bytes of total belong to the sheet: $strip", strip.contains("of 3"))
         assertEquals("1.5 of 3 MB", formatSizeOf(1536L * 1024, 3L * 1024 * 1024))
         assertEquals("512 KB of 3 MB", formatSizeOf(512L * 1024, 3L * 1024 * 1024))
         assertTrue("the strip's states in order", snapshots.map { it.state }.distinct().let { it == listOf(TransferState.QUEUED, TransferState.RUNNING, TransferState.DONE) || it == listOf(TransferState.RUNNING, TransferState.DONE) })
@@ -221,8 +226,16 @@ class TransferManagerTest {
         assertEquals(6L, conflict.incomingSize)
         assertEquals(5L, conflict.existingSize)
         assertEquals(3, conflict.remaining)
+        // The sheet compares modified times as well as sizes: the file on the device has one; the fake server sent none for its side.
+        assertNotNull(conflict.existingModified)
+        assertNull(conflict.incomingModified)
+        assertNull("no comparison without both dates", conflict.incomingIsNewer)
         assertEquals("Waiting", transferTrailing(t))
         assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(t))
+        assertEquals("a.txt already exists \u00B7 tap to answer", transferCaption(t, showHost = false, compact = true))
+        // The notification counts a copy stopped on a question apart from those that move.
+        assertEquals(1, graph.sessions.activeTransfers.value)
+        assertEquals(1, graph.sessions.waitingTransfers.value)
         // An answer for a transfer that is not waiting goes nowhere.
         manager.resolveConflict("not-a-transfer", ConflictChoice.OVERWRITE, applyToAll = true)
 
@@ -234,6 +247,7 @@ class TransferManagerTest {
 
         t = awaitFinished(id)
         assertEquals(TransferState.DONE, t.state)
+        assertEquals(0, graph.sessions.waitingTransfers.value)
         val f = t.folder!!
         assertNull(f.conflict)
         assertEquals(4, f.filesTotal)
@@ -287,7 +301,7 @@ class TransferManagerTest {
         assertEquals(TransferKind.DOWNLOAD, r.kind)
         assertEquals("app", r.name)
         assertEquals(2, r.folder!!.filesTotal)
-        assertEquals(2, r.folder!!.filesCopied)
+        assertEquals(2, r.folder.filesCopied)
         // Only what was under the failed folder moved; the rest of the tree was left as it was.
         assertEquals(listOf("/srv/app/b/c.bin", "/srv/app/b/d.txt"), moved.toList())
         assertEquals("delta\n", File(tmp, "app/b/d.txt").readText())
@@ -335,14 +349,14 @@ class TransferManagerTest {
         await("the big file moving") { transfer(id).folder?.let { it.current == "b/c.bin" && it.currentBytes > 0 } == true }
         val before = transfer(id)
         assertEquals("b/c.bin", before.folder!!.current)
-        assertEquals(2, before.folder!!.filesCopied)
+        assertEquals(2, before.folder.filesCopied)
         manager.cancel(id)
 
         val t = awaitFinished(id)
         assertEquals(TransferState.CANCELLED, t.state)
         assertEquals("Cancelled", transferTrailing(t))
         assertEquals(2, t.folder!!.filesCopied)
-        assertTrue(transferCaption(t).startsWith("prod-web \u00B7 2 of 4 files \u00B7 "))
+        assertTrue(transferCaption(t), transferCaption(t).startsWith("prod-web \u00B7 ${nb("2 of 4 files")} \u00B7 "))
         val root = File(tmp, "app")
         assertEquals("alpha\n", File(root, "a.txt").readText())
         assertEquals("zulu\n", File(root, "z.txt").readText())
@@ -354,26 +368,116 @@ class TransferManagerTest {
     // ---- a mixed selection -------------------------------------------------------------------------
 
     @Test
-    fun `a mixed selection downloads each file as its own transfer, renamed when the name is taken, and each folder as one`() {
+    fun `a mixed selection downloads each file as its own transfer, asking through the sheet when its name is taken, and each folder as one`() {
         val session = session("s1")
         File(tmp, "a.txt").writeText("mine\n")
         val socket = SftpEntry("app.sock", "/srv/app.sock", SftpFileType.OTHER, 0, 0, 0b110_000_000)
         val ids = manager.downloadInto(session, listOf(server.entry("/srv/app/a.txt"), dirEntry("/srv/app/b"), socket), Uri.fromFile(tmp))
         assertEquals("a special file is nothing to copy", 2, ids.size)
-        val file = transfer(ids[0])
-        val folder = transfer(ids[1])
-        assertFalse(file.isFolder)
-        assertEquals("a.txt", file.name)
-        assertEquals(6L, file.total)
-        assertTrue(folder.isFolder)
-        assertEquals("b", folder.name)
-        assertEquals("/srv/app/b", folder.remotePath)
+        val (fileId, folderId) = ids
+        assertFalse(transfer(fileId).isFolder)
+        assertEquals("a.txt", transfer(fileId).name)
+        assertEquals(6L, transfer(fileId).total)
+        assertTrue(transfer(folderId).isFolder)
+        assertEquals("b", transfer(folderId).name)
+        assertEquals("/srv/app/b", transfer(folderId).remotePath)
 
+        // The file finds its name taken and asks the same question a file inside a folder does, naming the picked folder; the folder behind it on the lane waits its turn.
+        await("the file waiting on a.txt") { transfer(fileId).waiting }
+        val file = transfer(fileId)
+        assertNull(file.folder)
+        val conflict = file.conflict!!
+        assertEquals("${tmp.name}/a.txt", conflict.relativePath)
+        assertEquals("a.txt", conflict.name)
+        assertEquals(6L, conflict.incomingSize)
+        assertEquals(5L, conflict.existingSize)
+        assertEquals("the only file of the selection: apply to all has nothing to cover", 0, conflict.remaining)
+        assertNotNull(conflict.existingModified)
+        assertEquals("Waiting", transferTrailing(file))
+        assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(file))
+        assertEquals("a.txt already exists \u00B7 tap to answer", transferCaption(file, showHost = false, compact = true))
+        assertEquals(TransferState.QUEUED, transfer(folderId).state)
+        assertEquals(1, graph.sessions.waitingTransfers.value)
+
+        // Keep both: the row is named after what is saved before a byte moves, and once done says what was there and what became of it.
+        manager.resolveConflict(fileId, ConflictChoice.KEEP_BOTH, applyToAll = false)
         ids.forEach { assertEquals(TransferState.DONE, awaitFinished(it).state) }
+        val saved = transfer(fileId)
+        assertEquals("a (1).txt", saved.name)
+        assertNull(saved.conflict)
+        assertEquals("a.txt was there \u00B7 saved as a (1).txt", saved.note)
+        assertTrue(transferCaption(saved), transferCaption(saved).startsWith("prod-web \u00B7 a.txt was there \u00B7 saved as a (1).txt \u00B7 6 B \u00B7 "))
+        assertEquals("Done", transferTrailing(saved))
+        assertEquals(0, graph.sessions.waitingTransfers.value)
         assertEquals("mine\n", File(tmp, "a.txt").readText())
         assertEquals("alpha\n", File(tmp, "a (1).txt").readText())
         assertEquals("delta\n", File(tmp, "b/d.txt").readText())
         assertEquals(3L * 1024 * 1024, File(tmp, "b/c.bin").length())
+    }
+
+    @Test
+    fun `files of a selection in the way take skip and overwrite, apply to all covers the ones after them that clash, and the rest copy regardless`() {
+        val session = session("s1")
+        File(tmp, "a.txt").writeText("mine\n")
+        File(tmp, "z.txt").writeText("mine too\n")
+        val ids = manager.downloadInto(session, listOf(server.entry("/srv/app/a.txt"), server.entry("/srv/app/z.txt"), server.entry("/srv/app/b/d.txt")), Uri.fromFile(tmp))
+        val (a, z, d) = ids
+
+        // Overwrite for one: replaced, and the row says so.
+        await("a.txt waiting") { transfer(a).waiting }
+        assertEquals("two more files of the selection may clash", 2, transfer(a).conflict!!.remaining)
+        manager.resolveConflict(a, ConflictChoice.OVERWRITE, applyToAll = false)
+        assertEquals(TransferState.DONE, awaitFinished(a).state)
+        assertEquals("a.txt", transfer(a).name)
+        assertEquals("a.txt was there \u00B7 replaced", transfer(a).note)
+        assertEquals("alpha\n", File(tmp, "a.txt").readText())
+
+        // Skip for all: this one is left alone and ends as skipped, not done and not failed.
+        await("z.txt waiting") { transfer(z).waiting }
+        assertEquals(1, transfer(z).conflict!!.remaining)
+        manager.resolveConflict(z, ConflictChoice.SKIP, applyToAll = true)
+        val skipped = awaitFinished(z)
+        assertEquals(TransferState.SKIPPED, skipped.state)
+        assertNull(skipped.error)
+        assertEquals("Skipped", transferTrailing(skipped))
+        assertEquals("prod-web \u00B7 z.txt was there \u00B7 left as it was", transferCaption(skipped))
+        assertEquals("mine too\n", File(tmp, "z.txt").readText())
+
+        // The sticky answer is consulted only for a file that turns out to exist; d.txt is not in the way and comes down without asking.
+        val done = awaitFinished(d)
+        assertEquals(TransferState.DONE, done.state)
+        assertNull(done.note)
+        assertEquals("delta\n", File(tmp, "d.txt").readText())
+        assertEquals(listOf("/srv/app/a.txt", "/srv/app/b/d.txt"), moved.toList())
+        assertEquals(0, graph.sessions.waitingTransfers.value)
+
+        // Skipped rows go with Clear finished like any other finished row.
+        manager.clearFinished()
+        assertTrue(manager.transfers.value.isEmpty())
+    }
+
+    @Test
+    fun `Retry failed with the picked tree gone fails as one transfer with nothing to retry`() {
+        val session = session("s1")
+        server.locked += "/srv/app/b"
+        val dest = File(tmp, "picked").apply { mkdirs() }
+        val id = manager.downloadFolder(session, dirEntry("/srv/app"), Uri.fromFile(dest))
+        assertEquals(TransferState.FAILED, awaitFinished(id).state)
+        server.locked.clear()
+
+        // The grant behind the tree is gone: the tree's root cannot be made (a file stands where the folder was), so the retry cannot begin.
+        dest.deleteRecursively()
+        dest.writeText("not a folder any more")
+        val retry = manager.retryFailed(id)
+        assertNotNull(retry)
+        val r = awaitFinished(retry!!)
+        assertEquals(TransferState.FAILED, r.state)
+        assertEquals("Couldn't create the folder app.", r.error)
+        assertEquals("Failed", transferTrailing(r))
+        assertEquals("prod-web \u00B7 Couldn't create the folder app.", transferCaption(r))
+        assertTrue("the transfer failed whole; there is no part to retry", r.folder!!.failures.isEmpty())
+        assertEquals(0, r.folder.filesCopied)
+        assertNull(manager.retryFailed(retry))
     }
 
     // ---- upload ------------------------------------------------------------------------------------
@@ -417,6 +521,9 @@ class TransferManagerTest {
     }
 
     private fun dirEntry(path: String) = SftpEntry(path.substringAfterLast('/'), path, SftpFileType.DIRECTORY, 0, 0, 0b111_101_101)
+
+    /** A Caption pair as the formatter holds it together: every space a non-breaking one. */
+    private fun nb(text: String) = text.replace(' ', '\u00A0')
 
     private fun FakeSftpFileSystem.entry(path: String): SftpEntry = runBlocking { stat(path) }
 

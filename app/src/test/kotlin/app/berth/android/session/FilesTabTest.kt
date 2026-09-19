@@ -20,7 +20,9 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -136,6 +138,43 @@ class FilesTabTest {
         assertEquals("Files \u00B7 log", tab.record.value.displayTitle)
         runCurrent()
         assertEquals(4, written.size)
+    }
+
+    @Test
+    fun `a copy waiting on an answer raises attention off stage, and the answer or a look clears it`() = runTest {
+        val written = ArrayList<SessionRecord>()
+        val tab = FilesTab(FilesTab.newRecord("f", host, "home", 0), backgroundScope) { written += it }
+
+        // On stage the pane is asking already; nothing to ring about.
+        tab.onStage = true
+        tab.waitingOnUser(true)
+        assertFalse(tab.record.value.needsAttention)
+
+        // Leaving with the question open is when the tab has to say so: the ring on the tab, the mark on its tile.
+        tab.onStage = false
+        assertTrue(tab.record.value.needsAttention)
+        assertEquals(FilesTab.WAITING_ON_YOU, tab.record.value.attentionReason)
+
+        // Coming back (the manager's markSeen on arrival) clears it; leaving again with the copy still waiting raises it again.
+        tab.onStage = true
+        tab.markSeen()
+        assertFalse(tab.record.value.needsAttention)
+        tab.onStage = false
+        assertTrue(tab.record.value.needsAttention)
+
+        // The answer, from whichever tab it came, clears it and going off stage no longer rings.
+        tab.waitingOnUser(false)
+        assertFalse(tab.record.value.needsAttention)
+        assertNull(tab.record.value.attentionReason)
+        tab.onStage = true
+        tab.onStage = false
+        assertFalse(tab.record.value.needsAttention)
+
+        // A question raised while already off stage rings at once.
+        tab.waitingOnUser(true)
+        assertTrue(tab.record.value.needsAttention)
+        runCurrent()
+        assertEquals(listOf(true, false, true, false, true), written.map { it.needsAttention })
     }
 
     @Test

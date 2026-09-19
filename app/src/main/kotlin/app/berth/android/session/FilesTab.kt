@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
  * and close ([follow]), so closing one terminal never strands the browser while another to the
  * same host is up. The browser itself lives in `FilesCenter`, keyed by this tab's id. The tab
  * holds what the strip and the record need: the ride, its mirrored state, the folder being shown
- * (kept as `cwd` so the browser reopens there after a restart) and a title made from it.
+ * (kept as `cwd` so the browser reopens there after a restart) and a title made from it. Its one
+ * source of attention is a transfer of its session stopped for an answer ([waitingOnUser]).
  */
 class FilesTab(
     initial: SessionRecord,
@@ -33,7 +34,15 @@ class FilesTab(
     override val host: Host get() = _record.value.hostSnapshot
     override val state: SessionState get() = _record.value.state
 
+    /** Whether a transfer of this tab's session waits for an answer only its pane can give. */
+    @Volatile private var waiting: Boolean = false
+
+    /** Leaving the stage with a question still open raises it again; the manager clears it on arrival through [markSeen]. */
     @Volatile override var onStage: Boolean = false
+        set(value) {
+            field = value
+            if (!value && waiting) attention()
+        }
 
     /** The terminal whose login the browser uses; null while the host has no terminal tab at all. */
     private val _ride = MutableStateFlow<TerminalSession?>(null)
@@ -88,8 +97,28 @@ class FilesTab(
 
     override fun rename(title: String?) = patch { copy(customTitle = title?.trim()?.takeIf { it.isNotEmpty() }) }
 
-    /** A Files tab never raises attention, so there is nothing to clear. */
-    override fun markSeen() = Unit
+    /**
+     * From `FilesCenter`: whether a transfer of this tab's session has stopped for an answer about a
+     * file already at its destination. Off stage that raises attention (the ring on the tab, the mark
+     * on its tile), so a copy that stalled while the user was in a shell or another app does not
+     * sit silent under a notification that says a transfer is running; on stage the pane is asking
+     * already. The answer clears it, whichever tab it came from.
+     */
+    fun waitingOnUser(waiting: Boolean) {
+        this.waiting = waiting
+        when {
+            waiting && !onStage -> attention()
+            !waiting -> markSeen()
+        }
+    }
+
+    override fun markSeen() {
+        if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+    }
+
+    private fun attention() {
+        if (!_record.value.needsAttention) patch { copy(needsAttention = true, attentionReason = WAITING_ON_YOU) }
+    }
 
     override fun close() {
         _ride.value = null
@@ -103,6 +132,9 @@ class FilesTab(
     }
 
     companion object {
+        /** The one reason a Files tab raises attention: a copy stopped on a question. */
+        const val WAITING_ON_YOU = "Waiting on you"
+
         /**
          * Which of a host's terminal tabs the browser rides, from their records in strip order:
          * the preferred one while it is connecting or Live, else the current ride while it is
