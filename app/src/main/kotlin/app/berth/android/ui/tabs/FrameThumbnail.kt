@@ -22,9 +22,12 @@ import app.berth.domain.model.TerminalTheme
 
 /**
  * A tab's frame at a reduced size (spec C3, Switcher): the emulator's real cells drawn through
- * [TerminalRenderer] with the canvas scaled so the full width of the screen fits, top-aligned and
- * clipped at the bottom. [live] cards follow the screen as it changes; the rest draw the frame as
- * it stood when the card appeared, which is the frame a switch shows first anyway.
+ * [TerminalRenderer] with the canvas scaled so the first [THUMBNAIL_COLS] columns fit the card's
+ * width (a wider screen is cropped at the right, so type on a phone stays a legible ~6 sp rather
+ * than texture), and a frame taller than the box anchored on the cursor row, so the prompt and
+ * the rows above it show rather than the oldest rows. [live] cards follow the screen as it
+ * changes; the rest draw the frame as it stood when the card appeared, which is the frame a
+ * switch shows first anyway.
  */
 @Composable
 fun FrameThumbnail(
@@ -45,10 +48,17 @@ fun FrameThumbnail(
         val rows = emulator.rows.coerceAtLeast(1)
         val frameWidth = cols * paints.cellWidth
         val frameHeight = rows * paints.cellHeight
-        val scale = size.width / frameWidth
+        val scale = size.width / (minOf(cols, THUMBNAIL_COLS) * paints.cellWidth)
+        val shownHeight = frameHeight * scale
+        // Slide the frame up until the cursor row is the last one in the box, never past the frame's end.
+        val shift = if (shownHeight > size.height) {
+            val cursorBottom = (emulator.cursorY + 1) * paints.cellHeight * scale
+            (cursorBottom - size.height).coerceIn(0f, shownHeight - size.height)
+        } else 0f
         drawIntoCanvas { canvas ->
             val nc = canvas.nativeCanvas
             val saved = nc.save()
+            nc.translate(0f, -shift)
             nc.scale(scale, scale)
             TerminalRenderer.draw(
                 nc = nc,
@@ -57,7 +67,7 @@ fun FrameThumbnail(
                 theme = theme,
                 boldAsBright = font.boldAsBright,
                 width = frameWidth,
-                height = maxOf(frameHeight, size.height / scale),
+                height = maxOf(frameHeight, (size.height + shift) / scale),
                 showCursor = live,
                 focused = true,
             )
@@ -65,3 +75,6 @@ fun FrameThumbnail(
         }
     }
 }
+
+/** The most columns a thumbnail fits across the card; a wider screen is cropped at the right. */
+private const val THUMBNAIL_COLS = 40

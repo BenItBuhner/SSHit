@@ -159,16 +159,17 @@ fun TabSwitcher(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SwitcherChip(entry: StripEntry.Chip, style: TabStripStyle, actions: TabActions, expanded: Boolean, onMenu: (Boolean) -> Unit) {
+    val resolved = rememberResolvedTabStyle(style)
     val group = entry.group
     val tint = group.color.rgb.toColor()
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
-    val label = if (group.collapsed) "${group.name.uppercase()} \u00B7 ${entry.tabs.size}" else group.name.uppercase()
+    val label = chipLabel(group, entry.tabs.size, style)
     Box(Modifier.fillMaxWidth().padding(top = if (entry.groupIndex == 0) 0.dp else 8.dp), contentAlignment = Alignment.CenterStart) {
         Box(
             Modifier
-                .clip(CircleShape)
+                .clip(resolved.chipShape)
                 .combinedClickable(
                     interactionSource = interaction,
                     indication = null,
@@ -181,16 +182,17 @@ private fun SwitcherChip(entry: StripEntry.Chip, style: TabStripStyle, actions: 
                     onLongClick { onMenu(true); true }
                 },
         ) {
-            ChipPill(label = label, tint = tint, attention = attention, pressed = pressed, height = style.chipHeight)
+            ChipPill(label = label, tint = tint, attention = attention, pressed = pressed, style = resolved)
         }
         GroupMenu(expanded = expanded, group = group, actions = actions, onDismiss = { onMenu(false) })
     }
 }
 
 /**
- * One card (spec C3, Switcher): radius 20, `surface.2` (`surface.3` active), 8 dp padding; a 36 dp
- * header with the 20 dp swatch, the title in Label and ×; a Caption subtitle; the frame at radius 12.
- * A Files tab has no frame: its card shows the folder glyph on `surface.1`, the folder in the subtitle.
+ * One card (spec C3, Switcher): panel radius, `surface.2` (`surface.3` active), 8 dp padding; a
+ * 36 dp header with the 20 dp swatch, the title in Label and ×; a Caption subtitle; the frame at
+ * row radius. A Files tab has no frame: its card shows the folder glyph on `surface.1`, the folder
+ * in the subtitle.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -227,7 +229,7 @@ private fun TabCard(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(BerthRadius.panel))
                 .background(fill)
                 .combinedClickable(
                     interactionSource = interaction,
@@ -283,7 +285,7 @@ private fun TabCard(
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.6f)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(BerthRadius.row))
                     .background(if (session != null) theme.background.toColor() else c.surface1)
                     .alpha(if (detached) 0.8f else 1f),
                 contentAlignment = Alignment.Center,
@@ -300,9 +302,13 @@ private fun TabCard(
     }
 }
 
-/** Caption under the title: cwd or the last command while live; age and cwd when detached; the state otherwise. */
-private fun cardSubtitle(record: SessionRecord, now: Long): String = when (record.state) {
-    SessionState.LIVE -> record.cwd ?: record.lastCommand ?: "Live"
+/**
+ * Caption under the title: the last command, else the cwd, while live (two live cards on one host
+ * then read `uptime` and `ls --color=always -la /` rather than the same folder); age and cwd when
+ * detached; the state otherwise.
+ */
+internal fun cardSubtitle(record: SessionRecord, now: Long): String = when (record.state) {
+    SessionState.LIVE -> record.lastCommand ?: record.cwd ?: "Live"
     SessionState.IDLE, SessionState.CONNECTING -> "Connecting\u2026"
     SessionState.RECONNECTING -> "Reconnecting\u2026"
     SessionState.DETACHED -> listOfNotNull(ageText(record.lastLiveAt, now).takeIf { it.isNotBlank() }, record.cwd).joinToString(" \u00B7 ")

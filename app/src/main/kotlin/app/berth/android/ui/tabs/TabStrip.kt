@@ -26,11 +26,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -64,10 +67,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -140,16 +147,22 @@ internal sealed interface StripEntry {
     }
 }
 
-/** Groups in order, each headed by its chip once a second group exists; a collapsed group shows only its active tab. */
+/**
+ * Groups in order, each run headed by its chip once a second group holds tabs; a collapsed group
+ * shows only its active tab. The strip and the switcher are for tabs, so a group without any has
+ * no run to head and gets no chip (spec C3, Groups: "with a single group the strip shows no chip"):
+ * an empty group lives in the drawer, the New tab sheet's group choice and Move to group.
+ */
 internal fun buildEntries(slots: List<TabSlot>, groups: List<Workspace>, activeId: String?): List<StripEntry> {
     val ordered = groups.sortedWith(compareBy<Workspace> { it.sortOrder }.thenBy { it.createdAt })
     val byGroup = slots.groupBy { it.groupId }
     val stripIndex = HashMap<String, Int>(slots.size * 2)
     slots.forEachIndexed { i, s -> stripIndex[s.id] = i }
-    val showChips = ordered.size > 1
+    val showChips = ordered.count { !byGroup[it.id].isNullOrEmpty() } > 1
     val out = ArrayList<StripEntry>(slots.size + ordered.size + 1)
     ordered.forEachIndexed { gi, group ->
         val tabs = byGroup[group.id].orEmpty()
+        if (tabs.isEmpty()) return@forEachIndexed
         if (showChips) out += StripEntry.Chip(group, gi, tabs.map { it.tab })
         for (slot in tabs) {
             if (group.collapsed && slot.id != activeId) continue
@@ -207,9 +220,11 @@ fun rememberTabStripState(): TabStripState {
 // ---- header and strip ----------------------------------------------------------------------------------
 
 /**
- * The Stage header (spec C3): the scrolling [TabStrip] with weight 1, then the fixed [trailing]
- * slots (count tile, Overflow). Owns the status-bar inset and the chrome chosen by the style: a
- * flat toolbar on `surface.1`, or an island inset from the edges.
+ * The Stage header (spec C3): the scrolling [TabStrip] with weight 1, a [TabStripStyle.trailingGap]
+ * gutter, then the fixed [trailing] slots (count tile, Overflow). Owns the status-bar inset and
+ * the chrome chosen by the style: a flat toolbar on its [TabStripStyle.headerFill], or an island
+ * inset from the edges. Over a flat toolbar the strip's items reach [TabStripStyle.topReach] into
+ * the inset as touch target, so a 40 dp row answers a 44 dp target without moving anything.
  */
 @Composable
 fun TabHeader(
@@ -222,23 +237,27 @@ fun TabHeader(
     style: TabStripStyle = LocalTabStripStyle.current,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
-    val c = Berth.colors
     val resolved = rememberResolvedTabStyle(style)
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // The island's clip would cut a target that reached past its edge, so only the toolbar lends the inset.
+    val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
-        Row(rowModifier.height(style.height), verticalAlignment = Alignment.CenterVertically) {
-            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style)
-            trailing()
+        Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
+            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach)
+            Spacer(Modifier.width(style.trailingGap))
+            Row(Modifier.padding(top = reach).height(style.height), verticalAlignment = Alignment.CenterVertically) { trailing() }
         }
     }
     when (style.chrome) {
-        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(c.surface1).statusBarsPadding())
+        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
         StripChrome.ISLAND -> Box(
             modifier
                 .fillMaxWidth()
+                .background(resolved.headerFill)
                 .statusBarsPadding()
                 .padding(start = style.islandInset, end = style.islandInset, top = style.islandInset),
         ) {
-            row(Modifier.fillMaxWidth().clip(RoundedCornerShape(resolved.islandRadius)).background(c.surface1))
+            row(Modifier.fillMaxWidth().clip(RoundedCornerShape(resolved.islandRadius)).background(resolved.islandFill))
         }
     }
 }
@@ -246,9 +265,11 @@ fun TabHeader(
 /**
  * The tab strip (spec C3): a lazy row of group chips, tabs and the plus tab. Tap switches;
  * long-press lifts (release for the menu, move to reorder live, hold near an edge to auto-scroll);
- * the active tab is kept in view. Every visual decision comes from [style]; every behaviour goes
- * through [actions]. Each tab observes its own record, so the strip itself recomposes only when
- * tabs open, close, move or the active tab changes.
+ * the active tab is kept in view, resting [TabStripStyle.edgeInset] inside either edge, and each
+ * edge fades while the strip continues past it. Every visual decision comes from [style]; every
+ * behaviour goes through [actions]. Each tab observes its own record, so the strip itself
+ * recomposes only when tabs open, close, move or the active tab changes. [topReach] is extra
+ * height above the visual row that the items take as touch target (the header lends the inset).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -260,6 +281,7 @@ fun TabStrip(
     modifier: Modifier = Modifier,
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
+    topReach: Dp = 0.dp,
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId) }
@@ -270,6 +292,10 @@ fun TabStrip(
     val density = LocalDensity.current
     val gapPx = with(density) { style.gap.toPx() }
     val edgePx = with(density) { AUTO_SCROLL_EDGE.toPx() }
+    val insetPx = with(density) { style.edgeInset.roundToPx() }
+    val fadePx = with(density) { style.edgeFade.toPx() }
+    // Every neighbour already gets [gap]; a chip after the first adds the rest of [groupGap] ahead of itself.
+    val chipLead = (style.groupGap - style.gap).coerceAtLeast(0.dp)
     val tabCount = slots.size
     val scope = rememberCoroutineScope()
 
@@ -290,13 +316,18 @@ fun TabStrip(
         val leadIndex = if (index > 0 && groupId != null && (entries[index - 1] as? StripEntry.Chip)?.group?.id == groupId) index - 1 else index
         val item = info.visibleItemsInfo.firstOrNull { it.index == index }
         if (item == null) {
+            // Item offsets count from the end of the start inset, so offset 0 is the resting place: the inset in from the edge.
             state.listState.animateScrollToItem(if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
             return@LaunchedEffect
         }
         val lead = info.visibleItemsInfo.firstOrNull { it.index == leadIndex } ?: item
+        // The viewport's ends are the physical edges (negative by the inset at the start); the tab rests the inset inside them,
+        // so its × never sits against the count tile and its swatch never against the screen edge.
+        val restStart = info.viewportStartOffset + insetPx
+        val restEnd = info.viewportEndOffset - insetPx
         val delta = when {
-            lead.offset < info.viewportStartOffset -> lead.offset - info.viewportStartOffset
-            item.offset + item.size > info.viewportEndOffset -> item.offset + item.size - info.viewportEndOffset
+            lead.offset < restStart -> lead.offset - restStart
+            item.offset + item.size > restEnd -> item.offset + item.size - restEnd
             else -> 0
         }
         if (delta != 0) state.listState.animateScrollBy(delta.toFloat(), tween(120))
@@ -334,7 +365,8 @@ fun TabStrip(
         modifier
             .selectableGroup()
             // Plain semantics: the strip announces itself, and the tabs stay reachable as their own nodes.
-            .semantics { contentDescription = "Tabs, $tabCount open" },
+            .semantics { contentDescription = "Tabs, $tabCount open" }
+            .then(if (fadePx > 0f) Modifier.edgeFades(state.listState, fadePx) else Modifier),
         state = state.listState,
         contentPadding = PaddingValues(horizontal = style.edgeInset),
         horizontalArrangement = Arrangement.spacedBy(style.gap),
@@ -352,6 +384,7 @@ fun TabStrip(
                     controller = controller,
                     actions = actions,
                     groups = orderedGroups,
+                    topReach = topReach,
                     modifier = Modifier.liftable(entry.key, state),
                 )
                 is StripEntry.Chip -> GroupChip(
@@ -360,9 +393,11 @@ fun TabStrip(
                     state = state,
                     controller = controller,
                     actions = actions,
+                    topReach = topReach,
+                    leadGap = if (index > 0) chipLead else 0.dp,
                     modifier = Modifier.liftable(entry.key, state),
                 )
-                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, modifier = Modifier.animateItem())
+                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, topReach = topReach, modifier = Modifier.animateItem())
             }
         }
     }
@@ -370,6 +405,37 @@ fun TabStrip(
 
 /** The lifted item draws over its neighbours. */
 private fun Modifier.liftable(key: String, state: TabStripState): Modifier = zIndex(if (state.drag?.key == key) 1f else 0f)
+
+/**
+ * Fades [fade] px of either end of the strip while it can scroll that way (spec C3, Header row),
+ * so a title cut by the edge reads as continuing rather than as a rendering fault. The row is
+ * composited offscreen and the ramp is drawn with DstIn, which scales the content's own alpha
+ * instead of painting the header's colour over it, so the fade is right on any surface. The scroll
+ * state is read in the draw phase only: a change at either end redraws the strip without
+ * recomposing it.
+ */
+private fun Modifier.edgeFades(listState: LazyListState, fade: Float): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val width = size.width
+        if (width <= fade * 2) return@drawWithContent
+        if (listState.canScrollBackward) {
+            drawRect(
+                brush = Brush.horizontalGradient(0f to Color.Transparent, 1f to Color.Black, startX = 0f, endX = fade),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+        if (listState.canScrollForward) {
+            drawRect(
+                brush = Brush.horizontalGradient(0f to Color.Black, 1f to Color.Transparent, startX = width - fade, endX = width),
+                topLeft = Offset(width - fade, 0f),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
 
 /** The 32 dp auto-scroll zone at either end of the strip and how far one frame scrolls (spec C3, Reorder). */
 private val AUTO_SCROLL_EDGE = 32.dp
@@ -479,18 +545,26 @@ internal class DragController(
         return true
     }
 
-    /** A chip passed the neighbouring group's chip: the whole group moves one place. */
+    /**
+     * A chip passed the neighbouring chip: the whole group moves to that group's place. Neighbours
+     * are the chips either side in the strip, not the groups either side in the model, since a
+     * group without tabs has no chip to pass.
+     */
     private fun crossChip(list: List<StripEntry>, me: StripEntry.Chip, visualCenter: Float, items: List<LazyListItemInfo>): Boolean {
         val chips = list.filterIsInstance<StripEntry.Chip>()
-        val next = chips.firstOrNull { it.groupIndex == me.groupIndex + 1 }?.let { c -> items.firstOrNull { it.key == c.key } }
-        val prev = chips.firstOrNull { it.groupIndex == me.groupIndex - 1 }?.let { c -> items.firstOrNull { it.key == c.key } }
+        val at = chips.indexOfFirst { it.key == me.key }
+        if (at < 0) return false
+        val nextChip = chips.getOrNull(at + 1)
+        val prevChip = chips.getOrNull(at - 1)
+        val next = nextChip?.let { c -> items.firstOrNull { it.key == c.key } }
+        val prev = prevChip?.let { c -> items.firstOrNull { it.key == c.key } }
         return when {
-            next != null && visualCenter > next.offset + next.size / 2f -> {
-                actions.value.moveGroup(me.group.id, me.groupIndex + 1)
+            nextChip != null && next != null && visualCenter > next.offset + next.size / 2f -> {
+                actions.value.moveGroup(me.group.id, nextChip.groupIndex)
                 true
             }
-            prev != null && visualCenter < prev.offset + prev.size / 2f -> {
-                actions.value.moveGroup(me.group.id, me.groupIndex - 1)
+            prevChip != null && prev != null && visualCenter < prev.offset + prev.size / 2f -> {
+                actions.value.moveGroup(me.group.id, prevChip.groupIndex)
                 true
             }
             else -> false
@@ -629,6 +703,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
     controller: DragController,
     actions: TabActions,
     groups: List<Workspace>,
+    topReach: Dp,
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
@@ -653,7 +728,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         label = "tab fill",
     )
     val titleColor = when {
-        active || pressed -> c.text1
+        active || pressed -> style.activeTitleColor
         record.state == SessionState.DETACHED || record.state == SessionState.CLOSED -> c.text3
         else -> c.text2
     }
@@ -698,7 +773,9 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                     CustomAccessibilityAction("Move right") { actions.move(id, stripIndex + 1, null); true },
                     CustomAccessibilityAction("More options") { state.menuKey = entry.key; true },
                 )
-            },
+            }
+            // The target is the whole box, reach included; the visual sits centred in the row beneath it.
+            .padding(top = topReach),
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(
@@ -714,7 +791,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 .drawBehind {
                     if (active && s.activeMark == ActiveTabMark.UNDERLINE) {
                         val h = 2.dp.toPx()
-                        drawRoundRect(c.accent, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
+                        drawRoundRect(style.underlineColor, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
                     }
                 }
                 .padding(s.tabPadding),
@@ -726,14 +803,15 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 state = record.state,
                 showLiveDot = false,
                 attention = record.needsAttention,
-                halo = if (fill.alpha > 0.01f) fill else c.surface1,
+                // The dot's halo cuts the tab's fill, or the surface the tab sits on when it has none.
+                halo = if (fill.alpha > 0.01f) fill else if (s.chrome == StripChrome.ISLAND) style.islandFill else style.headerFill,
                 style = style,
             )
             if (titled) {
                 Spacer(Modifier.width(6.dp))
                 Text(
                     title,
-                    style = BerthType.label,
+                    style = style.titleStyle,
                     color = titleColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -835,8 +913,8 @@ internal fun TabSwatch(
     ) {
         Text(
             monogram.take(2),
-            style = BerthType.label.copy(fontSize = 9.sp, lineHeight = 12.sp),
-            color = Color.White.copy(alpha = 0.92f),
+            style = style.monogramStyle,
+            color = style.monogramColor,
             maxLines = 1,
         )
         if (dotColor != null) {
@@ -869,9 +947,12 @@ internal fun TabSwatch(
 }
 
 /**
- * A group chip (spec C3, Groups): 22 dp pill tinted with the group colour, its name in Caption;
- * collapsed it reads `HOMELAB · 4` and carries its hidden tabs' rings. Tap collapses or expands,
- * long-press lifts for the menu or a drag that reorders whole groups.
+ * A group chip (spec C3, Groups): a pill tinted with the group colour carrying the group's name,
+ * treated as the style says; collapsed it reads `HOMELAB · 4` and carries its hidden tabs' rings.
+ * Tap collapses a run of two or more, expands a collapsed one, and on a run of one jumps to that
+ * tab (collapsing it would change nothing); long-press lifts for the menu or a drag that reorders
+ * whole groups. [leadGap] is the extra room ahead of a chip that heads a run after the first, so
+ * the run boundary reads as spacing.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -881,9 +962,10 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     state: TabStripState,
     controller: DragController,
     actions: TabActions,
+    topReach: Dp,
+    leadGap: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val c = Berth.colors
     val group = entry.group
     val tint = group.color.rgb.toColor()
     val draggedHere = state.drag?.key == entry.key
@@ -891,7 +973,14 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     var pressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, tween(120), label = "chip lift")
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
-    val label = if (group.collapsed) "${group.name.uppercase()} \u00B7 ${entry.tabs.size}" else group.name.uppercase()
+    val label = chipLabel(group, entry.tabs.size, style.style)
+    val tap: () -> Unit = {
+        when {
+            group.collapsed -> actions.setGroupCollapsed(group.id, false)
+            entry.tabs.size > 1 -> actions.setGroupCollapsed(group.id, true)
+            else -> entry.tabs.firstOrNull()?.let { actions.activate(it.id) }
+        }
+    }
 
     Box(
         modifier
@@ -904,11 +993,11 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
                     drag.startOffset + state.dragTravel - current
                 } else 0f
             }
-            .stripItemGestures(entry.key, isChip = true, controller, state, onTap = { actions.setGroupCollapsed(group.id, !group.collapsed) }, onPressedChange = { pressed = it })
+            .stripItemGestures(entry.key, isChip = true, controller, state, onTap = tap, onPressedChange = { pressed = it })
             .clearAndSetSemantics {
                 role = Role.Button
                 contentDescription = "Group ${group.name}, ${entry.tabs.size} tabs" + (if (group.collapsed) ", collapsed" else "") + (if (attention) ", needs attention" else "")
-                onClick { actions.setGroupCollapsed(group.id, !group.collapsed); true }
+                onClick { tap(); true }
                 onLongClick { state.menuKey = entry.key; true }
                 customActions = listOf(
                     CustomAccessibilityAction("New tab here") { actions.newTabIn(group.id); true },
@@ -916,7 +1005,8 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
                     CustomAccessibilityAction("Move right") { actions.moveGroup(group.id, entry.groupIndex + 1); true },
                     CustomAccessibilityAction("More options") { state.menuKey = entry.key; true },
                 )
-            },
+            }
+            .padding(start = leadGap, top = topReach),
         contentAlignment = Alignment.Center,
     ) {
         ChipPill(
@@ -924,7 +1014,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
             tint = tint,
             attention = attention,
             pressed = pressed || liftedHere,
-            height = style.style.chipHeight,
+            style = style,
             modifier = Modifier.graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -939,9 +1029,16 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     }
 }
 
+/** The chip's label: the group's name, in capitals when the style says so, with its tab count while collapsed. */
+internal fun chipLabel(group: Workspace, tabCount: Int, style: TabStripStyle): String {
+    val name = if (style.chipUppercase) group.name.uppercase() else group.name
+    return if (group.collapsed) "$name \u00B7 $tabCount" else name
+}
+
 /**
- * The pill itself: full radius, the group colour at 20% (32% pressed) over the surface, the label
- * in Caption in the group colour, and the attention ring 2 dp outside. Shared with the switcher.
+ * The pill itself, as [TabStripStyle] treats it: its shape, the group colour at the style's alpha
+ * (pressed alpha while pressed) over the surface, the label in the chip text style in the group
+ * colour, and the attention ring 2 dp outside. Shared with the switcher, so its headers follow.
  */
 @Composable
 internal fun ChipPill(
@@ -949,31 +1046,33 @@ internal fun ChipPill(
     tint: Color,
     attention: Boolean,
     pressed: Boolean,
-    height: Dp,
+    style: ResolvedTabStyle,
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
+    val s = style.style
     Box(
         modifier
-            .height(height)
+            .height(s.chipHeight)
             .drawBehind {
                 if (attention) {
                     val out = 2.dp.toPx()
+                    val radius = s.chipRadius?.toPx() ?: (size.height / 2)
                     drawRoundRect(
                         color = c.attention,
                         topLeft = Offset(-out, -out),
                         size = Size(size.width + out * 2, size.height + out * 2),
-                        cornerRadius = CornerRadius(size.height / 2 + out),
+                        cornerRadius = CornerRadius(radius + out),
                         style = Stroke(width = 1.5.dp.toPx()),
                     )
                 }
             }
-            .clip(CircleShape)
-            .background(tint.copy(alpha = if (pressed) 0.32f else 0.2f))
-            .padding(horizontal = 8.dp),
+            .clip(style.chipShape)
+            .background(tint.copy(alpha = if (pressed) s.chipPressedAlpha else s.chipFillAlpha))
+            .padding(horizontal = s.chipPadding),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = BerthType.caption, color = tint, maxLines = 1)
+        Text(label, style = style.chipTextStyle, color = tint, maxLines = 1)
     }
 }
 
@@ -985,7 +1084,7 @@ internal fun rememberGroupAttention(tabs: List<TabSource>, enabled: Boolean): Fl
 
 /** The plus tab (spec C3): a 32 dp square with the drawn `+`; tap for the New tab sheet, long-press duplicates the active tab. */
 @Composable
-private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, modifier: Modifier = Modifier) {
+private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, modifier: Modifier = Modifier) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -1003,7 +1102,8 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, modifier: Modi
                 contentDescription = "New tab"
                 role = Role.Button
                 onLongClick { actions.duplicateActive(); true }
-            },
+            }
+            .padding(top = topReach),
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -1061,12 +1161,12 @@ fun CountTile(
                     }
                 }
                 .clip(RoundedCornerShape(resolved.countTileRadius))
-                .background(if (pressed) c.surface4 else c.surface2),
+                .background(if (pressed) resolved.pressedFill else resolved.countTileFill),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (count > 99) ":)" else count.toString(),
-                style = BerthType.label.copy(fontSize = if (count > 9) 11.sp else 13.sp),
+                if (count > 99) "99+" else count.toString(),
+                style = BerthType.label.copy(fontSize = if (count > 99) 9.sp else if (count > 9) 11.sp else 13.sp),
                 color = c.text1,
                 maxLines = 1,
             )
