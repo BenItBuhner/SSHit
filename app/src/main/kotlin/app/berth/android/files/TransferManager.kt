@@ -224,7 +224,15 @@ class TransferManager(
 
     /** Answers the conflict a folder transfer waits on; nothing happens when it is not waiting. */
     fun resolveConflict(id: String, choice: ConflictChoice, applyToAll: Boolean) {
-        synchronized(conflicts) { conflicts[id] }?.complete(ConflictResolution(choice, applyToAll))
+        val answer = ConflictResolution(choice, applyToAll)
+        val asked = synchronized(conflicts) {
+            conflicts[id] ?: run {
+                // The row shows the question a moment before the copy starts waiting on it; an answer in that moment is kept for it.
+                if (_transfers.value.any { it.id == id && it.waiting }) answers[id] = answer
+                null
+            }
+        }
+        asked?.complete(answer)
     }
 
     /**
@@ -290,7 +298,10 @@ class TransferManager(
 
     private suspend fun awaitAnswer(id: String): ConflictResolution {
         val deferred = CompletableDeferred<ConflictResolution>()
-        synchronized(conflicts) { conflicts[id] = deferred }
+        synchronized(conflicts) {
+            answers.remove(id)?.let { return it }
+            conflicts[id] = deferred
+        }
         try {
             return deferred.await()
         } finally {
@@ -362,6 +373,7 @@ class TransferManager(
                     patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = System.currentTimeMillis()) }
                 } finally {
                     synchronized(jobs) { jobs.remove(id) }
+                    synchronized(conflicts) { answers.remove(id) }
                     publishCount()
                 }
             }
