@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
@@ -196,7 +197,10 @@ fun StageScreen(
     Column(
         modifier
             .fillMaxSize()
-            .background(c.surface0),
+            .background(c.surface0)
+            // The ribbon absorbs the status bar and the bottom chrome the navigation bar and IME; in
+            // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         Ribbon(
             session = session,
