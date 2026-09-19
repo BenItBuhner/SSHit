@@ -43,6 +43,7 @@ import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
@@ -119,6 +120,15 @@ private fun Shell(vm: AppViewModel) {
     fun openDrawer() = scope.launch { drawer.open() }
     fun closeDrawer() = scope.launch { drawer.close() }
     val tabActions = remember(vm, tabUi) { ShellTabActions(vm, tabUi, onActivated = { toStage() }) }
+
+    // A notification opened a tab (spec C21): whatever screen or sheet was up gives way to the Stage.
+    LaunchedEffect(vm) {
+        vm.stageRequests.collect {
+            sessionSheet = false
+            toStage()
+            if (drawer.isOpen) drawer.close()
+        }
+    }
 
     val onStage = backStack.lastOrNull() == Screen.Stage
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
@@ -260,4 +270,5 @@ private fun Shell(vm: AppViewModel) {
         ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
+    NotificationPermissionHost(vm.notifier)
 }

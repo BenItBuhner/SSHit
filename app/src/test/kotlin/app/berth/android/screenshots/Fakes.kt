@@ -1,11 +1,15 @@
 package app.berth.android.screenshots
 
 import android.content.Context
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import app.berth.android.files.FilesCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.NetworkMonitor
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
+import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppViewModel
 import app.berth.data.crypto.HardwareKeys
 import app.berth.domain.model.DeckLayout
@@ -174,9 +178,25 @@ class InMemorySettings : SettingsRepository {
 }
 
 /**
+ * Stands in for [androidx.lifecycle.ProcessLifecycleOwner]: tests move the app on and off the
+ * screen with [start] and [stop] and the manager reacts as it would to the real process.
+ */
+class FakeLifecycleOwner : LifecycleOwner {
+    private val registry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = registry
+
+    /** An activity reached the screen ([Lifecycle.Event.ON_START]). */
+    fun start() = registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+
+    /** The last activity left the screen ([Lifecycle.Event.ON_STOP]). */
+    fun stop() = registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+}
+
+/**
  * The production object graph with in-memory storage, the way Hilt would wire it on a device.
  * [sessions] and [viewModel] are created on first use so seeded records exist before the manager
- * restores them.
+ * restores them. [process] is the process lifecycle the manager watches; it starts created, off
+ * screen, so a test decides when the app is in front.
  */
 class TestGraph(private val context: Context) {
     val hosts = InMemoryHosts()
@@ -191,8 +211,10 @@ class TestGraph(private val context: Context) {
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
     val authResolver = AuthResolver(identities, secrets, hardwareKeys, prompts)
+    val process = FakeLifecycleOwner()
+    val notifier = SessionNotifier(context)
     val sessions: SessionManager by lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, notifier, process.lifecycle)
     }
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     val viewModel: AppViewModel by lazy {

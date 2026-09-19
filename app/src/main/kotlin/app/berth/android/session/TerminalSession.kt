@@ -72,6 +72,15 @@ interface SessionEnvironment {
     suspend fun connectCommands(host: Host, workspaceId: String): List<String> = emptyList()
 }
 
+/** A failure worth telling the user about away from the Stage (spec C21, Problems channel). */
+sealed interface SessionProblem {
+    /** Every retry in the host's window failed; the session is Detached with its frame kept. */
+    data class GaveUp(val afterMillis: Long) : SessionProblem
+
+    /** A connect attempt failed for a reason a retry will not fix; [reason] is the plain-language text of [TerminalSession.failure]. */
+    data class Failed(val reason: String, val authentication: Boolean) : SessionProblem
+}
+
 /** Runtime state of one configured tunnel on the session that carries it. */
 sealed interface TunnelStatus {
     data object Starting : TunnelStatus
@@ -116,8 +125,20 @@ class TerminalSession(
     private val _failure = MutableStateFlow<Pair<String, String>?>(null)
     val failure: StateFlow<Pair<String, String>?> = _failure.asStateFlow()
 
+    /** Failures the user should hear about even when this tab is not on stage; the manager turns them into Problems notifications. */
+    private val _problems = MutableSharedFlow<SessionProblem>(extraBufferCapacity = 4)
+    val problems: SharedFlow<SessionProblem> = _problems.asSharedFlow()
+
     /** Whether this session is currently on stage; off-stage events raise attention. */
     @Volatile override var onStage: Boolean = false
+
+    /**
+     * When the current attention was raised, or null while the tab needs nothing. Kept off the
+     * record (no schema change) for jump-to-unread, which goes to the most recent, and for the
+     * Attention notification's timestamp.
+     */
+    @Volatile var attentionAt: Long? = null
+        private set
 
     val emulator: TerminalEmulator = TerminalEmulator(
         cols = 80,
@@ -149,10 +170,14 @@ class TerminalSession(
 
             override fun onShellIntegration(mark: Char, param: String) {
                 when (mark) {
-                    'C' -> commandRunning = true
-                    'D' -> if (commandRunning) {
-                        commandRunning = false
-                        if (!onStage) attention(if (param.isEmpty() || param == "0") "Command finished" else "Command failed ($param)")
+                    'C' -> commandStartedAt = env.now()
+                    'D' -> commandStartedAt?.let { started ->
+                        commandStartedAt = null
+                        // Only a command that ran long enough to have been walked away from counts
+                        // (vision §4.5): a quick `ls` in a background tab is not news.
+                        if (!onStage && env.now() - started >= ATTENTION_COMMAND_MS) {
+                            attention(if (param.isEmpty() || param == "0") "Command finished" else "Command failed ($param)")
+                        }
                     }
                 }
             }
@@ -162,7 +187,9 @@ class TerminalSession(
     private var connection: SshConnection? = null
     private var shell: ShellChannel? = null
     private var connectJob: Job? = null
-    private var commandRunning = false
+
+    /** When the running command began (OSC 133 `C`), or null between commands. */
+    private var commandStartedAt: Long? = null
     private var everLive = false
 
     /** Geometry the renderer last requested; applied to the PTY once a shell exists. */
@@ -369,6 +396,7 @@ class TerminalSession(
             if (!ReconnectBackoff.shouldRetry(env.now() - since, host.persistence)) {
                 marker("gave up reconnecting")
                 transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
+                _problems.tryEmit(SessionProblem.GaveUp(env.now() - since))
                 return
             }
             transition(SessionState.RECONNECTING, PersistenceLayer.IN_APP)
@@ -478,6 +506,7 @@ class TerminalSession(
         _failure.value = plain to (e.message ?: e.javaClass.simpleName)
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
+        _problems.tryEmit(SessionProblem.Failed(plain, authentication = e is SshError.AuthenticationFailed))
     }
 
     private fun teardownConnection() {
@@ -546,7 +575,17 @@ class TerminalSession(
     // ---- attention and record ------------------------------------------------------------------
 
     override fun markSeen() {
+        attentionAt = null
         if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+    }
+
+    /**
+     * Refreshes `lastLiveAt` while Live. The manager calls it as it saves frames in the background,
+     * so a tab the OS kills mid-session comes back dated to its last save rather than to the moment
+     * it connected, and "Detached · 4 min ago" stays honest.
+     */
+    fun markLive() {
+        if (state == SessionState.LIVE) patch { copy(lastLiveAt = env.now()) }
     }
 
     /** Sets the tab's custom title; blank restores the automatic one (spec C3, Rename). */
@@ -559,7 +598,10 @@ class TerminalSession(
     override fun place(workspaceId: String, sortOrder: Int): SessionRecord =
         _record.updateAndGet { if (it.workspaceId == workspaceId && it.sortOrder == sortOrder) it else it.copy(workspaceId = workspaceId, sortOrder = sortOrder) }
 
-    private fun attention(reason: String) = patch { copy(needsAttention = true, attentionReason = reason) }
+    private fun attention(reason: String) {
+        attentionAt = env.now()
+        patch { copy(needsAttention = true, attentionReason = reason) }
+    }
 
     private fun transition(state: SessionState, layer: PersistenceLayer) = patch { copy(state = state, layer = layer) }
 
@@ -576,9 +618,9 @@ class TerminalSession(
         }
     }
 
-    /** Writes a dim marker row into the terminal, e.g. `reconnected 14:07`. */
-    private fun marker(text: String) {
-        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(env.now()))
+    /** Writes a dim marker row into the terminal, e.g. `reconnected 14:07`, stamped [at] (now by default). */
+    private fun marker(text: String, at: Long = env.now()) {
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at))
         val line = "\r\n\u001b[0;2m\u2500\u2500 $text $time \u2500\u2500\u001b[0m\r\n"
         emulator.write(line)
     }
@@ -603,21 +645,32 @@ class TerminalSession(
         return out.toByteArray()
     }
 
-    fun restoreFrame(frame: ByteArray) {
-        runCatching {
-            DataInputStream(frame.inputStream()).use { d ->
-                if (d.readInt() != FRAME_VERSION) return
-                val n = d.readInt()
-                val text = StringBuilder()
-                repeat(n) { text.append(d.readUTF()).append("\r\n") }
-                emulator.write("\u001b[2m")
-                emulator.write(text.toString())
-                emulator.write("\u001b[0m")
+    /**
+     * Replays a saved frame into the emulator, dimmed. [pausedAt] is set for a tab that was
+     * connected when the process died: the frame then ends in a `paused 14:07` marker stamped with
+     * the last moment it was known to be live, so the relaunch reads as a session that paused
+     * rather than one that vanished (vision §4.3, L0).
+     */
+    fun restoreFrame(frame: ByteArray?, pausedAt: Long? = null) {
+        if (frame != null) {
+            runCatching {
+                DataInputStream(frame.inputStream()).use { d ->
+                    if (d.readInt() != FRAME_VERSION) return@runCatching
+                    val n = d.readInt()
+                    val text = StringBuilder()
+                    repeat(n) { text.append(d.readUTF()).append("\r\n") }
+                    emulator.write("\u001b[2m")
+                    emulator.write(text.toString())
+                    emulator.write("\u001b[0m")
+                }
             }
         }
+        if (pausedAt != null) marker("paused", pausedAt)
     }
 
     companion object {
+        /** How long an OSC 133 command must have run before its finishing off stage counts as attention (vision §4.5). */
+        const val ATTENTION_COMMAND_MS = 10_000L
         private const val CONNECT_TIMEOUT_MS = 45_000L
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
         private const val BIND_RETRIES = 2

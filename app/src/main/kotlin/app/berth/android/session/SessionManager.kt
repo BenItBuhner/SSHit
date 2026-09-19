@@ -2,8 +2,15 @@ package app.berth.android.session
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
+import android.os.Handler
+import android.os.Looper
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import app.berth.android.di.ProcessLifecycle
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
@@ -26,11 +33,17 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -39,6 +52,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -58,6 +72,11 @@ data class ClosedTab(val record: SessionRecord) {
  * in kinds (spec C3): a [TerminalSession] runs one SSH login, a [FilesTab] browses a host's files
  * over one of its terminals' logins. This class owns their order, their groups and which one is
  * active, and writes each change so the strip comes back the same after process death.
+ *
+ * It also watches the process: frames are saved when the app leaves the screen, when the OS asks
+ * for memory and on a cadence while live sessions run in the background, so a tab the OS kills
+ * comes back as a session that paused (vision §4.3, L0); and while the app is away, a tab that
+ * needs the user or loses its server says so through [SessionNotifier] (spec C21).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -73,7 +92,9 @@ class SessionManager @Inject constructor(
     private val network: NetworkMonitor,
     private val tunnelRepository: TunnelRepository,
     private val snippetRepository: SnippetRepository,
-) {
+    val notifier: SessionNotifier,
+    @ProcessLifecycle private val processLifecycle: Lifecycle,
+) : SessionCommands {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _sessions = MutableStateFlow<Map<String, TerminalSession>>(emptyMap())
@@ -147,6 +168,28 @@ class SessionManager @Inject constructor(
     /** Whether the persisted tabs have been loaded; until then nothing is known about the strip, not even that it is empty. */
     val restored: StateFlow<Boolean> = _restored.asStateFlow()
 
+    private val _foreground = MutableStateFlow(false)
+
+    /** Whether an activity is on screen ([Lifecycle.Event.ON_START] to [Lifecycle.Event.ON_STOP]); off screen, attention goes to the shade. */
+    val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
+
+    private val _stageRequests = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** A tab a notification put on stage; the shell pops back to the Stage so it is actually seen. */
+    val stageRequests: SharedFlow<String> = _stageRequests.asSharedFlow()
+
+    /** A notification's tab asked for before the strip was restored; staged the moment it is. */
+    private var pendingActivation: String? = null
+    private val pendingLock = Any()
+
+    /** Problems collectors, one per terminal tab, cancelled when the tab closes. */
+    private val trackers = HashMap<String, Job>()
+
+    /** Screen version each tab's frame was last saved at, so the background cadence skips quiet tabs. */
+    private val savedVersions = HashMap<String, Long>()
+    private var backgroundSaver: Job? = null
+    private var firstLiveSeen = false
+
     private val environment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
@@ -162,17 +205,42 @@ class SessionManager @Inject constructor(
                 .map { it.render() }
     }
 
+    // Declared ahead of init, which registers them: Kotlin initialises properties in order.
+    private val lifecycleObserver = LifecycleEventObserver { _, event ->
+        when (event) {
+            Lifecycle.Event.ON_START -> onForeground()
+            Lifecycle.Event.ON_STOP -> onBackground()
+            else -> Unit
+        }
+    }
+
+    private val memoryCallbacks = object : ComponentCallbacks2 {
+        override fun onTrimMemory(level: Int) = this@SessionManager.onTrimMemory(level)
+        override fun onLowMemory() = this@SessionManager.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+    }
+
     init {
         scope.launch { restore() }
         scope.launch {
-            // Only a terminal holds a socket; a Files tab mirrors its ride's state and never keeps the service up on its own.
-            combine(
-                records.map { list -> list.count { it.kind == TabKind.Ssh && it.state.keepsService } },
-                tunnelStatuses.map { statuses -> statuses.count { it.value is TunnelStatus.Up } },
-                activeTransfers,
-                waitingTransfers,
-            ) { active, tunnels, transfers, waiting -> ServiceCounts(active, tunnels, transfers, waiting) }.distinctUntilChanged().collect { (active, tunnels, transfers, waiting) ->
-                if (active > 0) SessionService.start(context, active, tunnels, transfers, waiting) else SessionService.stop(context)
+            // Only a terminal holds a socket; a Files tab mirrors its ride's state and never keeps the
+            // service up on its own. The notification says what every terminal tab is doing, with the
+            // tunnels up, the transfers in flight and how many of those wait on the user; the service
+            // itself only starts and stops with the count of tabs holding a socket.
+            var lastActive = 0
+            combine(records, tunnelStatuses, activeTransfers, waitingTransfers) { list, statuses, transfers, waiting ->
+                SessionsSummary(
+                    lines = list.filter { it.kind == TabKind.Ssh && it.state != SessionState.CLOSED }.map { SessionLine(it.displayTitle, it.state) },
+                    tunnels = statuses.count { it.value is TunnelStatus.Up },
+                    transfers = transfers,
+                    waiting = waiting,
+                )
+            }.distinctUntilChanged().collect { summary ->
+                notifier.updateSessions(summary)
+                if (summary.active != lastActive) {
+                    lastActive = summary.active
+                    if (summary.active > 0) SessionService.start(context) else SessionService.stop(context)
+                }
             }
         }
         scope.launch {
@@ -183,6 +251,96 @@ class SessionManager @Inject constructor(
             records.collect {
                 electCarriers(it)
                 refollow()
+            }
+        }
+        scope.launch {
+            // Each terminal record against its last emission: frames on the way out of Live, the
+            // first Live of the process, and attention lighting or clearing.
+            val seen = HashMap<String, SessionRecord>()
+            records.collect { list ->
+                seen.keys.retainAll(list.mapTo(HashSet()) { it.id })
+                for (record in list) {
+                    val previous = seen.put(record.id, record)
+                    if (record.kind == TabKind.Ssh) onRecordChanged(previous, record)
+                }
+            }
+        }
+        observeProcess()
+    }
+
+    // ---- process lifecycle -----------------------------------------------------------------------
+
+    private fun observeProcess() {
+        context.registerComponentCallbacks(memoryCallbacks)
+        // ProcessLifecycleOwner's registry insists on the main thread; Hilt may build the manager elsewhere.
+        if (Looper.myLooper() == Looper.getMainLooper()) processLifecycle.addObserver(lifecycleObserver)
+        else Handler(Looper.getMainLooper()).post { processLifecycle.addObserver(lifecycleObserver) }
+    }
+
+    private fun onForeground() {
+        _foreground.value = true
+        backgroundSaver?.cancel()
+        backgroundSaver = null
+        // The user may have flipped notifications in system settings while away.
+        notifier.refresh()
+    }
+
+    /**
+     * The app left the screen: every frame is saved now, then again every [BACKGROUND_SAVE_MS]
+     * for tabs whose screen moved while a session is still connected, so however the process ends
+     * the relaunch shows what each tab last showed.
+     */
+    private fun onBackground() {
+        _foreground.value = false
+        saveAllFrames()
+        backgroundSaver?.cancel()
+        backgroundSaver = scope.launch {
+            while (isActive) {
+                delay(BACKGROUND_SAVE_MS)
+                if (_sessions.value.values.any { it.state.isActive }) saveAllFrames(onlyChanged = true)
+            }
+        }
+    }
+
+    /**
+     * [ComponentCallbacks2.onTrimMemory], registered on the application: the OS is about to
+     * reclaim, so frames go to disk first, whatever the level. Public for tests and for any host
+     * that wants to forward its own callback.
+     */
+    fun onTrimMemory(@Suppress("UNUSED_PARAMETER") level: Int) {
+        saveAllFrames()
+    }
+
+    private fun onRecordChanged(previous: SessionRecord?, record: SessionRecord) {
+        val session = _sessions.value[record.id] ?: return
+        val before = previous?.state
+        val now = record.state
+        if (before != null && before != now && now != SessionState.CLOSED) {
+            // Leaving Live (dropped, ended, detached) or giving up: keep what the screen showed.
+            if (before == SessionState.LIVE || (before.isActive && !now.isActive)) saveFrame(session)
+            // A tab connecting again has answered its problem notification itself.
+            if (now.isActive && !before.isActive) notifier.cancelProblem(record.id)
+        }
+        if (now == SessionState.LIVE && before != SessionState.LIVE && !firstLiveSeen) {
+            // The first successful connect of this process is the moment to ask for notifications (spec C1 note).
+            firstLiveSeen = true
+            notifier.onFirstLive()
+        }
+        val hadAttention = previous?.needsAttention == true
+        if (record.needsAttention && !hadAttention) {
+            // On screen the ring says it; away, the shade does (spec C21, Attention).
+            if (!_foreground.value) notifier.postAttention(record, session.attentionAt ?: System.currentTimeMillis())
+        } else if (!record.needsAttention && hadAttention) {
+            notifier.cancelAttention(record.id)
+        }
+    }
+
+    /** Problems from one tab, for as long as it is open: the shade hears about them unless the tab is on stage in the foreground. */
+    private fun track(session: TerminalSession) {
+        trackers.remove(session.id)?.cancel()
+        trackers[session.id] = scope.launch {
+            session.problems.collect { problem ->
+                if (!_foreground.value || _activeTabId.value != session.id) notifier.postProblem(session.record.value, problem)
             }
         }
     }
@@ -227,11 +385,15 @@ class SessionManager @Inject constructor(
         val map = LinkedHashMap<String, TerminalSession>()
         val files = LinkedHashMap<String, FilesTab>()
         val restoredRecords = ArrayList<SessionRecord>()
+        // Tabs that held a socket when the process died, with the last moment each was known to be
+        // live: their frames end in a `paused` marker so the relaunch reads as a pause, not a loss.
+        val pausedAt = HashMap<String, Long?>()
         for (record in sessionRepository.getAll()) {
             if (record.state == SessionState.CLOSED) {
                 sessionRepository.delete(record.id)
                 continue
             }
+            if (record.state.isActive) pausedAt[record.id] = record.lastLiveAt
             restoredRecords += record.copy(
                 state = SessionState.DETACHED,
                 layer = PersistenceLayer.LOCAL_FRAME,
@@ -249,8 +411,9 @@ class SessionManager @Inject constructor(
             when (record.kind) {
                 TabKind.Ssh -> {
                     val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
-                    sessionRepository.loadFrame(record.id)?.let { session.restoreFrame(it) }
+                    session.restoreFrame(sessionRepository.loadFrame(record.id), pausedAt = pausedAt[record.id])
                     map[record.id] = session
+                    track(session)
                 }
                 // A Files tab has no frame and nothing to reconnect; its browser reopens at the saved folder on first use.
                 TabKind.Files -> files[record.id] = FilesTab(record, scope) { sessionRepository.upsert(it) }
@@ -271,7 +434,31 @@ class SessionManager @Inject constructor(
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
         map.values.filter { it.record.value.workspaceId in reconnectWorkspaces }.forEach { it.connect() }
-        _restored.value = true
+        val pending = synchronized(pendingLock) {
+            _restored.value = true
+            pendingActivation.also { pendingActivation = null }
+        }
+        pending?.let { stage(it) }
+    }
+
+    /**
+     * A notification's tab (spec C21: every notification opens the tab it is about). Staged now,
+     * or the moment the strip is restored when the tap is what started the process.
+     */
+    fun activateFromNotification(id: String) {
+        val now = synchronized(pendingLock) {
+            if (_restored.value) true else {
+                pendingActivation = id
+                false
+            }
+        }
+        if (now) stage(id)
+    }
+
+    private fun stage(id: String) {
+        if (tabNow(id) == null) return
+        setActive(id)
+        _stageRequests.tryEmit(id)
     }
 
     /** Every tab right now, from the maps rather than the (asynchronous) flows. */
@@ -367,6 +554,7 @@ class SessionManager @Inject constructor(
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
         val session = TerminalSession(placed, scope, environment) { sessionRepository.upsert(it) }
         _sessions.update { it + (placed.id to session) }
+        track(session)
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
         sessionRepository.upsertAll(shifted + placed)
         placed.hostId?.let { hostRepository.markConnected(it, placed.createdAt) }
@@ -496,6 +684,19 @@ class SessionManager @Inject constructor(
     }
 
     /**
+     * Jump to unread (spec C3, C4, C22): the tab whose attention is the most recent goes on stage,
+     * which clears it; ties (nothing timed) fall to strip order. False when no other tab needs the user.
+     */
+    fun jumpToUnread(): Boolean {
+        val active = _activeTabId.value
+        val target = stripNow()
+            .filter { it.needsAttention && it.id != active }
+            .maxByOrNull { _sessions.value[it.id]?.attentionAt ?: 0L } ?: return false
+        setActive(target.id)
+        return true
+    }
+
+    /**
      * Jumps to a group from the drawer: with [activate], the group's most recently active tab (or its
      * first) goes on stage; a group with no tabs just becomes the target for the next new tab.
      */
@@ -571,7 +772,7 @@ class SessionManager @Inject constructor(
     // ---- lifecycle -----------------------------------------------------------------------------------
 
     /** Reconnects a terminal tab; for a Files tab, the terminal it rides, or a new one on its host when it has none. */
-    fun reconnect(id: String) {
+    override fun reconnect(id: String) {
         when (val tab = tabNow(id)) {
             is TerminalSession -> tab.reconnectNow()
             is FilesTab -> tab.ride.value?.reconnectNow() ?: connectFor(tab)
@@ -580,10 +781,10 @@ class SessionManager @Inject constructor(
     }
 
     /** Disconnects a terminal tab and keeps its frame. A Files tab has no connection of its own, so this does nothing to it. */
-    fun detach(id: String) {
+    override fun detach(id: String) {
         val session = _sessions.value[id] ?: return
         session.detach()
-        scope.launch { sessionRepository.saveFrame(id, session.snapshotFrame()) }
+        saveFrame(session)
     }
 
     /**
@@ -598,6 +799,9 @@ class SessionManager @Inject constructor(
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
+        trackers.remove(id)?.cancel()
+        savedVersions.remove(id)
+        notifier.cancelFor(id)
         if (_activeTabId.value == id) setActive(next)
         scope.launch { sessionRepository.delete(id) }
         return closed
@@ -609,20 +813,33 @@ class SessionManager @Inject constructor(
         if (_activeTabId.value != id) setActive(id)
     }
 
-    /** Persists frames for every session; called when the app goes to the background. */
-    fun saveAllFrames() {
-        val snapshot = _sessions.value.values.toList()
-        scope.launch {
-            for (s in snapshot) if (s.state != SessionState.CLOSED) sessionRepository.saveFrame(s.id, s.snapshotFrame())
+    /**
+     * Persists the frame of every open terminal tab: on the way to the background, when the OS
+     * trims memory, and on the background cadence, where [onlyChanged] skips tabs whose screen has
+     * not moved since their last save. A Live tab is also re-dated, so "Detached · 4 min ago"
+     * after a kill counts from the last save rather than from the connect.
+     */
+    fun saveAllFrames(onlyChanged: Boolean = false) {
+        for (session in _sessions.value.values.toList()) {
+            if (session.state == SessionState.CLOSED) continue
+            if (onlyChanged && savedVersions[session.id] == session.screenVersion.value) continue
+            saveFrame(session)
         }
     }
 
-    fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }
+    private fun saveFrame(session: TerminalSession) {
+        savedVersions[session.id] = session.screenVersion.value
+        session.markLive()
+        val frame = session.snapshotFrame()
+        scope.launch { sessionRepository.saveFrame(session.id, frame) }
+    }
 
-    /** What the foreground notification counts: live sessions, tunnels up, transfers in flight and, of those, the ones waiting on the user. */
-    private data class ServiceCounts(val active: Int, val tunnels: Int, val transfers: Int, val waiting: Int)
+    override fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }
 
     companion object {
+        /** How often frames are re-saved while live sessions run in the background. */
+        const val BACKGROUND_SAVE_MS = 30_000L
+
         fun openAppIntent(context: Context): Intent =
             context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()
     }

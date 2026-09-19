@@ -1,139 +1,72 @@
 package app.berth.android.session
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
-import android.os.IBinder
-import app.berth.android.R
+import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Holds the process in the foreground while sessions are connecting, live or reconnecting. The
- * notification is the "Sessions" surface from the UX spec: a count, and Detach all.
+ * Holds the process in the foreground while sessions are connecting, live or reconnecting, and
+ * answers the notification actions. What the ongoing notification says comes from
+ * [SessionNotifier.summary]; the manager starts and stops the service with the count of tabs
+ * holding a socket, and every change to the summary re-posts the notification while it is up.
  */
 @AndroidEntryPoint
-class SessionService : Service() {
+class SessionService : LifecycleService() {
     @Inject lateinit var sessions: SessionManager
+    @Inject lateinit var notifier: SessionNotifier
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    private var foreground = false
 
     override fun onCreate() {
         super.onCreate()
-        ensureChannel()
+        notifier.ensureChannels()
+        lifecycleScope.launch {
+            notifier.summary.collect { summary ->
+                // The empty summary is the moment before the manager stops the service; posting it would flash "0 sessions".
+                if (foreground && summary.active > 0) {
+                    getSystemService(NotificationManager::class.java).notify(SessionNotifier.ID_SESSIONS, notifier.sessionsNotification(summary))
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_DETACH_ALL -> {
-                sessions.detachAll()
-                stopSelf()
-                return START_NOT_STICKY
+        super.onStartCommand(intent, flags, startId)
+        if (intent?.action != null) {
+            // A notification action. When the tap is what started the process, the tabs are still
+            // loading, so the command waits for them; a service left with nothing connected stops.
+            lifecycleScope.launch {
+                sessions.restore()
+                notifier.dispatch(intent, sessions)
+                if (!foreground && notifier.summary.value.active == 0) stopSelf(startId)
             }
-            ACTION_STOP -> {
-                stopSelf()
-                return START_NOT_STICKY
-            }
+            return START_NOT_STICKY
         }
-        val count = intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1
-        val tunnels = intent?.getIntExtra(EXTRA_TUNNELS, 0) ?: 0
-        val transfers = intent?.getIntExtra(EXTRA_TRANSFERS, 0) ?: 0
-        val waiting = intent?.getIntExtra(EXTRA_WAITING, 0) ?: 0
-        val notification = buildNotification(count, tunnels, transfers, waiting)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        if (intent == null) {
+            // Restarted by the system after a kill: nothing is connected until the manager says so, and it will start the service again.
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
-        return START_STICKY
+        startForeground(SessionNotifier.ID_SESSIONS, notifier.sessionsNotification(notifier.summary.value), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        foreground = true
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        foreground = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
-    /**
-     * `1 session live · 1 tunnel · 2 transfers · 1 waiting on you`: [waiting] is how many of the
-     * transfers have stopped for an answer only the Files tab can give, so a copy that stalled
-     * while the app was in the background does not read as one that is running.
-     */
-    private fun buildNotification(count: Int, tunnels: Int, transfers: Int, waiting: Int): Notification {
-        val open = PendingIntent.getActivity(
-            this, 0, SessionManager.openAppIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val detachAll = PendingIntent.getService(
-            this, 1, Intent(this, SessionService::class.java).setAction(ACTION_DETACH_ALL),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val sessionsText = if (count == 1) getString(R.string.notification_one_session) else getString(R.string.notification_sessions, count)
-        val text = buildString {
-            append(sessionsText)
-            when (tunnels) {
-                0 -> Unit
-                1 -> append(" \u00B7 ").append(getString(R.string.notification_one_tunnel))
-                else -> append(" \u00B7 ").append(getString(R.string.notification_tunnels, tunnels))
-            }
-            when (transfers) {
-                0 -> Unit
-                1 -> append(" \u00B7 ").append(getString(if (waiting > 0) R.string.notification_one_transfer_waiting else R.string.notification_one_transfer))
-                else -> {
-                    append(" \u00B7 ").append(getString(R.string.notification_transfers, transfers))
-                    when (waiting) {
-                        0 -> Unit
-                        1 -> append(" \u00B7 ").append(getString(R.string.notification_one_waiting))
-                        else -> append(" \u00B7 ").append(getString(R.string.notification_waiting, waiting))
-                    }
-                }
-            }
-        }
-        return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(text)
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .addAction(Notification.Action.Builder(null, getString(R.string.notification_detach_all), detachAll).build())
-            .build()
-    }
-
-    private fun ensureChannel() {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel_sessions), NotificationManager.IMPORTANCE_LOW).apply {
-            description = getString(R.string.notification_channel_sessions_description)
-            setShowBadge(false)
-        }
-        manager.createNotificationChannel(channel)
-    }
-
     companion object {
-        const val CHANNEL_ID = "sessions"
-        private const val NOTIFICATION_ID = 1
-        private const val ACTION_DETACH_ALL = "app.berth.android.action.DETACH_ALL"
-        private const val ACTION_STOP = "app.berth.android.action.STOP"
-        private const val EXTRA_COUNT = "count"
-        private const val EXTRA_TUNNELS = "tunnels"
-        private const val EXTRA_TRANSFERS = "transfers"
-        private const val EXTRA_WAITING = "waiting"
-
-        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0, transferCount: Int = 0, waitingCount: Int = 0) {
-            val intent = Intent(context, SessionService::class.java)
-                .putExtra(EXTRA_COUNT, activeCount)
-                .putExtra(EXTRA_TUNNELS, tunnelCount)
-                .putExtra(EXTRA_TRANSFERS, transferCount)
-                .putExtra(EXTRA_WAITING, waitingCount)
-            runCatching { context.startForegroundService(intent) }
+        fun start(context: Context) {
+            runCatching { context.startForegroundService(Intent(context, SessionService::class.java)) }
         }
 
         fun stop(context: Context) {
