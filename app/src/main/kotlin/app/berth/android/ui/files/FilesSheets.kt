@@ -1,5 +1,6 @@
 package app.berth.android.ui.files
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -474,11 +477,13 @@ fun TransferSheet(
     val active = transfers.count { it.state.isActive }
     val done = transfers.count { it.state == TransferState.DONE }
     val failed = transfers.count { it.state == TransferState.FAILED }
+    val skipped = transfers.count { it.state == TransferState.SKIPPED }
     val cancelled = transfers.count { it.state == TransferState.CANCELLED }
     val caption = buildList {
         if (active > 0) add(if (active == 1) "1 running" else "$active running")
         if (done > 0) add("$done done")
         if (failed > 0) add("$failed failed")
+        if (skipped > 0) add("$skipped skipped")
         if (cancelled > 0) add("$cancelled cancelled")
     }.joinToString(" \u00B7 ").ifEmpty { "Nothing moving" }
     var opened by remember { mutableStateOf(emptySet<String>()) }
@@ -498,8 +503,11 @@ fun TransferSheet(
                         t,
                         onCancel = { onCancel(t.id) },
                         expanded = t.id in opened,
-                        onToggle = if (!t.isFolder) null else {
-                            { if (t.waiting) onAnswer(t.id) else opened = if (t.id in opened) opened - t.id else opened + t.id }
+                        // A row waiting on an answer, a folder's or a single file's, goes to its question; a folder otherwise opens.
+                        onToggle = when {
+                            t.waiting -> ({ onAnswer(t.id) })
+                            t.isFolder -> ({ opened = if (t.id in opened) opened - t.id else opened + t.id })
+                            else -> null
                         },
                         onRetryFailed = { onRetryFailed(t.id) },
                     )
@@ -515,9 +523,13 @@ fun TransferSheet(
 /**
  * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
  * one Caption line naming the host, then bytes and speed. The glyph carries the direction. A folder
- * carries the aggregate on that line, given two like a failure's reason, and a chevron; [expanded] it adds the file moving now with its
- * own line, the last few failures while it runs, and once over everything that failed with Retry
- * failed. The per-file rows are as they were.
+ * carries the aggregate on that line, given two like a failure's reason, and a chevron; [expanded]
+ * it adds the file moving now with its own line, the last few failures while it runs, and once over
+ * everything that failed with Retry failed. A folder that copied most of itself and lost a few
+ * files is drawn as that outcome: the line in the done colour for the copied share with the failed
+ * share in danger after it, the glyph and Caption in their usual colours and only the `N failed`
+ * span and the trailing count in danger. The whole-failure treatment is kept for a copy that
+ * failed outright. The per-file rows are as they were; one waiting on an answer taps through to it.
  */
 @Composable
 fun TransferRow(
@@ -529,14 +541,16 @@ fun TransferRow(
     onRetryFailed: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
-    val failed = t.state == TransferState.FAILED
+    val partial = t.partialOutcome
+    val failed = t.state == TransferState.FAILED && !partial
     val folder = t.folder
     Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(c.surface2)
-            .then(if (onToggle != null) Modifier.clickable(onClick = onToggle).semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" } else Modifier),
+            .then(if (onToggle != null) Modifier.clickable(onClick = onToggle) else Modifier)
+            .then(if (folder != null && onToggle != null) Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" } else Modifier),
     ) {
         Row(
             Modifier
@@ -552,18 +566,23 @@ fun TransferRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
-                    Text(transferTrailing(t), style = BerthType.caption, color = if (failed) c.danger else c.text2)
+                    Text(transferTrailing(t), style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text2)
                     if (folder != null) {
                         Spacer(Modifier.width(4.dp))
                         BerthIcon(BerthIcons.chevronRight, size = 16.dp, tint = c.text3, modifier = Modifier.rotate(if (expanded) 90f else 0f))
                     }
                 }
-                ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else t.fraction, active = t.state == TransferState.RUNNING, color = t.lineColor)
+                if (partial && folder != null) {
+                    val (copied, lost) = folder.outcomeShares()
+                    ProgressLine(fraction = copied, active = false, color = c.live, failedFraction = lost)
+                } else {
+                    ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else t.fraction, active = t.state == TransferState.RUNNING, color = t.lineColor)
+                }
                 Text(
-                    transferCaption(t),
+                    transferCaptionStyled(t),
                     style = BerthType.caption,
                     color = if (failed) c.danger else c.text3,
-                    maxLines = if (failed || folder != null) 2 else 1,
+                    maxLines = if (failed || folder != null || t.note != null) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -581,24 +600,50 @@ fun TransferRow(
 }
 
 /**
- * Under an expanded folder row, aligned with its text: the file moving now with its own 2 dp line
- * and bytes; then the failures, the last three while the copy runs and up to eight once it is over,
- * each as its path and the reason in one Caption; then Retry failed when there is something to retry.
+ * The two spans of a partial outcome's line, by bytes as the line always is: the copied share in
+ * the done colour, then the failed share in danger. A failure with no bytes behind it (a folder
+ * that would not list) still gets a sliver, so the line says something failed; the copied span
+ * gives way to it rather than the line running past its end.
  */
+private fun FolderProgress.outcomeShares(): Pair<Float, Float> {
+    val copied = when {
+        bytesTotal > 0 -> (bytesDone.toDouble() / bytesTotal).coerceIn(0.0, 1.0).toFloat()
+        filesTotal > 0 -> (filesCopied.toFloat() / filesTotal).coerceIn(0f, 1f)
+        else -> 1f
+    }
+    val failedShare = if (bytesTotal > 0) (bytesFailed.toDouble() / bytesTotal).toFloat() else 0f
+    val failed = if (filesFailed > 0) failedShare.coerceIn(FAILED_SLIVER, 1f) else 0f
+    return copied.coerceAtMost(1f - failed) to failed
+}
+
+private const val FAILED_SLIVER = 0.03f
+
+/**
+ * Under an expanded folder row, aligned with its text on both sides: the file moving now with its
+ * own 2 dp line and bytes, its path cut in the middle so the name survives; then the failures, the
+ * last three while the copy runs and up to eight once it is over, each as its path and the reason
+ * in one Caption; then Retry failed when there is something to retry. Opening a row brings the
+ * detail into view, so what the tap was for never lands under the sheet's fold.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FolderDetail(t: Transfer, f: FolderProgress, onRetryFailed: (() -> Unit)?) {
     val c = Berth.colors
+    val requester = remember { BringIntoViewRequester() }
+    LaunchedEffect(Unit) { requester.bringIntoView() }
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(start = 60.dp, end = 12.dp, bottom = 12.dp),
+            .bringIntoViewRequester(requester)
+            // The row's text column ends before Cancel while the copy runs and at the card's padding once it is over; the detail's lines share that right edge.
+            .padding(start = 60.dp, end = if (t.state.isActive) 52.dp else 12.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val current = f.current
         if (current != null && t.state == TransferState.RUNNING) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(current, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(current, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
                     Text(
                         if (f.currentTotal > 0) "${formatSize(f.currentBytes)} of ${formatSize(f.currentTotal)}" else formatSize(f.currentBytes),
@@ -646,33 +691,46 @@ private const val SUMMARY_FAILURES = 8
 // ---- A file that exists already ------------------------------------------------------------------
 
 /**
- * A folder copy has met a file that already exists where it is going, and waits. The sheet says
- * which file and where in the folder, what is coming and what is there by size, and offers Skip,
- * Keep both and Overwrite, with Apply to all for the files still to come; folders never ask, they
- * merge. Dismissing leaves the copy waiting; the strip and the transfer's row bring the question back.
+ * A copy has met a file that already exists where it is going, and waits: a file inside a folder
+ * being copied, or a single file of a selection going into the picked folder. The sheet says which
+ * file, where it is going and on which host, then what is coming and what is there by size and
+ * modified time, the newer of the two saying so, and offers Overwrite, Skip and Keep both, with
+ * Apply to all for the files still to come that turn out to exist too; folders never ask, they
+ * merge. Dismissing leaves the copy waiting; the strip and the transfer's row bring the question
+ * back. [now] dates the times the way the listing does.
  */
 @Composable
-fun FolderConflictSheet(transfer: Transfer, onChoose: (ConflictChoice, applyToAll: Boolean) -> Unit, onDismiss: () -> Unit) {
+fun FolderConflictSheet(transfer: Transfer, now: Long, onChoose: (ConflictChoice, applyToAll: Boolean) -> Unit, onDismiss: () -> Unit) {
     val c = Berth.colors
-    val conflict = transfer.folder?.conflict ?: return
+    val conflict = transfer.pendingConflict ?: return
     var applyToAll by remember(conflict) { mutableStateOf(false) }
     val download = transfer.kind == TransferKind.DOWNLOAD
     val incomingWhere = if (download) "On the server" else "On this device"
     val existingWhere = if (download) "On this device" else "On the server"
-    val within = conflict.relativePath.substringBeforeLast('/', "").let { if (it.isEmpty()) transfer.name else "${transfer.name}/$it" }
-    fun sizeLine(size: Long, then: String) = listOfNotNull(formatSize(size).takeIf { it.isNotEmpty() }, then).joinToString(" \u00B7 ")
+    // Inside a folder the path is relative to it; a single file's path names the folder it is going into.
+    val dir = conflict.relativePath.substringBeforeLast('/', "")
+    val within = if (transfer.isFolder) (if (dir.isEmpty()) transfer.name else "${transfer.name}/$dir") else dir
+    val newer = conflict.incomingIsNewer
+    fun line(size: Long, modified: Long?, isNewer: Boolean, then: String) = buildList {
+        formatSize(size).takeIf { it.isNotEmpty() }?.let(::add)
+        modified?.let { formatModified(it, now) }?.takeIf { it.isNotEmpty() }?.let { date ->
+            add(date)
+            if (isNewer) add("newer")
+        }
+        add(then)
+    }.joinToString(" \u00B7 ")
     FilesSheet(onDismiss) {
-        SheetTitle("${conflict.name} already exists", "In $within")
+        SheetTitle("${conflict.name} already exists", listOfNotNull(within.takeIf { it.isNotEmpty() }?.let { "In $it" }, transfer.hostName).joinToString(" \u00B7 "))
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ListRow(
                 title = incomingWhere,
-                subtitle = sizeLine(conflict.incomingSize, "coming in"),
+                subtitle = line(conflict.incomingSize, conflict.incomingModified, newer == true, "coming in"),
                 minHeight = 48.dp,
                 leading = { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { BerthIcon(transfer.kind.icon, size = 20.dp) } },
             )
             ListRow(
                 title = existingWhere,
-                subtitle = sizeLine(conflict.existingSize, "already there"),
+                subtitle = line(conflict.existingSize, conflict.existingModified, newer == false, "already there"),
                 minHeight = 48.dp,
                 leading = { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.file, size = 20.dp, tint = c.text3) } },
             )
@@ -682,16 +740,18 @@ fun FolderConflictSheet(transfer: Transfer, onChoose: (ConflictChoice, applyToAl
                 title = "Apply to all",
                 checked = applyToAll,
                 onCheckedChange = { applyToAll = it },
-                caption = if (conflict.remaining == 1) "The same answer for the 1 file still to copy" else "The same answer for the ${conflict.remaining} files still to copy",
+                // The answer is consulted only for a file that turns out to exist; the rest copy regardless, so the count is of candidates, not of files skipped.
+                caption = if (conflict.remaining == 1) "For the 1 file still to copy, if it already exists" else "For any of the ${conflict.remaining} files still to copy that already exist",
             )
         }
+        // Destructive furthest from the thumb's resting side, the safe choice in the affirmative position.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BerthButton("Overwrite", kind = ButtonKind.DESTRUCTIVE, onClick = { onChoose(ConflictChoice.OVERWRITE, applyToAll) }, modifier = Modifier.weight(1f))
             BerthButton("Skip", onClick = { onChoose(ConflictChoice.SKIP, applyToAll) }, modifier = Modifier.weight(1f))
             BerthButton("Keep both", onClick = { onChoose(ConflictChoice.KEEP_BOTH, applyToAll) }, modifier = Modifier.weight(1f))
-            BerthButton("Overwrite", kind = ButtonKind.DESTRUCTIVE, onClick = { onChoose(ConflictChoice.OVERWRITE, applyToAll) }, modifier = Modifier.weight(1f))
         }
         Text(
-            "Skip leaves what is there. Keep both saves the new one as ${SftpPaths.keepBothName(conflict.name, emptySet())}. Overwrite replaces it.",
+            "Overwrite replaces it. Skip leaves what is there. Keep both saves the new one as ${SftpPaths.keepBothName(conflict.name, emptySet())}.",
             style = BerthType.caption,
             color = c.text3,
             modifier = Modifier.padding(start = 4.dp),
@@ -702,23 +762,25 @@ fun FolderConflictSheet(transfer: Transfer, onChoose: (ConflictChoice, applyToAl
 /** The direction glyph for a transfer. */
 val TransferKind.icon: Int get() = if (this == TransferKind.DOWNLOAD) BerthIcons.download else BerthIcons.upload
 
-/** The progress line's colour by state: danger when failed, muted when cancelled, live once done, accent while moving. */
+/** The progress line's colour by state: danger when failed, muted when cancelled or skipped, live once done, accent while moving. */
 val Transfer.lineColor: Color
     @Composable get() = when (state) {
         TransferState.FAILED -> Berth.colors.danger
-        TransferState.CANCELLED -> Berth.colors.text3
+        TransferState.CANCELLED, TransferState.SKIPPED -> Berth.colors.text3
         TransferState.DONE -> Berth.colors.live
         else -> Berth.colors.accent
     }
 
 /**
  * A 2 dp progress line on surface.4 with the fill in [color]; an unknown [fraction] while active
- * shows a short segment so the row still reads as moving. Inside a row the ends are round; as the
- * top [edge] of a band they are square so the line meets the band's sides.
+ * shows a short segment so the row still reads as moving. A [failedFraction] draws a second span
+ * in danger right after the first, for a folder that ended with part of it failed. Inside a row
+ * the ends are round; as the top [edge] of a band they are square so the line meets the band's sides.
  */
 @Composable
-fun ProgressLine(fraction: Float?, active: Boolean, color: Color = Berth.colors.accent, modifier: Modifier = Modifier, edge: Boolean = false) {
+fun ProgressLine(fraction: Float?, active: Boolean, color: Color = Berth.colors.accent, modifier: Modifier = Modifier, edge: Boolean = false, failedFraction: Float = 0f) {
     val track = Berth.colors.surface4
+    val danger = Berth.colors.danger
     val cap = if (edge) StrokeCap.Butt else StrokeCap.Round
     Box(
         modifier
@@ -730,6 +792,10 @@ fun ProgressLine(fraction: Float?, active: Boolean, color: Color = Berth.colors.
                 drawLine(track, Offset(0f, y), Offset(size.width, y), size.height, cap)
                 val f = fraction ?: if (active) 0.15f else 0f
                 if (f > 0f) drawLine(color, Offset(0f, y), Offset(size.width * f, y), size.height, cap)
+                if (failedFraction > 0f) {
+                    val end = (f + failedFraction).coerceAtMost(1f)
+                    if (end > f) drawLine(danger, Offset(size.width * f, y), Offset(size.width * end, y), size.height, cap)
+                }
             },
     )
 }

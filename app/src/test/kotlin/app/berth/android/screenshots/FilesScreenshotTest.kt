@@ -46,6 +46,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.files.FilesActions
 import app.berth.android.ui.files.FilesPane
+import app.berth.android.ui.files.formatModified
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.FilesPrefs
@@ -428,12 +429,12 @@ class FilesScreenshotTest {
         "f1", "s-demo", "prod-web", TransferKind.DOWNLOAD, "berth", "/home/demo/projects/berth",
         total = 612 * mb, bytes = 233 * mb, bytesPerSecond = 3.8 * mb, state = TransferState.RUNNING, startedAt = now - 62_000,
         folder = FolderProgress(
-            phase = FolderPhase.COPYING, filesTotal = 1240, filesCopied = 511, bytesTotal = 612 * mb, bytesDone = 233 * mb, bytesPassed = 2 * mb,
+            phase = FolderPhase.COPYING, filesTotal = 1240, filesCopied = 511, bytesTotal = 612 * mb, bytesDone = 233 * mb, bytesFailed = 2 * mb,
             current = "app/build/intermediates/dex/debug/classes.dex", currentBytes = 9 * mb, currentTotal = 24 * mb,
             failures = listOf(
                 FolderFailure("core/ssh/build/tmp/kotlin-classes/debug/.lock", "The server refused access to /home/demo/projects/berth/core/ssh/build/tmp/kotlin-classes/debug/.lock."),
                 FolderFailure("app/build/tmp/lock", "The server refused access to /home/demo/projects/berth/app/build/tmp/lock."),
-                FolderFailure("www", "Link to a folder; skipped.", retryable = false),
+                FolderFailure("www", "Link to a folder; left out.", retryable = false, isLink = true),
             ),
         ),
     )
@@ -443,16 +444,19 @@ class FilesScreenshotTest {
         "f0", "s-demo", "prod-web", TransferKind.UPLOAD, "photos", "/home/demo/photos",
         total = 1843 * mb, bytes = 1801 * mb, state = TransferState.FAILED, error = "3 files and 1 folder didn't copy.", startedAt = now - 900_000, finishedAt = now - 300_000,
         folder = FolderProgress(
-            phase = FolderPhase.FINISHED, filesTotal = 2048, filesCopied = 2043, filesSkipped = 2, bytesTotal = 1843 * mb, bytesDone = 1801 * mb, bytesPassed = 42 * mb,
+            phase = FolderPhase.FINISHED, filesTotal = 2048, filesCopied = 2043, filesSkipped = 2, bytesTotal = 1843 * mb, bytesDone = 1801 * mb, bytesSkipped = 12 * mb, bytesFailed = 30 * mb,
             failures = listOf(
                 FolderFailure("2024/IMG_0412.HEIC", "The server refused access to /home/demo/photos/2024/IMG_0412.HEIC."),
                 FolderFailure("2024/IMG_0413.HEIC", "The server refused access to /home/demo/photos/2024/IMG_0413.HEIC."),
                 FolderFailure("2025/raw", "The server refused access to /home/demo/photos/2025/raw.", isDirectory = true),
                 FolderFailure("2025/IMG_1190.MOV", "The connection dropped."),
-                FolderFailure("Camera Roll", "Link to a folder; skipped.", retryable = false),
+                FolderFailure("Camera Roll", "Link to a folder; left out.", retryable = false, isLink = true),
             ),
         ),
     )
+
+    /** A Caption pair as the formatter holds it together: every space a non-breaking one. */
+    private fun nb(text: String) = text.replace(' ', '\u00A0')
 
     @Test
     fun `folder transfer on the strip, its row expanded, and the end summary`() {
@@ -469,9 +473,10 @@ class FilesScreenshotTest {
         val retried = ArrayList<String>()
         themed { Pane(b, transfers = transfers, onRetryFailed = { retried += it }) }
         waitForText("deploy.sh")
-        // The whole folder is one row on the strip: files done of total (copied and failed alike) where a file's percentage goes, then bytes of total in the short form, speed, what waits behind it.
-        waitForText("233 of 612 MB \u00B7 3.8 MB/s \u00B7 1 more")
-        waitForText("513 of 1240")
+        // The whole folder is one row on the strip: the percentage where it always goes (the line's measure), then files done of total
+        // (copied and failed alike), speed and what waits behind it on the one Caption line; bytes of total belong to the sheet.
+        waitForText("${nb("513 of 1240 files")} \u00B7 3.8 MB/s \u00B7 1 more")
+        waitForText("38%")
         capture("files-folder-transfer-strip")
 
         compose.onNodeWithContentDescription("Transfers, 2 running").performClick()
@@ -481,7 +486,10 @@ class FilesScreenshotTest {
         compose.onNode(hasText("photos") and hasStateDescription("Collapsed")).assertExists()
         compose.onAllNodes(hasText("berth-arm64.apk") and hasStateDescription("Collapsed")).assertCountEquals(0)
         compose.onAllNodes(hasText("notes.txt") and hasStateDescription("Collapsed")).assertCountEquals(0)
-        waitForText("2043 files copied \u00B7 4 failed \u00B7 3 skipped", substring = true)
+        // The sheet's row keeps files and bytes of total together, each pair unbroken; the finished one counts the user's Skips apart from the link the policy left out.
+        waitForText("prod-web \u00B7 ${nb("513 of 1240 files")} \u00B7 ${nb("233 MB of 612 MB")} \u00B7 3.8 MB/s")
+        waitForText("2043 files copied \u00B7 4 failed \u00B7 2 skipped \u00B7 1 link left out", substring = true)
+        waitForText("4 failed")
         capture("files-folder-transfers-sheet")
 
         // Open, a running folder shows the file moving now with its own line and the last few failures; no retry while it runs.
@@ -513,31 +521,78 @@ class FilesScreenshotTest {
         val b = browser(fs, "/home/demo")
         val mb = 1024L * 1024
         val answers = ArrayList<Triple<String, ConflictChoice, Boolean>>()
+        // The file coming in was changed yesterday evening; the one on the device dates from half a year back.
+        val incomingAt = now - TimeUnit.HOURS.toMillis(25)
+        val existingAt = now - TimeUnit.DAYS.toMillis(199)
         val waiting = folderMidway(mb).let { t ->
-            t.copy(folder = t.folder!!.copy(current = null, currentBytes = 0L, currentTotal = 0L, conflict = FolderConflict("app/build.gradle.kts", incomingSize = 2418, existingSize = 2390, remaining = 728)))
+            t.copy(
+                folder = t.folder!!.copy(
+                    current = null, currentBytes = 0L, currentTotal = 0L,
+                    conflict = FolderConflict("app/build.gradle.kts", incomingSize = 2418, existingSize = 2390, remaining = 728, incomingModified = incomingAt, existingModified = existingAt),
+                ),
+            )
         }
         themed { Pane(b, transfers = listOf(waiting), onResolveConflict = { id, choice, all -> answers += Triple(id, choice, all) }) }
         waitForText("deploy.sh")
-        // The question opens over the pane on its own while the copy waits: which file, where in the folder, what is coming and what is there.
-        waitForText("In berth/app")
+        // The question opens over the pane on its own while the copy waits: which file, where in the folder and on which host, what is coming
+        // and what is there by size and modified time, the newer one saying so; the answer for the rest covers only the files that turn out to exist.
+        waitForText("In berth/app \u00B7 prod-web")
         waitForText("On the server")
-        waitForText("2.4 KB \u00B7 coming in")
-        waitForText("2.3 KB \u00B7 already there")
-        waitForText("The same answer for the 728 files still to copy")
+        waitForText("2.4 KB \u00B7 ${formatModified(incomingAt, now)} \u00B7 newer \u00B7 coming in")
+        waitForText("2.3 KB \u00B7 ${formatModified(existingAt, now)} \u00B7 already there")
+        waitForText("For any of the 728 files still to copy that already exist")
         compose.onNodeWithText("Apply to all").performClick()
         compose.onNode(isToggleable()).assertIsOn()
+        // Overwrite, the destructive one, sits furthest from the thumb; Skip, the safe one, in the middle; Keep both last.
+        val buttons = listOf("Overwrite", "Skip", "Keep both").map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.left }
+        assertEquals(buttons, buttons.sorted())
         capture("files-folder-conflict")
         compose.onNodeWithText("Keep both").performClick()
         assertEquals(listOf(Triple("f1", ConflictChoice.KEEP_BOTH, true)), answers)
 
-        // Dismissed, the copy keeps waiting: the strip says so in a word, and a tap on it brings the question back.
+        // Dismissed, the copy keeps waiting: the strip says so in a word and that a tap answers, and the tap brings the question back.
         dismissSheet()
-        waitForNoText("In berth/app")
+        waitForNoText("In berth/app \u00B7 prod-web")
         waitForText("Waiting")
-        waitForText("build.gradle.kts already exists")
+        waitForText("build.gradle.kts already exists \u00B7 tap to answer")
         capture("files-folder-conflict-put-aside")
-        compose.onNodeWithText("build.gradle.kts already exists").performClick()
-        waitForText("In berth/app")
+        compose.onNodeWithText("build.gradle.kts already exists \u00B7 tap to answer").performClick()
+        waitForText("In berth/app \u00B7 prod-web")
+    }
+
+    @Test
+    fun `a single file of a selection asks through the same sheet`() {
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        val answers = ArrayList<Triple<String, ConflictChoice, Boolean>>()
+        val incomingAt = now - TimeUnit.DAYS.toMillis(41)
+        val existingAt = now - TimeUnit.HOURS.toMillis(3)
+        // notes.txt of a three-file selection, going into the device's Download folder where a newer notes.txt already is; two files of the selection still to come.
+        val waiting = Transfer(
+            "t9", "s-demo", "prod-web", TransferKind.DOWNLOAD, "notes.txt", "/home/demo/notes.txt",
+            total = 4820, state = TransferState.RUNNING, startedAt = now - 3_000,
+            conflict = FolderConflict("Download/notes.txt", incomingSize = 4820, existingSize = 4102, remaining = 2, incomingModified = incomingAt, existingModified = existingAt),
+        )
+        val queued = Transfer("t10", "s-demo", "prod-web", TransferKind.DOWNLOAD, "deploy.sh", "/home/demo/deploy.sh", total = 1207, state = TransferState.QUEUED)
+        themed { Pane(b, transfers = listOf(waiting, queued), onResolveConflict = { id, choice, all -> answers += Triple(id, choice, all) }) }
+        waitForText("deploy.sh")
+        // The same sheet a file inside a folder gets: the picked folder is where it is going, and this time the file already there is the newer one.
+        waitForText("notes.txt already exists")
+        waitForText("In Download \u00B7 prod-web")
+        waitForText("4.7 KB \u00B7 ${formatModified(incomingAt, now)} \u00B7 coming in")
+        waitForText("4 KB \u00B7 ${formatModified(existingAt, now)} \u00B7 newer \u00B7 already there")
+        waitForText("For any of the 2 files still to copy that already exist")
+        capture("files-folder-file-conflict")
+        compose.onNodeWithText("Skip").performClick()
+        assertEquals(listOf(Triple("t9", ConflictChoice.SKIP, false)), answers)
+
+        // Put aside, the strip reads the same as a folder's: Waiting, the file, and that a tap answers.
+        dismissSheet()
+        waitForNoText("In Download \u00B7 prod-web")
+        waitForText("Waiting")
+        waitForText("notes.txt already exists \u00B7 tap to answer \u00B7 1 more")
+        compose.onNodeWithText("notes.txt already exists \u00B7 tap to answer \u00B7 1 more").performClick()
+        waitForText("In Download \u00B7 prod-web")
     }
 
     @Test
@@ -553,18 +608,19 @@ class FilesScreenshotTest {
         compose.onNodeWithContentDescription("Select backups").performClick()
         compose.onNodeWithContentDescription("Select notes.txt").performClick()
         waitForText("2 selected")
-        // Download takes the folder with the file; Share has no single document to hand on, so its Caption says why it is off.
-        waitForText("Files only")
-        compose.onNodeWithText("Files only").assertIsNotEnabled()
+        // Download takes the folder with the file; Share keeps its name and is off, and a tap on it says why where the bar already tells reasons.
+        compose.onNodeWithText("Share").assertIsNotEnabled()
         compose.onNodeWithText("Download").assertIsEnabled()
+        compose.onNodeWithText("Share").performClick()
+        waitForText("Share takes one file; a folder has no single document to hand on. Download takes folders.")
         capture("files-folder-multi-select")
         compose.onNodeWithText("Download").performClick()
         assertEquals(listOf(setOf("backups", "notes.txt")), downloaded)
 
-        // One folder alone: still Files only, still off.
+        // One folder alone: still Share, still off.
         compose.onNodeWithContentDescription("Deselect notes.txt").performClick()
         waitForText("1 selected")
-        compose.onNodeWithText("Files only").assertIsNotEnabled()
+        compose.onNodeWithText("Share").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Clear selection").performClick()
         waitForNoText("1 selected")
 

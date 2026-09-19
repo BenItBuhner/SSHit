@@ -80,6 +80,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -308,9 +309,9 @@ private enum class Foot { TRANSFER, ACTIONS }
  * has one ⋮ and the breadcrumb row keeps Upload and Transfers; without it the headerless pane
  * keeps a Folder options ⋮ of its own. The navigation-bar inset is the pane's own either way; a
  * host adds none. [noSession] says the tab has no terminal at all to ride, so the disconnected
- * state offers Connect rather than Reconnect. A folder transfer waiting on a file that exists
- * already asks through [onResolveConflict]; what failed in a finished one goes again through
- * [onRetryFailed].
+ * state offers Connect rather than Reconnect. A copy waiting on a file that exists already, inside
+ * a folder or a single file of a selection, asks through [onResolveConflict]; what failed in a
+ * finished folder goes again through [onRetryFailed].
  */
 @Composable
 fun FilesPane(
@@ -380,15 +381,19 @@ fun FilesPane(
     var viewerPath by rememberSaveable { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
 
-    // A folder copy waiting on a file that exists already asks through its own sheet, once whatever
-    // sheet is open closes. Dismissed, it is put aside and the copy keeps waiting; a tap on the strip
-    // or on its row brings the question back.
-    val waiting = transfers.firstOrNull { it.waiting }
-    val conflictKey = waiting?.let { it.id to it.folder!!.conflict!!.relativePath }
-    var conflictPutAside by remember { mutableStateOf<Pair<String, String>?>(null) }
-    val asking = waiting != null && conflictKey != conflictPutAside && sheet == null && viewerPath == null
-    fun askAgain() {
-        conflictPutAside = null
+    // A copy waiting on a file that exists already, a folder's or a single file's, asks through its
+    // own sheet once whatever sheet is open closes. Dismissed, that question is put aside and the copy
+    // keeps waiting; with several waiting, the first not put aside is asked, so one put aside never
+    // keeps another unasked. A tap on the strip or on a row brings that transfer's question back first.
+    var conflictsPutAside by remember { mutableStateOf(emptySet<Pair<String, String>>()) }
+    var askFirst by remember { mutableStateOf<String?>(null) }
+    val waiting = transfers.filter { it.waiting && (it.id to it.pendingConflict!!.relativePath) !in conflictsPutAside }
+        .let { open -> open.firstOrNull { it.id == askFirst } ?: open.firstOrNull() }
+    val conflictKey = waiting?.let { it.id to it.pendingConflict!!.relativePath }
+    val asking = waiting != null && sheet == null && viewerPath == null
+    fun askAgain(id: String) {
+        conflictsPutAside = conflictsPutAside.filterTo(HashSet()) { it.first != id }
+        askFirst = id
         sheet = null
     }
 
@@ -537,13 +542,14 @@ fun FilesPane(
                         onChmod = { sheet = FilesSheetKind.Chmod(selected.map { it.path }) },
                         onCopyPath = { selected.singleOrNull()?.let { copyPath(it.path) } },
                         onDelete = { sheet = FilesSheetKind.Delete(selected.map { it.path }) },
+                        onHint = { browser.post(Notice(it, isError = false)) },
                     )
                     Foot.TRANSFER, null -> lastMoving.value?.let { t ->
                         TransferStrip(
                             t,
                             others = transfers.count { it.state.isActive } - 1,
                             onCancel = { onCancelTransfer(t.id) },
-                            onClick = { if (t.waiting) askAgain() else sheet = FilesSheetKind.Transfers },
+                            onClick = { if (t.waiting) askAgain(t.id) else sheet = FilesSheetKind.Transfers },
                         )
                     }
                 }
@@ -604,14 +610,15 @@ fun FilesPane(
             onClearFinished = onClearFinished,
             onDismiss = { sheet = null },
             onRetryFailed = onRetryFailed,
-            onAnswer = { askAgain() },
+            onAnswer = ::askAgain,
         )
     }
-    if (asking && waiting != null) {
+    if (asking && waiting != null && conflictKey != null) {
         FolderConflictSheet(
             transfer = waiting,
+            now = now,
             onChoose = { choice, applyToAll -> onResolveConflict(waiting.id, choice, applyToAll) },
-            onDismiss = { conflictPutAside = conflictKey },
+            onDismiss = { conflictsPutAside = conflictsPutAside + conflictKey },
         )
     }
     viewerPath?.let { path ->
@@ -1059,8 +1066,10 @@ private val FootHeight = 64.dp
 /**
  * The transfer that is moving, as a full-width band like the action band, with the 2 dp progress
  * line as its top edge: direction glyph, name, one Caption line of bytes, speed and how many wait,
- * the percentage, and Cancel. A folder puts its files done of total where the percentage goes, so
- * the one line keeps its bytes of total and speed. A tap anywhere else opens the sheet.
+ * the percentage, and Cancel. A folder keeps the percentage, the line's own measure, and its Caption
+ * reads files done of total and speed; bytes of total belong to the sheet, so no line here carries
+ * two `X of Y` pairs. A tap anywhere else opens the sheet, or brings back the question a waiting copy
+ * is stopped on.
  */
 @Composable
 private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit, onClick: () -> Unit) {
@@ -1094,7 +1103,7 @@ private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit,
                 Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0), compact = true), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(12.dp))
-            Text(transferTrailing(transfer, compact = true), style = BerthType.caption, color = c.text2)
+            Text(transferTrailing(transfer), style = BerthType.caption, color = c.text2)
             Spacer(Modifier.width(4.dp))
             IconAction(onClick = onCancel, description = "Cancel ${transfer.name}") { BerthIcon(BerthIcons.close, size = 20.dp) }
         }
@@ -1104,7 +1113,9 @@ private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit,
 /**
  * The contextual actions for the selected rows, one glyph over one Caption each; Delete in danger.
  * Download takes files and folders alike. Share takes one file and nothing else: a folder has no
- * single document to hand to another app, so with one selected the glyph's Caption says why it is off.
+ * single document to hand to another app. It keeps its name when it is off, as Rename and Copy path
+ * do for two rows; the reason goes where the bar already tells reasons, a [Notice] on a tap of the
+ * disabled item, through [onHint].
  */
 @Composable
 private fun SelectionActions(
@@ -1116,11 +1127,16 @@ private fun SelectionActions(
     onChmod: () -> Unit,
     onCopyPath: () -> Unit,
     onDelete: () -> Unit,
+    onHint: (String) -> Unit,
 ) {
     val c = Berth.colors
     val single = selected.size == 1
     val files = selected.count { it.isRegularFile }
     val folders = selected.count { it.isDirectory }
+    val shareHint = when {
+        folders > 0 -> "Share takes one file; a folder has no single document to hand on. Download takes folders."
+        else -> "Share takes one file at a time."
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -1130,7 +1146,7 @@ private fun SelectionActions(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ActionItem(BerthIcons.download, "Download", enabled = files + folders > 0, onClick = onDownload, modifier = Modifier.weight(1f))
-        ActionItem(BerthIcons.link, if (folders > 0) "Files only" else "Share", enabled = single && files == 1, onClick = onShare, modifier = Modifier.weight(1f))
+        ActionItem(BerthIcons.link, "Share", enabled = single && files == 1, onClick = onShare, modifier = Modifier.weight(1f), onDisabledClick = { onHint(shareHint) })
         ActionItem(BerthIcons.edit, "Rename", enabled = single && canWrite, onClick = onRename, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.lock, "Mode", enabled = selected.isNotEmpty() && canWrite, onClick = onChmod, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.copy, "Copy path", enabled = single, onClick = onCopyPath, modifier = Modifier.weight(1f))
@@ -1138,8 +1154,21 @@ private fun SelectionActions(
     }
 }
 
+/**
+ * One action of the bar. Off, it is drawn muted and does nothing, unless [onDisabledClick] is given:
+ * then a tap on it still lands and says why it is off, while the item itself stays disabled to
+ * assistive tech through its state.
+ */
 @Composable
-private fun ActionItem(icon: Int, label: String, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, danger: Boolean = false) {
+private fun ActionItem(
+    icon: Int,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+    onDisabledClick: (() -> Unit)? = null,
+) {
     val c = Berth.colors
     val tint = when {
         !enabled -> c.text3.copy(alpha = 0.6f)
@@ -1149,7 +1178,8 @@ private fun ActionItem(icon: Int, label: String, enabled: Boolean, onClick: () -
     Column(
         modifier
             .clip(RoundedCornerShape(BerthRadius.row))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = enabled || onDisabledClick != null, onClick = { if (enabled) onClick() else onDisabledClick?.invoke() })
+            .then(if (!enabled && onDisabledClick != null) Modifier.semantics { disabled() } else Modifier)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),

@@ -39,7 +39,7 @@ fun formatSize(bytes: Long): String {
 /** `2.1 MB/s`; blank below a byte a second so a stalled transfer shows nothing rather than `0 B/s`. */
 fun formatSpeed(bytesPerSecond: Double): String = if (bytesPerSecond < 1) "" else formatSize(bytesPerSecond.toLong()) + "/s"
 
-/** `233 of 612 MB` while the two share a unit, `512 KB of 612 MB` until they do: the strip's short form of `done of total`. */
+/** `233 of 612 MB` while the two share a unit, `512 KB of 612 MB` until they do: the short form of `done of total`, for a line with no room for the long one. */
 fun formatSizeOf(done: Long, total: Long): String {
     val a = formatSize(done)
     val b = formatSize(total)
@@ -60,6 +60,9 @@ private val BinaryExtensions = setOf(
 /** True when the name alone says the file is binary. */
 fun looksBinary(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in BinaryExtensions
 
+/** One piece of a transfer's Caption line; [danger] marks the span a partial folder outcome paints in the danger colour. */
+data class CaptionPart(val text: String, val danger: Boolean = false)
+
 /**
  * The Caption line under a transfer's name: the host when transfers from several sessions share a
  * list, then the size while it waits, bytes and speed while it moves, size and time once done, how
@@ -67,65 +70,115 @@ fun looksBinary(name: String): Boolean = name.substringAfterLast('.', "").lowerc
  * [others] is given. A folder reads in files as well as bytes: how many are done of how many, the
  * file that already exists while it waits for an answer, and once over how many copied, failed and
  * were skipped. The state word itself is [transferTrailing]'s, so it is not repeated here. [compact]
- * is the strip's one line, where a moving folder's files done of total stand in the trailing slot
- * ([transferTrailing] with the same flag) so its bytes of total, speed and what waits behind it fit.
+ * is the strip's one line, which keeps a moving folder's files done of total and its speed and
+ * leaves the bytes of total to the sheet, so no line carries two `X of Y` pairs. A single file
+ * that found its name taken says so while it waits and, once over, what became of it.
  */
-fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0, compact: Boolean = false): String = buildList {
-    if (showHost) add(t.hostName)
+fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0, compact: Boolean = false): String =
+    transferCaptionParts(t, showHost, others, compact).joinToString(" \u00B7 ") { it.text }
+
+/** [transferCaption] in its parts, so a row can paint one of them; only a folder's `N failed` is ever marked. */
+fun transferCaptionParts(t: Transfer, showHost: Boolean = true, others: Int = 0, compact: Boolean = false): List<CaptionPart> = buildList {
+    if (showHost) plain(t.hostName)
     val f = t.folder
     if (f != null) addAll(folderCaption(t, f, compact)) else when (t.state) {
-        TransferState.QUEUED -> add(if (t.total > 0) formatSize(t.total) else "Queued")
+        TransferState.QUEUED -> plain(if (t.total > 0) formatSize(t.total) else "Queued")
         TransferState.RUNNING -> {
-            add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
-            formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
-        }
-        TransferState.DONE -> {
-            add(formatSize(if (t.total > 0) t.total else t.bytes))
-            add(transferDuration(t))
-        }
-        TransferState.FAILED -> add(t.error ?: "Failed")
-        TransferState.CANCELLED -> add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else "Cancelled")
-    }
-    if (others > 0) add(if (others == 1) "1 more" else "$others more")
-}.joinToString(" \u00B7 ")
-
-private fun folderCaption(t: Transfer, f: FolderProgress, compact: Boolean): List<String> = buildList {
-    val conflict = f.conflict
-    when (t.state) {
-        TransferState.QUEUED -> add("Folder")
-        TransferState.RUNNING -> when {
-            conflict != null -> add("${conflict.name} already exists")
-            f.phase == FolderPhase.SCANNING -> add(if (f.filesTotal > 0) "${f.filesTotal} files so far" else "Folder")
-            else -> {
-                val bytes = when {
-                    f.bytesTotal <= 0 -> null
-                    compact -> formatSizeOf(f.bytesDone, f.bytesTotal)
-                    else -> "${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}"
-                }
-                if (!compact || bytes == null) add("${f.filesDone} of ${f.filesTotal} files")
-                bytes?.let(::add)
-                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
+            val conflict = t.conflict
+            if (conflict != null) {
+                plain("${conflict.name} already exists")
+                if (compact) plain("tap to answer")
+            } else {
+                plain(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
+                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::plain)
             }
         }
         TransferState.DONE -> {
-            addAll(folderSummary(f))
-            add(formatSize(f.bytesDone))
-            add(transferDuration(t))
+            t.note?.let(::plain)
+            plain(formatSize(if (t.total > 0) t.total else t.bytes))
+            plain(transferDuration(t))
         }
-        TransferState.FAILED -> if (f.filesTotal == 0 && f.failures.isEmpty()) add(t.error ?: "Failed") else addAll(folderSummary(f))
-        TransferState.CANCELLED -> {
-            add("${f.filesCopied} of ${f.filesTotal} files")
-            if (f.bytesTotal > 0) add("${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}")
+        TransferState.SKIPPED -> plain(t.note ?: "Skipped")
+        TransferState.FAILED -> plain(t.error ?: "Failed")
+        TransferState.CANCELLED -> plain(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else "Cancelled")
+    }
+    if (others > 0) plain(if (others == 1) "1 more" else "$others more")
+}
+
+/** [transferCaption] as one annotated line: a partial folder outcome's `N failed` in the danger colour, the rest in the colour the row gives the text. */
+@Composable
+fun transferCaptionStyled(t: Transfer, showHost: Boolean = true): AnnotatedString {
+    val danger = Berth.colors.danger
+    return buildAnnotatedString {
+        transferCaptionParts(t, showHost).forEachIndexed { i, part ->
+            if (i > 0) append(" \u00B7 ")
+            if (part.danger) withStyle(SpanStyle(color = danger)) { append(part.text) } else append(part.text)
         }
     }
 }
 
-/** `309 copied · 3 failed · 2 skipped`, only the parts that are not zero; skipped covers Skip answers and links the policy left out. */
-fun folderSummary(f: FolderProgress): List<String> = buildList {
-    add(if (f.filesCopied == 1) "1 file copied" else "${f.filesCopied} files copied")
-    if (f.filesFailed > 0) add("${f.filesFailed} failed")
-    val skipped = f.filesSkipped + f.filesLeftOut
-    if (skipped > 0) add("$skipped skipped")
+/**
+ * A folder that ended with something copied and something left to retry: an outcome to read, not
+ * a copy that failed, so the row keeps the done colour for the copied share and paints only the
+ * failed part in danger. The state stays FAILED underneath, since Retry failed needs it.
+ */
+val Transfer.partialOutcome: Boolean get() = state == TransferState.FAILED && (folder?.filesCopied ?: 0) > 0
+
+private fun MutableList<CaptionPart>.plain(text: String) = add(CaptionPart(text))
+
+private fun folderCaption(t: Transfer, f: FolderProgress, compact: Boolean): List<CaptionPart> = buildList {
+    val conflict = f.conflict
+    when (t.state) {
+        TransferState.QUEUED -> plain("Folder")
+        TransferState.RUNNING -> when {
+            conflict != null -> {
+                plain("${conflict.name} already exists")
+                if (compact) plain("tap to answer")
+            }
+            f.phase == FolderPhase.SCANNING -> plain(if (f.filesTotal > 0) "${f.filesTotal} files so far" else "Folder")
+            else -> {
+                plain(filesOf(f.filesDone, f.filesTotal))
+                if (!compact && f.bytesTotal > 0) plain(sizeOf(f.bytesDone, f.bytesTotal))
+                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::plain)
+            }
+        }
+        TransferState.DONE -> {
+            addAll(folderSummary(f))
+            plain(formatSize(f.bytesDone))
+            plain(transferDuration(t))
+        }
+        // No file of its own failed: the copy failed whole (the scan, or the folder at the destination), and the reason is the line.
+        TransferState.FAILED -> if (f.filesFailed == 0) plain(t.error ?: "Failed") else addAll(folderSummary(f))
+        TransferState.CANCELLED -> {
+            plain(filesOf(f.filesCopied, f.filesTotal))
+            if (f.bytesTotal > 0) plain(sizeOf(f.bytesDone, f.bytesTotal))
+        }
+        TransferState.SKIPPED -> plain("Skipped")
+    }
+}
+
+/** `513 of 1240 files` held together with non-breaking spaces, so a Caption that wraps breaks on a `·` and never inside the pair. */
+private fun filesOf(done: Int, total: Int): String = "$done of $total files".unbroken()
+
+/** `233 MB of 612 MB`, held together the same way. */
+private fun sizeOf(done: Long, total: Long): String = "${formatSize(done)} of ${formatSize(total)}".unbroken()
+
+private fun String.unbroken(): String = replace(' ', '\u00A0')
+
+/**
+ * `309 files copied · 3 failed · 2 skipped · 1 link left out`, only the parts that are not zero.
+ * Skipped is what the user's Skip answers passed over and nothing else; links and special files
+ * the policy left out get their own count, since Skip is the user's word in this sheet. The failed
+ * part is the one a partial outcome paints in danger.
+ */
+fun folderSummary(f: FolderProgress): List<CaptionPart> = buildList {
+    plain(if (f.filesCopied == 1) "1 file copied" else "${f.filesCopied} files copied")
+    if (f.filesFailed > 0) add(CaptionPart("${f.filesFailed} failed", danger = true))
+    if (f.filesSkipped > 0) plain("${f.filesSkipped} skipped")
+    val links = f.linksLeftOut
+    val special = f.filesLeftOut - links
+    if (links > 0) plain(if (links == 1) "1 link left out" else "$links links left out")
+    if (special > 0) plain(if (special == 1) "1 special file left out" else "$special special files left out")
 }
 
 private fun transferDuration(t: Transfer): String {
@@ -134,20 +187,18 @@ private fun transferDuration(t: Transfer): String {
 }
 
 /**
- * The trailing word or percentage beside a transfer's name; on the strip ([compact]) a moving
- * folder shows its files done of total there, the percentage being the line above.
+ * The trailing word or percentage beside a transfer's name, the strip and the sheet alike: the
+ * percentage is the measure of the line above it, so a folder shows it too and keeps its files
+ * done of total for the Caption.
  */
-fun transferTrailing(t: Transfer, compact: Boolean = false): String = when (t.state) {
-    TransferState.RUNNING -> {
-        val f = t.folder
-        when {
-            t.waiting -> "Waiting"
-            f?.phase == FolderPhase.SCANNING -> "Scanning"
-            compact && f != null && f.bytesTotal > 0 -> "${f.filesDone} of ${f.filesTotal}"
-            else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
-        }
+fun transferTrailing(t: Transfer): String = when (t.state) {
+    TransferState.RUNNING -> when {
+        t.waiting -> "Waiting"
+        t.folder?.phase == FolderPhase.SCANNING -> "Scanning"
+        else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
     }
     TransferState.DONE -> "Done"
+    TransferState.SKIPPED -> "Skipped"
     TransferState.FAILED -> t.folder?.filesFailed?.takeIf { it > 0 }?.let { "$it failed" } ?: "Failed"
     TransferState.CANCELLED -> "Cancelled"
     TransferState.QUEUED -> "Queued"
