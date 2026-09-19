@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +25,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import app.berth.android.R
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -37,13 +39,14 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.HostKeyChangedDecision
+import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
-import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.hosts.HostEditorScreen
@@ -85,6 +88,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
@@ -163,10 +167,10 @@ class BerthScreenshotTest {
     @Composable
     private fun tabActions(): TabActions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
 
-    /** The Stage as the shell mounts it, minus navigation. */
+    /** The Stage as the shell mounts it, minus navigation: a terminal's body or a Files tab's browser under the strip. */
     @Composable
-    private fun Stage(session: TerminalSession?) {
-        StageScreen(graph.viewModel, session, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+    private fun Stage(tab: ManagedTab?) {
+        StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
     }
 
     // ---- offline screens ------------------------------------------------------------------------
@@ -431,11 +435,12 @@ class BerthScreenshotTest {
         capture("tab-menu")
     }
 
-    /** The switcher: a grid of frozen frames, grouped, the active card marked. */
+    /** The switcher: a grid of frozen frames, grouped, the active card marked; a Files tab is a folder card. */
     @Test
     fun `tab switcher`() {
         seedLibrary()
         seedDetachedSessions()
+        seedFilesTab()
         runBlocking { graph.sessions.restore() }
         val session = graph.sessions.get("s-homelab")!!
         graph.sessions.setActive(session.id)
@@ -444,7 +449,76 @@ class BerthScreenshotTest {
             TabSwitcher(graph.viewModel, tabActions(), onDismiss = {})
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         capture("tab-switcher")
+    }
+
+    /**
+     * A Files tab on the Stage (spec C3, tab kinds): the browser under the strip with no header of
+     * its own, the tab titled for the folder it shows with the host's monogram and its ride's state.
+     * A selection swaps the breadcrumb row for the selection bar at the same height, so the strip
+     * keeps the top to itself and the listing does not move; the selection and the folder survive
+     * a switch to a terminal tab and back.
+     */
+    @Test
+    fun `files tab on stage`() {
+        seedLibrary()
+        seedDetachedSessions()
+        seedFilesTab()
+        val fs = FakeSftpFileSystem.demoTree(now)
+        graph.files.channelFor = { fs }
+        runBlocking { graph.sessions.restore() }
+        val tab = graph.sessions.filesTab("f-homelab")!!
+        graph.sessions.setActive(tab.id)
+        // The body follows the active tab, as the shell's does, so a tap on the strip swaps bodies.
+        themed { Stage(graph.viewModel.activeTab.collectAsState().value) }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText("settings.gradle.kts")).fetchSemanticsNodes().isNotEmpty() }
+        // The folder listed names the tab, and the tab rides the host's detached terminal.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("s-homelab", tab.ride.value?.id)
+        assertEquals("/home/demo/projects/berth", tab.folder)
+        compose.onAllNodesWithText("Files \u00B7 homelab").assertCountEquals(0)
+        compose.onNodeWithContentDescription("Tabs, 4 open").assertExists()
+        capture("stage-files")
+
+        compose.onNodeWithContentDescription("Select settings.gradle.kts").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("1 selected")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("Edit path").assertCountEquals(0)
+        capture("stage-files-selected")
+
+        // Over to the terminal tab and back: the selection is still there, then a folder deeper renames the tab.
+        compose.onNode(hasContentDescription("homelab, detached", substring = true)).performClick()
+        compose.waitUntil(5_000) { graph.sessions.activeTabId.value == "s-homelab" }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("1 selected")).fetchSemanticsNodes().isEmpty() }
+        compose.onNode(hasContentDescription("Files \u00B7 berth, detached", substring = true)).performClick()
+        compose.waitUntil(5_000) { graph.sessions.activeTabId.value == tab.id }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("1 selected")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Clear selection").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Edit path")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("app").performClick()
+        compose.waitUntil(10_000) { tab.folder == "/home/demo/projects/berth/app" }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 app, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Empty folder.")).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    /** The Files tab's long-press menu: Terminal where a terminal tab offers Files, and no Detach. */
+    @Test
+    fun `files tab menu`() {
+        seedLibrary()
+        seedDetachedSessions()
+        seedFilesTab()
+        val fs = FakeSftpFileSystem.demoTree(now)
+        graph.files.channelFor = { fs }
+        runBlocking { graph.sessions.restore() }
+        val tab = graph.sessions.filesTab("f-homelab")!!
+        graph.sessions.setActive(tab.id)
+        themed { Stage(tab) }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasContentDescription("Files \u00B7 berth, detached", substring = true)).performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Terminal")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText("Detach").assertCountEquals(0)
+        compose.onAllNodesWithText("Files").assertCountEquals(0)
+        capture("tab-menu-files")
     }
 
     /** The New tab sheet: quick connect, recent hosts, then the library. */
@@ -554,7 +628,7 @@ class BerthScreenshotTest {
         compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 }
         capture("app-cold-start")
 
-        compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
+        openNewTabSheet()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth test box")).fetchSemanticsNodes().isNotEmpty() }
         capture("new-tab-sheet-live")
         compose.onNodeWithText("Berth test box").performClick()
@@ -622,8 +696,8 @@ class BerthScreenshotTest {
         compose.onNodeWithContentDescription("Back").performClick()
 
         // Second tab on the ask-each-time host from the plus tab: the password prompt comes from the transport.
-        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("New tab").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        openNewTabSheet()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Search hosts")).fetchSemanticsNodes().isNotEmpty() }
         // The host sits low in the half-height sheet; the search field brings it up.
         compose.onAllNodes(hasSetTextAction()).onLast().performTextInput("same box")
@@ -640,7 +714,9 @@ class BerthScreenshotTest {
         capture("stage-live-two-tabs")
 
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
+        // The shell sets the tab's title over OSC 0 at its first prompt, so the card is found by the title the session has now.
+        val second = graph.sessions.sessions.value.first { it.record.value.hostId == askBox.id }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of ${second.record.value.displayTitle}")).fetchSemanticsNodes().isNotEmpty() }
         settle(400)
         capture("tab-switcher-live")
         compose.onNodeWithText("Done").performClick()
@@ -648,12 +724,19 @@ class BerthScreenshotTest {
 
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("Library").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Groups")).fetchSemanticsNodes().isNotEmpty() }
+        // Section labels draw in capitals.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("GROUPS")).fetchSemanticsNodes().isNotEmpty() }
         settle(400)
         capture("drawer-live")
 
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
         http.stop(0)
+    }
+
+    /** The plus tab is the strip's last item; with tabs before it the lazy row has not composed it until it scrolls there. */
+    private fun openNewTabSheet() {
+        compose.onNode(hasContentDescription("Tabs, ", substring = true)).performScrollToNode(hasContentDescription("New tab"))
+        compose.onNodeWithContentDescription("New tab").performClick()
     }
 
     /** Real time passes for the remote shell while the compose clock keeps ticking. */
@@ -816,6 +899,26 @@ class BerthScreenshotTest {
         )
         graph.sessionRecords.saveFrame("s-pihole", frame(listOf("pi@pi-hole:/etc/pihole$ tail -f pihole.log", "Sep 18 20:41:02 dnsmasq[712]: query[A] api.berth.app from 192.168.1.30", "Sep 18 20:41:02 dnsmasq[712]: forwarded api.berth.app to 1.1.1.1")))
         graph.sessionRecords.saveFrame("s-build", frame(listOf("ci@build:~/work/berth$ ./gradlew assembleDebug", "BUILD SUCCESSFUL in 1m 12s", "ci@build:~/work/berth$ ")))
+    }
+
+    /** A Files tab for homelab at the end of the default group, left on the berth project folder; it rides the homelab terminal. */
+    private fun seedFilesTab() = runBlocking {
+        val homelab = graph.hosts.items.value.first { it.id == "homelab" }
+        graph.sessionRecords.upsert(
+            SessionRecord(
+                id = "f-homelab",
+                workspaceId = Workspace.DEFAULT_ID,
+                hostId = homelab.id,
+                hostSnapshot = homelab,
+                state = SessionState.DETACHED,
+                title = "Files \u00B7 berth",
+                cwd = "/home/demo/projects/berth",
+                sortOrder = 2,
+                createdAt = now - TimeUnit.HOURS.toMillis(2),
+                lastLiveAt = now - TimeUnit.MINUTES.toMillis(12),
+                kind = TabKind.Files,
+            ),
+        )
     }
 
     private fun frame(lines: List<String>): ByteArray {
