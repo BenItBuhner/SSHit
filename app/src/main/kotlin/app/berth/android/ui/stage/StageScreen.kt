@@ -59,6 +59,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -177,8 +179,9 @@ fun StageScreen(
         session.markSeen()
         viewport.scrollOffset = 0
     }
-    // Bell while on stage is haptic only (C2), unless the host mutes it.
-    LaunchedEffect(session.id, host.muteBell) {
+    // Bell while on stage is haptic only (C2), unless the host mutes it. Keyed on the patterns too,
+    // so a haptic level change restarts the collector on the new instance.
+    LaunchedEffect(session.id, host.muteBell, patterns) {
         if (host.muteBell) return@LaunchedEffect
         session.bell.collect { patterns.bell() }
     }
@@ -381,15 +384,20 @@ private fun Ribbon(
             if (subtitle != null) Text(subtitle, style = BerthType.caption, color = c.text3, maxLines = 1)
         }
         if (scrolled) {
-            // The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target.
+            // The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target,
+            // one surface step when pressed. The label names the state; the description names the action.
             val interaction = remember { MutableInteractionSource() }
+            val pressed by interaction.collectIsPressedAsState()
             Box(
                 Modifier
                     .clickable(interactionSource = interaction, indication = null, onClick = onReturnToBottom)
-                    .semantics { role = Role.Button }
+                    .clearAndSetSemantics {
+                        contentDescription = "Scrolled up, return to the bottom"
+                        role = Role.Button
+                    }
                     .padding(horizontal = 4.dp, vertical = 9.dp),
             ) {
-                Pill("scrolled", textColor = c.accent)
+                Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
             }
         }
         Box {
