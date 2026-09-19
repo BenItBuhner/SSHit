@@ -5,6 +5,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import app.berth.android.files.Transfer
+import app.berth.android.files.TransferState
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.FilesPrefs
@@ -34,6 +36,53 @@ fun formatSize(bytes: Long): String {
 
 /** `2.1 MB/s`; blank below a byte a second so a stalled transfer shows nothing rather than `0 B/s`. */
 fun formatSpeed(bytesPerSecond: Double): String = if (bytesPerSecond < 1) "" else formatSize(bytesPerSecond.toLong()) + "/s"
+
+/**
+ * Extensions that are binary wherever they turn up, so the viewer offers a download without reading
+ * a byte. Deliberately short: an unknown extension on a server is more often text than not.
+ */
+private val BinaryExtensions = setOf(
+    "apk", "gz", "tgz", "tar", "zip", "7z", "xz", "zst", "bz2",
+    "png", "jpg", "jpeg", "gif", "webp", "mp4", "mp3", "pdf",
+    "so", "bin", "img", "iso", "jar", "db", "sqlite",
+)
+
+/** True when the name alone says the file is binary. */
+fun looksBinary(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in BinaryExtensions
+
+/**
+ * The Caption line under a transfer's name: the host when transfers from several sessions share a
+ * list, then the size while it waits, bytes and speed while it moves, size and time once done, how
+ * far it got when cancelled, the reason when it failed, and how many more wait behind it when
+ * [others] is given. The state word itself is [transferTrailing]'s, so it is not repeated here.
+ */
+fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): String = buildList {
+    if (showHost) add(t.hostName)
+    when (t.state) {
+        TransferState.QUEUED -> add(if (t.total > 0) formatSize(t.total) else "Queued")
+        TransferState.RUNNING -> {
+            add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
+            formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
+        }
+        TransferState.DONE -> {
+            add(formatSize(if (t.total > 0) t.total else t.bytes))
+            val seconds = ((t.finishedAt - t.startedAt) / 1000).coerceAtLeast(1)
+            add(if (seconds < 60) "$seconds s" else "${seconds / 60} min")
+        }
+        TransferState.FAILED -> add(t.error ?: "Failed")
+        TransferState.CANCELLED -> add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else "Cancelled")
+    }
+    if (others > 0) add(if (others == 1) "1 more" else "$others more")
+}.joinToString(" \u00B7 ")
+
+/** The trailing word or percentage beside a transfer's name. */
+fun transferTrailing(t: Transfer): String = when (t.state) {
+    TransferState.RUNNING -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
+    TransferState.DONE -> "Done"
+    TransferState.FAILED -> "Failed"
+    TransferState.CANCELLED -> "Cancelled"
+    TransferState.QUEUED -> "Queued"
+}
 
 /** `14:07` today, `12 Sep 14:07` this year, `12 Sep 2025` before that; blank when the server sent no time. */
 fun formatModified(epochMillis: Long, now: Long = System.currentTimeMillis()): String {

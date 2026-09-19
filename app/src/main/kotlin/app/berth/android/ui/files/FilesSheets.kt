@@ -26,6 +26,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,11 +36,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.files.Transfer
@@ -68,12 +72,18 @@ import app.berth.sftp.SftpPaths
 import app.berth.sftp.SftpPermissions
 import app.berth.sftp.TextRead
 
-/** The sheet chrome every Files sheet shares: surface.1, the sheet radius, the handle, 20 dp margins. */
+/**
+ * The sheet chrome every Files sheet shares: surface.1, the sheet radius, the handle, 20 dp margins.
+ * [expanded] sheets skip the half-open stop and is decided once, when the sheet opens; [fillHeight]
+ * makes the column take 92 % of the screen for content that scrolls inside (the viewer's text) and
+ * may drop later so the sheet shrinks to what is left.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FilesSheet(onDismiss: () -> Unit, tall: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+private fun FilesSheet(onDismiss: () -> Unit, expanded: Boolean = false, fillHeight: Boolean = expanded, content: @Composable ColumnScope.() -> Unit) {
     val c = Berth.colors
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = tall)
+    val skipHalf = remember { expanded }
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = skipHalf)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
@@ -84,7 +94,7 @@ private fun FilesSheet(onDismiss: () -> Unit, tall: Boolean = false, content: @C
         Column(
             Modifier
                 .fillMaxWidth()
-                .then(if (tall) Modifier.fillMaxHeight(0.92f) else Modifier)
+                .then(if (fillHeight) Modifier.fillMaxHeight(0.92f) else Modifier)
                 .imePadding()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
@@ -174,7 +184,11 @@ fun PathEditorSheet(
 
 // ---- Names ----------------------------------------------------------------------------------------
 
-/** New folder and rename share this: one field, the folder it lands in as the caption, and validation against the listing. */
+/**
+ * New folder and rename share this: one field, the folder it lands in as the caption, and validation
+ * against the listing. The field takes focus on open; under Rename the stem is selected (`deploy` of
+ * `deploy.sh`) so typing replaces the name and keeps the extension, as every file manager does.
+ */
 @Composable
 fun NameSheet(
     title: String,
@@ -185,8 +199,9 @@ fun NameSheet(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var name by remember { mutableStateOf(initial) }
-    val trimmed = name.trim()
+    var field by remember { mutableStateOf(TextFieldValue(initial, selection = stemRange(initial))) }
+    val focus = remember { FocusRequester() }
+    val trimmed = field.text.trim()
     val problem = when {
         trimmed.isEmpty() -> null
         !SftpPaths.isValidName(trimmed) -> "Names cannot contain / and cannot be . or .."
@@ -203,20 +218,29 @@ fun NameSheet(
     FilesSheet(onDismiss) {
         SheetTitle(title, folder)
         BerthField(
-            name,
-            { name = it },
+            field,
+            { field = it },
             label = "Name",
             placeholder = if (initial.isEmpty()) "New folder" else initial,
             helper = problem,
             isError = problem != null,
             keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { done() }),
+            focusRequester = focus,
         )
+        // Inside the sheet's own composition, so the field is attached in the sheet window by the time this runs.
+        LaunchedEffect(Unit) { focus.requestFocus() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BerthButton(confirm, kind = ButtonKind.PRIMARY, enabled = canConfirm, onClick = { done() })
             BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
         }
     }
+}
+
+/** The part of a name before its last extension; a dotfile or a name without a dot is all stem. */
+private fun stemRange(name: String): TextRange {
+    val dot = name.lastIndexOf('.')
+    return TextRange(0, if (dot > 0) dot else name.length)
 }
 
 // ---- Delete ---------------------------------------------------------------------------------------
@@ -256,25 +280,31 @@ fun DeleteSheet(entries: List<SftpEntry>, onConfirm: () -> Unit, onDismiss: () -
 
 /**
  * chmod as a grid of chips, owner, group and others by read, write and execute, with the special
- * bits on their own row and the octal field kept in step both ways.
+ * bits on their own row and the octal field kept in step both ways. Off bits read as `-`, the way
+ * the mode string beside the field does. When the selected entries do not agree, the chips show the
+ * first entry's bits for reference and the field starts empty, so Apply always writes a mode the
+ * user chose rather than one entry's bits spread over the rest.
  */
 @Composable
 fun ChmodSheet(entries: List<SftpEntry>, onApply: (Int) -> Unit, onDismiss: () -> Unit) {
     val c = Berth.colors
-    val initial = entries.map { it.permissions }.distinct().singleOrNull() ?: entries.firstOrNull()?.permissions ?: 0b110_100_100
-    var mode by remember { mutableIntStateOf(initial and SftpPermissions.MASK) }
-    var octal by remember { mutableStateOf(SftpPermissions.octal(initial)) }
+    val sample = entries.firstOrNull()
+    val modes = entries.map { it.permissions and SftpPermissions.MASK }.distinct()
+    val mixed = modes.size > 1
+    val initial = modes.firstOrNull() ?: 0b110_100_100
+    var mode by remember { mutableIntStateOf(initial) }
+    var octal by remember { mutableStateOf(if (mixed) "" else SftpPermissions.octal(initial)) }
     val octalValid = SftpPermissions.parseOctal(octal) != null
     fun set(bits: Int) {
         mode = bits and SftpPermissions.MASK
         octal = SftpPermissions.octal(mode)
     }
     fun toggle(bit: Int) = set(mode xor bit)
-    val sample = entries.firstOrNull()
-    val caption = when (entries.size) {
-        0 -> null
-        1 -> entries.single().path
-        else -> "${entries.size} items in ${SftpPaths.parent(entries.first().path)}"
+    val caption = when {
+        sample == null -> null
+        entries.size == 1 -> sample.path
+        mixed -> "${entries.size} items in ${SftpPaths.parent(sample.path)} \u00B7 modes differ, showing ${sample.name}"
+        else -> "${entries.size} items in ${SftpPaths.parent(sample.path)}"
     }
     FilesSheet(onDismiss) {
         SheetTitle("Permissions", caption)
@@ -291,8 +321,9 @@ fun ChmodSheet(entries: List<SftpEntry>, onApply: (Int) -> Unit, onDismiss: () -
                     Text(label, style = BerthType.body, color = c.text1, modifier = Modifier.width(72.dp))
                     for ((i, letter) in listOf("r", "w", "x").withIndex()) {
                         val bit = (4 shr i) shl shift
+                        val on = mode and bit != 0
                         Box(Modifier.weight(1f)) {
-                            Chip(letter, selected = mode and bit != 0, mono = true, onClick = { toggle(bit) })
+                            Chip(if (on) letter else "-", selected = on, mono = true, onClick = { toggle(bit) })
                         }
                     }
                 }
@@ -313,8 +344,9 @@ fun ChmodSheet(entries: List<SftpEntry>, onApply: (Int) -> Unit, onDismiss: () -
                     SftpPermissions.parseOctal(digits)?.let { mode = it }
                 },
                 label = "Octal",
+                placeholder = if (mixed) SftpPermissions.octal(initial) else null,
                 mono = true,
-                isError = !octalValid,
+                isError = octal.isNotEmpty() && !octalValid,
                 modifier = Modifier.width(112.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
             )
@@ -326,7 +358,7 @@ fun ChmodSheet(entries: List<SftpEntry>, onApply: (Int) -> Unit, onDismiss: () -
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BerthButton("Apply", kind = ButtonKind.PRIMARY, enabled = octalValid && mode != (initial and SftpPermissions.MASK), onClick = { onApply(mode); onDismiss() })
+            BerthButton("Apply", kind = ButtonKind.PRIMARY, enabled = octalValid && (mixed || mode != initial), onClick = { onApply(mode); onDismiss() })
             BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
         }
     }
@@ -343,29 +375,35 @@ sealed interface ViewerContent {
     data class Failed(val message: String) : ViewerContent
 }
 
-/** Read-only look at a small text file; anything else gets its size and the ways to take it off the server. */
+/**
+ * Read-only look at a small text file. [tall] is decided from the entry before anything is read:
+ * a text file gets the 92 % sheet with a Mono well that fills it; a file the name or size already
+ * says is not viewable gets a compact sheet with one Caption line and the ways to take it off the
+ * server. When a tall read turns out binary or fails, the well goes and the sheet shrinks to the note.
+ */
 @Composable
 fun FileViewerSheet(
     entry: SftpEntry,
     content: ViewerContent,
+    tall: Boolean,
     onDownload: () -> Unit,
     onShare: () -> Unit,
     onCopyPath: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val c = Berth.colors
-    FilesSheet(onDismiss, tall = true) {
+    val well = content is ViewerContent.Loading || content is ViewerContent.Text
+    FilesSheet(onDismiss, expanded = tall, fillHeight = tall && well) {
         SheetTitle(entry.name, "${formatSize(entry.size)} \u00B7 ${SftpPaths.parent(entry.path)}")
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(BerthRadius.row))
-                .background(c.surface0),
-        ) {
-            when (content) {
-                ViewerContent.Loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.CONNECTING, size = 10.dp) }
-                is ViewerContent.Text -> {
+        when (content) {
+            ViewerContent.Loading, is ViewerContent.Text -> Box(
+                Modifier
+                    .then(if (tall) Modifier.weight(1f) else Modifier)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(BerthRadius.row))
+                    .background(c.surface0),
+            ) {
+                if (content is ViewerContent.Text) {
                     val text = content.read.content.ifEmpty { "This file is empty." }
                     SelectionContainer {
                         Text(
@@ -378,11 +416,13 @@ fun FileViewerSheet(
                                 .padding(12.dp),
                         )
                     }
+                } else {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.CONNECTING, size = 10.dp) }
                 }
-                is ViewerContent.Binary -> ViewerNote("This is a binary file.", "Download it or share it to open it in another app.")
-                is ViewerContent.TooLarge -> ViewerNote("Too large to view here.", "${formatSize(content.size)} is more than the viewer reads. Download it instead.")
-                is ViewerContent.Failed -> ViewerNote("Couldn't read the file.", content.message, danger = true)
             }
+            is ViewerContent.Binary -> ViewerNote("Binary file. Download it or share it to open it elsewhere.")
+            is ViewerContent.TooLarge -> ViewerNote("${formatSize(content.size)} is more than the viewer reads. Download it instead.")
+            is ViewerContent.Failed -> ViewerNote("Couldn't read the file. ${content.message}", danger = true)
         }
         if (content is ViewerContent.Text && content.read.truncated) {
             Text("Showing the first ${formatSize(content.read.content.toByteArray().size.toLong())} of ${formatSize(content.read.size)}.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp))
@@ -395,36 +435,42 @@ fun FileViewerSheet(
     }
 }
 
+/** One Caption line where the text would have been: what the file is and what to do with it. */
 @Composable
-private fun ViewerNote(title: String, body: String, danger: Boolean = false) {
-    val c = Berth.colors
-    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = BerthType.headline, color = if (danger) c.danger else c.text1)
-        Text(body, style = BerthType.body, color = c.text2)
-    }
+private fun ViewerNote(text: String, danger: Boolean = false) {
+    Text(text, style = BerthType.caption, color = if (danger) Berth.colors.danger else Berth.colors.text3, modifier = Modifier.padding(start = 4.dp))
 }
 
 // ---- Transfers ------------------------------------------------------------------------------------
 
-/** Every transfer this process has run, newest first: per-file progress, speed, and Cancel while it moves. */
+/**
+ * Every transfer this process has run, newest first: per-file progress, speed, and Cancel while it
+ * moves. The list is the one weighted child, measured after the title and Clear finished have their
+ * height, so it scrolls inside what is left and the button never gets squeezed out. More than a
+ * handful of rows opens the sheet fully expanded rather than at the half stop.
+ */
 @Composable
 fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClearFinished: () -> Unit, onDismiss: () -> Unit) {
     val c = Berth.colors
     val active = transfers.count { it.state.isActive }
     val done = transfers.count { it.state == TransferState.DONE }
-    val failed = transfers.count { it.state == TransferState.FAILED || it.state == TransferState.CANCELLED }
+    val failed = transfers.count { it.state == TransferState.FAILED }
+    val cancelled = transfers.count { it.state == TransferState.CANCELLED }
     val caption = buildList {
         if (active > 0) add(if (active == 1) "1 running" else "$active running")
         if (done > 0) add("$done done")
-        if (failed > 0) add("$failed stopped")
+        if (failed > 0) add("$failed failed")
+        if (cancelled > 0) add("$cancelled cancelled")
     }.joinToString(" \u00B7 ").ifEmpty { "Nothing moving" }
-    FilesSheet(onDismiss) {
+    FilesSheet(onDismiss, expanded = transfers.size > 4, fillHeight = false) {
         SheetTitle("Transfers", caption)
         if (transfers.isEmpty()) {
             Text("Downloads and uploads show here while they run and after they finish.", style = BerthType.body, color = c.text2)
         } else {
             Column(
-                Modifier.verticalScroll(rememberScrollState()).fillMaxHeight(0.7f),
+                Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 for (t in transfers.sortedByDescending { if (it.state.isActive) Long.MAX_VALUE else it.finishedAt }) {
@@ -439,76 +485,37 @@ fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClear
 }
 
 /**
- * One transfer: the name, a 2 dp progress line, and one Caption line with bytes and speed. The glyph
- * carries the direction; [showHost] names the host when transfers from several sessions share a
- * list, and [others] counts the queue behind this one for the strip.
+ * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
+ * one Caption line naming the host, then bytes and speed. The glyph carries the direction.
  */
 @Composable
-fun TransferRow(
-    t: Transfer,
-    onCancel: () -> Unit,
-    modifier: Modifier = Modifier,
-    surface: Color = Berth.colors.surface2,
-    showHost: Boolean = true,
-    others: Int = 0,
-) {
+fun TransferRow(t: Transfer, onCancel: () -> Unit, modifier: Modifier = Modifier) {
     val c = Berth.colors
-    val fraction = t.fraction
-    val caption = buildList {
-        if (showHost) add(t.hostName)
-        when (t.state) {
-            TransferState.QUEUED -> add("Queued")
-            TransferState.RUNNING -> {
-                add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
-                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
-            }
-            TransferState.DONE -> {
-                add(formatSize(if (t.total > 0) t.total else t.bytes))
-                val seconds = ((t.finishedAt - t.startedAt) / 1000).coerceAtLeast(1)
-                add(if (seconds < 60) "$seconds s" else "${seconds / 60} min")
-            }
-            TransferState.FAILED -> add(t.error ?: "Failed")
-            TransferState.CANCELLED -> add("Cancelled")
-        }
-        if (others > 0) add(if (others == 1) "1 more" else "$others more")
-    }.joinToString(" \u00B7 ")
-    val trailing = when (t.state) {
-        TransferState.RUNNING -> fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
-        TransferState.DONE -> "Done"
-        TransferState.FAILED -> "Failed"
-        TransferState.CANCELLED -> "Cancelled"
-        TransferState.QUEUED -> "Queued"
-    }
-    val lineColor = when (t.state) {
-        TransferState.FAILED -> c.danger
-        TransferState.CANCELLED -> c.text3
-        TransferState.DONE -> c.live
-        else -> c.accent
-    }
+    val failed = t.state == TransferState.FAILED
     Row(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.row))
-            .background(surface)
+            .background(c.surface2)
             .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-            BerthIcon(if (t.kind == TransferKind.DOWNLOAD) BerthIcons.download else BerthIcons.upload, size = 20.dp, tint = if (t.state == TransferState.FAILED) c.danger else c.text2)
+            BerthIcon(t.kind.icon, size = 20.dp, tint = if (failed) c.danger else c.text2)
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(12.dp))
-                Text(trailing, style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text2)
+                Text(transferTrailing(t), style = BerthType.caption, color = if (failed) c.danger else c.text2)
             }
-            ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else fraction, active = t.state == TransferState.RUNNING, color = lineColor)
+            ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else t.fraction, active = t.state == TransferState.RUNNING, color = t.lineColor)
             Text(
-                caption,
+                transferCaption(t),
                 style = BerthType.caption,
-                color = if (t.state == TransferState.FAILED) c.danger else c.text3,
-                maxLines = if (t.state == TransferState.FAILED) 2 else 1,
+                color = if (failed) c.danger else c.text3,
+                maxLines = if (failed) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -521,23 +528,37 @@ fun TransferRow(
     }
 }
 
+/** The direction glyph for a transfer. */
+val TransferKind.icon: Int get() = if (this == TransferKind.DOWNLOAD) BerthIcons.download else BerthIcons.upload
+
+/** The progress line's colour by state: danger when failed, muted when cancelled, live once done, accent while moving. */
+val Transfer.lineColor: Color
+    @Composable get() = when (state) {
+        TransferState.FAILED -> Berth.colors.danger
+        TransferState.CANCELLED -> Berth.colors.text3
+        TransferState.DONE -> Berth.colors.live
+        else -> Berth.colors.accent
+    }
+
 /**
  * A 2 dp progress line on surface.4 with the fill in [color]; an unknown [fraction] while active
- * shows a short segment so the row still reads as moving.
+ * shows a short segment so the row still reads as moving. Inside a row the ends are round; as the
+ * top [edge] of a band they are square so the line meets the band's sides.
  */
 @Composable
-fun ProgressLine(fraction: Float?, active: Boolean, color: Color = Berth.colors.accent, modifier: Modifier = Modifier) {
+fun ProgressLine(fraction: Float?, active: Boolean, color: Color = Berth.colors.accent, modifier: Modifier = Modifier, edge: Boolean = false) {
     val track = Berth.colors.surface4
+    val cap = if (edge) StrokeCap.Butt else StrokeCap.Round
     Box(
         modifier
             .fillMaxWidth()
             .height(2.dp)
-            .clip(CircleShape)
+            .then(if (edge) Modifier else Modifier.clip(CircleShape))
             .drawBehind {
                 val y = size.height / 2
-                drawLine(track, Offset(0f, y), Offset(size.width, y), size.height, StrokeCap.Round)
+                drawLine(track, Offset(0f, y), Offset(size.width, y), size.height, cap)
                 val f = fraction ?: if (active) 0.15f else 0f
-                if (f > 0f) drawLine(color, Offset(0f, y), Offset(size.width * f, y), size.height, StrokeCap.Round)
+                if (f > 0f) drawLine(color, Offset(0f, y), Offset(size.width * f, y), size.height, cap)
             },
     )
 }

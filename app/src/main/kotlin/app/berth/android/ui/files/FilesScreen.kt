@@ -9,6 +9,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -19,17 +24,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -48,22 +56,32 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.files.FilesBrowser
@@ -212,20 +230,56 @@ private class CreateNamedDocument : ActivityResultContract<Pair<String, String>,
     override fun parseResult(resultCode: Int, intent: Intent?): Uri? = intent?.data?.takeIf { resultCode == Activity.RESULT_OK }
 }
 
+/**
+ * Which sheet is open. Targets are paths, not entries, so the state survives a tab switch or a
+ * rotation through [SheetSaver] and the sheet reads the entry fresh from the listing when it draws.
+ */
 private sealed interface FilesSheetKind {
     data object Path : FilesSheetKind
     data object NewFolder : FilesSheetKind
-    data class Rename(val entry: SftpEntry) : FilesSheetKind
-    data class Delete(val entries: List<SftpEntry>) : FilesSheetKind
-    data class Chmod(val entries: List<SftpEntry>) : FilesSheetKind
+    data class Rename(val path: String) : FilesSheetKind
+    data class Delete(val paths: List<String>) : FilesSheetKind
+    data class Chmod(val paths: List<String>) : FilesSheetKind
     data object Transfers : FilesSheetKind
 }
 
+private val SheetSaver = listSaver<FilesSheetKind?, String>(
+    save = { s ->
+        when (s) {
+            null -> emptyList()
+            FilesSheetKind.Path -> listOf("path")
+            FilesSheetKind.NewFolder -> listOf("new-folder")
+            is FilesSheetKind.Rename -> listOf("rename", s.path)
+            is FilesSheetKind.Delete -> listOf("delete") + s.paths
+            is FilesSheetKind.Chmod -> listOf("chmod") + s.paths
+            FilesSheetKind.Transfers -> listOf("transfers")
+        }
+    },
+    restore = { saved ->
+        when (saved.firstOrNull()) {
+            "path" -> FilesSheetKind.Path
+            "new-folder" -> FilesSheetKind.NewFolder
+            "rename" -> saved.getOrNull(1)?.let { FilesSheetKind.Rename(it) }
+            "delete" -> FilesSheetKind.Delete(saved.drop(1))
+            "chmod" -> FilesSheetKind.Chmod(saved.drop(1))
+            "transfers" -> FilesSheetKind.Transfers
+            else -> null
+        }
+    },
+)
+
+private val SelectionSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
+
+/** The two things the foot slot shows; both are bands of [FootHeight] so the swap is a crossfade with no size change. */
+private enum class Foot { TRANSFER, ACTIONS }
+
 /**
  * The single-pane browser: header with upload, transfers and more; the breadcrumb; sort and hidden
- * chips; the listing under pull to refresh; and, when rows are selected by a long press, a
- * contextual action row in place of the transfer strip. Everything the pane needs comes in, so a
- * fake file system renders it as faithfully as a live one.
+ * chips; the listing under pull to refresh; and, when rows are selected, a contextual action band in
+ * place of the transfer band. Everything the pane needs comes in, so a fake file system renders it
+ * as faithfully as a live one. With [header] false the pane draws neither the screen header nor the
+ * status-bar inset, for a host that owns the top (a tab strip); the header's actions then sit at the
+ * end of the breadcrumb row, and the selection header still appears while rows are selected.
  */
 @Composable
 fun FilesPane(
@@ -244,6 +298,7 @@ fun FilesPane(
     modifier: Modifier = Modifier,
     connected: Boolean = true,
     onReconnect: (() -> Unit)? = null,
+    header: Boolean = true,
 ) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
@@ -255,7 +310,7 @@ fun FilesPane(
     val entries = remember(state.entries, prefs.sort, prefs.ascending, prefs.showHidden) { sortEntries(state.entries, prefs) }
     val listState = rememberLazyListState()
 
-    var selection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selection by rememberSaveable(stateSaver = SelectionSaver) { mutableStateOf(emptySet()) }
     val selected = remember(selection, state.entries) { state.entries.filter { it.path in selection } }
     LaunchedEffect(state.path, state.entries) {
         // A re-list drops rows that are gone; a new folder drops the selection outright.
@@ -264,15 +319,34 @@ fun FilesPane(
             selection = selection.filterTo(HashSet()) { it in present }
         }
     }
-    LaunchedEffect(state.path) { listState.scrollToItem(0) }
 
-    var sheet by remember { mutableStateOf<FilesSheetKind?>(null) }
-    var viewer by remember { mutableStateOf<SftpEntry?>(null) }
-    var viewerContent by remember { mutableStateOf<ViewerContent>(ViewerContent.Loading) }
+    // The browser keeps where each folder was scrolled to, so coming back lands where you left; the
+    // pane hands it the position on every navigation and when it goes away (tab switch, rotation).
+    fun leaving() {
+        browser.rememberScroll(state.path, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+    }
+    fun go(path: String) {
+        leaving()
+        browser.navigate(path)
+    }
+    fun goBack() {
+        leaving()
+        browser.back()
+    }
+    DisposableEffect(browser) { onDispose { leaving() } }
+    LaunchedEffect(state.path, state.loading) {
+        if (!state.loading) {
+            val (index, offset) = browser.scrollFor(state.path)
+            listState.scrollToItem(index, offset)
+        }
+    }
+
+    var sheet by rememberSaveable(stateSaver = SheetSaver) { mutableStateOf(null) }
+    var viewerPath by rememberSaveable { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
 
     BackHandler(enabled = selection.isNotEmpty()) { selection = emptySet() }
-    BackHandler(enabled = selection.isEmpty() && state.canGoBack) { browser.back() }
+    BackHandler(enabled = selection.isEmpty() && state.canGoBack) { goBack() }
 
     fun copyPath(path: String) {
         clipboard.setText(AnnotatedString(path))
@@ -280,68 +354,69 @@ fun FilesPane(
     }
     fun open(entry: SftpEntry) {
         when {
-            entry.isDirectory -> browser.navigate(entry.path)
-            entry.isRegularFile -> viewer = entry
+            entry.isDirectory -> go(entry.path)
+            entry.isRegularFile -> viewerPath = entry.path
             entry.isSymlink -> browser.post(Notice("${entry.name} points at nothing.", isError = true))
             else -> browser.post(Notice("${entry.name} is a special file; there is nothing to open.", isError = true))
         }
     }
-    fun toggle(entry: SftpEntry) {
-        selection = if (entry.path in selection) selection - entry.path else selection + entry.path
-    }
     fun select(entry: SftpEntry) {
         if (hapticLevel != HapticLevel.OFF) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-        toggle(entry)
+        selection = if (entry.path in selection) selection - entry.path else selection + entry.path
     }
     fun selectAll() {
         selection = entries.mapTo(HashSet()) { it.path }
+    }
+
+    val headerActions: @Composable RowScope.() -> Unit = {
+        IconAction(onClick = actions.upload, description = "Upload", enabled = connected) {
+            BerthIcon(BerthIcons.upload, tint = if (connected) c.text2 else c.text3)
+        }
+        TransfersAction(active = transfers.count { it.state.isActive }) { sheet = FilesSheetKind.Transfers }
+        Box {
+            IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                MenuItem("New folder", enabled = connected && state.error == null) { menu = false; sheet = FilesSheetKind.NewFolder }
+                if (terminalCwd != null) {
+                    MenuItem("Terminal directory", enabled = terminalCwd != state.path) { menu = false; go(terminalCwd) }
+                }
+                MenuItem("Copy path") { menu = false; copyPath(state.path) }
+                MenuItem("Select all", enabled = entries.isNotEmpty()) { menu = false; selectAll() }
+                MenuItem("Refresh") { menu = false; browser.refresh() }
+            }
+        }
     }
 
     Column(
         modifier
             .fillMaxSize()
             .background(c.surface0)
-            .statusBarsPadding()
+            .then(if (header) Modifier.statusBarsPadding() else Modifier)
             .navigationBarsPadding(),
     ) {
-        if (selection.isEmpty()) {
-            ScreenHeader(
-                title = "Files \u00B7 $hostName",
-                onBack = onBack,
-                actions = {
-                    IconAction(onClick = actions.upload, description = "Upload", enabled = connected) {
-                        BerthIcon(BerthIcons.upload, tint = if (connected) c.text2 else c.text3)
-                    }
-                    TransfersAction(active = transfers.count { it.state.isActive }) { sheet = FilesSheetKind.Transfers }
-                    Box {
-                        IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                            MenuItem("New folder", enabled = connected && state.error == null) { menu = false; sheet = FilesSheetKind.NewFolder }
-                            if (terminalCwd != null) {
-                                MenuItem("Terminal directory", enabled = terminalCwd != state.path) { menu = false; browser.navigate(terminalCwd) }
-                            }
-                            MenuItem("Copy path") { menu = false; copyPath(state.path) }
-                            MenuItem("Select all", enabled = entries.isNotEmpty()) { menu = false; selectAll() }
-                            MenuItem("Refresh") { menu = false; browser.refresh() }
-                        }
-                    }
-                },
-            )
-        } else {
+        if (selection.isNotEmpty()) {
             SelectionHeader(
                 count = selection.size,
                 allSelected = selection.size >= entries.size,
                 onClose = { selection = emptySet() },
                 onSelectAll = { if (selection.size >= entries.size) selection = emptySet() else selectAll() },
             )
+        } else if (header) {
+            ScreenHeader(title = "Files \u00B7 $hostName", onBack = onBack, actions = headerActions)
         }
         Breadcrumb(
             path = state.path,
-            onJump = { browser.navigate(it) },
+            onJump = ::go,
             onEdit = { sheet = FilesSheetKind.Path },
             onCopy = { copyPath(state.path) },
+            trailing = if (header) null else headerActions,
         )
-        FilterRow(prefs, onSort, onShowHidden, hiddenCount = state.entries.count { it.isHidden })
+        // Nothing to sort over an error or an empty folder; the chips stay when hidden files are the reason.
+        if (state.error == null && (state.entries.isNotEmpty() || state.loading)) {
+            FilterRow(prefs, onSort, onShowHidden, hiddenCount = state.entries.count { it.isHidden })
+        } else {
+            Spacer(Modifier.height(8.dp))
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val error = state.error
             when {
@@ -349,8 +424,8 @@ fun FilesPane(
                     error = error,
                     state = state,
                     onRetry = browser::refresh,
-                    onUp = browser::up,
-                    onHome = browser::home,
+                    onUp = { go(SftpPaths.parent(state.path)) },
+                    onHome = { go(state.home ?: SftpPaths.ROOT) },
                     onReconnect = onReconnect,
                 )
                 state.loading && state.entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -364,7 +439,7 @@ fun FilesPane(
                     listState = listState,
                     now = now,
                     onRefresh = browser::refresh,
-                    onOpen = { entry -> if (selection.isEmpty()) open(entry) else toggle(entry) },
+                    onOpen = ::open,
                     onSelect = ::select,
                     onUpload = actions.upload,
                     onNewFolder = { sheet = FilesSheetKind.NewFolder },
@@ -377,26 +452,36 @@ fun FilesPane(
         val moving = transfers.firstOrNull { it.state == TransferState.RUNNING } ?: transfers.firstOrNull { it.state == TransferState.QUEUED }
         val lastMoving = remember { mutableStateOf(moving) }
         if (moving != null) lastMoving.value = moving
-        AnimatedVisibility(visible = selection.isEmpty() && moving != null, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut() + slideOutVertically { it / 2 }) {
-            lastMoving.value?.let { t ->
-                TransferStrip(t, others = transfers.count { it.state.isActive } - 1, onCancel = { onCancelTransfer(t.id) }, onClick = { sheet = FilesSheetKind.Transfers })
-            }
+        val foot = when {
+            selection.isNotEmpty() -> Foot.ACTIONS
+            moving != null -> Foot.TRANSFER
+            else -> null
         }
-        AnimatedVisibility(visible = selection.isNotEmpty(), enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut() + slideOutVertically { it / 2 }) {
-            SelectionActions(
-                selected = selected,
-                canWrite = connected,
-                onDownload = { actions.download(selected) },
-                onShare = { selected.singleOrNull()?.let(actions.share) },
-                onRename = { selected.singleOrNull()?.let { sheet = FilesSheetKind.Rename(it) } },
-                onChmod = { sheet = FilesSheetKind.Chmod(selected) },
-                onCopyPath = { selected.singleOrNull()?.let { copyPath(it.path) } },
-                onDelete = { sheet = FilesSheetKind.Delete(selected) },
-            )
+        val lastFoot = remember { mutableStateOf(foot) }
+        if (foot != null) lastFoot.value = foot
+        AnimatedVisibility(visible = foot != null, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut() + slideOutVertically { it / 2 }) {
+            Crossfade(targetState = lastFoot.value, animationSpec = tween(150), label = "foot") { which ->
+                when (which) {
+                    Foot.ACTIONS -> SelectionActions(
+                        selected = selected,
+                        canWrite = connected,
+                        onDownload = { actions.download(selected) },
+                        onShare = { selected.singleOrNull()?.let(actions.share) },
+                        onRename = { selected.singleOrNull()?.let { sheet = FilesSheetKind.Rename(it.path) } },
+                        onChmod = { sheet = FilesSheetKind.Chmod(selected.map { it.path }) },
+                        onCopyPath = { selected.singleOrNull()?.let { copyPath(it.path) } },
+                        onDelete = { sheet = FilesSheetKind.Delete(selected.map { it.path }) },
+                    )
+                    Foot.TRANSFER, null -> lastMoving.value?.let { t ->
+                        TransferStrip(t, others = transfers.count { it.state.isActive } - 1, onCancel = { onCancelTransfer(t.id) }, onClick = { sheet = FilesSheetKind.Transfers })
+                    }
+                }
+            }
         }
     }
 
     val names = remember(state.entries) { state.entries.mapTo(HashSet()) { it.name } }
+    fun entriesAt(paths: List<String>): List<SftpEntry> = state.entries.filter { it.path in paths }
     when (val s = sheet) {
         null -> Unit
         FilesSheetKind.Path -> PathEditorSheet(
@@ -404,7 +489,7 @@ fun FilesPane(
             home = state.home,
             terminalCwd = terminalCwd,
             recent = recent,
-            onGo = { browser.navigate(it) },
+            onGo = ::go,
             onDismiss = { sheet = null },
         )
         FilesSheetKind.NewFolder -> NameSheet(
@@ -416,25 +501,32 @@ fun FilesPane(
             onConfirm = { browser.mkdir(it) },
             onDismiss = { sheet = null },
         )
-        is FilesSheetKind.Rename -> NameSheet(
-            title = "Rename",
-            folder = SftpPaths.parent(s.entry.path),
-            initial = s.entry.name,
-            confirm = "Rename",
-            existing = names,
-            onConfirm = { browser.rename(s.entry, it); selection = emptySet() },
-            onDismiss = { sheet = null },
-        )
-        is FilesSheetKind.Delete -> DeleteSheet(
-            entries = s.entries,
-            onConfirm = { browser.delete(s.entries); selection = emptySet() },
-            onDismiss = { sheet = null },
-        )
-        is FilesSheetKind.Chmod -> ChmodSheet(
-            entries = s.entries,
-            onApply = { browser.chmod(s.entries, it); selection = emptySet() },
-            onDismiss = { sheet = null },
-        )
+        is FilesSheetKind.Rename -> WithTargets(entriesAt(listOf(s.path)), onGone = { sheet = null }) { targets ->
+            val entry = targets.single()
+            NameSheet(
+                title = "Rename",
+                folder = SftpPaths.parent(entry.path),
+                initial = entry.name,
+                confirm = "Rename",
+                existing = names,
+                onConfirm = { browser.rename(entry, it); selection = emptySet() },
+                onDismiss = { sheet = null },
+            )
+        }
+        is FilesSheetKind.Delete -> WithTargets(entriesAt(s.paths), onGone = { sheet = null }) { targets ->
+            DeleteSheet(
+                entries = targets,
+                onConfirm = { browser.delete(targets); selection = emptySet() },
+                onDismiss = { sheet = null },
+            )
+        }
+        is FilesSheetKind.Chmod -> WithTargets(entriesAt(s.paths), onGone = { sheet = null }) { targets ->
+            ChmodSheet(
+                entries = targets,
+                onApply = { browser.chmod(targets, it); selection = emptySet() },
+                onDismiss = { sheet = null },
+            )
+        }
         FilesSheetKind.Transfers -> TransferSheet(
             transfers = transfers,
             onCancel = onCancelTransfer,
@@ -442,31 +534,51 @@ fun FilesPane(
             onDismiss = { sheet = null },
         )
     }
-    viewer?.let { entry ->
-        LaunchedEffect(entry.path) {
-            viewerContent = ViewerContent.Loading
-            viewerContent = if (entry.size > FilesBrowser.VIEWER_SKIP_BYTES) {
-                ViewerContent.TooLarge(entry.size)
-            } else {
-                browser.readText(entry).fold(
-                    onSuccess = { read ->
-                        when (read) {
-                            is TextRead.Text -> ViewerContent.Text(read)
-                            is TextRead.Binary -> ViewerContent.Binary(read.size)
-                        }
-                    },
-                    onFailure = { ViewerContent.Failed(it.message ?: "Couldn't read the file.") },
-                )
+    viewerPath?.let { path ->
+        WithTargets(entriesAt(listOf(path)), onGone = { viewerPath = null }) { targets ->
+            val entry = targets.single()
+            // The name or the size can settle what the sheet is before a byte is read.
+            val verdict = remember(entry.path) {
+                when {
+                    entry.size > FilesBrowser.VIEWER_SKIP_BYTES -> ViewerContent.TooLarge(entry.size)
+                    looksBinary(entry.name) -> ViewerContent.Binary(entry.size)
+                    else -> ViewerContent.Loading
+                }
             }
+            var content by remember(entry.path) { mutableStateOf(verdict) }
+            if (verdict == ViewerContent.Loading) {
+                LaunchedEffect(entry.path) {
+                    content = browser.readText(entry).fold(
+                        onSuccess = { read ->
+                            when (read) {
+                                is TextRead.Text -> ViewerContent.Text(read)
+                                is TextRead.Binary -> ViewerContent.Binary(read.size)
+                            }
+                        },
+                        onFailure = { ViewerContent.Failed(it.message ?: "The read did not finish.") },
+                    )
+                }
+            }
+            FileViewerSheet(
+                entry = entry,
+                content = content,
+                tall = verdict == ViewerContent.Loading,
+                onDownload = { actions.download(listOf(entry)) },
+                onShare = { actions.share(entry) },
+                onCopyPath = { copyPath(entry.path) },
+                onDismiss = { viewerPath = null },
+            )
         }
-        FileViewerSheet(
-            entry = entry,
-            content = viewerContent,
-            onDownload = { actions.download(listOf(entry)) },
-            onShare = { actions.share(entry) },
-            onCopyPath = { copyPath(entry.path) },
-            onDismiss = { viewer = null },
-        )
+    }
+}
+
+/** Shows [content] for the entries a sheet targets; when the listing no longer has them the sheet has nothing to act on and closes. */
+@Composable
+private fun WithTargets(targets: List<SftpEntry>, onGone: () -> Unit, content: @Composable (List<SftpEntry>) -> Unit) {
+    if (targets.isEmpty()) {
+        LaunchedEffect(Unit) { onGone() }
+    } else {
+        content(targets)
     }
 }
 
@@ -501,32 +613,33 @@ private fun MenuItem(label: String, enabled: Boolean = true, onClick: () -> Unit
     )
 }
 
-/** The header while rows are selected: close at the leading edge, the count as the title, All or None trailing. */
+/**
+ * The header while rows are selected: the shared [ScreenHeader] with close in its navigation slot,
+ * the count as the title, All or None trailing, so a restyle of the header covers this state too.
+ */
 @Composable
 private fun SelectionHeader(count: Int, allSelected: Boolean, onClose: () -> Unit, onSelectAll: () -> Unit) {
-    val c = Berth.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .padding(horizontal = BerthSpace.screenMargin - 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconAction(onClick = onClose, description = "Clear selection") { BerthIcon(BerthIcons.close) }
-        Spacer(Modifier.width(4.dp))
-        Text(if (count == 1) "1 selected" else "$count selected", style = BerthType.title, color = c.text1, modifier = Modifier.weight(1f), maxLines = 1)
-        BerthButton(if (allSelected) "None" else "All", kind = ButtonKind.TEXT, onClick = onSelectAll)
-    }
+    ScreenHeader(
+        title = if (count == 1) "1 selected" else "$count selected",
+        navigation = { IconAction(onClick = onClose, description = "Clear selection") { BerthIcon(BerthIcons.close) } },
+        actions = { BerthButton(if (allSelected) "None" else "All", kind = ButtonKind.TEXT, onClick = onSelectAll) },
+    )
 }
 
 /**
  * The path as crumbs: ancestors in text.2, the current folder in text.1, a chevron between. A tap
  * jumps; the current crumb and the pencil open the editor; a long press copies the path. Long
- * paths scroll and keep their tail in view.
+ * paths scroll and keep their tail in view, and a fade at the leading edge says there is more
+ * behind. [trailing] carries the header's actions when the pane has no header of its own.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Breadcrumb(path: String, onJump: (String) -> Unit, onEdit: () -> Unit, onCopy: () -> Unit) {
+private fun Breadcrumb(
+    path: String,
+    onJump: (String) -> Unit,
+    onEdit: () -> Unit,
+    onCopy: () -> Unit,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
+) {
     val c = Berth.colors
     val crumbs = remember(path) { SftpPaths.crumbs(path) }
     val scroll = rememberScrollState()
@@ -539,34 +652,59 @@ private fun Breadcrumb(path: String, onJump: (String) -> Unit, onEdit: () -> Uni
             .semantics { contentDescription = "Path $path" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        val fade = 16.dp
         Row(
             Modifier
                 .weight(1f)
+                .drawWithContent {
+                    drawContent()
+                    if (scroll.value > 0) {
+                        val w = fade.toPx().coerceAtMost(size.width)
+                        drawRect(Brush.horizontalGradient(0f to c.surface0, 1f to Color.Transparent, startX = 0f, endX = w), size = Size(w, size.height))
+                    }
+                }
                 .horizontalScroll(scroll),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             crumbs.forEachIndexed { i, (label, full) ->
                 val last = i == crumbs.lastIndex
                 if (i > 0) BerthIcon(BerthIcons.chevronRight, size = 14.dp, tint = c.text3)
-                Text(
-                    label,
-                    style = if (last) BerthType.bodyMedium else BerthType.body,
-                    color = if (last) c.text1 else c.text2,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(BerthRadius.swatch))
-                        .combinedClickable(onClick = { if (last) onEdit() else onJump(full) }, onLongClick = onCopy)
-                        .padding(horizontal = 6.dp, vertical = 8.dp),
-                )
+                Crumb(label, last = last, onClick = { if (last) onEdit() else onJump(full) }, onLongClick = onCopy)
             }
         }
         IconAction(onClick = onEdit, description = "Edit path") { BerthIcon(BerthIcons.edit, size = 20.dp) }
+        if (trailing != null) trailing()
     }
 }
 
-/** Sort chips, the active one carrying its direction, and the hidden-files chip at the trailing edge. */
+/** One crumb: the pressed step Berth's pressables share, no ripple. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Crumb(label: String, last: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Text(
+        label,
+        style = if (last) BerthType.bodyMedium else BerthType.body,
+        color = if (last) c.text1 else c.text2,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(BerthRadius.swatch))
+            .background(if (pressed) c.surface3 else Color.Transparent)
+            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+    )
+}
+
+/**
+ * Sort chips and the hidden-files chip at the trailing edge. Every sort chip is as wide as its label
+ * with the direction arrow, so the arrow moving to the active one does not reflow the row.
+ */
 @Composable
 private fun FilterRow(prefs: FilesPrefs, onSort: (FilesSort) -> Unit, onShowHidden: (Boolean) -> Unit, hiddenCount: Int) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
     Row(
         Modifier
             .fillMaxWidth()
@@ -577,10 +715,15 @@ private fun FilterRow(prefs: FilesPrefs, onSort: (FilesSort) -> Unit, onShowHidd
     ) {
         for (sort in FilesSort.entries) {
             val active = prefs.sort == sort
+            val arrow = if (prefs.ascending) " \u2191" else " \u2193"
+            val width = remember(sort, density) {
+                with(density) { measurer.measure(sort.label + " \u2191", BerthType.label).size.width.toDp() } + 20.dp
+            }
             Chip(
-                text = if (active) sort.label + (if (prefs.ascending) " \u2191" else " \u2193") else sort.label,
+                text = if (active) sort.label + arrow else sort.label,
                 selected = active,
                 onClick = { onSort(sort) },
+                modifier = Modifier.width(width),
             )
         }
         Spacer(Modifier.weight(1f))
@@ -613,13 +756,23 @@ private fun EntryList(
     canWrite: Boolean,
 ) {
     val pull = rememberPullToRefreshState()
-    Box(
+    // The pull opens a slot above the first row for the disc, so it never sits over a row; the slot
+    // stays open while the listing is on its way and closes when it lands.
+    val slot by animateDpAsState(
+        if (refreshing) RefreshSlot else RefreshSlot * pull.distanceFraction.coerceIn(0f, 1f),
+        if (refreshing || pull.distanceFraction > 0f) snap() else tween(200),
+        label = "refresh",
+    )
+    Column(
         Modifier
             .fillMaxSize()
             .pullToRefresh(isRefreshing = refreshing, state = pull, onRefresh = onRefresh),
     ) {
+        Box(Modifier.fillMaxWidth().height(slot), contentAlignment = Alignment.BottomCenter) {
+            RefreshIndicator(pull, refreshing)
+        }
         LazyColumn(
-            Modifier.fillMaxSize(),
+            Modifier.weight(1f).fillMaxWidth(),
             state = listState,
             contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(BerthSpace.rowGap),
@@ -651,18 +804,25 @@ private fun EntryList(
                     selected = entry.path in selection,
                     now = now,
                     onClick = { onOpen(entry) },
-                    onLongClick = { onSelect(entry) },
+                    onSelect = { onSelect(entry) },
                     modifier = Modifier.padding(horizontal = BerthSpace.screenMargin),
                 )
             }
         }
-        RefreshIndicator(pull, refreshing, Modifier.align(Alignment.TopCenter))
     }
 }
 
-/** One entry: type glyph, name, and the Caption line with size or kind, modified time and mode. */
+private val RefreshSlot = 44.dp
+
+/**
+ * One entry: the leading slot, name, and the Caption line with size or kind, modified time and mode.
+ * The leading 36 dp slot is the selection control: the type glyph at rest, a check in a surface.4 disc
+ * when selected, the same box either way so nothing shifts. It has its own tap, so tapping the glyph
+ * selects and tapping the row opens; a long press on the row is the other way into selecting. The
+ * selected row also steps up one surface, without the accent dot the Rail uses for the live session.
+ */
 @Composable
-private fun EntryRow(entry: SftpEntry, selected: Boolean, now: Long, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun EntryRow(entry: SftpEntry, selected: Boolean, now: Long, onClick: () -> Unit, onSelect: () -> Unit, modifier: Modifier = Modifier) {
     val c = Berth.colors
     val (icon, tint) = when {
         entry.isSymlink -> BerthIcons.link to (if (entry.linkTarget == null) c.text3 else c.text2)
@@ -673,19 +833,33 @@ private fun EntryRow(entry: SftpEntry, selected: Boolean, now: Long, onClick: ()
         title = entry.name,
         modifier = modifier,
         subtitle = entryCaption(entry, now),
-        selected = selected,
+        surface = if (selected) c.surface3 else c.surface2,
         onClick = onClick,
-        onLongClick = onLongClick,
+        onLongClick = onSelect,
         titleColor = if (entry.isHidden) c.text2 else c.text1,
         leading = {
+            val interaction = remember { MutableInteractionSource() }
+            val disc by animateColorAsState(if (selected) c.surface4 else Color.Transparent, tween(120), label = "disc")
+            // A 36 dp slot in the layout; the touch target is 44 dp centred on it, the way IconAction overflows a short row.
             Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                BerthIcon(icon, size = 22.dp, tint = tint)
+                Box(
+                    Modifier
+                        .requiredSize(44.dp)
+                        .clickable(interactionSource = interaction, indication = null, role = Role.Checkbox, onClick = onSelect)
+                        .semantics { contentDescription = if (selected) "Deselect ${entry.name}" else "Select ${entry.name}" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(30.dp).clip(CircleShape).background(disc), contentAlignment = Alignment.Center) {
+                        if (selected) BerthIcon(BerthIcons.check, size = 18.dp, tint = c.text1)
+                        else BerthIcon(icon, size = 22.dp, tint = tint)
+                    }
+                }
             }
         },
     )
 }
 
-/** Berth's pending dot rides down with the pull inside a surface.3 disc and spins once the listing is on its way. */
+/** Berth's pending dot in a surface.3 disc, rising into its slot with the pull and spinning once the listing is on its way. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RefreshIndicator(state: PullToRefreshState, refreshing: Boolean, modifier: Modifier = Modifier) {
@@ -694,11 +868,8 @@ private fun RefreshIndicator(state: PullToRefreshState, refreshing: Boolean, mod
     if (fraction <= 0f && !refreshing) return
     Box(
         modifier
-            .padding(top = 4.dp)
-            .graphicsLayer {
-                translationY = (fraction - 1f) * 44.dp.toPx()
-                alpha = fraction
-            }
+            .padding(bottom = 4.dp)
+            .graphicsLayer { alpha = if (refreshing) 1f else fraction }
             .size(36.dp)
             .clip(CircleShape)
             .background(c.surface3),
@@ -774,20 +945,51 @@ private fun NoticeLine(notice: Notice?, onDismiss: () -> Unit, modifier: Modifie
 
 // ---- the foot -------------------------------------------------------------------------------------
 
-/** The transfer that is moving, as its row from the sheet; a tap opens the sheet, the trailing pill counts the rest. */
+/** Both bands in the foot slot are this tall, so selection starting or ending crossfades without a size change. */
+private val FootHeight = 64.dp
+
+/**
+ * The transfer that is moving, as a full-width band like the action band, with the 2 dp progress
+ * line as its top edge: direction glyph, name, one Caption line of bytes, speed and how many wait,
+ * the percentage, and Cancel. A tap anywhere else opens the sheet.
+ */
 @Composable
 private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit, onClick: () -> Unit) {
-    TransferRow(
-        transfer,
-        onCancel = onCancel,
-        modifier = Modifier
-            .padding(horizontal = BerthSpace.screenMargin)
-            .padding(bottom = 8.dp)
+    val c = Berth.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(FootHeight)
+            .background(c.surface1)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
-        surface = Berth.colors.surface2,
-        showHost = false,
-        others = others,
-    )
+    ) {
+        ProgressLine(
+            fraction = if (transfer.state == TransferState.DONE) 1f else transfer.fraction,
+            active = transfer.state == TransferState.RUNNING,
+            color = transfer.lineColor,
+            edge = true,
+        )
+        Row(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                BerthIcon(transfer.kind.icon, size = 20.dp, tint = c.text2)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(transfer.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0)), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(transferTrailing(transfer), style = BerthType.caption, color = c.text2)
+            Spacer(Modifier.width(4.dp))
+            IconAction(onClick = onCancel, description = "Cancel ${transfer.name}") { BerthIcon(BerthIcons.close, size = 20.dp) }
+        }
+    }
 }
 
 /** The contextual actions for the selected rows, one glyph over one Caption each; Delete in danger. */
@@ -808,8 +1010,9 @@ private fun SelectionActions(
     Row(
         Modifier
             .fillMaxWidth()
+            .height(FootHeight)
             .background(c.surface1)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ActionItem(BerthIcons.download, "Download", enabled = files > 0, onClick = onDownload, modifier = Modifier.weight(1f))

@@ -37,6 +37,7 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
     var listDelayMs = 0L
     var chunkDelayMs = 0L
     var lists = 0
+    var reads = 0
     override var isOpen: Boolean = true
 
     init {
@@ -172,6 +173,7 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
     }
 
     override suspend fun readText(path: String, maxBytes: Int): TextRead {
+        reads++
         val node = node(SftpPaths.normalize(path))
         if (node.type == SftpFileType.DIRECTORY) throw SftpError.IsADirectory(path)
         val head = node.content.take(maxBytes).toByteArray()

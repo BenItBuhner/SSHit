@@ -15,6 +15,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onLast
@@ -140,11 +141,13 @@ class FilesScreenshotTest {
         cwd: String? = "/home/demo/projects/berth/app",
         connected: Boolean = true,
         initial: FilesPrefs = FilesPrefs(),
+        header: Boolean = true,
     ) {
         var prefs by remember { mutableStateOf(initial) }
         FilesPane(
             hostName = "prod-web",
             browser = browser,
+            header = header,
             prefs = prefs,
             onSort = { sort -> prefs = prefs.copy(sort = sort, ascending = if (prefs.sort == sort) !prefs.ascending else true) },
             onShowHidden = { prefs = prefs.copy(showHidden = it) },
@@ -219,15 +222,31 @@ class FilesScreenshotTest {
         themed { Pane(b) }
         waitForText("deploy.sh")
 
+        // A long press on the row is one way in; the glyph is the other, and it is the checkbox from then on.
         compose.onNodeWithText("deploy.sh").performTouchInput { longClick() }
         waitForText("1 selected")
-        compose.onNodeWithText("notes.txt").performClick()
-        compose.onNodeWithText("backups").performClick()
+        compose.onNodeWithContentDescription("Select notes.txt").performClick()
+        compose.onNodeWithContentDescription("Select backups").performClick()
         waitForText("3 selected")
+        compose.onNodeWithContentDescription("Deselect backups").assertExists()
         capture("files-multi-select")
 
+        // The row itself still opens: a folder tap enters it and the selection goes with the old folder.
+        compose.onNodeWithText("projects").performClick()
+        waitForText("berth")
+        assertEquals("/home/demo/projects", b.state.value.path)
+        waitForNoText("3 selected")
+        compose.onNodeWithText("demo").performClick()
+        waitForText("deploy.sh")
+
+        compose.onNodeWithContentDescription("Select deploy.sh").performClick()
+        compose.onNodeWithContentDescription("Select notes.txt").performClick()
+        compose.onNodeWithContentDescription("Select backups").performClick()
+        waitForText("3 selected")
         compose.onNodeWithText("Mode").performClick()
         waitForText("Permissions")
+        // Two files at 644 and a folder at 755 do not agree, so the field waits for an explicit mode.
+        waitForText("modes differ", substring = true)
         capture("files-chmod")
         compose.onNodeWithText("Cancel").performClick()
         waitForNoText("Permissions")
@@ -244,9 +263,10 @@ class FilesScreenshotTest {
         waitForText("1 selected")
         compose.onNodeWithText("Rename").performClick()
         waitForText("Rename", timeout = 5_000)
-        compose.onNode(hasSetTextAction()).performTextInput("-prod")
+        // The stem opens selected, so typing replaces `deploy` and keeps `.sh`.
+        compose.onNode(hasSetTextAction()).performTextInput("deploy-prod")
+        waitForText("deploy-prod.sh")
         capture("files-rename")
-        compose.onAllNodes(hasText("Rename")).fetchSemanticsNodes()
         compose.onNodeWithText("Cancel").performClick()
 
         compose.onNodeWithText("Delete").performClick()
@@ -290,9 +310,29 @@ class FilesScreenshotTest {
         dismissSheet()
         waitForNoText("Copy path")
 
+        // The name settles it before any read: a compact sheet with one line and the three actions.
+        val reads = fs.reads
         compose.onNodeWithText("berth-arm64.apk").performClick()
-        waitForText("This is a binary file.")
+        waitForText("Binary file. Download it or share it to open it elsewhere.")
+        assertEquals(reads, fs.reads)
         capture("files-viewer-binary")
+    }
+
+    @Test
+    fun `pane without its own header`() {
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        themed { Pane(b, header = false) }
+        waitForText("deploy.sh")
+        // No screen header or status-bar inset; the header's actions ride the breadcrumb row instead.
+        assertTrue(compose.onAllNodes(hasText("Files \u00B7 prod-web")).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithContentDescription("Upload").assertExists()
+        compose.onNodeWithContentDescription("Transfers").assertExists()
+        capture("files-headerless")
+        // The selection header still comes and goes with the selection.
+        compose.onNodeWithContentDescription("Select notes.txt").performClick()
+        waitForText("1 selected")
+        capture("files-headerless-selected")
     }
 
     @Test
@@ -308,11 +348,42 @@ class FilesScreenshotTest {
         )
         themed { Pane(b, transfers = transfers) }
         waitForText("deploy.sh")
-        waitForText("131 MB of 348 MB", substring = true)
+        waitForText("131 MB of 348 MB \u00B7 4.2 MB/s \u00B7 1 more")
         capture("files-transfer-strip")
         compose.onNodeWithContentDescription("Transfers, 2 running").performClick()
         waitForText("Clear finished")
+        waitForText("1 failed", substring = true)
         capture("files-transfers-sheet")
+    }
+
+    @Test
+    fun `transfers sheet keeps clear finished under a long history`() {
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        val mb = 1024L * 1024
+        val names = listOf("site-backup-2026-09-18.tar.gz", "berth-arm64.apk", "notes.txt", "config.yaml", "nginx.conf", "app.log", "deploy.sh", "schema.sql", "README.txt", "photo.jpg", "vendor.tar", "metrics.csv")
+        val transfers = names.mapIndexed { i, name ->
+            Transfer(
+                "t$i", "s-demo", "prod-web",
+                if (i % 2 == 0) TransferKind.DOWNLOAD else TransferKind.UPLOAD,
+                name, "/home/demo/$name",
+                total = (i + 1) * 3 * mb, bytes = if (i == 3) (i + 1) * mb else (i + 1) * 3 * mb,
+                state = if (i == 3) TransferState.CANCELLED else TransferState.DONE,
+                startedAt = now - (i + 2) * 60_000L, finishedAt = now - (i + 1) * 60_000L,
+            )
+        }
+        themed { Pane(b, transfers = transfers) }
+        waitForText("deploy.sh")
+        compose.onNodeWithContentDescription("Transfers").performClick()
+        waitForText("Clear finished")
+        // Twelve rows outgrow the screen; the list scrolls and the button keeps its height at the foot.
+        // The sheet is its own window, so there are two roots; the button's own root is the sheet's.
+        val button = compose.onNodeWithText("Clear finished").fetchSemanticsNode()
+        assertTrue("Clear finished collapsed to ${button.size.height} px", button.size.height > 0)
+        val root = compose.onAllNodes(isRoot()).onLast().fetchSemanticsNode()
+        assertTrue(button.boundsInRoot.bottom <= root.size.height)
+        waitForText("11 done \u00B7 1 cancelled")
+        capture("files-transfers-sheet-long")
     }
 
     @Test
