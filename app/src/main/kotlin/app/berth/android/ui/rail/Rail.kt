@@ -165,11 +165,13 @@ fun Rail(
         }
 
         Spacer(Modifier.height(12.dp))
+        // Three links per line (C7): Hosts Keys Tunnels / Snippets Settings.
         FlowRow(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
+            maxItemsInEachRow = 3,
         ) {
             LibraryLink("Hosts") { onLibrary(Library.HOSTS) }
             LibraryLink("Keys") { onLibrary(Library.KEYS) }
@@ -252,8 +254,10 @@ fun SessionRow(
             trailing = {
                 if (tunnelPorts.isNotEmpty()) {
                     val pillModifier = if (onTunnelTap != null) Modifier.clip(CircleShape).clickable(onClick = onTunnelTap) else Modifier
-                    for (port in tunnelPorts.take(2)) Pill(port.toString(), mono = true, modifier = pillModifier)
-                    if (tunnelPorts.size > 2) Pill("+${tunnelPorts.size - 2}", mono = true, modifier = pillModifier)
+                    // One tonal step above the row it sits on: the active row is already surface.3.
+                    val pill = if (selected) c.surface4 else c.surface3
+                    for (port in tunnelPorts.take(2)) Pill(port.toString(), mono = true, modifier = pillModifier, color = pill)
+                    if (tunnelPorts.size > 2) Pill("+${tunnelPorts.size - 2}", mono = true, modifier = pillModifier, color = pill)
                 }
                 val trailing = when (record.state) {
                     SessionState.LIVE -> null

@@ -112,8 +112,8 @@ fun HostsScreen(
                 body = "Hosts, keys and history stay on this device. No account. No telemetry.",
             ) {
                 BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
-                BerthButton("Quick connect", onClick = { quickConnect = true })
-                BerthButton("Import ssh config", onClick = { importConfig = true })
+                BerthButton("Quick connect", onClick = { quickConnect = true }, kind = ButtonKind.TEXT)
+                BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)
             }
         } else {
             val recent = hosts.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)

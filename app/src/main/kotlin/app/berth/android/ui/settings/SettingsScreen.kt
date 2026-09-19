@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -132,13 +133,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 Text("Editing keys and layers arrives with the layout editor; the layout is already data, so it will not require a migration.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 2.dp))
             }
 
+            // Rows that navigate end in the same chevron the Terminal pickers use.
+            val chevron: @Composable RowScope.() -> Unit = { Text("\u203A", style = BerthType.body, color = c.text3) }
             Panel(label = "Trust") {
-                ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts)
+                ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
             }
 
             Panel(label = "Data") {
-                ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true })
-                ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true })
+                ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
+                ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
             }
 
             Panel(label = "About") {

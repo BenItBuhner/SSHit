@@ -2,8 +2,6 @@ package app.berth.android.ui.stage
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -41,7 +39,7 @@ import app.berth.domain.model.SessionState
  * The session sheet from the Grip or the ribbon title: this session's facts and actions, then the
  * other sessions in the workspace for a quick switch.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionSheet(
     vm: AppViewModel,
@@ -107,15 +105,20 @@ fun SessionSheet(
                     )
                 }
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!record.state.isActive) BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() })
-                if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() })
-                record.hostId?.let { hostId ->
-                    BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() })
+            // Two deliberate rows (C6): the session's own actions, then the host and the exit.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                    else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                    record.hostId?.let { hostId ->
+                        BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                    }
+                    if (record.state == SessionState.LIVE) BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
                 }
-                if (record.state == SessionState.LIVE) BerthButton("Snippets", onClick = { snippets = true })
-                if (record.hostId != null) BerthButton("Host", onClick = { onEditHost(record.hostId!!); onDismiss() })
-                BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(session.id); onDismiss() })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    record.hostId?.let { hostId -> BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f)) }
+                    BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                }
             }
             val rest = others.filter { it.id != session.id }
             if (rest.isNotEmpty()) {
