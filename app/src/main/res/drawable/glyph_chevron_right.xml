@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Trailing chevron for picker rows, 1.75 dp stroke, round caps. -->
+<!-- Trailing chevron for picker rows, 1.75 dp stroke, round caps; mirrors in RTL locales. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:viewportHeight="24"
+    android:autoMirrored="true">
     <path
         android:strokeColor="#FF000000"
         android:strokeWidth="1.75"
