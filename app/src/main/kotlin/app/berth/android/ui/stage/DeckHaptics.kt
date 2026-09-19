@@ -72,6 +72,16 @@ class DeckHaptics(
         if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
     }
 
+    /** Text copied from the terminal (spec C18): Confirm, the same tick as a paste. */
+    fun copy() {
+        if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+    }
+
+    /** A long-press placed a selection: a heavy tick, the same as a tab's long-press menu. */
+    fun selectionStarted() {
+        if (level != HapticLevel.OFF) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
     /** One pinch step of terminal font size: a light tick. */
     fun fontStep() {
         if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
