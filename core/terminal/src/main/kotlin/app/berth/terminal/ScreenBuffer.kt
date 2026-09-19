@@ -111,8 +111,17 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
     /**
      * Reflows the primary screen to [newCols] x [newRows], re-wrapping soft-wrapped logical lines.
      * Returns the new cursor position.
+     *
+     * A change of height alone re-wraps nothing, so it takes the row adjustment of [resizeNoReflow]
+     * with history kept; that is the resize the keyboard and the Deck cause as they animate, and it
+     * has to be cheap enough to run on the UI thread with thousands of lines of history.
      */
     fun resizeReflow(newCols: Int, newRows: Int, cursorX: Int, cursorY: Int, fillBg: Int): Pair<Int, Int> {
+        if (newCols == cols) {
+            val shift = resizeNoReflow(newCols, newRows, cursorY, fillBg, keepInScrollback = true)
+            return Pair(cursorX.coerceIn(0, newCols - 1), (cursorY - shift).coerceIn(0, newRows - 1))
+        }
+
         // Gather every physical line, history first.
         val all = ArrayList<TerminalLine>(scrollback.size + lines.size)
         all.addAll(scrollback)
@@ -123,59 +132,82 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
         for (i in 0..lastContent) all.add(lines[i])
 
         // Build logical lines as lists of physical segments, remembering where the cursor lives.
-        val output = ArrayList<TerminalLine>()
+        val output = ArrayList<TerminalLine>(all.size + 16)
         var newCursorLine = -1
         var newCursorX = cursorX.coerceIn(0, newCols - 1)
+        val cells = ReflowCells(newCols * 2)
         var i = 0
         while (i < all.size) {
             var j = i
             while (j < all.size - 1 && all[j].wrapped) j++
-            // Logical line is all[i..j].
-            val cells = ArrayList<IntArray>() // [cp, fg, bg, attrs] per cell, wide tails skipped
-            val combiningByCell = HashMap<Int, String>()
+            val logicalHasCursor = cursorPhysical in i..j
+
+            // A line of its own that already fits keeps its arrays; most of history is such lines.
+            if (i == j) {
+                val single = all[i]
+                if (single.contentLength() <= newCols && (!logicalHasCursor || cursorX < newCols)) {
+                    single.resize(newCols, fillBg)
+                    single.wrapped = false
+                    if (logicalHasCursor) {
+                        newCursorLine = output.size
+                        newCursorX = cursorX
+                    }
+                    output.add(single)
+                    i++
+                    continue
+                }
+            }
+
+            // Logical line is all[i..j]: its cells, wide tails skipped, into the scratch arrays.
+            cells.reset()
+            var combiningByCell: HashMap<Int, String>? = null
             var cursorCellIndex = -1
             for (k in i..j) {
                 val l = all[k]
                 val len = if (k == j) l.contentLength() else l.cols
                 val cursorHere = (k == cursorPhysical)
+                cells.ensure(cells.size + len)
+                val marks = l.combining
                 for (x in 0 until len) {
                     if (l.attrs[x] and Attr.WIDE_TAIL != 0) continue
                     if (cursorHere && x == cursorX) cursorCellIndex = cells.size
-                    l.combining?.get(x)?.let { combiningByCell[cells.size] = it }
-                    cells.add(intArrayOf(l.chars[x], l.fg[x], l.bg[x], l.attrs[x]))
+                    marks?.get(x)?.let { m -> (combiningByCell ?: HashMap<Int, String>().also { combiningByCell = it })[cells.size] = m }
+                    cells.add(l.chars[x], l.fg[x], l.bg[x], l.attrs[x])
                 }
                 // Cursor sitting past the content: remember how far beyond the last cell it was.
                 if (cursorHere && cursorX >= len) cursorCellIndex = cells.size + (cursorX - len)
             }
-            val logicalHasCursor = cursorPhysical in i..j
             var cursorOverflow = 0
             if (logicalHasCursor && cursorCellIndex >= cells.size) {
                 cursorOverflow = cursorCellIndex - cells.size
                 cursorCellIndex = cells.size
             }
 
-            // Re-wrap into newCols.
-            var current = TerminalLine(newCols).also { it.clear(fillBg) }
+            // Re-wrap into newCols; a row is allocated when its first cell lands.
+            var current: TerminalLine? = null
             var x = 0
             var placedCursor = false
+            fun row(): TerminalLine = current ?: TerminalLine(newCols).also { it.clear(fillBg); current = it }
             fun flush(wrapped: Boolean) {
-                current.wrapped = wrapped
-                output.add(current)
-                current = TerminalLine(newCols).also { it.clear(fillBg) }
+                val line = row()
+                line.wrapped = wrapped
+                output.add(line)
+                current = null
                 x = 0
             }
-            for (idx in cells.indices) {
-                val c = cells[idx]
-                val width = if (c[3] and Attr.WIDE != 0) 2 else 1
+            for (idx in 0 until cells.size) {
+                val attrs = cells.attrs[idx]
+                val width = if (attrs and Attr.WIDE != 0) 2 else 1
                 if (x + width > newCols) flush(wrapped = true)
                 if (logicalHasCursor && idx == cursorCellIndex && !placedCursor) {
                     newCursorLine = output.size
                     newCursorX = x
                     placedCursor = true
                 }
-                current.set(x, c[0], c[1], c[2], c[3])
-                combiningByCell[idx]?.let { marks -> for (ch in marks.codePoints()) current.addCombining(x, ch) }
-                if (width == 2 && x + 1 < newCols) current.set(x + 1, 0, c[1], c[2], Attr.WIDE_TAIL)
+                val line = row()
+                line.set(x, cells.chars[idx], cells.fg[idx], cells.bg[idx], attrs)
+                combiningByCell?.get(idx)?.let { marks -> for (ch in marks.codePoints()) line.addCombining(x, ch) }
+                if (width == 2 && x + 1 < newCols) line.set(x + 1, 0, cells.fg[idx], cells.bg[idx], Attr.WIDE_TAIL)
                 x += width
             }
             if (logicalHasCursor && !placedCursor) {
@@ -217,5 +249,36 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
         cols = newCols
         rows = newRows
         return Pair(newCursorX.coerceIn(0, newCols - 1), (newCursorLine - first).coerceIn(0, newRows - 1))
+    }
+}
+
+/** The cells of one logical line during a reflow, as parallel arrays that grow and are reused. */
+private class ReflowCells(capacity: Int) {
+    var chars = IntArray(capacity)
+    var fg = IntArray(capacity)
+    var bg = IntArray(capacity)
+    var attrs = IntArray(capacity)
+    var size = 0
+        private set
+
+    fun reset() {
+        size = 0
+    }
+
+    fun ensure(capacity: Int) {
+        if (capacity <= chars.size) return
+        val n = maxOf(capacity, chars.size * 2)
+        chars = chars.copyOf(n)
+        fg = fg.copyOf(n)
+        bg = bg.copyOf(n)
+        attrs = attrs.copyOf(n)
+    }
+
+    fun add(cp: Int, f: Int, b: Int, a: Int) {
+        chars[size] = cp
+        fg[size] = f
+        bg[size] = b
+        attrs[size] = a
+        size++
     }
 }

@@ -567,6 +567,84 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `resize of the height alone keeps every line as it is`() {
+        val (t, _) = term(cols = 5, rows = 4)
+        t.write("abcdefg\r\nx")
+        assertEquals(listOf("abcde", "fg", "x", ""), t.screenText())
+        val wrapped = t.line(0)
+        val tail = t.line(1)
+        val cursorLine = t.line(2)
+        t.resize(5, 2)
+        // The blank row went first, then the top row to history untouched; the rest are the same objects.
+        assertEquals(1, t.scrollbackSize)
+        assertTrue(t.viewLine(0, 1) === wrapped && wrapped.wrapped)
+        assertTrue(t.line(0) === tail)
+        assertTrue(t.line(1) === cursorLine)
+        assertEquals(listOf("fg", "x"), t.screenText())
+        assertEquals(1, t.cursorX)
+        assertEquals(1, t.cursorY)
+        t.resize(5, 6)
+        // Growing pulls history back, still the same lines, and the cursor follows its line down.
+        assertEquals(0, t.scrollbackSize)
+        assertTrue(t.line(0) === wrapped && t.line(1) === tail && t.line(2) === cursorLine)
+        assertEquals(2, t.cursorY)
+    }
+
+    @Test
+    fun `reflow keeps lines that already fit and rewraps the rest`() {
+        val (t, _) = term(cols = 10, rows = 4)
+        t.write("short\r\n\u001b[44mblue\u001b[0m\r\nabcdefghijklmno")
+        val short = t.line(0)
+        val blue = t.line(1)
+        t.resize(8, 4)
+        assertEquals(listOf("short", "blue", "abcdefgh", "ijklmno"), t.screenText())
+        // Lines that fit keep their identity and their cell colours; the long one was re-wrapped.
+        assertTrue(t.line(0) === short)
+        assertTrue(t.line(1) === blue)
+        assertEquals(TermColor.indexed(4), t.line(1).bg[0])
+        assertTrue(t.line(2).wrapped)
+        assertFalse(t.line(3).wrapped)
+        assertEquals(7, t.cursorX)
+        assertEquals(3, t.cursorY)
+        t.resize(20, 4)
+        assertEquals(listOf("short", "blue", "abcdefghijklmno", ""), t.screenText())
+        assertEquals(15, t.cursorX)
+        assertEquals(2, t.cursorY)
+    }
+
+    @Test
+    fun `reflow carries wide characters and combining marks`() {
+        val (t, _) = term(cols = 8, rows = 3)
+        t.write("a\u0301\u4F60\u597D\u4E16")
+        assertEquals("a\u0301\u4F60\u597D\u4E16", t.text(0))
+        assertEquals(7, t.cursorX)
+        t.resize(4, 3)
+        // "a" with its mark, then one wide glyph; the next wide glyph would split, so it wraps whole,
+        // and the cursor that followed the last glyph lands at the start of a fresh row.
+        assertEquals("a\u0301\u4F60", t.text(0))
+        assertEquals("\u597D\u4E16", t.text(1))
+        assertTrue(t.line(0).wrapped)
+        assertEquals("a\u0301", t.line(0).cellText(0))
+        assertEquals(0, t.cursorX)
+        assertEquals(2, t.cursorY)
+    }
+
+    @Test
+    fun `large writes are parsed in slices and each slice is announced`() {
+        val (t, r) = term(cols = 80, rows = 24, scrollback = 10)
+        val slice = TerminalEmulator.WRITE_SLICE_BYTES
+        val text = ("x".repeat(79) + "\r\n").repeat(5 * slice / 81 + 1).take(5 * slice)
+        t.write(text)
+        assertEquals(5, r.screenChanges)
+        assertEquals(24, t.screenText().size)
+        // A multi-byte character straddling a slice boundary still decodes as one glyph.
+        val (u, _) = term(cols = 80, rows = 2, scrollback = 0)
+        val bytes = ByteArray(slice - 1) { 'a'.code.toByte() } + "\u4F60".toByteArray(Charsets.UTF_8) + "b".toByteArray()
+        u.write(bytes)
+        assertEquals("a".repeat((slice - 1) % 80) + "\u4F60b", u.text(1))
+    }
+
+    @Test
     fun `origin mode positions relative to the scroll region`() {
         val (t, _) = term(cols = 5, rows = 5)
         t.write("\u001b[2;4r\u001b[?6h\u001b[1;1Hx")
