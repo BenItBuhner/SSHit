@@ -5,14 +5,18 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -28,7 +32,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
@@ -36,7 +43,6 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
-import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
@@ -112,7 +118,22 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
     var selection by remember(candidates) { mutableStateOf(candidates.filter { it.existing == null }.map { it.alias }.toSet()) }
     val picked = candidates.filter { it.alias in selection }
     val aliasesHere = candidates.map { it.alias }.toSet()
-    val unresolvedJumps = picked.flatMap { cand -> cand.entry.proxyJump.filterNot { hop -> hop in aliasesHere || hosts.any { it.name.equals(hop, true) || it.address.equals(hop.substringAfter('@').substringBefore(':'), true) } } }.distinct()
+    fun hopKnown(hop: String) = hop in aliasesHere || hosts.any { it.name.equals(hop, true) || it.address.equals(hop.substringAfter('@').substringBefore(':'), true) }
+    val jumpsMissing = picked.any { cand -> cand.entry.proxyJump.any { !hopKnown(it) } }
+    val keysMissing = picked.any { it.identity == null && it.entry.identityFiles.isNotEmpty() }
+
+    /** Everything about one candidate in a single Caption line; the leading dot carries the tick. */
+    fun captionFor(cand: ConfigCandidate): String = buildList {
+        add(cand.target)
+        if (cand.existing != null) add("saved")
+        if (cand.entry.proxyJump.isNotEmpty()) add("via " + cand.entry.proxyJump.joinToString(", ") { hop -> if (hopKnown(hop)) hop else "$hop (not here)" })
+        val forwards = cand.entry.forwards.size
+        if (forwards > 0) add(if (forwards == 1) "1 forward" else "$forwards forwards")
+        when {
+            cand.identity != null -> add("key ${cand.identity.name}")
+            cand.entry.identityFiles.isNotEmpty() -> add("no matching key")
+        }
+    }.joinToString(" \u00B7 ")
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -156,24 +177,17 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
                         val selected = cand.alias in selection
                         ListRow(
                             title = cand.alias,
-                            subtitle = cand.target,
-                            subtitleStyle = BerthType.mono.copy(fontSize = BerthType.caption.fontSize),
-                            selected = selected,
+                            subtitle = captionFor(cand),
                             minHeight = 52.dp,
                             onClick = { selection = if (selected) selection - cand.alias else selection + cand.alias },
-                            trailing = {
-                                if (cand.existing != null) Pill("saved")
-                                if (cand.entry.proxyJump.isNotEmpty()) Pill("via " + cand.entry.proxyJump.joinToString(", "), mono = true)
-                                if (cand.identity != null) Pill(cand.identity.name) else if (cand.entry.identityFiles.isNotEmpty()) Pill("no key match", textColor = c.text3)
-                                if (cand.entry.forwards.isNotEmpty()) Pill("${cand.entry.forwards.size} fwd", mono = true)
-                            },
+                            leading = { TickDot(selected) },
                         )
                     }
-                    for (hop in unresolvedJumps) {
-                        Text("ProxyJump $hop is not a host here; the jump is left off. Add it and set the chain in the host editor.", style = BerthType.caption, color = c.attention, modifier = Modifier.padding(horizontal = 4.dp))
+                    if (jumpsMissing) {
+                        Text("Jumps that are not hosts here are left off.", style = BerthType.caption, color = c.attention, modifier = Modifier.padding(horizontal = 4.dp))
                     }
-                    if (candidates.any { it.identity == null && it.entry.identityFiles.isNotEmpty() }) {
-                        Text("Hosts whose IdentityFile does not match a key here will ask on connect. Import the key under Keys, named after the file, and pick it in the host editor.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
+                    if (keysMissing) {
+                        Text("Hosts with no matching key ask on connect.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
                     }
                 }
                 for (note in parsed.notes) {
@@ -203,6 +217,21 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
                 BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
             }
         }
+    }
+}
+
+/** The tick on a candidate row: an 8 dp dot, accent when the host will import, text.3 when it will not. */
+@Composable
+private fun TickDot(selected: Boolean) {
+    val c = Berth.colors
+    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (selected) c.accent else c.text3)
+                .semantics { contentDescription = if (selected) "Will import" else "Will not import" },
+        )
     }
 }
 
@@ -304,11 +333,10 @@ fun ImportKeySheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Identit
                     { passphrase = it; error = null },
                     label = "Passphrase",
                     password = true,
-                    helper = "This key is protected. It stays protected here and is asked for on each connection.",
+                    helper = "Stays protected; asked for on each connection.",
                 )
             }
             if (error != null) Text(error!!, style = BerthType.caption, color = c.danger, modifier = Modifier.padding(horizontal = 4.dp))
-            Text("The key is re-encoded as OpenSSH and encrypted at rest with a Keystore-wrapped key. Nothing is uploaded anywhere.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BerthButton(if (busy) "Importing\u2026" else "Import", kind = ButtonKind.PRIMARY, enabled = canImport, onClick = ::import)
                 BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)

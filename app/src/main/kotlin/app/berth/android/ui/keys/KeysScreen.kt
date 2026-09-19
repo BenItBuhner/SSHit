@@ -94,10 +94,10 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
             Spacer(Modifier.height(48.dp))
             EmptyState(
                 title = "No keys yet.",
-                body = "Keys are generated on this device and never leave it unencrypted. Hardware-backed keys never leave the secure hardware at all.",
+                body = "Keys are generated or imported on this device, stored encrypted under a Keystore-wrapped key, and never leave it unencrypted. Hardware-backed keys never leave the secure hardware at all.",
             ) {
                 BerthButton("New key", onClick = { generate = true }, kind = ButtonKind.PRIMARY)
-                BerthButton("Import key", onClick = { importKey = true })
+                BerthButton("Import key", onClick = { importKey = true }, kind = ButtonKind.TEXT)
             }
         } else {
             LazyColumn(
@@ -160,7 +160,8 @@ fun Identity.summary(): String {
     val parts = ArrayList<String>()
     parts += algorithm.displayName
     if (isHardwareBacked) parts += "hardware-backed"
-    parts += SshKeys.groupedFingerprint(fingerprintSha256).take(19) + "\u2026"
+    // `SHA256:Qk3f 8vLm…`, the spec's row anatomy: hash name, then the first two groups.
+    parts += "SHA256:" + SshKeys.groupedFingerprint(fingerprintSha256).take(9) + "\u2026"
     when (protection) {
         KeyProtection.BIOMETRIC -> parts += "biometric"
         KeyProtection.PASSPHRASE -> parts += "passphrase"
