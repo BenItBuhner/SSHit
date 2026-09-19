@@ -282,7 +282,6 @@ private fun StageBody(
     val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
         configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
     val patterns = rememberDeckHaptics()
-    val now = ageTicker()
 
     // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
     // and the user's own choice survives otherwise.
@@ -378,25 +377,7 @@ private fun StageBody(
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
                 EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
-            if (viewport.scrollOffset > 0) {
-                // The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target,
-                // one surface step when pressed. The label names the state; the description names the action.
-                val interaction = remember { MutableInteractionSource() }
-                val pressed by interaction.collectIsPressedAsState()
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(end = 8.dp)
-                        .clickable(interactionSource = interaction, indication = null, onClick = { viewport.scrollOffset = 0 })
-                        .clearAndSetSemantics {
-                            contentDescription = "Scrolled up, return to the bottom"
-                            role = Role.Button
-                        }
-                        .padding(horizontal = 4.dp, vertical = 9.dp),
-                ) {
-                    Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
-                }
-            }
+            ScrolledPill(viewport, Modifier.align(Alignment.TopEnd))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
                     plain = failure?.first ?: "Couldn't connect.",
@@ -414,7 +395,6 @@ private fun StageBody(
             state = record.state,
             retryIn = retryIn,
             lastLiveAt = record.lastLiveAt,
-            now = now,
             onReconnect = { vm.reconnect(session.id) },
             onDetach = { vm.detach(session.id) },
             onClose = { vm.close(session.id) },
@@ -491,28 +471,55 @@ private fun EdgeSwipeZone(onSwipe: (forward: Boolean) -> Unit, modifier: Modifie
     )
 }
 
+/**
+ * The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target, one
+ * surface step when pressed. The label names the state; the description names the action. Reads
+ * the viewport itself, so a scroll through history recomposes this and nothing around it.
+ */
+@Composable
+private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifier) {
+    if (viewport.scrollOffset <= 0) return
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        modifier
+            .padding(end = 8.dp)
+            .clickable(interactionSource = interaction, indication = null, onClick = { viewport.scrollOffset = 0 })
+            .clearAndSetSemantics {
+                contentDescription = "Scrolled up, return to the bottom"
+                role = Role.Button
+            }
+            .padding(horizontal = 4.dp, vertical = 9.dp),
+    ) {
+        Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
+    }
+}
+
 /** Visible height of the state pill; its touch target is the full 44 dp row around it. */
 private val StatePillHeight = 32.dp
 
 /**
  * One floating pill for the non-live states (C2, A9): `Detached · 4 min ago · Reconnect · Close`,
- * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live.
+ * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live. The age
+ * follows its own clock unless a [now] is given, so the minute tick recomposes the pill alone.
  */
 @Composable
 internal fun StatePill(
     state: SessionState,
     retryIn: Int?,
     lastLiveAt: Long?,
-    now: Long,
     onReconnect: () -> Unit,
     onDetach: () -> Unit,
     onClose: () -> Unit,
+    now: Long? = null,
 ) {
     val c = Berth.colors
+    if (state != SessionState.RECONNECTING && state != SessionState.DETACHED) return
+    val clock = now ?: ageTicker()
     val (text, actions) = when (state) {
         SessionState.RECONNECTING -> (if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
-        SessionState.DETACHED -> "Detached \u00B7 ${ageText(lastLiveAt, now)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
-        else -> return
+        else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
     Box(
         Modifier
