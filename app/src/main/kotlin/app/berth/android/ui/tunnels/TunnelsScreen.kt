@@ -1,8 +1,6 @@
 package app.berth.android.ui.tunnels
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -38,11 +35,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
@@ -144,13 +142,15 @@ fun TunnelsScreen(vm: AppViewModel, hostId: String?, onBack: () -> Unit, modifie
                         TunnelRow(vm, t, statuses[t.id], hostActive(t.hostId), onEdit = { editor = TunnelEditorTarget(t.hostId, t) })
                     }
                 }
-                item {
-                    Text(
-                        "Tunnels run while their host has a session, and come back on their own after a reconnect.",
-                        style = BerthType.caption,
-                        color = c.text3,
-                        modifier = Modifier.padding(start = 4.dp, top = 12.dp),
-                    )
+                if (hostId != null) {
+                    item {
+                        Text(
+                            "Tunnels run while this host has a session.",
+                            style = BerthType.caption,
+                            color = c.text3,
+                            modifier = Modifier.padding(start = 4.dp, top = 12.dp),
+                        )
+                    }
                 }
             }
         }
@@ -163,8 +163,10 @@ fun TunnelsScreen(vm: AppViewModel, hostId: String?, onBack: () -> Unit, modifie
 
 class TunnelEditorTarget(val hostId: String?, val tunnel: Tunnel?)
 
-/** One tunnel: state dot, spec in Mono, type and status in Caption, Open for web ports, a switch. */
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * One tunnel as a [ListRow]: state dot leading, the spec in Mono, type and status in one Caption
+ * line, then Open for local web ports, Retry after a failure, and the switch.
+ */
 @Composable
 fun TunnelRow(
     vm: AppViewModel,
@@ -196,54 +198,42 @@ fun TunnelRow(
     }
     val failed = status is TunnelStatus.Failed
     Box(modifier) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .clip(RoundedCornerShape(BerthRadius.row))
-                .background(surface)
-                .combinedClickable(onClick = onEdit, onLongClick = { menu = true })
-                .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(dot) }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    tunnel.spec,
-                    style = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
-                    color = if (tunnel.enabled) c.text1 else c.text2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        ListRow(
+            title = tunnel.spec,
+            titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+            titleColor = if (tunnel.enabled) c.text1 else c.text2,
+            subtitle = buildAnnotatedString {
+                append(tunnel.type.label)
+                append(" \u00B7 ")
+                if (failed) withStyle(SpanStyle(color = c.danger)) { append(stateText) } else append(stateText)
+                if (tunnel.exposed) append(" \u00B7 all interfaces")
+            },
+            surface = surface,
+            onClick = onEdit,
+            onLongClick = { menu = true },
+            leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(dot) } },
+            trailing = {
+                val url = tunnel.openUrl
+                if (status is TunnelStatus.Up && url != null) {
+                    BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, modifier = Modifier.height(36.dp))
+                }
+                if (failed) {
+                    BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, modifier = Modifier.height(36.dp))
+                }
+                Switch(
+                    checked = tunnel.enabled,
+                    onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = c.onAccent,
+                        checkedTrackColor = c.accent,
+                        checkedBorderColor = Color.Transparent,
+                        uncheckedThumbColor = c.text2,
+                        uncheckedTrackColor = c.surface4,
+                        uncheckedBorderColor = Color.Transparent,
+                    ),
                 )
-                Text(
-                    "${tunnel.type.label} \u00B7 $stateText" + if (tunnel.exposed) " \u00B7 all interfaces" else "",
-                    style = BerthType.caption,
-                    color = if (failed) c.danger else c.text2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            val url = tunnel.openUrl
-            if (status is TunnelStatus.Up && url != null) {
-                BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, modifier = Modifier.height(36.dp))
-            }
-            if (failed) {
-                BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, modifier = Modifier.height(36.dp))
-            }
-            Switch(
-                checked = tunnel.enabled,
-                onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = c.onAccent,
-                    checkedTrackColor = c.accent,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = c.text2,
-                    uncheckedTrackColor = c.surface4,
-                    uncheckedBorderColor = Color.Transparent,
-                ),
-            )
-        }
+            },
+        )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
             DropdownMenuItem(text = { Text("Edit", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onEdit() })
             DropdownMenuItem(
@@ -368,9 +358,9 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
     }
 }
 
-/** The host editor's Tunnels panel body: the host's tunnels as rows on the panel surface, then Add. */
+/** The host editor's Tunnels panel body (C10): the host's tunnels as rows on the panel surface, then `+ Add tunnel`. */
 @Composable
-fun TunnelsPanelContent(vm: AppViewModel, host: Host, onOpenAll: () -> Unit) {
+fun TunnelsPanelContent(vm: AppViewModel, host: Host) {
     val c = Berth.colors
     val all by vm.tunnels.collectAsState()
     val statuses by vm.tunnelStatuses.collectAsState()
@@ -381,17 +371,13 @@ fun TunnelsPanelContent(vm: AppViewModel, host: Host, onOpenAll: () -> Unit) {
     for (t in mine) {
         TunnelRow(vm, t, statuses[t.id], hostActive = active, onEdit = { editor = TunnelEditorTarget(host.id, t) }, surface = Color.Transparent)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        ListRow(
-            title = "Add tunnel",
-            surface = Color.Transparent,
-            minHeight = 44.dp,
-            onClick = { editor = TunnelEditorTarget(host.id, null) },
-            titleColor = c.text2,
-            modifier = Modifier.weight(1f),
-            leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Text("+", style = BerthType.title, color = c.text2) } },
-        )
-        if (mine.isNotEmpty()) BerthButton("All tunnels", kind = ButtonKind.TEXT, onClick = onOpenAll, modifier = Modifier.height(36.dp))
-    }
+    ListRow(
+        title = "Add tunnel",
+        surface = Color.Transparent,
+        minHeight = 44.dp,
+        onClick = { editor = TunnelEditorTarget(host.id, null) },
+        titleColor = c.text2,
+        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Text("+", style = BerthType.title, color = c.text2) } },
+    )
     editor?.let { target -> TunnelEditorSheet(vm, hostId = target.hostId, existing = target.tunnel, onDismiss = { editor = null }) }
 }

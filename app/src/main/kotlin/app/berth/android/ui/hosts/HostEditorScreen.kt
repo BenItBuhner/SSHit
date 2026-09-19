@@ -65,7 +65,6 @@ fun HostEditorScreen(
     hostId: String?,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
-    onOpenTunnels: (String) -> Unit = {},
 ) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
@@ -255,7 +254,7 @@ fun HostEditorScreen(
 
             original?.let { saved ->
                 Panel(label = "Tunnels") {
-                    TunnelsPanelContent(vm, saved, onOpenAll = { onOpenTunnels(saved.id) })
+                    TunnelsPanelContent(vm, saved)
                 }
             }
 

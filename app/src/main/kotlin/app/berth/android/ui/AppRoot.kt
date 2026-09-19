@@ -198,7 +198,7 @@ private fun Shell(vm: AppViewModel) {
                         )
                     }
                     is Screen.HostEditor -> NavEntry(key) {
-                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() }, onOpenTunnels = { go(Screen.Tunnels(it)) })
+                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() })
                     }
                     is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
                     is Screen.Settings -> NavEntry(key) { SettingsScreen(vm, onBack = { back() }, onKnownHosts = { go(Screen.KnownHosts) }) }
