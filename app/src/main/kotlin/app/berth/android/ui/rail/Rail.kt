@@ -16,7 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import app.berth.android.session.TerminalSession
+import app.berth.android.session.TabSource
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SectionLabel
@@ -27,20 +27,22 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 
 /*
  * The rail as a session switcher is superseded by the tab strip (spec C3); the drawer in Drawer.kt
- * is its successor. What remains here are the session rows the Session sheet still lists.
+ * is its successor. What remains here are the tab rows the Session sheet still lists.
  */
 
 /**
- * 56 dp session row: swatch with state dot, title, subtitle, the local ports of tunnels that are
- * up as Mono pills (tap opens the host's tunnels), and an age when not Live.
+ * 56 dp tab row: swatch with state dot, title, subtitle, the local ports of tunnels that are up as
+ * Mono pills (tap opens the host's tunnels), and an age when not Live. Any tab kind; the long-press
+ * menu offers Detach only to a terminal, since a Files tab has no connection of its own.
  */
 @Composable
 fun SessionRow(
-    session: TerminalSession,
+    tab: TabSource,
     selected: Boolean,
     now: Long,
     onTap: () -> Unit,
@@ -52,7 +54,8 @@ fun SessionRow(
     onTunnelTap: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
-    val record by session.record.collectAsState()
+    val record by tab.record.collectAsState()
+    val files = record.kind == TabKind.Files
     var menu by remember { mutableStateOf(false) }
     Box {
         ListRow(
@@ -98,7 +101,7 @@ fun SessionRow(
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
             if (!record.state.isActive) DropdownMenuItem(text = { Text("Reconnect", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onReconnect() })
-            if (record.state.isActive) DropdownMenuItem(text = { Text("Detach", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onDetach() })
+            if (record.state.isActive && !files) DropdownMenuItem(text = { Text("Detach", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onDetach() })
             DropdownMenuItem(text = { Text("Close", style = BerthType.body, color = c.danger) }, onClick = { menu = false; onClose() })
         }
     }

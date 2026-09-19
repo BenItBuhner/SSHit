@@ -89,7 +89,7 @@ fun TabSwitcher(
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
     val groups by vm.workspaces.collectAsState()
-    val activeId by vm.activeSessionId.collectAsState()
+    val activeId by vm.activeTabId.collectAsState()
     val now = ageTicker()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId).filterNot { it is StripEntry.Plus } }
@@ -190,6 +190,7 @@ private fun SwitcherChip(entry: StripEntry.Chip, style: TabStripStyle, actions: 
 /**
  * One card (spec C3, Switcher): radius 20, `surface.2` (`surface.3` active), 8 dp padding; a 36 dp
  * header with the 20 dp swatch, the title in Label and ×; a Caption subtitle; the frame at radius 12.
+ * A Files tab has no frame: its card shows the folder glyph on `surface.1`, the folder in the subtitle.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -283,12 +284,15 @@ private fun TabCard(
                     .fillMaxWidth()
                     .aspectRatio(1.6f)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(theme.background.toColor())
+                    .background(if (session != null) theme.background.toColor() else c.surface1)
                     .alpha(if (detached) 0.8f else 1f),
+                contentAlignment = Alignment.Center,
             ) {
                 if (session != null) {
                     // The same cursor rule as the Stage: only a live screen shows one, and only the active card follows changes.
                     FrameThumbnail(session, theme, font, live = active && record.state == SessionState.LIVE, modifier = Modifier.fillMaxWidth().fillMaxHeight())
+                } else {
+                    BerthIcon(BerthIcons.folder, tint = c.text3, size = 36.dp)
                 }
             }
         }

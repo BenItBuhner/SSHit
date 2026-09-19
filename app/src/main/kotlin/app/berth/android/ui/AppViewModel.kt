@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
+import app.berth.android.session.FilesTab
+import app.berth.android.session.ManagedTab
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.TabSlot
@@ -97,18 +99,23 @@ class AppViewModel @Inject constructor(
     val records: StateFlow<List<SessionRecord>> = sessions.records
     val workspaces: StateFlow<List<Workspace>> = sessions.workspaces
     val currentWorkspaceId: StateFlow<String?> = sessions.currentWorkspaceId
-    val activeSessionId: StateFlow<String?> = sessions.activeSessionId
+    val activeTabId: StateFlow<String?> = sessions.activeTabId
+
+    /** The tab on stage, whatever it runs. */
+    val activeTab: StateFlow<ManagedTab?> = sessions.activeTab
+
+    /** The tab on stage when it is a terminal; null while a Files tab, or nothing, is showing. */
     val activeSession: StateFlow<TerminalSession?> = sessions.activeSession
 
-    /** Every tab in strip order. */
-    val tabs: StateFlow<List<TerminalSession>> = sessions.sessions
+    /** Every tab in strip order, terminals and Files tabs alike. */
+    val tabs: StateFlow<List<ManagedTab>> = sessions.tabs
 
     /**
      * The strip's skeleton: each tab with its group, in strip order. Emits only when membership,
      * order or grouping change (state flows skip equal lists), so titles and states flowing through
      * [records] never rebuild the strip; each tab observes its own record for those.
      */
-    val stripSlots: StateFlow<List<TabSlot>> = combine(sessions.records, sessions.sessions) { list, live ->
+    val stripSlots: StateFlow<List<TabSlot>> = combine(sessions.records, sessions.tabs) { list, live ->
         val byId = live.associateBy { it.id }
         list.mapNotNull { r -> byId[r.id]?.let { TabSlot(it, r.workspaceId) } }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -118,12 +125,12 @@ class AppViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     /** Tabs of the current group in strip order; the Session sheet's secondary list. */
-    val workspaceSessions: StateFlow<List<TerminalSession>> = combine(sessions.sessions, sessions.currentWorkspaceId) { list, ws ->
+    val workspaceTabs: StateFlow<List<ManagedTab>> = combine(sessions.tabs, sessions.currentWorkspaceId) { list, ws ->
         list.filter { ws == null || it.record.value.workspaceId == ws }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Tabs other than the active one that need attention; drives the count tile's ring and the grip jump. */
-    val attentionCount: StateFlow<Int> = combine(records, sessions.activeSessionId) { list, active ->
+    val attentionCount: StateFlow<Int> = combine(records, sessions.activeTabId) { list, active ->
         list.count { it.needsAttention && it.id != active }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
@@ -186,6 +193,33 @@ class AppViewModel @Inject constructor(
     fun duplicate(id: String) {
         viewModelScope.launch { sessions.duplicate(id) }
     }
+
+    // ---- files tabs ------------------------------------------------------------------------------
+
+    /**
+     * Files from a terminal tab's menu or the Session sheet: the host's Files tab, riding that
+     * terminal, comes on stage. Handed a Files tab's own id, it just puts that tab on stage.
+     */
+    fun openFiles(tabId: String) {
+        if (sessions.filesTab(tabId) != null) {
+            sessions.setActive(tabId)
+            return
+        }
+        viewModelScope.launch { sessions.openFiles(tabId) }
+    }
+
+    /** Terminal from a Files tab's menu or the Session sheet: the terminal it rides, or a new one on its host, comes on stage. */
+    fun openTerminal(filesTabId: String) {
+        viewModelScope.launch { sessions.openTerminalFor(filesTabId) }
+    }
+
+    /** Files from the host list or the New tab sheet: the host's Files tab, opened if it has none. */
+    fun openFilesForHost(host: Host, workspaceId: String? = null) {
+        viewModelScope.launch { sessions.openFilesForHost(host, workspaceId) }
+    }
+
+    /** A Files tab's Connect: a terminal on its host opens off stage, so the browser has a login to ride. */
+    fun connectFor(tab: FilesTab) = sessions.connectFor(tab)
 
     fun rename(id: String, title: String?) = sessions.rename(id, title)
     fun moveTab(id: String, toIndex: Int, groupId: String? = null) = sessions.moveTab(id, toIndex, groupId)

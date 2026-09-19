@@ -90,6 +90,8 @@ import app.berth.android.files.Notice
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferManager
 import app.berth.android.files.TransferState
+import app.berth.android.session.FilesTab
+import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -134,35 +136,26 @@ class FilesActions(
 }
 
 /**
- * Files for one session (the isolated entry point that becomes the Files tab kind): resolves the
- * session and its browser, wires the document pickers to the transfer queue, and shows [FilesPane].
- * [sessionId] null means the active session.
+ * A Files tab's body under the tab strip (spec C3, tab kinds): the tab's browser from
+ * `FilesCenter`, the document pickers wired to the transfer queue over the terminal the tab rides,
+ * and [FilesPane] without a header of its own. The pane keeps its own navigation-bar inset, so the
+ * Stage adds none below it. Nothing while the tab is gone.
  */
 @Composable
-fun FilesScreen(vm: AppViewModel, sessionId: String?, onBack: () -> Unit, onNewSession: () -> Unit, modifier: Modifier = Modifier) {
-    val active by vm.activeSession.collectAsState()
-    val session = sessionId?.let { vm.sessions.get(it) } ?: active
-    val browser = session?.let { s -> remember(s.id) { vm.files.browser(s.id) } }
-    if (session == null || browser == null) {
-        Column(modifier.fillMaxSize().background(Berth.colors.surface0).statusBarsPadding().navigationBarsPadding()) {
-            ScreenHeader("Files", onBack = onBack)
-            Spacer(Modifier.height(48.dp))
-            EmptyState("Files rides a session.", "Open a host and its terminal; the browser uses that login, so there is no second sign-in.") {
-                BerthButton("New session", kind = ButtonKind.PRIMARY, onClick = onNewSession)
-            }
-        }
-        return
-    }
-    val record by session.record.collectAsState()
+fun FilesTabBody(vm: AppViewModel, tab: FilesTab, modifier: Modifier = Modifier) {
+    val browser = remember(tab.id) { vm.files.browser(tab.id) } ?: return
+    val record by tab.record.collectAsState()
+    val ride by tab.ride.collectAsState()
+    val rideRecord = ride?.record?.collectAsState()?.value
     val prefs by vm.files.prefs.collectAsState()
     val transfers by vm.files.transfers.transfers.collectAsState()
-    val state by browser.state.collectAsState()
     val queue = vm.files.transfers
 
-    // The browser opened its channel on a connection that may since have dropped; a reconnect re-lists.
-    LaunchedEffect(record.state) {
-        val error = state.error
-        if (record.state == SessionState.LIVE && (error is SftpError.NotConnected || error is SftpError.Io)) browser.refresh()
+    // A transfer runs over a login. The pane disables uploads while there is none; the viewer's
+    // download and share still reach here, and say so instead of doing nothing.
+    fun login(): TerminalSession? = tab.ride.value ?: run {
+        browser.post(Notice("Not connected.", isError = true))
+        null
     }
 
     var pendingDocument by remember { mutableStateOf<SftpEntry?>(null) }
@@ -170,21 +163,25 @@ fun FilesScreen(vm: AppViewModel, sessionId: String?, onBack: () -> Unit, onNewS
     val createDocument = rememberLauncherForActivityResult(CreateNamedDocument()) { uri ->
         val entry = pendingDocument
         pendingDocument = null
-        if (uri != null && entry != null) queue.download(session, entry, uri)
+        val session = tab.ride.value
+        if (uri != null && entry != null && session != null) queue.download(session, entry, uri)
     }
     val openTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val batch = pendingBatch
         pendingBatch = emptyList()
-        if (uri != null && batch.isNotEmpty()) queue.downloadInto(session, batch, uri)
+        val session = tab.ride.value
+        if (uri != null && batch.isNotEmpty() && session != null) queue.downloadInto(session, batch, uri)
     }
     val openDocuments = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) queue.upload(session, uris, browser.state.value.path)
+        val session = tab.ride.value
+        if (uris.isNotEmpty() && session != null) queue.upload(session, uris, browser.state.value.path)
     }
     val actions = FilesActions(
         download = { entries ->
             val files = entries.filter { it.isRegularFile }
             when {
                 files.isEmpty() -> browser.post(Notice("Only files can be downloaded.", isError = true))
+                login() == null -> Unit
                 files.size == 1 -> {
                     val file = files.single()
                     pendingDocument = file
@@ -196,8 +193,8 @@ fun FilesScreen(vm: AppViewModel, sessionId: String?, onBack: () -> Unit, onNewS
                 }
             }
         },
-        share = { entry -> queue.share(session, entry) },
-        upload = { openDocuments.launch(arrayOf("*/*")) },
+        share = { entry -> login()?.let { queue.share(it, entry) } },
+        upload = { if (login() != null) openDocuments.launch(arrayOf("*/*")) },
     )
 
     FilesPane(
@@ -209,13 +206,15 @@ fun FilesScreen(vm: AppViewModel, sessionId: String?, onBack: () -> Unit, onNewS
         transfers = transfers,
         onCancelTransfer = queue::cancel,
         onClearFinished = queue::clearFinished,
-        terminalCwd = record.cwd,
-        recent = prefs.recentFor(session.host.id),
+        terminalCwd = rideRecord?.cwd,
+        recent = prefs.recentFor(tab.host.id),
         actions = actions,
-        onBack = onBack,
+        onBack = {},
         modifier = modifier,
         connected = record.state == SessionState.LIVE,
-        onReconnect = { vm.reconnect(session.id) },
+        onReconnect = { vm.reconnect(tab.id) },
+        header = false,
+        noSession = ride == null,
     )
 }
 
@@ -278,8 +277,11 @@ private enum class Foot { TRANSFER, ACTIONS }
  * chips; the listing under pull to refresh; and, when rows are selected, a contextual action band in
  * place of the transfer band. Everything the pane needs comes in, so a fake file system renders it
  * as faithfully as a live one. With [header] false the pane draws neither the screen header nor the
- * status-bar inset, for a host that owns the top (a tab strip); the header's actions then sit at the
- * end of the breadcrumb row, and the selection header still appears while rows are selected.
+ * status-bar inset, for a host that owns the top (the tab strip); the header's actions then sit at
+ * the end of the breadcrumb row, and while rows are selected the breadcrumb row itself becomes the
+ * selection bar (same height), so the host's top row stays alone and nothing below moves. The
+ * navigation-bar inset is the pane's own either way; a host adds none. [noSession] says the tab has
+ * no terminal at all to ride, so the disconnected state offers Connect rather than Reconnect.
  */
 @Composable
 fun FilesPane(
@@ -299,6 +301,7 @@ fun FilesPane(
     connected: Boolean = true,
     onReconnect: (() -> Unit)? = null,
     header: Boolean = true,
+    noSession: Boolean = false,
 ) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
@@ -374,7 +377,8 @@ fun FilesPane(
         }
         TransfersAction(active = transfers.count { it.state.isActive }) { sheet = FilesSheetKind.Transfers }
         Box {
-            IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
+            // Named for the folder it acts on; under the tab strip the Stage's own overflow is the plain "More".
+            IconAction(onClick = { menu = true }, description = "Folder options") { BerthIcon(BerthIcons.moreVert) }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                 MenuItem("New folder", enabled = connected && state.error == null) { menu = false; sheet = FilesSheetKind.NewFolder }
                 if (terminalCwd != null) {
@@ -394,23 +398,25 @@ fun FilesPane(
             .then(if (header) Modifier.statusBarsPadding() else Modifier)
             .navigationBarsPadding(),
     ) {
-        if (selection.isNotEmpty()) {
-            SelectionHeader(
-                count = selection.size,
-                allSelected = selection.size >= entries.size,
-                onClose = { selection = emptySet() },
-                onSelectAll = { if (selection.size >= entries.size) selection = emptySet() else selectAll() },
-            )
-        } else if (header) {
-            ScreenHeader(title = "Files \u00B7 $hostName", onBack = onBack, actions = headerActions)
+        val selecting = selection.isNotEmpty()
+        val allSelected = selection.size >= entries.size
+        val clearSelection = { selection = emptySet() }
+        val toggleAll = { if (allSelected) selection = emptySet() else selectAll() }
+        if (header) {
+            if (selecting) SelectionHeader(count = selection.size, allSelected = allSelected, onClose = clearSelection, onSelectAll = toggleAll)
+            else ScreenHeader(title = "Files \u00B7 $hostName", onBack = onBack, actions = headerActions)
         }
-        Breadcrumb(
-            path = state.path,
-            onJump = ::go,
-            onEdit = { sheet = FilesSheetKind.Path },
-            onCopy = { copyPath(state.path) },
-            trailing = if (header) null else headerActions,
-        )
+        if (!header && selecting) {
+            SelectionBar(count = selection.size, allSelected = allSelected, onClose = clearSelection, onSelectAll = toggleAll)
+        } else {
+            Breadcrumb(
+                path = state.path,
+                onJump = ::go,
+                onEdit = { sheet = FilesSheetKind.Path },
+                onCopy = { copyPath(state.path) },
+                trailing = if (header) null else headerActions,
+            )
+        }
         // Nothing to sort over an error or an empty folder; the chips stay when hidden files are the reason.
         if (state.error == null && (state.entries.isNotEmpty() || state.loading)) {
             FilterRow(prefs, onSort, onShowHidden, hiddenCount = state.entries.count { it.isHidden })
@@ -427,6 +433,7 @@ fun FilesPane(
                     onUp = { go(SftpPaths.parent(state.path)) },
                     onHome = { go(state.home ?: SftpPaths.ROOT) },
                     onReconnect = onReconnect,
+                    noSession = noSession,
                 )
                 state.loading && state.entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     StatusDot(SessionState.CONNECTING, size = 10.dp)
@@ -620,10 +627,35 @@ private fun MenuItem(label: String, enabled: Boolean = true, onClick: () -> Unit
 @Composable
 private fun SelectionHeader(count: Int, allSelected: Boolean, onClose: () -> Unit, onSelectAll: () -> Unit) {
     ScreenHeader(
-        title = if (count == 1) "1 selected" else "$count selected",
+        title = selectionTitle(count),
         navigation = { IconAction(onClick = onClose, description = "Clear selection") { BerthIcon(BerthIcons.close) } },
         actions = { BerthButton(if (allSelected) "None" else "All", kind = ButtonKind.TEXT, onClick = onSelectAll) },
     )
+}
+
+private fun selectionTitle(count: Int) = if (count == 1) "1 selected" else "$count selected"
+
+/**
+ * Selection under a host's header: the breadcrumb row's 44 dp with Clear selection leading, the
+ * count where the crumbs were, and All or None trailing. The same row swaps for the crumbs and
+ * back, so a tab strip above keeps the top to itself and the listing never moves.
+ */
+@Composable
+private fun SelectionBar(count: Int, allSelected: Boolean, onClose: () -> Unit, onSelectAll: () -> Unit) {
+    val c = Berth.colors
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .padding(horizontal = BerthSpace.screenMargin - 8.dp)
+            .semantics { contentDescription = selectionTitle(count) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconAction(onClick = onClose, description = "Clear selection") { BerthIcon(BerthIcons.close) }
+        Spacer(Modifier.width(4.dp))
+        Text(selectionTitle(count), style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        BerthButton(if (allSelected) "None" else "All", kind = ButtonKind.TEXT, onClick = onSelectAll)
+    }
 }
 
 /**
@@ -892,13 +924,16 @@ private fun ListingError(
     onUp: () -> Unit,
     onHome: () -> Unit,
     onReconnect: (() -> Unit)?,
+    noSession: Boolean = false,
 ) {
     val disconnected = error is SftpError.NotConnected || error is SftpError.Io
     val (title, body) = when (error) {
         is SftpError.NotFound -> "Nothing here." to "There is no folder at ${state.path}."
         is SftpError.PermissionDenied -> "No access." to "The server refused to list ${state.path} for this login."
         is SftpError.NotADirectory -> "That is a file." to "${SftpPaths.name(state.path)} is a file, not a folder."
-        is SftpError.NotConnected -> "Not connected." to "Files rides the terminal's connection. Reconnect the session to browse."
+        is SftpError.NotConnected ->
+            if (noSession) "Not connected." to "Files rides a terminal's login. Connect one on this host and the browser uses it; there is no second sign-in."
+            else "Not connected." to "Files rides the terminal's connection. Reconnect the session to browse."
         is SftpError.Io -> "The connection dropped." to "Reconnect the session and the listing comes back."
         is SftpError.Unsupported -> "Not available here." to (error.message ?: "The server does not offer sftp.")
         else -> "Couldn't list this folder." to (error.message ?: "")
@@ -907,7 +942,7 @@ private fun ListingError(
         Spacer(Modifier.height(40.dp))
         EmptyState(title, body) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (disconnected && onReconnect != null) BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = onReconnect)
+                if (disconnected && onReconnect != null) BerthButton(if (noSession) "Connect" else "Reconnect", kind = ButtonKind.PRIMARY, onClick = onReconnect)
                 else BerthButton("Try again", kind = ButtonKind.PRIMARY, onClick = onRetry)
                 if (state.path != SftpPaths.ROOT) BerthButton("Up", onClick = onUp)
                 if (state.home != null && state.home != state.path) BerthButton("Home", onClick = onHome)

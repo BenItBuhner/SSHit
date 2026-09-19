@@ -32,12 +32,15 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 
 /**
- * The tab's long-press menu (spec C3): Close, Close others, Duplicate, Rename, Move to group ▸,
- * Detach (Reconnect when detached or failed). Move to group swaps the panel for the groups as rows
- * with swatches and a New group row; Back returns. Shared by the strip and the switcher cards.
+ * The tab's long-press menu (spec C3): Close, Close others, Duplicate, Rename, then the other
+ * kind on the same host (Files from a terminal tab, Terminal from a Files tab), Move to group ▸,
+ * and Detach (Reconnect when detached or failed); a Files tab has no connection of its own to
+ * detach. Move to group swaps the panel for the groups as rows with swatches and a New group row;
+ * Back returns. Shared by the strip and the switcher cards.
  */
 @Composable
 fun TabMenu(
@@ -51,15 +54,18 @@ fun TabMenu(
     var groupsPage by remember { mutableStateOf(false) }
     LaunchedEffect(expanded) { if (!expanded) groupsPage = false }
     val id = record.id
+    val files = record.kind == TabKind.Files
     MenuPanel(expanded = expanded, onDismiss = onDismiss) {
         if (!groupsPage) {
             MenuRow("Close", destructive = true) { onDismiss(); actions.close(id) }
             MenuRow("Close others") { onDismiss(); actions.closeOthers(id) }
             MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
             MenuRow("Rename") { onDismiss(); actions.rename(id) }
+            if (files) MenuRow("Terminal") { onDismiss(); actions.openTerminal(id) }
+            else MenuRow("Files") { onDismiss(); actions.openFiles(id) }
             MenuRow("Move to group", trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }) { groupsPage = true }
             when {
-                record.state.isActive -> MenuRow("Detach") { onDismiss(); actions.detach(id) }
+                record.state.isActive -> if (!files) MenuRow("Detach") { onDismiss(); actions.detach(id) }
                 record.state != SessionState.CLOSED -> MenuRow("Reconnect") { onDismiss(); actions.reconnect(id) }
             }
         } else {

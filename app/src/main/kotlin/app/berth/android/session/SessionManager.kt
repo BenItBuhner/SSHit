@@ -9,6 +9,7 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabOrder
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
@@ -52,10 +53,11 @@ data class ClosedTab(val record: SessionRecord) {
 }
 
 /**
- * Owns every tab (one runtime session each) across groups, keeps the persisted records in step,
- * restores detached frames after process death, and runs the foreground service while anything is
- * active. Sessions are tabs (spec C3): this class also owns their order, their groups and which one
- * is active, and writes each change so the strip comes back the same after process death.
+ * Owns every tab across groups, keeps the persisted records in step, restores detached frames
+ * after process death, and runs the foreground service while a terminal is connected. Tabs come
+ * in kinds (spec C3): a [TerminalSession] runs one SSH login, a [FilesTab] browses a host's files
+ * over one of its terminals' logins. This class owns their order, their groups and which one is
+ * active, and writes each change so the strip comes back the same after process death.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
@@ -75,18 +77,32 @@ class SessionManager @Inject constructor(
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _sessions = MutableStateFlow<Map<String, TerminalSession>>(emptyMap())
+    private val _filesTabs = MutableStateFlow<Map<String, FilesTab>>(emptyMap())
+
+    /** Every tab by id, whatever it runs. */
+    private val tabsById: StateFlow<Map<String, ManagedTab>> = combine(_sessions, _filesTabs) { sessions, files ->
+        buildMap<String, ManagedTab> {
+            putAll(sessions)
+            putAll(files)
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     val workspaces: StateFlow<List<Workspace>> = workspaceRepository.observeAll().stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** Every open tab's record, in strip order: groups in their order, then positions within each group. */
     val records: StateFlow<List<SessionRecord>> = combine(
-        _sessions.flatMapLatest { map ->
+        tabsById.flatMapLatest { map ->
             if (map.isEmpty()) MutableStateFlow(emptyList()) else combine(map.values.map { it.record }) { it.toList() }
         },
         workspaces,
     ) { list, groups -> TabOrder.strip(list, groups) }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    /** All tabs in strip order. */
+    /** All tabs in strip order, whatever they run. */
+    val tabs: StateFlow<List<ManagedTab>> = combine(records, tabsById) { ordered, live ->
+        ordered.mapNotNull { live[it.id] }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** The terminal tabs in strip order. */
     val sessions: StateFlow<List<TerminalSession>> = combine(records, _sessions) { ordered, live ->
         ordered.mapNotNull { live[it.id] }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -104,10 +120,15 @@ class SessionManager @Inject constructor(
     /** The current group: the active tab's group, or the group last chosen in the drawer when no tab is active. */
     val currentWorkspaceId: StateFlow<String?> = _currentWorkspaceId.asStateFlow()
 
-    private val _activeSessionId = MutableStateFlow<String?>(null)
-    val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
+    private val _activeTabId = MutableStateFlow<String?>(null)
+    val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
 
-    val activeSession: StateFlow<TerminalSession?> = combine(_activeSessionId, _sessions) { id, map -> id?.let { map[it] } }
+    /** The tab on stage, whatever it runs. */
+    val activeTab: StateFlow<ManagedTab?> = combine(_activeTabId, tabsById) { id, map -> id?.let { map[it] } }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** The tab on stage when it is a terminal; null while a Files tab, or nothing, is showing. */
+    val activeSession: StateFlow<TerminalSession?> = activeTab.map { it as? TerminalSession }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -137,8 +158,9 @@ class SessionManager @Inject constructor(
     init {
         scope.launch { restore() }
         scope.launch {
+            // Only a terminal holds a socket; a Files tab mirrors its ride's state and never keeps the service up on its own.
             combine(
-                records.map { list -> list.count { it.state.keepsService } },
+                records.map { list -> list.count { it.kind == TabKind.Ssh && it.state.keepsService } },
                 tunnelStatuses.map { statuses -> statuses.count { it.value is TunnelStatus.Up } },
                 activeTransfers,
             ) { active, tunnels, transfers -> Triple(active, tunnels, transfers) }.distinctUntilChanged().collect { (active, tunnels, transfers) ->
@@ -146,10 +168,15 @@ class SessionManager @Inject constructor(
             }
         }
         scope.launch {
-            // Keep the stage flag on the session that is showing so attention is raised correctly.
-            _activeSessionId.collect { id -> _sessions.value.values.forEach { it.onStage = it.id == id } }
+            // Keep the stage flag on the tab that is showing so attention is raised correctly.
+            _activeTabId.collect { id -> tabsNow().forEach { it.onStage = it.id == id } }
         }
-        scope.launch { records.collect { electCarriers(it) } }
+        scope.launch {
+            records.collect {
+                electCarriers(it)
+                refollow()
+            }
+        }
     }
 
     /**
@@ -158,7 +185,7 @@ class SessionManager @Inject constructor(
      * the moment it comes up. Sessions that lose the role release their ports first.
      */
     private fun electCarriers(records: List<SessionRecord>) {
-        val byHost = records.filter { it.hostId != null && it.state.isActive }.groupBy { it.hostId!! }
+        val byHost = records.filter { it.kind == TabKind.Ssh && it.hostId != null && it.state.isActive }.groupBy { it.hostId!! }
         val chosen = HashMap<String, String>()
         for ((hostId, candidates) in byHost) {
             val current = carrierByHost[hostId]?.let { id -> candidates.firstOrNull { it.id == id && it.state == SessionState.LIVE } }
@@ -172,6 +199,15 @@ class SessionManager @Inject constructor(
         live.filter { it.id in carriers }.forEach { it.carriesTunnels.value = true }
     }
 
+    /** Every Files tab re-elects its ride among its host's terminal tabs, in strip order. */
+    private fun refollow() {
+        val files = _filesTabs.value.values
+        if (files.isEmpty()) return
+        val live = _sessions.value
+        val byHost = stripNow().mapNotNull { live[it.id] }.groupBy { it.host.id }
+        for (tab in files) tab.follow(byHost[tab.host.id].orEmpty())
+    }
+
     fun retryTunnel(id: String) = _sessions.value.values.forEach { it.retryTunnel(id) }
 
     /** Loads persisted tabs as detached frames, in their saved order. Safe to call more than once. */
@@ -181,6 +217,7 @@ class SessionManager @Inject constructor(
         val defaultWorkspace = workspaceRepository.ensureDefault()
         val groups = workspaceRepository.observeAll().first()
         val map = LinkedHashMap<String, TerminalSession>()
+        val files = LinkedHashMap<String, FilesTab>()
         val restoredRecords = ArrayList<SessionRecord>()
         for (record in sessionRepository.getAll()) {
             if (record.state == SessionState.CLOSED) {
@@ -201,35 +238,57 @@ class SessionManager @Inject constructor(
         val finalRecords = strip.map { renumbered[it.id] ?: it }
         sessionRepository.upsertAll(finalRecords)
         for (record in finalRecords) {
-            val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
-            sessionRepository.loadFrame(record.id)?.let { session.restoreFrame(it) }
-            map[record.id] = session
+            when (record.kind) {
+                TabKind.Ssh -> {
+                    val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
+                    sessionRepository.loadFrame(record.id)?.let { session.restoreFrame(it) }
+                    map[record.id] = session
+                }
+                // A Files tab has no frame and nothing to reconnect; its browser reopens at the saved folder on first use.
+                TabKind.Files -> files[record.id] = FilesTab(record, scope) { sessionRepository.upsert(it) }
+            }
         }
         _sessions.value = map
-        val last = settings.lastActiveSessionId.first()?.takeIf { map.containsKey(it) }
-        _activeSessionId.value = last
-        _currentWorkspaceId.value = last?.let { map[it]?.record?.value?.workspaceId }
+        _filesTabs.value = files
+        val last = settings.lastActiveSessionId.first()?.takeIf { map.containsKey(it) || files.containsKey(it) }
+        _activeTabId.value = last
+        _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId }
             ?: settings.currentWorkspaceId.first()?.takeIf { id -> groups.any { it.id == id } }
             ?: defaultWorkspace.id
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
         map.values.filter { it.record.value.workspaceId in reconnectWorkspaces }.forEach { it.connect() }
     }
 
-    /** The strip as it is right now, from the live records rather than the (asynchronous) flows. */
-    private fun stripNow(): List<SessionRecord> = TabOrder.strip(_sessions.value.values.map { it.record.value }, workspaces.value)
+    /** Every tab right now, from the maps rather than the (asynchronous) flows. */
+    private fun tabsNow(): List<ManagedTab> {
+        val all = ArrayList<ManagedTab>()
+        all.addAll(_sessions.value.values)
+        all.addAll(_filesTabs.value.values)
+        return all
+    }
 
-    /** Applies placements computed by [TabOrder] to the live sessions and writes them in one transaction. */
+    private fun tabNow(id: String): ManagedTab? = _sessions.value[id] ?: _filesTabs.value[id]
+
+    /** The strip as it is right now, from the live records rather than the (asynchronous) flows. */
+    private fun stripNow(): List<SessionRecord> = TabOrder.strip(tabsNow().map { it.record.value }, workspaces.value)
+
+    /** Applies placements computed by [TabOrder] to the live tabs and writes them in one transaction. */
     private fun applyPlacements(changes: List<SessionRecord>) {
         if (changes.isEmpty()) return
-        val updated = changes.mapNotNull { change -> _sessions.value[change.id]?.place(change.workspaceId, change.sortOrder) }
+        val updated = changes.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
         if (updated.isNotEmpty()) scope.launch { sessionRepository.upsertAll(updated) }
     }
 
+    /** An anchor in another group would drag the new tab into that group; an explicit group wins. */
+    private fun anchorFor(afterId: String?, workspaceId: String?): String? =
+        afterId?.takeIf { id -> tabNow(id)?.record?.value?.let { workspaceId == null || it.workspaceId == workspaceId } == true }
+
     /**
-     * Opens a new tab for [host] and puts it on stage. It lands directly after [afterId] (the active
-     * tab by default) in that tab's group, or at the end of [workspaceId] when there is no anchor.
+     * Opens a new terminal tab for [host] and, unless [activate] is off, puts it on stage. It lands
+     * directly after [afterId] (the active tab by default) in that tab's group, or at the end of
+     * [workspaceId] when there is no anchor.
      */
-    suspend fun open(host: Host, workspaceId: String? = null, afterId: String? = _activeSessionId.value, customTitle: String? = null): TerminalSession {
+    suspend fun open(host: Host, workspaceId: String? = null, afterId: String? = _activeTabId.value, customTitle: String? = null, activate: Boolean = true): TerminalSession {
         restore()
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
         val fresh = SessionRecord(
@@ -243,60 +302,157 @@ class SessionManager @Inject constructor(
             createdAt = System.currentTimeMillis(),
             customTitle = customTitle,
         )
-        // An anchor in another group would drag the new tab into that group; an explicit group wins.
-        val anchor = afterId?.takeIf { id -> _sessions.value[id]?.record?.value?.let { workspaceId == null || it.workspaceId == workspaceId } == true }
-        val changes = TabOrder.insertAfter(stripNow(), fresh, anchor, group)
-        return start(fresh, changes)
+        val changes = TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group)
+        return start(fresh, changes, activate)
     }
 
-    /** Recreates a closed tab in its old slot and connects it again (spec C3, Reopen). */
-    suspend fun reopen(closed: ClosedTab): TerminalSession {
+    /** Recreates a closed tab in its old slot; a terminal connects again, a Files tab reopens at its folder (spec C3, Reopen). */
+    suspend fun reopen(closed: ClosedTab): ManagedTab {
         restore()
         val old = closed.record
         val group = old.workspaceId.takeIf { id -> workspaces.value.any { it.id == id } } ?: workspaceRepository.ensureDefault().id
-        val fresh = old.copy(
-            id = UUID.randomUUID().toString(),
-            workspaceId = group,
-            state = SessionState.IDLE,
-            layer = PersistenceLayer.IN_APP,
-            title = old.hostSnapshot.name,
-            cwd = null,
-            lastCommand = null,
-            needsAttention = false,
-            attentionReason = null,
-            createdAt = System.currentTimeMillis(),
-            lastLiveAt = null,
-            frameKey = null,
-        )
-        return start(fresh, TabOrder.insertAt(stripNow(), fresh, group, old.sortOrder))
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        return when (old.kind) {
+            TabKind.Files -> {
+                val fresh = FilesTab.newRecord(id, old.hostSnapshot, group, now, folder = old.cwd).copy(title = old.title, customTitle = old.customTitle)
+                placeFiles(fresh, TabOrder.insertAt(stripNow(), fresh, group, old.sortOrder), preferred = null)
+            }
+            TabKind.Ssh -> {
+                val fresh = old.copy(
+                    id = id,
+                    workspaceId = group,
+                    state = SessionState.IDLE,
+                    layer = PersistenceLayer.IN_APP,
+                    title = old.hostSnapshot.name,
+                    cwd = null,
+                    lastCommand = null,
+                    needsAttention = false,
+                    attentionReason = null,
+                    createdAt = now,
+                    lastLiveAt = null,
+                    frameKey = null,
+                )
+                start(fresh, TabOrder.insertAt(stripNow(), fresh, group, old.sortOrder), activate = true)
+            }
+        }
     }
 
-    /** Opens a second tab on the same host directly after [id], in its group (spec C3, Duplicate). */
-    suspend fun duplicate(id: String): TerminalSession? {
-        val source = _sessions.value[id]?.record?.value ?: return null
-        return open(source.hostSnapshot, workspaceId = source.workspaceId, afterId = id)
+    /** Opens a second tab of the same kind on the same host directly after [id], in its group (spec C3, Duplicate). */
+    suspend fun duplicate(id: String): ManagedTab? {
+        val source = tabNow(id) ?: return null
+        val record = source.record.value
+        return when (record.kind) {
+            TabKind.Ssh -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id)
+            TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd)
+        }
     }
 
-    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>): TerminalSession {
+    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>, activate: Boolean): TerminalSession {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
         val session = TerminalSession(placed, scope, environment) { sessionRepository.upsert(it) }
         _sessions.update { it + (placed.id to session) }
-        val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> _sessions.value[change.id]?.place(change.workspaceId, change.sortOrder) }
+        val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
         sessionRepository.upsertAll(shifted + placed)
         placed.hostId?.let { hostRepository.markConnected(it, placed.createdAt) }
-        setActive(placed.id)
+        if (activate) setActive(placed.id)
         session.connect()
+        return session
+    }
+
+    // ---- files tabs --------------------------------------------------------------------------------
+
+    /** The host's Files tab, first in strip order, when it has one. */
+    fun filesTabFor(hostId: String): FilesTab? =
+        stripNow().firstOrNull { it.kind == TabKind.Files && it.hostSnapshot.id == hostId }?.let { _filesTabs.value[it.id] }
+
+    /**
+     * Files from a terminal tab's menu or the Session sheet: the host's Files tab comes on stage
+     * riding that terminal, opened directly after it (at the shell's directory) when the host has
+     * no Files tab yet. Null when there is no such terminal.
+     */
+    suspend fun openFiles(sessionId: String): FilesTab? {
+        restore()
+        val session = _sessions.value[sessionId] ?: return null
+        val existing = filesTabFor(session.host.id)
+        if (existing != null) {
+            existing.prefer(sessionId)
+            refollow()
+            setActive(existing.id)
+            return existing
+        }
+        return startFiles(session.host, workspaceId = session.record.value.workspaceId, afterId = sessionId, preferred = sessionId, folder = session.cwd)
+    }
+
+    /**
+     * Files from the host list or the New tab sheet: the host's Files tab, or a new one after the
+     * active tab (at the end of [workspaceId] when given). The browser rides whichever terminal to
+     * the host is up, or offers to connect one.
+     */
+    suspend fun openFilesForHost(host: Host, workspaceId: String? = null): FilesTab {
+        restore()
+        filesTabFor(host.id)?.let {
+            setActive(it.id)
+            return it
+        }
+        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = null)
+    }
+
+    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?): FilesTab {
+        val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
+        val fresh = FilesTab.newRecord(UUID.randomUUID().toString(), host, group, System.currentTimeMillis(), folder)
+        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred)
+    }
+
+    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?): FilesTab {
+        val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
+        val tab = FilesTab(placed, scope) { sessionRepository.upsert(it) }
+        tab.prefer(preferred)
+        _filesTabs.update { it + (placed.id to tab) }
+        val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
+        sessionRepository.upsertAll(shifted + placed)
+        refollow()
+        setActive(placed.id)
+        return tab
+    }
+
+    /**
+     * Opens a terminal on a Files tab's host directly after it, off stage, so the browser has a
+     * login to ride; the tab picks it up as it connects. The pane's Connect button.
+     */
+    fun connectFor(tab: FilesTab) {
+        scope.launch { open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, activate = false) }
+    }
+
+    /**
+     * Terminal from a Files tab's menu: the terminal it rides comes on stage, or, when the host has
+     * none, a new one opens directly after the Files tab and the browser rides that. Null when [id]
+     * is not a Files tab.
+     */
+    suspend fun openTerminalFor(id: String): TerminalSession? {
+        val tab = _filesTabs.value[id] ?: return null
+        tab.ride.value?.let {
+            setActive(it.id)
+            return it
+        }
+        val session = open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id)
+        tab.prefer(session.id)
+        refollow()
         return session
     }
 
     fun get(id: String): TerminalSession? = _sessions.value[id]
 
+    fun filesTab(id: String): FilesTab? = _filesTabs.value[id]
+
+    fun tab(id: String): ManagedTab? = tabNow(id)
+
     /** Puts [id] on stage; the current group follows the active tab. */
     fun setActive(id: String?) {
-        _activeSessionId.value = id
-        val session = id?.let { _sessions.value[it] }
-        session?.markSeen()
-        session?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
+        _activeTabId.value = id
+        val tab = id?.let { tabNow(it) }
+        tab?.markSeen()
+        tab?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
         scope.launch { settings.setLastActiveSessionId(id) }
     }
 
@@ -305,7 +461,7 @@ class SessionManager @Inject constructor(
         val strip = stripNow()
         if (strip.isEmpty()) return
         val collapsed = workspaces.value.filter { it.collapsed }.map { it.id }.toSet()
-        val active = _activeSessionId.value
+        val active = _activeTabId.value
         val visible = strip.filter { it.workspaceId !in collapsed || it.id == active }.ifEmpty { strip }
         val current = visible.indexOfFirst { it.id == active }
         val next = if (current < 0) (if (delta >= 0) 0 else visible.lastIndex) else Math.floorMod(current + delta, visible.size)
@@ -327,7 +483,7 @@ class SessionManager @Inject constructor(
         _currentWorkspaceId.value = id
         scope.launch { settings.setCurrentWorkspaceId(id) }
         if (!activate) return
-        val activeGroup = _activeSessionId.value?.let { _sessions.value[it]?.record?.value?.workspaceId }
+        val activeGroup = _activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
         if (activeGroup == id) return
         stripNow().firstOrNull { it.workspaceId == id }?.let { setActive(it.id) }
     }
@@ -340,10 +496,10 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Move to group: re-homes the tab at the end of [groupId]. */
     fun moveToGroup(id: String, groupId: String) {
         applyPlacements(TabOrder.moveToGroup(stripNow(), id, groupId))
-        if (_activeSessionId.value == id) setCurrentWorkspace(groupId, activate = false)
+        if (_activeTabId.value == id) setCurrentWorkspace(groupId, activate = false)
     }
 
-    fun rename(id: String, title: String?) = _sessions.value[id]?.rename(title)
+    fun rename(id: String, title: String?) = tabNow(id)?.rename(title)
 
     suspend fun createWorkspace(name: String, color: SwatchColor = SwatchColor.forName(name)): Workspace {
         val existing = workspaces.value
@@ -394,10 +550,16 @@ class SessionManager @Inject constructor(
 
     // ---- lifecycle -----------------------------------------------------------------------------------
 
+    /** Reconnects a terminal tab; for a Files tab, the terminal it rides, or a new one on its host when it has none. */
     fun reconnect(id: String) {
-        _sessions.value[id]?.reconnectNow()
+        when (val tab = tabNow(id)) {
+            is TerminalSession -> tab.reconnectNow()
+            is FilesTab -> tab.ride.value?.reconnectNow() ?: connectFor(tab)
+            else -> Unit
+        }
     }
 
+    /** Disconnects a terminal tab and keeps its frame. A Files tab has no connection of its own, so this does nothing to it. */
     fun detach(id: String) {
         val session = _sessions.value[id] ?: return
         session.detach()
@@ -409,13 +571,14 @@ class SessionManager @Inject constructor(
      * Returns what is needed to reopen it, or null when there was no such tab.
      */
     fun close(id: String): ClosedTab? {
-        val session = _sessions.value[id] ?: return null
+        val tab = tabNow(id) ?: return null
         val strip = stripNow()
-        val closed = ClosedTab(session.record.value)
+        val closed = ClosedTab(tab.record.value)
         val next = TabOrder.nextActiveAfterClose(strip, id)
-        session.close()
+        tab.close()
         _sessions.update { it - id }
-        if (_activeSessionId.value == id) setActive(next)
+        _filesTabs.update { it - id }
+        if (_activeTabId.value == id) setActive(next)
         scope.launch { sessionRepository.delete(id) }
         return closed
     }
@@ -423,7 +586,7 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Close others: every tab in the strip except [id]. */
     fun closeOthers(id: String) {
         stripNow().filter { it.id != id }.forEach { close(it.id) }
-        if (_activeSessionId.value != id) setActive(id)
+        if (_activeTabId.value != id) setActive(id)
     }
 
     /** Persists frames for every session; called when the app goes to the background. */

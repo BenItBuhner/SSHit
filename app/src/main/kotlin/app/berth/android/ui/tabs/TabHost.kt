@@ -113,9 +113,17 @@ class ShellTabActions(
     override fun moveToNewGroup(id: String) { ui.groupEditor = GroupEditorRequest.Create(moveTabId = id) }
     override fun detach(id: String) = vm.detach(id)
     override fun reconnect(id: String) = vm.reconnect(id)
+    override fun openFiles(id: String) {
+        vm.openFiles(id)
+        onActivated()
+    }
+    override fun openTerminal(id: String) {
+        vm.openTerminal(id)
+        onActivated()
+    }
     override fun move(id: String, toIndex: Int, groupId: String?) = vm.moveTab(id, toIndex, groupId)
     override fun newTab() { ui.newTab = NewTabRequest(groupId = null) }
-    override fun duplicateActive() { vm.activeSessionId.value?.let(vm::duplicate) }
+    override fun duplicateActive() { vm.activeTabId.value?.let(vm::duplicate) }
     override fun openSwitcher() { ui.switcher = true }
     override fun setGroupCollapsed(groupId: String, collapsed: Boolean) = vm.setWorkspaceCollapsed(groupId, collapsed)
     override fun editGroup(groupId: String) { ui.groupEditor = GroupEditorRequest.Edit(groupId) }

@@ -37,7 +37,8 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Workspace
 
-enum class Library { HOSTS, KEYS, TUNNELS, FILES, SNIPPETS, SETTINGS }
+/** The library rows. Files is not one: a host's files are a tab kind (spec C3), reached from the host or its terminal tab. */
+enum class Library { HOSTS, KEYS, TUNNELS, SNIPPETS, SETTINGS }
 
 /**
  * The drawer (spec C7): a secondary surface for jumping between groups and for the library. Not a

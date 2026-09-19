@@ -21,6 +21,12 @@ interface TabActions {
     fun detach(id: String) {}
     fun reconnect(id: String) {}
 
+    /** A terminal tab's menu › Files: the host's Files tab, riding this terminal, comes on stage (opened when the host has none). */
+    fun openFiles(id: String) {}
+
+    /** A Files tab's menu › Terminal: the terminal it rides comes on stage, or a new one opens on its host. */
+    fun openTerminal(id: String) {}
+
     /** Drag and drop: the tab ends up at [toIndex] in strip order, joining [groupId] when given. */
     fun move(id: String, toIndex: Int, groupId: String?) {}
 

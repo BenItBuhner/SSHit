@@ -158,8 +158,27 @@ class TabOrderTest {
         assertTrue(json.contains("ssh"))
         assertEquals(TabKind.Ssh, Json.decodeFromString(TabKind.serializer(), json))
         assertEquals(TabKind.Ssh, TabKind.fromId(null))
-        assertEquals(TabKind.Ssh, TabKind.fromId("sftp-from-the-future"))
+        assertEquals(TabKind.Ssh, TabKind.fromId("shell-from-the-future"))
         assertEquals("ssh", TabKind.Ssh.id)
+
+        val files = Json.encodeToString(TabKind.serializer(), TabKind.Files)
+        assertTrue(files.contains("files"))
+        assertEquals(TabKind.Files, Json.decodeFromString(TabKind.serializer(), files))
+        assertEquals(TabKind.Files, TabKind.fromId("files"))
+        assertEquals("files", TabKind.Files.id)
+    }
+
+    @Test
+    fun `the strip orders files tabs like any other tab`() {
+        val files = tab("f", "home", 1).copy(kind = TabKind.Files, title = "Files \u00B7 box")
+        val strip = listOf(tab("a", "home", 0), files, tab("b", "home", 2), tab("c", "work", 0))
+        assertEquals(listOf("a", "f", "b", "c"), TabOrder.strip(strip.shuffled(), listOf(home, work)).ids())
+        assertEquals("Files \u00B7 box", files.displayTitle)
+        assertTrue(TabOrder.normalize(TabOrder.strip(strip, listOf(home, work))).isEmpty())
+        assertEquals("b", TabOrder.nextActiveAfterClose(strip, "f"))
+        val moved = TabOrder.moveToGroup(strip, "f", "work")
+        assertEquals(listOf("a", "b", "c", "f"), strip.applying(moved).ids())
+        assertEquals(TabKind.Files, strip.applying(moved).last().kind)
     }
 
     @Test

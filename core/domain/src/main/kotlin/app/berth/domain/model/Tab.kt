@@ -21,12 +21,25 @@ sealed interface TabKind {
         override val id: String get() = ID_SSH
     }
 
+    /**
+     * The SFTP browser for a host. It has no connection of its own: it rides one of the host's
+     * SSH tabs (the login already made), so its state mirrors that session's and it shows the
+     * host's monogram. Its record keeps the folder being shown in [SessionRecord.cwd].
+     */
+    @Serializable
+    @SerialName("files")
+    data object Files : TabKind {
+        override val id: String get() = ID_FILES
+    }
+
     companion object {
         const val ID_SSH = "ssh"
+        const val ID_FILES = "files"
 
         /** The kind for a stored id; unknown ids fall back to SSH so an old build still opens a tab. */
         fun fromId(id: String?): TabKind = when (id) {
             ID_SSH, null -> Ssh
+            ID_FILES -> Files
             else -> Ssh
         }
     }

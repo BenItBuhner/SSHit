@@ -6,6 +6,7 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.ReconnectBackoff
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
@@ -91,13 +92,14 @@ class TerminalSession(
     private val scope: CoroutineScope,
     private val env: SessionEnvironment,
     private val onRecordChanged: suspend (SessionRecord) -> Unit,
-) : TabSource {
+) : ManagedTab {
     override val id: String = initial.id
+    override val kind: TabKind get() = TabKind.Ssh
 
     private val _record = MutableStateFlow(initial)
     override val record: StateFlow<SessionRecord> = _record.asStateFlow()
-    val host: Host get() = _record.value.hostSnapshot
-    val state: SessionState get() = _record.value.state
+    override val host: Host get() = _record.value.hostSnapshot
+    override val state: SessionState get() = _record.value.state
 
     /** Bumps on every visible change; the renderer reads it to know when to redraw. */
     private val _screenVersion = MutableStateFlow(0L)
@@ -115,7 +117,7 @@ class TerminalSession(
     val failure: StateFlow<Pair<String, String>?> = _failure.asStateFlow()
 
     /** Whether this session is currently on stage; off-stage events raise attention. */
-    @Volatile var onStage: Boolean = false
+    @Volatile override var onStage: Boolean = false
 
     val emulator: TerminalEmulator = TerminalEmulator(
         cols = 80,
@@ -314,7 +316,7 @@ class TerminalSession(
         transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
     }
 
-    fun close() {
+    override fun close() {
         connectJob?.cancel()
         connectJob = null
         teardownConnection()
@@ -543,18 +545,18 @@ class TerminalSession(
 
     // ---- attention and record ------------------------------------------------------------------
 
-    fun markSeen() {
+    override fun markSeen() {
         if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
     }
 
     /** Sets the tab's custom title; blank restores the automatic one (spec C3, Rename). */
-    fun rename(title: String?) = patch { copy(customTitle = title?.trim()?.takeIf { it.isNotEmpty() }) }
+    override fun rename(title: String?) = patch { copy(customTitle = title?.trim()?.takeIf { it.isNotEmpty() }) }
 
     /**
      * Applies a placement (group and position) to the record without persisting it. The manager
      * writes whole batches in one transaction after a reorder, so this stays a memory-only step.
      */
-    fun place(workspaceId: String, sortOrder: Int): SessionRecord =
+    override fun place(workspaceId: String, sortOrder: Int): SessionRecord =
         _record.updateAndGet { if (it.workspaceId == workspaceId && it.sortOrder == sortOrder) it else it.copy(workspaceId = workspaceId, sortOrder = sortOrder) }
 
     private fun attention(reason: String) = patch { copy(needsAttention = true, attentionReason = reason) }

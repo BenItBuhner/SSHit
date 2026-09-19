@@ -37,13 +37,14 @@ data class FilesState(
 data class Notice(val text: String, val isError: Boolean, val at: Long = System.currentTimeMillis())
 
 /**
- * One session's file browser: the current folder, its listing, and the operations on it. The
- * `sftp` channel opens on first use through [open] and reopens after the connection dropped, so
- * a reconnected terminal keeps its browser. All channel work is serialised on one lock; a new
- * navigation cancels a listing that is still on its way.
+ * One Files tab's browser: the current folder, its listing, and the operations on it. The `sftp`
+ * channel opens on first use through [open] and reopens after the connection dropped, so a
+ * reconnected terminal keeps its browser; [resetChannel] does the same when the login behind
+ * [open] is a different one. All channel work is serialised on one lock; a new navigation cancels
+ * a listing that is still on its way.
  */
 class FilesBrowser(
-    val sessionId: String,
+    val tabId: String,
     private val scope: CoroutineScope,
     private val open: suspend () -> SftpFileSystem,
     private val onVisited: (String) -> Unit = {},
@@ -56,6 +57,9 @@ class FilesBrowser(
 
     private var fs: SftpFileSystem? = null
     private val gate = Mutex()
+
+    /** Set when the channel belongs to a login that is no longer the one to use; consumed under the lock. */
+    @Volatile private var stale = false
     private var listJob: Job? = null
     private var noticeJob: Job? = null
 
@@ -139,7 +143,11 @@ class FilesBrowser(
             else it.copy(path = path, loading = true, refreshing = false, error = null, entries = if (it.path == path) it.entries else emptyList())
         }
         return try {
-            val entries = withChannel { it.list(path) }
+            val entries = withChannel { fs ->
+                // A browser that started before its login was up never learnt where home is; the first listing that works does.
+                if (_state.value.home == null) runCatching { fs.home() }.getOrNull()?.let { home -> _state.update { it.copy(home = home) } }
+                fs.list(path)
+            }
             _state.update { it.copy(path = path, entries = entries, loading = false, refreshing = false, error = null) }
             onVisited(path)
             true
@@ -201,6 +209,10 @@ class FilesBrowser(
      * [SftpError.Io] or [SftpError.NotConnected]; the channel is discarded so the next call reopens.
      */
     private suspend fun <T> withChannel(block: suspend (SftpFileSystem) -> T): T = gate.withLock {
+        if (stale) {
+            stale = false
+            dropChannel()
+        }
         val channel = fs?.takeIf { it.isOpen } ?: open().also { fs = it }
         try {
             block(channel)
@@ -216,6 +228,15 @@ class FilesBrowser(
     private fun dropChannel() {
         fs?.let { runCatching(it::close) }
         fs = null
+    }
+
+    /**
+     * The login behind [open] changed (the tab rides another terminal now): the open channel, if
+     * any, is on the old one, so the next call drops it and opens afresh. Synchronous, so a
+     * refresh queued right after cannot slip through on the old channel.
+     */
+    fun resetChannel() {
+        stale = true
     }
 
     fun post(notice: Notice) {

@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.berth.android.session.FilesTab
+import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.byId
@@ -78,6 +81,7 @@ import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
+import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -92,21 +96,25 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
- * The Stage (spec C3): the tab header, then the active tab's terminal, state pill and Deck, or the
- * empty state when no tab is open. The header owns the status-bar inset and the bottom chrome owns
- * the keyboard and navigation-bar insets, so both surfaces run edge to edge (A4) and the Deck rides
- * the keyboard's top edge without jumping. Hardware tab shortcuts are taken here, before the terminal.
+ * The Stage (spec C3): the tab header, then the active tab's body (a terminal with its state pill
+ * and Deck, or a Files browser), or the empty state when no tab is open. The header owns the
+ * status-bar inset and the bottom chrome owns the keyboard and navigation-bar insets, so both
+ * surfaces run edge to edge (A4) and the Deck rides the keyboard's top edge without jumping.
+ * Hardware tab shortcuts are taken here, before the terminal. Each tab's body keeps its own
+ * saveable state across switches (a Files tab's selection, sheet, viewer and per-folder scroll),
+ * dropped when the tab closes; the Deck's visibility and layer are the Stage's, shared by every tab.
  */
 @Composable
 fun StageScreen(
     vm: AppViewModel,
-    session: TerminalSession?,
+    tab: ManagedTab?,
     actions: TabActions,
     onOpenDrawer: () -> Unit,
     onOpenSessionSheet: () -> Unit,
@@ -117,10 +125,11 @@ fun StageScreen(
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
     val groups by vm.workspaces.collectAsState()
-    val activeId by vm.activeSessionId.collectAsState()
+    val activeId by vm.activeTabId.collectAsState()
     val attention by vm.attentionCount.collectAsState()
     val ctrlTabKeysReachTerminal by vm.ctrlTabKeysReachTerminal.collectAsState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
+    var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     val shortcuts = remember(vm, actions) {
         TabShortcuts(
             step = vm::stepTab,
@@ -129,9 +138,34 @@ fun StageScreen(
                 (if (index < 0) list.lastOrNull() else list.getOrNull(index))?.let { actions.activate(it.id) }
             },
             newTab = actions::newTab,
-            closeActive = { vm.activeSessionId.value?.let(actions::close) },
+            closeActive = { vm.activeTabId.value?.let(actions::close) },
             switcher = actions::openSwitcher,
         )
+    }
+
+    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
+    // and the user's own choice survives otherwise. Remembered by the Stage, not the tab, so a tab
+    // switch never re-collapses a Deck the user opened.
+    val configuration = LocalConfiguration.current
+    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
+        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    var seenHardwareKeyboard by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(hardwareKeyboard) {
+        if (hardwareKeyboard != seenHardwareKeyboard) {
+            val first = seenHardwareKeyboard == null
+            seenHardwareKeyboard = hardwareKeyboard
+            if (!first || hardwareKeyboard) deckVisible = !hardwareKeyboard
+        }
+    }
+
+    // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
+    val holder = rememberSaveableStateHolder()
+    val known = remember { HashSet<String>() }
+    LaunchedEffect(slots) {
+        val ids = slots.mapTo(HashSet()) { it.id }
+        for (id in known) if (id !in ids) holder.removeState(id)
+        known.retainAll(ids)
+        known.addAll(ids)
     }
 
     Column(
@@ -151,7 +185,7 @@ fun StageScreen(
             trailing = {
                 if (slots.isNotEmpty()) CountTile(count = slots.size, attention = attention > 0, onClick = actions::openSwitcher)
                 StageOverflow(
-                    session = session,
+                    tab = tab,
                     deckVisible = deckVisible,
                     onToggleDeck = { deckVisible = !deckVisible },
                     onOpenSessionSheet = onOpenSessionSheet,
@@ -161,19 +195,28 @@ fun StageScreen(
                 )
             },
         )
-        if (session == null) {
-            EmptyStage(onNewTab = actions::newTab, modifier = Modifier.weight(1f).fillMaxWidth())
+        val body = Modifier.weight(1f).fillMaxWidth()
+        if (tab == null) {
+            EmptyStage(onNewTab = actions::newTab, modifier = body)
         } else {
-            StageBody(
-                vm = vm,
-                session = session,
-                deckVisible = deckVisible,
-                onDeckVisibleChange = { deckVisible = it },
-                onOpenSessionSheet = onOpenSessionSheet,
-                onEditHost = onEditHost,
-                onOpenDeckEditor = onOpenDeckEditor,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            )
+            holder.SaveableStateProvider(tab.id) {
+                when (tab) {
+                    is TerminalSession -> StageBody(
+                        vm = vm,
+                        session = tab,
+                        deckVisible = deckVisible,
+                        onDeckVisibleChange = { deckVisible = it },
+                        layerIndex = layerIndex,
+                        onLayerIndexChange = { layerIndex = it },
+                        onOpenSessionSheet = onOpenSessionSheet,
+                        onEditHost = onEditHost,
+                        onOpenDeckEditor = onOpenDeckEditor,
+                        modifier = body,
+                    )
+                    is FilesTab -> FilesTabBody(vm = vm, tab = tab, modifier = body)
+                    else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
+                }
+            }
         }
     }
 }
@@ -200,11 +243,13 @@ private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
 
 /**
  * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Library,
- * Close. Without a tab it offers New tab and Library.
+ * Close. A Files tab has no Deck and no connection of its own, so it offers Connect (no terminal on
+ * the host) or Reconnect (its terminal is down) and Terminal in their place. Without a tab it offers
+ * New tab and Library.
  */
 @Composable
 private fun StageOverflow(
-    session: TerminalSession?,
+    tab: ManagedTab?,
     deckVisible: Boolean,
     onToggleDeck: () -> Unit,
     onOpenSessionSheet: () -> Unit,
@@ -214,7 +259,8 @@ private fun StageOverflow(
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
-    val record = session?.record?.collectAsState()?.value
+    val record = tab?.record?.collectAsState()?.value
+    val ride = (tab as? FilesTab)?.ride?.collectAsState()?.value
     Box {
         IconAction(onClick = { menu = true }, description = "More") {
             BerthIcon(BerthIcons.moreVert)
@@ -226,15 +272,23 @@ private fun StageOverflow(
                     onClick = { menu = false; action() },
                 )
             }
-            if (session != null && record != null) {
-                if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(session.id) }
-                if (record.state.isActive) item("Detach") { actions.detach(session.id) }
-                item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
+            if (tab != null && record != null) {
+                if (tab.kind == TabKind.Files) {
+                    when {
+                        ride == null -> item("Connect") { actions.reconnect(tab.id) }
+                        record.state != SessionState.LIVE && record.state != SessionState.CONNECTING -> item("Reconnect") { actions.reconnect(tab.id) }
+                    }
+                    item("Terminal") { actions.openTerminal(tab.id) }
+                } else {
+                    if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(tab.id) }
+                    if (record.state.isActive) item("Detach") { actions.detach(tab.id) }
+                    item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
+                }
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
                 item("Tabs", action = actions::openSwitcher)
                 item("Library", action = onOpenDrawer)
-                item("Close", destructive = true) { actions.close(session.id) }
+                item("Close", destructive = true) { actions.close(tab.id) }
             } else {
                 item("New tab", action = actions::newTab)
                 item("Library", action = onOpenDrawer)
@@ -243,7 +297,7 @@ private fun StageOverflow(
     }
 }
 
-/** Everything below the header for one tab; keyed on the session by the caller through [session]. */
+/** Everything below the header for one terminal tab; the caller keys it on the session's id. */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun StageBody(
@@ -251,6 +305,8 @@ private fun StageBody(
     session: TerminalSession,
     deckVisible: Boolean,
     onDeckVisibleChange: (Boolean) -> Unit,
+    layerIndex: Int,
+    onLayerIndexChange: (Int) -> Unit,
     onOpenSessionSheet: () -> Unit,
     onEditHost: (String) -> Unit,
     onOpenDeckEditor: () -> Unit,
@@ -278,22 +334,7 @@ private fun StageBody(
         snippets.filter { it.pinnedToDeck && it.visibleFor(record.hostId, record.workspaceId) }.sortedBy { it.name.lowercase() }
     }
     var pendingSnippet by remember { mutableStateOf<PendingSnippet?>(null) }
-    val configuration = LocalConfiguration.current
-    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
-        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
     val patterns = rememberDeckHaptics()
-
-    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
-    // and the user's own choice survives otherwise.
-    var seenHardwareKeyboard by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(hardwareKeyboard) {
-        if (hardwareKeyboard != seenHardwareKeyboard) {
-            val first = seenHardwareKeyboard == null
-            seenHardwareKeyboard = hardwareKeyboard
-            if (!first || hardwareKeyboard) onDeckVisibleChange(!hardwareKeyboard)
-        }
-    }
-    var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = remember(session.id) { TerminalViewport() }
     val focusRequester = remember { FocusRequester() }
@@ -318,8 +359,8 @@ private fun StageBody(
                     DeckAppAction.PREVIOUS_SESSION -> vm.stepTab(-1)
                     DeckAppAction.DETACH -> vm.detach(session.id)
                     DeckAppAction.OPEN_SESSION_SHEET -> onOpenSessionSheet()
-                    DeckAppAction.NEXT_LAYER -> layerIndex += 1
-                    DeckAppAction.PREVIOUS_LAYER -> layerIndex -= 1
+                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(layerIndex + 1)
+                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     else -> Unit
                 }
@@ -412,7 +453,7 @@ private fun StageBody(
                 Deck(
                     layout = deckLayout,
                     layerIndex = layerIndex,
-                    onLayerIndexChange = { layerIndex = it },
+                    onLayerIndexChange = onLayerIndexChange,
                     input = input,
                     enabled = live,
                     onGripTap = onOpenSessionSheet,

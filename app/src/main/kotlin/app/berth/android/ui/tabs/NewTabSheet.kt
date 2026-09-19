@@ -60,7 +60,8 @@ import app.berth.domain.model.Host
  * The New tab sheet (spec C3, Plus tab): a quick connect field, the four most recent hosts as
  * swatches, then the Hosts list as a picker with a search field. Half height; drag up for the full
  * list. A chosen host becomes a tab in [groupId] (the active group when null), directly after the
- * active tab when that tab is in the same group.
+ * active tab when that tab is in the same group. The folder glyph at the end of a host row opens
+ * the host's Files tab instead (or brings it on stage when the host already has one).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +82,10 @@ fun NewTabSheet(
 
     fun choose(host: Host) {
         vm.open(host, groupId)
+        onDismiss()
+    }
+    fun files(host: Host) {
+        vm.openFilesForHost(host, groupId)
         onDismiss()
     }
     fun connectSpec() {
@@ -186,6 +191,9 @@ fun NewTabSheet(
                     leading = { Swatch(host.color, host.monogram, 36.dp) },
                     trailing = {
                         if (host.lastConnectedAt != null) Text(ageText(host.lastConnectedAt, now), style = BerthType.caption, color = c.text3)
+                        IconAction(onClick = { files(host) }, description = "Files on ${host.name}") {
+                            BerthIcon(BerthIcons.folder, tint = c.text2, size = 20.dp)
+                        }
                     },
                 )
             }
