@@ -306,6 +306,12 @@ class BerthScreenshotTest {
     }
 
     @Test
+    fun `identities empty`() {
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        capture("identities-empty")
+    }
+
+    @Test
     fun settings() {
         seedLibrary()
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
@@ -353,7 +359,10 @@ class BerthScreenshotTest {
             publicKeyBase64 = SshKeys.openSshPublic(key).split(" ")[1],
             fingerprintSha256 = SshKeys.fingerprintSha256(key),
         )
-        themed { PromptHost(graph.prompts) }
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
         val bg = CoroutineScope(Dispatchers.IO)
 
         bg.launch { graph.prompts.trustHostKey(host, request, emptyList()) }
