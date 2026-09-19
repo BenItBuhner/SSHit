@@ -106,7 +106,7 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                     val names = hostNamesFor(k, hosts)
                     ListRow(
                         title = k.endpoint + if (names.isNotEmpty()) "  \u00B7  ${names.joinToString(", ")}" else "",
-                        // One Caption line: algorithm, the pin, then the hash and its first four groups in Mono (K1).
+                        // One Caption line: algorithm, the pin, then the hash and its leading groups in Mono (K1).
                         subtitle = buildAnnotatedString {
                             append(k.algorithmLabel)
                             if (k.pinned) {
@@ -115,7 +115,7 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                             }
                             append(" \u00B7 ")
                             withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp)) {
-                                append("SHA256:" + SshKeys.groupedFingerprint(k.fingerprintSha256).split(' ').take(4).joinToString(" ") + " \u2026")
+                                append(shortFingerprint(k.fingerprintSha256, prefixLength = length))
                             }
                         },
                         onClick = { detail = k.id },
@@ -148,6 +148,19 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
 /** Saved hosts that point at this endpoint, so the row can say which host a key belongs to. */
 private fun hostNamesFor(k: KnownHostKey, hosts: List<app.berth.domain.model.Host>): List<String> =
     hosts.filter { it.address.equals(k.host, ignoreCase = true) && it.port == k.port }.map { it.name }
+
+/** Characters of Caption that fit beside the trailing date on a phone-width row. */
+private const val ROW_CAPTION_BUDGET = 38
+
+/**
+ * `SHA256:` and as many whole four-character groups (four at most) as fit after [prefixLength]
+ * characters of algorithm and pin, so the row never cuts a group in half (K1). The sheet has it all.
+ */
+internal fun shortFingerprint(fingerprint: String, prefixLength: Int): String {
+    val groups = SshKeys.groupedFingerprint(fingerprint).split(' ')
+    val count = ((ROW_CAPTION_BUDGET - prefixLength - "SHA256:".length) / 5).coerceIn(1, 4)
+    return "SHA256:" + groups.take(count).joinToString(" ") + " \u2026"
+}
 
 /** One key in full: fingerprint, dates, pin toggle, copy and forget. */
 @OptIn(ExperimentalMaterial3Api::class)
