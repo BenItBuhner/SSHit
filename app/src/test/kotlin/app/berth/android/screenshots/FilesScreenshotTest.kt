@@ -605,6 +605,15 @@ class FilesScreenshotTest {
         themed { Pane(b, actions = actions) }
         waitForText("deploy.sh")
 
+        // Upload folder sits beside New folder in the folder menu, where folder things are looked for; captured before the
+        // selection so the Notice its Share tap leaves does not sit under the menu.
+        compose.onNodeWithContentDescription("Folder options").performClick()
+        waitForText("Upload folder")
+        capture("files-folder-upload-menu")
+        compose.onNodeWithText("Upload folder").performClick()
+        assertEquals(1, folderUploads)
+        waitForNoText("Upload folder")
+
         compose.onNodeWithContentDescription("Select backups").performClick()
         compose.onNodeWithContentDescription("Select notes.txt").performClick()
         waitForText("2 selected")
@@ -623,12 +632,6 @@ class FilesScreenshotTest {
         compose.onNodeWithText("Share").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Clear selection").performClick()
         waitForNoText("1 selected")
-
-        compose.onNodeWithContentDescription("Folder options").performClick()
-        waitForText("Upload folder")
-        capture("files-folder-upload-menu")
-        compose.onNodeWithText("Upload folder").performClick()
-        assertEquals(1, folderUploads)
     }
 
     @Test
