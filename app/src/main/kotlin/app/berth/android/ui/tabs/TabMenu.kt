@@ -36,11 +36,14 @@ import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 
 /**
- * The tab's long-press menu (spec C3): Close, Close others, Duplicate, Rename, then the other
- * kind on the same host (Files from a terminal tab, Terminal from a Files tab), Move to group ▸,
- * and Detach (Reconnect when detached or failed); a Files tab has no connection of its own to
- * detach. Move to group swaps the panel for the groups as rows with swatches and a New group row;
- * Back returns. Shared by the strip and the switcher cards.
+ * The tab's long-press menu (spec C3): Duplicate, Rename, then the other kind on the same host
+ * (Files from a terminal tab, Terminal from a Files tab), Move to group ▸, Detach (Reconnect when
+ * detached or failed; a Files tab has no connection of its own to detach), and last the closes,
+ * Close and Close others, in the destructive tint. The order follows Chrome: the menu opens under
+ * the tab on release, so the rows nearest the finger are the ones that change nothing for good,
+ * and the closes sit furthest from where a long-press lets go. Move to group swaps the panel for
+ * the groups as rows with swatches and a New group row; Back returns. Shared by the strip and the
+ * switcher cards.
  */
 @Composable
 fun TabMenu(
@@ -57,8 +60,6 @@ fun TabMenu(
     val files = record.kind == TabKind.Files
     MenuPanel(expanded = expanded, onDismiss = onDismiss) {
         if (!groupsPage) {
-            MenuRow("Close", destructive = true) { onDismiss(); actions.close(id) }
-            MenuRow("Close others") { onDismiss(); actions.closeOthers(id) }
             MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
             MenuRow("Rename") { onDismiss(); actions.rename(id) }
             if (files) MenuRow("Terminal") { onDismiss(); actions.openTerminal(id) }
@@ -68,6 +69,8 @@ fun TabMenu(
                 record.state.isActive -> if (!files) MenuRow("Detach") { onDismiss(); actions.detach(id) }
                 record.state != SessionState.CLOSED -> MenuRow("Reconnect") { onDismiss(); actions.reconnect(id) }
             }
+            MenuRow("Close", destructive = true) { onDismiss(); actions.close(id) }
+            MenuRow("Close others", destructive = true) { onDismiss(); actions.closeOthers(id) }
         } else {
             MenuRow("Move to group", leading = { BerthIcon(BerthIcons.back, tint = c.text2, size = 20.dp) }, color = c.text2) { groupsPage = false }
             for (group in groups) {
@@ -84,7 +87,11 @@ fun TabMenu(
     }
 }
 
-/** The chip's long-press menu (spec C3, Groups): Rename, Colour, New tab here, Close group, Delete group. */
+/**
+ * The chip's long-press menu (spec C3, Groups): Rename, Colour, New tab here, Collapse or Expand,
+ * then the two that end runtimes at the tail in the destructive tint, Close group and Delete
+ * group; the host confirms both when they would cut a connection.
+ */
 @Composable
 fun GroupMenu(
     expanded: Boolean,
@@ -98,7 +105,7 @@ fun GroupMenu(
         MenuRow("Colour") { onDismiss(); actions.editGroup(id) }
         MenuRow("New tab here") { onDismiss(); actions.newTabIn(id) }
         MenuRow(if (group.collapsed) "Expand" else "Collapse") { onDismiss(); actions.setGroupCollapsed(id, !group.collapsed) }
-        MenuRow("Close group") { onDismiss(); actions.closeGroup(id) }
+        MenuRow("Close group", destructive = true) { onDismiss(); actions.closeGroup(id) }
         MenuRow("Delete group", destructive = true) { onDismiss(); actions.deleteGroup(id) }
     }
 }

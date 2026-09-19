@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -54,6 +55,7 @@ import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.delay
 
@@ -69,6 +71,16 @@ sealed interface GroupEditorRequest {
 }
 
 /**
+ * A batch close that would cut a connection, waiting on the confirmation sheet (spec C3, Closing):
+ * Close others keeps [Others.keepId], Close group empties [Group.groupId]. A batch has no Reopen,
+ * so it is asked about first whenever any affected tab is connected or connecting.
+ */
+sealed interface CloseRequest {
+    data class Others(val keepId: String) : CloseRequest
+    data class Group(val groupId: String) : CloseRequest
+}
+
+/**
  * The tab UI that lives above every screen: which sheets are open and the Reopen bar. Owned by the
  * shell so the switcher, the New tab sheet and the menus' follow-ups work wherever they were asked for.
  */
@@ -78,9 +90,10 @@ class TabUiState {
     var renameId by mutableStateOf<String?>(null)
     var groupEditor by mutableStateOf<GroupEditorRequest?>(null)
     var deleteGroupId by mutableStateOf<String?>(null)
+    var closeConfirm by mutableStateOf<CloseRequest?>(null)
     var closed by mutableStateOf<ClosedTab?>(null)
 
-    val anySheet: Boolean get() = newTab != null || switcher || renameId != null || groupEditor != null || deleteGroupId != null
+    val anySheet: Boolean get() = newTab != null || switcher || renameId != null || groupEditor != null || deleteGroupId != null || closeConfirm != null
 }
 
 @Composable
@@ -106,7 +119,11 @@ class ShellTabActions(
         if (closed.wasActive) ui.closed = closed
     }
 
-    override fun closeOthers(id: String) = vm.closeOthers(id)
+    // A single close has Reopen; a batch does not, so one that would cut a connection asks first.
+    override fun closeOthers(id: String) {
+        val others = vm.records.value.filter { it.id != id }
+        if (others.any { it.state.isActive }) ui.closeConfirm = CloseRequest.Others(id) else vm.closeOthers(id)
+    }
     override fun duplicate(id: String) = vm.duplicate(id)
     override fun rename(id: String) { ui.renameId = id }
     override fun moveToGroup(id: String, groupId: String) = vm.moveToGroup(id, groupId)
@@ -128,7 +145,10 @@ class ShellTabActions(
     override fun setGroupCollapsed(groupId: String, collapsed: Boolean) = vm.setWorkspaceCollapsed(groupId, collapsed)
     override fun editGroup(groupId: String) { ui.groupEditor = GroupEditorRequest.Edit(groupId) }
     override fun newTabIn(groupId: String) { ui.newTab = NewTabRequest(groupId) }
-    override fun closeGroup(groupId: String) = vm.closeGroup(groupId)
+    override fun closeGroup(groupId: String) {
+        val tabs = vm.records.value.filter { it.workspaceId == groupId }
+        if (tabs.any { it.state.isActive }) ui.closeConfirm = CloseRequest.Group(groupId) else vm.closeGroup(groupId)
+    }
     override fun deleteGroup(groupId: String) { ui.deleteGroupId = groupId }
     override fun moveGroup(groupId: String, toIndex: Int) = vm.moveGroup(groupId, toIndex)
 }
@@ -197,10 +217,36 @@ fun TabSheets(vm: AppViewModel, ui: TabUiState, actions: TabActions, onAddHost: 
             )
         }
     }
+    ui.closeConfirm?.let { request ->
+        // Re-read the affected tabs at sheet time: a tab that dropped or closed since the menu row was
+        // tapped changes the count, and if nothing connected remains the question no longer applies.
+        val affected = when (request) {
+            is CloseRequest.Others -> records.filter { it.id != request.keepId }
+            is CloseRequest.Group -> records.filter { it.workspaceId == request.groupId }
+        }
+        val groupName = (request as? CloseRequest.Group)?.let { r -> groups.firstOrNull { it.id == r.groupId }?.name }
+        if (affected.none { it.state.isActive } || (request is CloseRequest.Group && groupName == null)) {
+            ui.closeConfirm = null
+        } else {
+            ConfirmCloseSheet(
+                title = when (request) {
+                    is CloseRequest.Others -> "Close ${plural(affected.size, "other tab")}?"
+                    is CloseRequest.Group -> "Close ${groupName}'s ${plural(affected.size, "tab")}?"
+                },
+                affected = affected,
+                onClose = {
+                    when (request) {
+                        is CloseRequest.Others -> vm.closeOthers(request.keepId)
+                        is CloseRequest.Group -> vm.closeGroup(request.groupId)
+                    }
+                },
+                onDismiss = { ui.closeConfirm = null },
+            )
+        }
+    }
 }
 
 /** Delete group, with what happens to its tabs spelled out (spec C3, Groups). */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DeleteGroupSheet(
     group: Workspace,
@@ -209,10 +255,72 @@ private fun DeleteGroupSheet(
     onDelete: (closeTabs: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val c = Berth.colors
     val ordered = remember(groups) { groups.sortedWith(compareBy<Workspace> { it.sortOrder }.thenBy { it.createdAt }) }
     val index = ordered.indexOfFirst { it.id == group.id }
     val receiver = ordered.getOrNull(index - 1) ?: ordered.getOrNull(index + 1)
+    ConfirmSheet(
+        title = "Delete ${group.name}?",
+        body = when {
+            tabCount == 0 -> "The group is empty."
+            receiver != null -> "Its ${plural(tabCount, "tab")} can move to ${receiver.name}, or close."
+            else -> "Its ${plural(tabCount, "tab")} will close."
+        },
+        onDismiss = onDismiss,
+    ) {
+        if (tabCount > 0 && receiver != null) {
+            BerthButton("Move tabs", kind = ButtonKind.PRIMARY, onClick = { onDelete(false); onDismiss() })
+            BerthButton("Close tabs", kind = ButtonKind.DESTRUCTIVE, onClick = { onDelete(true); onDismiss() })
+        } else {
+            BerthButton("Delete", kind = ButtonKind.DESTRUCTIVE, onClick = { onDelete(true); onDismiss() })
+        }
+    }
+}
+
+/**
+ * Close others / Close group when the batch would cut a connection (spec C3, Closing): a single
+ * close has the Reopen bar, a batch has none, so it says how many shells end and asks first.
+ */
+@Composable
+private fun ConfirmCloseSheet(
+    title: String,
+    affected: List<SessionRecord>,
+    onClose: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val connected = affected.count { it.state.isActive }
+    ConfirmSheet(
+        title = title,
+        body = buildString {
+            append(
+                when {
+                    connected == affected.size && connected == 1 -> "It is connected"
+                    connected == affected.size -> "All $connected are connected"
+                    connected == 1 -> "1 is connected"
+                    else -> "$connected are connected"
+                },
+            )
+            append(if (connected == 1) "; its shell ends. " else "; their shells end. ")
+            append("A batch close has no Reopen.")
+        },
+        onDismiss = onDismiss,
+    ) {
+        BerthButton("Close tabs", kind = ButtonKind.DESTRUCTIVE, onClick = { onClose(); onDismiss() })
+    }
+}
+
+/**
+ * The confirmation sheet shared by Delete group and the batch closes: title, one line of Body in
+ * `text.2` saying what happens, then the actions with Cancel last.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConfirmSheet(
+    title: String,
+    body: String,
+    onDismiss: () -> Unit,
+    actions: @Composable RowScope.() -> Unit,
+) {
+    val c = Berth.colors
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = c.surface1,
@@ -226,23 +334,10 @@ private fun DeleteGroupSheet(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetTitle("Delete ${group.name}?")
-            Text(
-                when {
-                    tabCount == 0 -> "The group is empty."
-                    receiver != null -> "Its ${plural(tabCount, "tab")} can move to ${receiver.name}, or close."
-                    else -> "Its ${plural(tabCount, "tab")} will close."
-                },
-                style = BerthType.body,
-                color = c.text2,
-            )
+            SheetTitle(title)
+            Text(body, style = BerthType.body, color = c.text2)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (tabCount > 0 && receiver != null) {
-                    BerthButton("Move tabs", kind = ButtonKind.PRIMARY, onClick = { onDelete(false); onDismiss() })
-                    BerthButton("Close tabs", kind = ButtonKind.DESTRUCTIVE, onClick = { onDelete(true); onDismiss() })
-                } else {
-                    BerthButton("Delete", kind = ButtonKind.DESTRUCTIVE, onClick = { onDelete(true); onDismiss() })
-                }
+                actions()
                 BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
             }
         }
