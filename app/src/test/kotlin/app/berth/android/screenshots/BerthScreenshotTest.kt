@@ -103,6 +103,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -480,6 +481,21 @@ class BerthScreenshotTest {
         compose.onAllNodesWithText("Files \u00B7 homelab").assertCountEquals(0)
         compose.onNodeWithContentDescription("Tabs, 4 open").assertExists()
         capture("stage-files")
+
+        // One ⋮ on the screen: the Stage's overflow opens on the folder rows, then the tab's own; the pane has none.
+        compose.onAllNodesWithContentDescription("Folder options").assertCountEquals(0)
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("New folder")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Terminal directory").assertExists()
+        compose.onNodeWithText("Terminal").assertExists()
+        compose.onNodeWithText("Close").assertExists()
+        val newFolderRow = compose.onNodeWithText("New folder").fetchSemanticsNode().boundsInRoot
+        val terminalRow = compose.onNodeWithText("Terminal").fetchSemanticsNode().boundsInRoot
+        assertTrue("folder rows lead the tab's", newFolderRow.bottom <= terminalRow.top)
+        capture("stage-files-overflow")
+        // A lent row closes the Stage's menu before it acts.
+        compose.onNodeWithText("Refresh").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("New folder")).fetchSemanticsNodes().isEmpty() }
 
         compose.onNodeWithContentDescription("Select settings.gradle.kts").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("1 selected")).fetchSemanticsNodes().isNotEmpty() }

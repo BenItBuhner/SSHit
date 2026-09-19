@@ -19,6 +19,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onLast
@@ -586,11 +587,15 @@ class FilesScreenshotTest {
         assertEquals(local.length(), uploaded.size)
         capture("files-live-uploaded")
 
-        // The shell moves on; the pane follows it through its own menu (the Stage's More is the tab's) into the empty releases folder.
+        // The shell moves on; the pane follows it into the empty releases folder through the Stage's one overflow,
+        // which hosts the folder rows ahead of the tab's own (the pane draws no ⋮ of its own under the strip).
         session.sendText("cd $dir/releases\n")
         compose.waitUntil(10_000) { session.cwd == "$dir/releases" }
-        compose.onNodeWithContentDescription("Folder options").performClick()
+        compose.onAllNodesWithContentDescription("Folder options").assertCountEquals(0)
+        compose.onNodeWithContentDescription("More").performClick()
         waitForText("Terminal directory", 5_000)
+        compose.onNodeWithText("Terminal").assertExists()
+        capture("files-live-overflow")
         compose.onNodeWithText("Terminal directory").performClick()
         waitForText("Empty folder.", 15_000)
         capture("files-live-terminal-directory")

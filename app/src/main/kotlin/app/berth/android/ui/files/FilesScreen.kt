@@ -57,6 +57,7 @@ import androidx.compose.material3.pulltorefresh.pullToRefresh
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -104,6 +105,7 @@ import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.stage.LocalHapticLevel
+import app.berth.android.ui.stage.OverflowRows
 import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -138,11 +140,12 @@ class FilesActions(
 /**
  * A Files tab's body under the tab strip (spec C3, tab kinds): the tab's browser from
  * `FilesCenter`, the document pickers wired to the transfer queue over the terminal the tab rides,
- * and [FilesPane] without a header of its own. The pane keeps its own navigation-bar inset, so the
- * Stage adds none below it. Nothing while the tab is gone.
+ * and [FilesPane] without a header of its own. The pane's folder rows go to the Stage's overflow
+ * through [onLendOverflow], so the screen has one ⋮; the pane keeps its own navigation-bar inset,
+ * so the Stage adds none below it. Nothing while the tab is gone.
  */
 @Composable
-fun FilesTabBody(vm: AppViewModel, tab: FilesTab, modifier: Modifier = Modifier) {
+fun FilesTabBody(vm: AppViewModel, tab: FilesTab, onLendOverflow: (OverflowRows?) -> Unit = {}, modifier: Modifier = Modifier) {
     val browser = remember(tab.id) { vm.files.browser(tab.id) } ?: return
     val record by tab.record.collectAsState()
     val ride by tab.ride.collectAsState()
@@ -215,6 +218,7 @@ fun FilesTabBody(vm: AppViewModel, tab: FilesTab, modifier: Modifier = Modifier)
         onReconnect = { vm.reconnect(tab.id) },
         header = false,
         noSession = ride == null,
+        folderMenuHost = onLendOverflow,
     )
 }
 
@@ -279,9 +283,13 @@ private enum class Foot { TRANSFER, ACTIONS }
  * as faithfully as a live one. With [header] false the pane draws neither the screen header nor the
  * status-bar inset, for a host that owns the top (the tab strip); the header's actions then sit at
  * the end of the breadcrumb row, and while rows are selected the breadcrumb row itself becomes the
- * selection bar (same height), so the host's top row stays alone and nothing below moves. The
- * navigation-bar inset is the pane's own either way; a host adds none. [noSession] says the tab has
- * no terminal at all to ride, so the disconnected state offers Connect rather than Reconnect.
+ * selection bar (same height), so the host's top row stays alone and nothing below moves. A host
+ * with an overflow of its own passes [folderMenuHost]: the pane then draws no ⋮ at all and hands
+ * the host its five folder rows every composition (withdrawn when the pane leaves), so the screen
+ * has one ⋮ and the breadcrumb row keeps Upload and Transfers; without it the headerless pane
+ * keeps a Folder options ⋮ of its own. The navigation-bar inset is the pane's own either way; a
+ * host adds none. [noSession] says the tab has no terminal at all to ride, so the disconnected
+ * state offers Connect rather than Reconnect.
  */
 @Composable
 fun FilesPane(
@@ -302,6 +310,7 @@ fun FilesPane(
     onReconnect: (() -> Unit)? = null,
     header: Boolean = true,
     noSession: Boolean = false,
+    folderMenuHost: ((OverflowRows?) -> Unit)? = null,
 ) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
@@ -371,22 +380,36 @@ fun FilesPane(
         selection = entries.mapTo(HashSet()) { it.path }
     }
 
+    // The five folder rows, wherever the menu that holds them lives; each closes that menu, then acts.
+    val folderRows: OverflowRows = { dismiss ->
+        MenuItem("New folder", enabled = connected && state.error == null) { dismiss(); sheet = FilesSheetKind.NewFolder }
+        if (terminalCwd != null) {
+            MenuItem("Terminal directory", enabled = terminalCwd != state.path) { dismiss(); go(terminalCwd) }
+        }
+        MenuItem("Copy path") { dismiss(); copyPath(state.path) }
+        MenuItem("Select all", enabled = entries.isNotEmpty()) { dismiss(); selectAll() }
+        MenuItem("Refresh") { dismiss(); browser.refresh() }
+    }
+    // Under a host with its own overflow the rows go there: handed over after every composition so
+    // their enabled states track the listing, and withdrawn when the pane leaves.
+    val lendTo = folderMenuHost?.takeIf { !header }
+    if (lendTo != null) {
+        SideEffect { lendTo(folderRows) }
+        DisposableEffect(lendTo) { onDispose { lendTo(null) } }
+    }
+
     val headerActions: @Composable RowScope.() -> Unit = {
         IconAction(onClick = actions.upload, description = "Upload", enabled = connected) {
             BerthIcon(BerthIcons.upload, tint = if (connected) c.text2 else c.text3)
         }
         TransfersAction(active = transfers.count { it.state.isActive }) { sheet = FilesSheetKind.Transfers }
-        Box {
-            // Named for the folder it acts on; under the tab strip the Stage's own overflow is the plain "More".
-            IconAction(onClick = { menu = true }, description = "Folder options") { BerthIcon(BerthIcons.moreVert) }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                MenuItem("New folder", enabled = connected && state.error == null) { menu = false; sheet = FilesSheetKind.NewFolder }
-                if (terminalCwd != null) {
-                    MenuItem("Terminal directory", enabled = terminalCwd != state.path) { menu = false; go(terminalCwd) }
+        if (lendTo == null) {
+            Box {
+                // Named for the folder it acts on, apart from a host's own overflow, the plain "More".
+                IconAction(onClick = { menu = true }, description = "Folder options") { BerthIcon(BerthIcons.moreVert) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                    folderRows { menu = false }
                 }
-                MenuItem("Copy path") { menu = false; copyPath(state.path) }
-                MenuItem("Select all", enabled = entries.isNotEmpty()) { menu = false; selectAll() }
-                MenuItem("Refresh") { menu = false; browser.refresh() }
             }
         }
     }

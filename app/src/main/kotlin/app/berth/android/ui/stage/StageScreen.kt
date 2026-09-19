@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -168,6 +169,9 @@ fun StageScreen(
         known.retainAll(ids)
         known.addAll(ids)
     }
+    // A Files tab's body lends the overflow its folder rows so the screen has one ⋮ (spec C3, tab
+    // kinds); the body writes them, the header reads them, and only while a Files tab is on stage.
+    var lentRows by remember { mutableStateOf<OverflowRows?>(null) }
 
     Column(
         modifier
@@ -193,6 +197,7 @@ fun StageScreen(
                     onEditHost = onEditHost,
                     onOpenDrawer = onOpenDrawer,
                     actions = actions,
+                    extra = if (tab is FilesTab) lentRows else null,
                 )
             },
         )
@@ -212,7 +217,7 @@ fun StageScreen(
                         onOpenDeckEditor = onOpenDeckEditor,
                         modifier = body,
                     )
-                    is FilesTab -> FilesTabBody(vm = vm, tab = tab, modifier = body)
+                    is FilesTab -> FilesTabBody(vm = vm, tab = tab, onLendOverflow = { lentRows = it }, modifier = body)
                     else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
                 }
             }
@@ -252,10 +257,17 @@ private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 /**
+ * Rows a tab's body lends the Stage overflow as its first section, so a screen has one ⋮ (spec C3,
+ * tab kinds); a row calls [dismiss] before it acts, since the menu is the Stage's.
+ */
+typealias OverflowRows = @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
+
+/**
  * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Library,
  * Close. A Files tab has no Deck and no connection of its own, so it offers Connect (no terminal on
- * the host) or Reconnect (its terminal is down) and Terminal in their place. Without a tab it offers
- * New tab and Library.
+ * the host) or Reconnect (its terminal is down) and Terminal in their place, and its body lends the
+ * folder rows as a leading section over an 8 dp break, [extra]. Without a tab it offers New tab
+ * and Library.
  */
 @Composable
 private fun StageOverflow(
@@ -266,6 +278,7 @@ private fun StageOverflow(
     onEditHost: (String) -> Unit,
     onOpenDrawer: () -> Unit,
     actions: TabActions,
+    extra: OverflowRows? = null,
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
@@ -281,6 +294,11 @@ private fun StageOverflow(
                     text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },
                     onClick = { menu = false; action() },
                 )
+            }
+            if (extra != null) {
+                extra { menu = false }
+                // The break between the lent section and the tab's rows is room, not a rule.
+                Spacer(Modifier.height(8.dp))
             }
             if (tab != null && record != null) {
                 if (tab.kind == TabKind.Files) {
