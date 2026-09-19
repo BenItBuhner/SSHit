@@ -8,6 +8,7 @@ import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -209,7 +210,11 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override suspend fun setCurrentWorkspaceId(id: String) =
         db.preferences().upsert(PreferenceEntity(KEY_CURRENT_WORKSPACE, id, System.currentTimeMillis()))
 
+    override val filesPrefs: Flow<FilesPrefs> = document(KEY_FILES, FilesPrefs.serializer()) { FilesPrefs() }
+    override suspend fun setFilesPrefs(prefs: FilesPrefs) = write(KEY_FILES, FilesPrefs.serializer(), prefs)
+
     companion object {
+        const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
         const val KEY_HAPTIC_LEVEL = "haptic_level"
         const val KEY_INTERFACE_THEME = "interface_theme"

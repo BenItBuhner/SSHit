@@ -18,6 +18,7 @@ import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.connection.channel.forwarded.RemotePortForwarder
 import net.schmizz.sshj.connection.channel.forwarded.SocketForwardingConnectListener
+import net.schmizz.sshj.sftp.SFTPClient
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider
@@ -319,6 +320,15 @@ class SshConnection(
         val channel = ShellChannel(session, shell)
         if (!command.isNullOrBlank()) channel.write(command.trimEnd('\n', '\r') + "\n")
         channel
+    }
+
+    /**
+     * Opens an `sftp` subsystem channel on this connection, so file browsing rides the login the
+     * terminal already made. The caller owns the client and closes it; the connection outlives it.
+     */
+    suspend fun openSftp(): SFTPClient = withContext(Dispatchers.IO) {
+        val c = client ?: throw SshError.Disconnected("not connected")
+        c.newSFTPClient()
     }
 
     /** Runs [command] without a PTY and returns its stdout; for "install on host" and probes. */

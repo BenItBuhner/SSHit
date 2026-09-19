@@ -95,6 +95,12 @@ class SessionManager @Inject constructor(
     val activeSession: StateFlow<TerminalSession?> = combine(_activeSessionId, _sessions) { id, map -> id?.let { map[it] } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
+    /**
+     * File transfers in flight, set by the transfer queue. They ride a live session, so they never
+     * hold the service up on their own; the count only shapes the notification.
+     */
+    val activeTransfers = MutableStateFlow(0)
+
     private val restored = Mutex()
     private var didRestore = false
 
@@ -119,8 +125,9 @@ class SessionManager @Inject constructor(
             combine(
                 records.map { list -> list.count { it.state.keepsService } },
                 tunnelStatuses.map { statuses -> statuses.count { it.value is TunnelStatus.Up } },
-            ) { active, tunnels -> active to tunnels }.distinctUntilChanged().collect { (active, tunnels) ->
-                if (active > 0) SessionService.start(context, active, tunnels) else SessionService.stop(context)
+                activeTransfers,
+            ) { active, tunnels, transfers -> Triple(active, tunnels, transfers) }.distinctUntilChanged().collect { (active, tunnels, transfers) ->
+                if (active > 0) SessionService.start(context, active, tunnels, transfers) else SessionService.stop(context)
             }
         }
         scope.launch {

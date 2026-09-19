@@ -1,6 +1,7 @@
 package app.berth.domain.repository
 
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -118,4 +119,7 @@ interface SettingsRepository {
 
     val currentWorkspaceId: Flow<String?>
     suspend fun setCurrentWorkspaceId(id: String)
+
+    val filesPrefs: Flow<FilesPrefs>
+    suspend fun setFilesPrefs(prefs: FilesPrefs)
 }

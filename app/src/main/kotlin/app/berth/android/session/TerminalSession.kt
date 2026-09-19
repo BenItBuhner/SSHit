@@ -9,6 +9,9 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
+import app.berth.sftp.SftpClient
+import app.berth.sftp.SftpError
+import app.berth.sftp.SftpFileSystem
 import app.berth.ssh.ForwardHandle
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.ShellChannel
@@ -483,6 +486,22 @@ class TerminalSession(
         connection?.let { c -> c.onDisconnected = null; runCatching { c.close() } }
         connection = null
     }
+
+    // ---- files ---------------------------------------------------------------------------------
+
+    /**
+     * Opens an `sftp` channel on the connection this terminal is using, so the file browser and
+     * the transfer queue ride the login already made. The caller owns the returned channel and
+     * closes it; a reconnect replaces the connection underneath, at which point the channel's
+     * calls fail with [SftpError.Io] and the caller opens a fresh one.
+     */
+    suspend fun openSftp(): SftpFileSystem {
+        val conn = connection?.takeIf { it.isConnected && state == SessionState.LIVE } ?: throw SftpError.NotConnected()
+        return SftpClient.open(conn)
+    }
+
+    /** The shell's working directory from OSC 7, when the shell reports it. */
+    val cwd: String? get() = _record.value.cwd
 
     // ---- input ---------------------------------------------------------------------------------
 

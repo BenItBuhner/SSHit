@@ -7,5 +7,7 @@
     <string name="notification_sessions">%1$d sessions live</string>
     <string name="notification_one_tunnel">1 tunnel</string>
     <string name="notification_tunnels">%1$d tunnels</string>
+    <string name="notification_one_transfer">1 transfer</string>
+    <string name="notification_transfers">%1$d transfers</string>
     <string name="notification_detach_all">Detach all</string>
 </resources>
