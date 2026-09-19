@@ -46,8 +46,10 @@ import app.berth.android.ui.rail.Library
 import app.berth.android.ui.rail.Rail
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.snippets.SnippetsScreen
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
 import kotlinx.coroutines.launch
@@ -60,6 +62,9 @@ sealed interface Screen : NavKey {
     @Serializable data object Keys : Screen
     @Serializable data object Settings : Screen
     @Serializable data object KnownHosts : Screen
+    /** One host's tunnels, or every host's when [hostId] is null. */
+    @Serializable data class Tunnels(val hostId: String? = null) : Screen
+    @Serializable data object Snippets : Screen
 }
 
 @Composable
@@ -68,7 +73,6 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     BerthTheme(theme) {
         Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
             Shell(vm)
-            PromptHost(vm.prompts)
         }
     }
 }
@@ -130,9 +134,15 @@ private fun Shell(vm: AppViewModel) {
                             when (lib) {
                                 Library.HOSTS -> Screen.Hosts()
                                 Library.KEYS -> Screen.Keys
+                                Library.TUNNELS -> Screen.Tunnels()
+                                Library.SNIPPETS -> Screen.Snippets
                                 Library.SETTINGS -> Screen.Settings
                             },
                         )
+                    },
+                    onTunnels = { hostId ->
+                        closeRail()
+                        go(Screen.Tunnels(hostId))
                     },
                 )
             }
@@ -192,6 +202,8 @@ private fun Shell(vm: AppViewModel) {
                     is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
                     is Screen.Settings -> NavEntry(key) { SettingsScreen(vm, onBack = { back() }, onKnownHosts = { go(Screen.KnownHosts) }) }
                     is Screen.KnownHosts -> NavEntry(key) { KnownHostsScreen(vm, onBack = { back() }) }
+                    is Screen.Tunnels -> NavEntry(key) { TunnelsScreen(vm, hostId = key.hostId, onBack = { back() }) }
+                    is Screen.Snippets -> NavEntry(key) { SnippetsScreen(vm, onBack = { back() }) }
                     else -> NavEntry(key) {
                         Spacer(Modifier.statusBarsPadding().height(48.dp))
                         EmptyState("Nothing here.", "This screen has not been built yet.") {
@@ -212,9 +224,14 @@ private fun Shell(vm: AppViewModel) {
             onSwitch = { vm.setActive(it) },
             onEditHost = { go(Screen.HostEditor(it)) },
             onNewSession = { go(Screen.Hosts(picker = true)) },
+            onOpenTunnels = { hostId ->
+                sessionSheet = false
+                go(Screen.Tunnels(hostId))
+            },
         )
     }
     if (quickConnect) {
         QuickConnectSheet(vm, onDismiss = { quickConnect = false }, onConnected = { quickConnect = false; toStage() })
     }
+    PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
 }

@@ -30,6 +30,7 @@ import net.schmizz.sshj.userauth.password.PasswordFinder
 import net.schmizz.sshj.userauth.password.Resource
 import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -362,6 +363,34 @@ class SshConnection(
             )
             ForwardHandle(forward.port) { runCatching { c.remotePortForwarder.cancel(forward) } }
         }
+
+    /**
+     * Starts a SOCKS5/4a proxy on [bindAddress]:[bindPort]; every connection it accepts leaves
+     * through the server as a `direct-tcpip` channel (`ssh -D`).
+     */
+    suspend fun startDynamicForward(bindAddress: String, bindPort: Int): ForwardHandle = withContext(Dispatchers.IO) {
+        val c = client ?: throw SshError.Disconnected("not connected")
+        val socket = ServerSocket().apply {
+            reuseAddress = true
+            bind(InetSocketAddress(bindAddress, bindPort))
+        }
+        val proxy = SocksProxy(socket) { host, port ->
+            val channel = c.newDirectConnection(host, port)
+            object : ForwardedStream {
+                override val input: InputStream get() = channel.inputStream
+                override val output: OutputStream get() = channel.outputStream
+                override fun close() = channel.close()
+            }
+        }
+        val thread = Thread({ proxy.listen() }, "berth-socks-${socket.localPort}").apply {
+            isDaemon = true
+            start()
+        }
+        ForwardHandle(socket.localPort) {
+            proxy.close()
+            thread.interrupt()
+        }
+    }
 
     override fun close() {
         closeQuietly()

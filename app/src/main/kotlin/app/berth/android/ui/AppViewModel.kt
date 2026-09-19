@@ -6,8 +6,11 @@ import app.berth.android.session.AuthResolver
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.TerminalSession
+import app.berth.android.session.TunnelStatus
 import app.berth.data.crypto.HardwareKeys
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.DeckAction
+import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -17,15 +20,23 @@ import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
+import app.berth.domain.model.Snippet
+import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
+import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
 import app.berth.domain.repository.SecretStore
 import app.berth.domain.repository.SettingsRepository
+import app.berth.domain.repository.SnippetRepository
+import app.berth.domain.repository.TunnelRepository
+import app.berth.ssh.SshConfigHost
+import app.berth.ssh.SshConfigParseResult
+import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -52,10 +63,17 @@ class AppViewModel @Inject constructor(
     private val secrets: SecretStore,
     private val hardwareKeys: HardwareKeys,
     val prompts: PromptCenter,
+    private val tunnelRepository: TunnelRepository,
+    private val snippetRepository: SnippetRepository,
 ) : ViewModel() {
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val knownHosts: StateFlow<List<KnownHostKey>> = knownHostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val tunnels: StateFlow<List<Tunnel>> = tunnelRepository.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val snippets: StateFlow<List<Snippet>> = snippetRepository.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Live status of every carried tunnel, by tunnel id; a missing id means the tunnel is not running. */
+    val tunnelStatuses: StateFlow<Map<String, TunnelStatus>> = sessions.tunnelStatuses
 
     val deckLayout: StateFlow<DeckLayout> = settings.deckLayout.stateIn(viewModelScope, SharingStarted.Eagerly, DeckLayout.default())
     val interfaceTheme: StateFlow<InterfaceTheme> = settings.interfaceTheme.stateIn(viewModelScope, SharingStarted.Eagerly, InterfaceTheme.DEFAULT)
@@ -219,6 +237,159 @@ class AppViewModel @Inject constructor(
 
     fun forgetKnownHost(id: String) {
         viewModelScope.launch { knownHostRepository.delete(id) }
+    }
+
+    fun setKnownHostPinned(id: String, pinned: Boolean) {
+        viewModelScope.launch { knownHostRepository.setPinned(id, pinned) }
+    }
+
+    // ---- tunnels ----------------------------------------------------------------------------------
+
+    fun saveTunnel(tunnel: Tunnel) {
+        viewModelScope.launch { tunnelRepository.upsert(tunnel) }
+    }
+
+    fun deleteTunnel(id: String) {
+        viewModelScope.launch { tunnelRepository.delete(id) }
+    }
+
+    fun setTunnelEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch { tunnelRepository.setEnabled(id, enabled) }
+    }
+
+    fun retryTunnel(id: String) = sessions.retryTunnel(id)
+
+    /** True while some session of [hostId] is Live or on its way there, so its tunnels can run. */
+    fun hostHasActiveSession(hostId: String): Boolean = sessions.sessions.value.any { it.record.value.hostId == hostId && it.state.isActive }
+
+    // ---- snippets ---------------------------------------------------------------------------------
+
+    fun saveSnippet(snippet: Snippet) {
+        viewModelScope.launch { snippetRepository.upsert(snippet) }
+    }
+
+    fun deleteSnippet(id: String) {
+        viewModelScope.launch {
+            snippetRepository.delete(id)
+            // A Deck key bound to the snippet would otherwise point at nothing.
+            val layout = settings.deckLayout.first()
+            val cleaned = layout.copy(
+                layers = layout.layers.map { layer ->
+                    layer.copy(keys = layer.keys.filterNot { key -> (key.tap as? DeckAction.Snippet)?.snippetId == id })
+                }.filter { it.keys.isNotEmpty() },
+            )
+            if (cleaned != layout) settings.setDeckLayout(cleaned)
+        }
+    }
+
+    /**
+     * Renders [snippet] with [values] and sends it to [session]: Run types it and presses Enter
+     * on every line; Paste puts it on the prompt (bracketed when the shell asks for it) and waits.
+     */
+    fun runSnippet(session: TerminalSession, snippet: Snippet, values: Map<String, String> = emptyMap(), action: SnippetAction = snippet.defaultAction) {
+        val text = snippet.render(values)
+        when (action) {
+            SnippetAction.RUN -> session.sendText(text.trimEnd('\n', '\r') + "\n")
+            SnippetAction.PASTE -> session.paste(text)
+        }
+    }
+
+    /**
+     * Binds a snippet to a Deck key so tapping it runs the snippet. This is the hook the layout
+     * editor builds on: a key with `tap = DeckAction.Snippet(id)` is all it takes.
+     */
+    fun deckKeyFor(snippet: Snippet): DeckKey = DeckKey(tap = DeckAction.Snippet(snippet.id), display = snippet.name.take(8))
+
+    // ---- import and export --------------------------------------------------------------------------
+
+    fun parseSshConfig(text: String): SshConfigParseResult = SshConfigParser.parse(text)
+
+    /** A host row from a config alias; the identity match and jump chain are resolved by the caller. */
+    fun hostFromConfig(entry: SshConfigHost, identityId: String?, jumpHostIds: List<String>): Host {
+        val name = entry.alias
+        return Host(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            color = SwatchColor.forName(name),
+            monogram = Host.monogramFor(name),
+            address = entry.hostName,
+            port = entry.port,
+            user = entry.user ?: "root",
+            auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
+            jumpHostIds = jumpHostIds,
+            persistence = app.berth.domain.model.PersistencePolicy(keepaliveSeconds = entry.serverAliveInterval ?: 15),
+            startupCommand = entry.remoteCommand,
+            agentForwarding = entry.forwardAgent ?: false,
+            compression = entry.compression ?: false,
+            addressFamily = when (entry.addressFamily) {
+                "inet" -> app.berth.domain.model.AddressFamily.IPV4
+                "inet6" -> app.berth.domain.model.AddressFamily.IPV6
+                else -> app.berth.domain.model.AddressFamily.AUTO
+            },
+            tags = listOf("imported"),
+            createdAt = System.currentTimeMillis(),
+        )
+    }
+
+    /** Saves imported hosts with their forwards as tunnels; returns how many hosts were added. */
+    suspend fun importHosts(hosts: List<Pair<Host, SshConfigHost>>): Int {
+        for ((host, entry) in hosts) {
+            hostRepository.upsert(host)
+            for (fwd in entry.forwards) {
+                tunnelRepository.upsert(
+                    Tunnel(
+                        id = UUID.randomUUID().toString(),
+                        hostId = host.id,
+                        type = fwd.type,
+                        bindAddress = fwd.bindAddress,
+                        bindPort = fwd.bindPort,
+                        destinationHost = fwd.destinationHost,
+                        destinationPort = fwd.destinationPort,
+                        enabled = false,
+                    ),
+                )
+            }
+        }
+        return hosts.size
+    }
+
+    sealed interface KeyImportResult {
+        data class Done(val identity: Identity) : KeyImportResult
+        data object PassphraseNeeded : KeyImportResult
+        data class Failed(val reason: String) : KeyImportResult
+    }
+
+    /** Reads a pasted or picked private key and stores it re-encoded as OpenSSH, encrypted at rest. */
+    suspend fun importIdentity(name: String, keyText: String, passphrase: CharArray?): KeyImportResult = withContext(Dispatchers.Default) {
+        val imported = try {
+            SshKeys.importPrivate(keyText, passphrase)
+        } catch (e: SshKeys.ImportError.PassphraseNeeded) {
+            return@withContext KeyImportResult.PassphraseNeeded
+        } catch (e: SshKeys.ImportError) {
+            return@withContext KeyImportResult.Failed(e.message ?: "Couldn't read this key.")
+        }
+        val algorithm = imported.algorithm
+            ?: return@withContext KeyImportResult.Failed("Berth stores Ed25519, ECDSA P-256, P-384 and RSA keys; this key is another type.")
+        val fingerprint = SshKeys.fingerprintSha256(imported.pair.public)
+        identityRepository.observeAll().first().firstOrNull { it.fingerprintSha256 == fingerprint }?.let {
+            return@withContext KeyImportResult.Failed("This key is already here as ${it.name}.")
+        }
+        val keepPassphrase = passphrase != null && passphrase.isNotEmpty()
+        val comment = imported.comment
+        val identity = Identity(
+            id = UUID.randomUUID().toString(),
+            name = name.ifBlank { comment.ifBlank { "imported ${algorithm.displayName.lowercase()}" } },
+            algorithm = algorithm,
+            storage = KeyStorage.SOFTWARE_ENCRYPTED,
+            protection = if (keepPassphrase) KeyProtection.PASSPHRASE else KeyProtection.NONE,
+            publicKeyOpenSsh = SshKeys.openSshPublic(imported.pair.public, comment),
+            fingerprintSha256 = fingerprint,
+            comment = comment,
+            createdAt = System.currentTimeMillis(),
+        )
+        val pem = SshKeys.openSshPrivate(imported.pair, comment, passphrase?.takeIf { keepPassphrase })
+        identityRepository.insert(identity, pem.toByteArray(Charsets.UTF_8))
+        KeyImportResult.Done(identity)
     }
 
     // ---- settings -------------------------------------------------------------------------------------

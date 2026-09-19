@@ -42,7 +42,8 @@ class SessionService : Service() {
             }
         }
         val count = intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1
-        val notification = buildNotification(count)
+        val tunnels = intent?.getIntExtra(EXTRA_TUNNELS, 0) ?: 0
+        val notification = buildNotification(count, tunnels)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -56,7 +57,7 @@ class SessionService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(count: Int): Notification {
+    private fun buildNotification(count: Int, tunnels: Int): Notification {
         val open = PendingIntent.getActivity(
             this, 0, SessionManager.openAppIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -65,7 +66,12 @@ class SessionService : Service() {
             this, 1, Intent(this, SessionService::class.java).setAction(ACTION_DETACH_ALL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val text = if (count == 1) getString(R.string.notification_one_session) else getString(R.string.notification_sessions, count)
+        val sessionsText = if (count == 1) getString(R.string.notification_one_session) else getString(R.string.notification_sessions, count)
+        val text = when (tunnels) {
+            0 -> sessionsText
+            1 -> "$sessionsText \u00B7 " + getString(R.string.notification_one_tunnel)
+            else -> "$sessionsText \u00B7 " + getString(R.string.notification_tunnels, tunnels)
+        }
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.app_name))
@@ -95,9 +101,12 @@ class SessionService : Service() {
         private const val ACTION_DETACH_ALL = "app.berth.android.action.DETACH_ALL"
         private const val ACTION_STOP = "app.berth.android.action.STOP"
         private const val EXTRA_COUNT = "count"
+        private const val EXTRA_TUNNELS = "tunnels"
 
-        fun start(context: Context, activeCount: Int) {
-            val intent = Intent(context, SessionService::class.java).putExtra(EXTRA_COUNT, activeCount)
+        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0) {
+            val intent = Intent(context, SessionService::class.java)
+                .putExtra(EXTRA_COUNT, activeCount)
+                .putExtra(EXTRA_TUNNELS, tunnelCount)
             runCatching { context.startForegroundService(intent) }
         }
 

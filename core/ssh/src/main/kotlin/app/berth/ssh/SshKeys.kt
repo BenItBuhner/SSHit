@@ -132,7 +132,7 @@ object SshKeys {
             val salt = ByteArray(16).also(random::nextBytes)
             val rounds = 16
             val keyAndIv = ByteArray(48)
-            val passBytes = String(passphrase!!).toByteArray(Charsets.UTF_8)
+            val passBytes = String(passphrase).toByteArray(Charsets.UTF_8)
             try {
                 BCrypt().pbkdf(passBytes, salt, rounds, keyAndIv)
             } finally {
@@ -219,6 +219,7 @@ object SshKeys {
     /** True when the private key text is encrypted and needs a passphrase to load. */
     fun isEncrypted(privateKeyText: String): Boolean {
         if (privateKeyText.contains("ENCRYPTED")) return true
+        if (privateKeyText.contains("PuTTY-User-Key-File")) return Regex("Encryption:\\s*(?!none)\\S").containsMatchIn(privateKeyText)
         if (!privateKeyText.contains("BEGIN OPENSSH PRIVATE KEY")) return false
         val body = privateKeyText.lines().filter { !it.startsWith("-----") }.joinToString("")
         return runCatching {
@@ -227,4 +228,113 @@ object SshKeys {
             buf.readString() != "none"
         }.getOrDefault(false)
     }
+
+    /** True when [text] looks like a private key in any format [load] understands. */
+    fun looksLikePrivateKey(text: String): Boolean =
+        text.contains("PRIVATE KEY-----") || text.contains("PuTTY-User-Key-File")
+
+    /** A private key read from user-supplied text, ready to be stored as an identity. */
+    class ImportedKey(
+        val pair: KeyPair,
+        /** Null for key types Berth cannot generate itself (DSA, P-521); they still authenticate. */
+        val algorithm: KeyAlgorithm?,
+        /** Comment embedded in an OpenSSH v1 file, or empty. */
+        val comment: String,
+        /** `OpenSSH`, `PEM`, `PKCS#8` or `PuTTY`, for the import sheet. */
+        val format: String,
+    )
+
+    sealed class ImportError(message: String) : Exception(message) {
+        class NotAKey : ImportError("This isn't a private key. Expected an OpenSSH, PEM, PKCS#8 or PuTTY key file.")
+        class PassphraseNeeded : ImportError("This key is protected by a passphrase.")
+        class WrongPassphrase : ImportError("That passphrase didn't unlock the key.")
+        class Unsupported(detail: String) : ImportError("Couldn't read this key: $detail")
+    }
+
+    /**
+     * Reads a private key from text. Throws [ImportError.PassphraseNeeded] when the key is
+     * encrypted and [passphrase] is null or empty, [ImportError.WrongPassphrase] when it does not
+     * decrypt, and [ImportError.NotAKey] when the text is not a key at all.
+     */
+    fun importPrivate(text: String, passphrase: CharArray? = null): ImportedKey {
+        val trimmed = text.trim()
+        if (!looksLikePrivateKey(trimmed)) throw ImportError.NotAKey()
+        val encrypted = isEncrypted(trimmed)
+        if (encrypted && (passphrase == null || passphrase.isEmpty())) throw ImportError.PassphraseNeeded()
+        val format = when {
+            trimmed.startsWith("PuTTY-User-Key-File") -> "PuTTY"
+            trimmed.contains("BEGIN OPENSSH PRIVATE KEY") -> "OpenSSH"
+            trimmed.contains("BEGIN PRIVATE KEY") || trimmed.contains("BEGIN ENCRYPTED PRIVATE KEY") -> "PKCS#8"
+            else -> "PEM"
+        }
+        // Read the comment first: sshj's one-off password finder blanks the passphrase once used.
+        val comment = if (format == "OpenSSH") openSshComment(trimmed, passphrase) ?: "" else ""
+        val provider = try {
+            load(trimmed, passphrase = passphrase?.takeIf { it.isNotEmpty() }?.copyOf())
+        } catch (e: Exception) {
+            throw ImportError.Unsupported(e.message ?: e.javaClass.simpleName)
+        }
+        val pair = try {
+            KeyPair(provider.public, provider.private)
+        } catch (e: Exception) {
+            if (encrypted) throw ImportError.WrongPassphrase()
+            throw ImportError.Unsupported(e.message ?: e.javaClass.simpleName)
+        }
+        return ImportedKey(pair, algorithmOf(pair.public), comment, format)
+    }
+
+    /** The comment stored inside an `openssh-key-v1` file; null when it cannot be read. */
+    internal fun openSshComment(text: String, passphrase: CharArray?): String? = runCatching {
+        val body = text.lines().filter { !it.startsWith("-----") }.joinToString("")
+        val file = Buffer.PlainBuffer(Base64.getDecoder().decode(body))
+        file.readRawBytes(ByteArray(15))
+        val cipherName = file.readString()
+        val kdfName = file.readString()
+        val kdfOptions = file.readStringAsBytes()
+        val keyCount = file.readUInt32AsInt()
+        repeat(keyCount) { file.readStringAsBytes() }
+        var section = file.readStringAsBytes()
+        if (cipherName != "none") {
+            if (kdfName != "bcrypt" || passphrase == null || passphrase.isEmpty()) return null
+            val (keyBits, mode) = when (cipherName) {
+                "aes256-ctr" -> 32 to "CTR"
+                "aes192-ctr" -> 24 to "CTR"
+                "aes128-ctr" -> 16 to "CTR"
+                "aes256-cbc" -> 32 to "CBC"
+                "aes192-cbc" -> 24 to "CBC"
+                "aes128-cbc" -> 16 to "CBC"
+                else -> return null
+            }
+            val options = Buffer.PlainBuffer(kdfOptions)
+            val salt = options.readStringAsBytes()
+            val rounds = options.readUInt32AsInt()
+            val keyAndIv = ByteArray(keyBits + 16)
+            val passBytes = String(passphrase).toByteArray(Charsets.UTF_8)
+            try {
+                BCrypt().pbkdf(passBytes, salt, rounds, keyAndIv)
+            } finally {
+                passBytes.fill(0)
+            }
+            val cipher = Cipher.getInstance("AES/$mode/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyAndIv.copyOfRange(0, keyBits), "AES"), IvParameterSpec(keyAndIv.copyOfRange(keyBits, keyBits + 16)))
+            section = cipher.doFinal(section)
+            keyAndIv.fill(0)
+        }
+        val private = Buffer.PlainBuffer(section)
+        if (private.readUInt32AsInt() != private.readUInt32AsInt()) return null
+        val type = private.readString()
+        when (type) {
+            "ssh-ed25519" -> repeat(2) { private.readStringAsBytes() }
+            "ssh-rsa" -> repeat(6) { private.readMPInt() }
+            "ssh-dss" -> repeat(5) { private.readMPInt() }
+            else -> if (type.startsWith("ecdsa-sha2-")) {
+                private.readString()
+                private.readStringAsBytes()
+                private.readMPInt()
+            } else {
+                return null
+            }
+        }
+        private.readString()
+    }.getOrNull()
 }

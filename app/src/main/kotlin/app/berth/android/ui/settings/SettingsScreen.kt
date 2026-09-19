@@ -5,16 +5,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,23 +21,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
-import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
-import app.berth.android.ui.prompts.formatDate
+import app.berth.android.ui.importer.ImportHostsSheet
+import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -49,7 +47,6 @@ import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.TerminalFont
-import app.berth.ssh.SshKeys
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
 @Composable
@@ -60,6 +57,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
     val themes by vm.terminalThemes.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val deck by vm.deckLayout.collectAsState()
+    val known by vm.knownHosts.collectAsState()
+    var importConfig by remember { mutableStateOf(false) }
+    var importKey by remember { mutableStateOf(false) }
+
+    if (importConfig) ImportHostsSheet(vm, onDismiss = { importConfig = false })
+    if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
 
     Column(
         modifier
@@ -130,8 +133,15 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 Text("Editing keys and layers arrives with the layout editor; the layout is already data, so it will not require a migration.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 2.dp))
             }
 
+            // Rows that navigate end in the same chevron the Terminal pickers use.
+            val chevron: @Composable RowScope.() -> Unit = { Text("\u203A", style = BerthType.body, color = c.text3) }
             Panel(label = "Trust") {
-                ListRow("Known hosts", subtitle = "Saved server keys", surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts)
+                ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
+            }
+
+            Panel(label = "Data") {
+                ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
+                ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
             }
 
             Panel(label = "About") {
@@ -146,42 +156,3 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
 }
 
 private val ACCENTS = listOf(0xE0A458, 0xD9776B, 0x7AD3C6, 0x8FB573, 0x89A7E0, 0xC79BD8)
-
-@Composable
-fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val c = Berth.colors
-    val known by vm.knownHosts.collectAsState()
-    Column(
-        modifier
-            .fillMaxSize()
-            .background(c.surface0)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
-    ) {
-        ScreenHeader("Known hosts", onBack = onBack)
-        if (known.isEmpty()) {
-            EmptyState("No saved server keys.", "The first connection to each server asks you to trust its key; the keys you trust are listed here.") {}
-        } else {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(known, key = { it.id }) { k ->
-                    ListRow(
-                        title = k.host + if (k.port != 22) ":${k.port}" else "",
-                        subtitle = "${k.keyType} \u00B7 ${SshKeys.groupedFingerprint(k.fingerprintSha256)}",
-                        subtitleStyle = BerthType.mono.copy(fontSize = BerthType.caption.fontSize),
-                        onLongClick = { vm.forgetKnownHost(k.id) },
-                        trailing = {
-                            Text("since ${formatDate(k.firstSeenAt)}", style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        },
-                    )
-                }
-                item {
-                    Text("Long-press a row to forget the key.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
-                }
-            }
-        }
-    }
-}

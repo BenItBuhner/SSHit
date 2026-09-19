@@ -117,9 +117,9 @@ internal fun IdentityEntity.toDomain() = Identity(
     createdAt = createdAt,
 )
 
-internal fun KnownHostKey.toEntity() = KnownHostEntity(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt)
+internal fun KnownHostKey.toEntity() = KnownHostEntity(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
-internal fun KnownHostEntity.toDomain() = KnownHostKey(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt)
+internal fun KnownHostEntity.toDomain() = KnownHostKey(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
 internal fun Workspace.toEntity() = WorkspaceEntity(id, name, color.name, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt)
 
@@ -195,6 +195,7 @@ internal fun Snippet.toEntity() = SnippetEntity(
     defaultAction = defaultAction.name,
     runOnConnect = runOnConnect,
     pinnedToDeck = pinnedToDeck,
+    workspaceId = workspaceId,
 )
 
 internal fun SnippetEntity.toDomain() = Snippet(
@@ -206,4 +207,5 @@ internal fun SnippetEntity.toDomain() = Snippet(
     defaultAction = defaultAction.toEnumOr(SnippetAction.RUN),
     runOnConnect = runOnConnect,
     pinnedToDeck = pinnedToDeck,
+    workspaceId = workspaceId,
 )

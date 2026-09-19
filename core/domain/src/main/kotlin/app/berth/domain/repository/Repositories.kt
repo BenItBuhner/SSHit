@@ -50,6 +50,7 @@ interface KnownHostRepository {
     suspend fun find(host: String, port: Int): List<KnownHostKey>
     suspend fun upsert(key: KnownHostKey)
     suspend fun delete(id: String)
+    suspend fun setPinned(id: String, pinned: Boolean)
 }
 
 interface WorkspaceRepository {
@@ -74,13 +75,17 @@ interface SessionRepository {
 }
 
 interface TunnelRepository {
+    fun observeAll(): Flow<List<Tunnel>>
     fun observeForHost(hostId: String): Flow<List<Tunnel>>
+    suspend fun get(id: String): Tunnel?
     suspend fun upsert(tunnel: Tunnel)
     suspend fun delete(id: String)
+    suspend fun setEnabled(id: String, enabled: Boolean)
 }
 
 interface SnippetRepository {
     fun observeAll(): Flow<List<Snippet>>
+    suspend fun get(id: String): Snippet?
     suspend fun upsert(snippet: Snippet)
     suspend fun delete(id: String)
 }

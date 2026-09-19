@@ -12,8 +12,12 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.DataInputStream
 import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.Socket
+import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -174,6 +178,90 @@ class SshIntegrationTest {
             } finally {
                 forward.close()
             }
+        }
+    }
+
+    @Test
+    fun `dynamic forward proxies SOCKS5 connections out through the server`() = runBlocking {
+        SshConnection(passwordEndpoint(), AcceptAllHostKeys).use { connection ->
+            connection.connect()
+            val forward = connection.startDynamicForward("127.0.0.1", 0)
+            try {
+                assertTrue(forward.localPort > 0)
+                val banner = withTimeout(10_000) {
+                    Socket("127.0.0.1", forward.localPort).use { socket ->
+                        socket.soTimeout = 8_000
+                        val out = socket.getOutputStream()
+                        val input = DataInputStream(socket.getInputStream())
+                        out.write(byteArrayOf(5, 1, 0))
+                        out.flush()
+                        assertEquals(5, input.readUnsignedByte())
+                        assertEquals(0, input.readUnsignedByte())
+                        val name = "localhost".toByteArray()
+                        out.write(byteArrayOf(5, 1, 0, 3, name.size.toByte()) + name + byteArrayOf((port shr 8).toByte(), port.toByte()))
+                        out.flush()
+                        val reply = ByteArray(10).also { input.readFully(it) }
+                        assertEquals(0, reply[1].toInt(), "SOCKS5 reply should be succeeded")
+                        input.bufferedReader().readLine()
+                    }
+                }
+                assertTrue(banner.startsWith("SSH-2.0"), "got banner: $banner")
+
+                // A port nobody listens on comes back as "connection refused" rather than a hang.
+                withTimeout(10_000) {
+                    Socket("127.0.0.1", forward.localPort).use { socket ->
+                        socket.soTimeout = 8_000
+                        val out = socket.getOutputStream()
+                        val input = DataInputStream(socket.getInputStream())
+                        out.write(byteArrayOf(5, 1, 0))
+                        out.flush()
+                        input.readFully(ByteArray(2))
+                        out.write(byteArrayOf(5, 1, 0, 1, 127, 0, 0, 1, 0, 1))
+                        out.flush()
+                        val reply = ByteArray(10).also { input.readFully(it) }
+                        assertEquals(5, reply[1].toInt(), "SOCKS5 reply should be connection refused")
+                    }
+                }
+            } finally {
+                forward.close()
+            }
+        }
+    }
+
+    @Test
+    fun `remote forward delivers server-side connections back to this side`() = runBlocking {
+        val echo = ServerSocket(0, 5, InetAddress.getLoopbackAddress())
+        val server = thread(isDaemon = true) {
+            runCatching {
+                echo.accept().use { s ->
+                    val line = s.getInputStream().bufferedReader().readLine()
+                    s.getOutputStream().write("echo:$line\n".toByteArray())
+                    s.getOutputStream().flush()
+                }
+            }
+        }
+        try {
+            SshConnection(passwordEndpoint(), AcceptAllHostKeys).use { connection ->
+                connection.connect()
+                val forward = connection.startRemoteForward("127.0.0.1", 0, "127.0.0.1", echo.localPort)
+                try {
+                    assertTrue(forward.localPort > 0, "server should pick a port")
+                    val reply = withTimeout(10_000) {
+                        Socket("127.0.0.1", forward.localPort).use { socket ->
+                            socket.soTimeout = 8_000
+                            socket.getOutputStream().write("ping\n".toByteArray())
+                            socket.getOutputStream().flush()
+                            socket.getInputStream().bufferedReader().readLine()
+                        }
+                    }
+                    assertEquals("echo:ping", reply)
+                } finally {
+                    forward.close()
+                }
+            }
+        } finally {
+            echo.close()
+            server.join(2_000)
         }
     }
 

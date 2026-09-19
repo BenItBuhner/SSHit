@@ -1,14 +1,21 @@
 package app.berth.data
 
+import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.driver.AndroidSQLiteDriver
+import androidx.sqlite.execSQL
+import androidx.test.platform.app.InstrumentationRegistry
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
+import app.berth.data.db.BerthDatabase_Impl
 import app.berth.data.repo.EncryptedSecretStore
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
 import app.berth.data.repo.RoomKnownHostRepository
 import app.berth.data.repo.RoomSessionRepository
 import app.berth.data.repo.RoomSettingsRepository
+import app.berth.data.repo.RoomSnippetRepository
+import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
@@ -25,11 +32,15 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TmuxMode
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.flow.first
+import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -129,13 +140,78 @@ class RoomRepositoriesTest {
     }
 
     @Test
-    fun `known hosts are looked up by endpoint`() = runTest {
+    fun `known hosts are looked up by endpoint and can be pinned`() = runTest {
         val repo = RoomKnownHostRepository(db)
         repo.upsert(KnownHostKey("k1", "example.com", 22, "ssh-ed25519", "AAAA1", "SHA256:1", 1, 1))
         repo.upsert(KnownHostKey("k2", "example.com", 2222, "ssh-ed25519", "AAAA2", "SHA256:2", 1, 1))
-        repo.upsert(KnownHostKey("k3", "example.com", 22, "ssh-rsa", "AAAA3", "SHA256:3", 1, 1))
+        repo.upsert(KnownHostKey("k3", "example.com", 22, "ssh-rsa", "AAAA3", "SHA256:3", 1, 1, pinned = true))
         assertEquals(setOf("k1", "k3"), repo.find("example.com", 22).map { it.id }.toSet())
         assertEquals(3, repo.observeAll().first().size)
+        assertEquals(listOf("k3"), repo.find("example.com", 22).filter { it.pinned }.map { it.id })
+
+        repo.setPinned("k1", true)
+        repo.setPinned("k3", false)
+        assertEquals(listOf("k1"), repo.find("example.com", 22).filter { it.pinned }.map { it.id })
+    }
+
+    @Test
+    fun `tunnels and snippets round trip with their scopes`() = runTest {
+        val tunnels = RoomTunnelRepository(db)
+        val local = Tunnel(id = "t1", hostId = "h1", type = TunnelType.LOCAL, bindPort = 8080, destinationHost = "localhost", destinationPort = 80)
+        val socks = Tunnel(id = "t2", hostId = "h2", type = TunnelType.DYNAMIC, bindAddress = "0.0.0.0", bindPort = 1080, enabled = false)
+        tunnels.upsert(local)
+        tunnels.upsert(socks)
+        assertEquals(listOf(local), tunnels.observeForHost("h1").first())
+        assertEquals(listOf(local, socks), tunnels.observeAll().first())
+        assertEquals(socks, tunnels.get("t2"))
+        tunnels.setEnabled("t2", true)
+        assertTrue(assertNotNull(tunnels.get("t2")).enabled)
+        tunnels.delete("t1")
+        assertNull(tunnels.get("t1"))
+
+        val snippets = RoomSnippetRepository(db)
+        val global = Snippet(id = "s1", name = "disk", body = "df -h", tags = listOf("ops"))
+        val scoped = Snippet(id = "s2", name = "tail", body = "tail -f {{file}}", hostId = "h1", workspaceId = "w1", runOnConnect = true, pinnedToDeck = true)
+        snippets.upsert(global)
+        snippets.upsert(scoped)
+        assertEquals(listOf(global, scoped), snippets.observeAll().first())
+        assertEquals("w1", assertNotNull(snippets.get("s2")).workspaceId)
+        snippets.delete("s1")
+        assertNull(snippets.get("s1"))
+    }
+
+    @Test
+    fun `a version 1 database migrates to version 2 keeping its rows`() {
+        val helper = MigrationTestHelper(
+            InstrumentationRegistry.getInstrumentation(),
+            File.createTempFile("berth-migration", ".db").also { it.delete(); it.deleteOnExit() },
+            AndroidSQLiteDriver(),
+            BerthDatabase::class,
+            { BerthDatabase_Impl() },
+            emptyList(),
+        )
+        helper.createDatabase(1).use { connection ->
+            connection.execSQL(
+                "INSERT INTO known_hosts (id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt) " +
+                    "VALUES ('k1', 'example.com', 22, 'ssh-ed25519', 'AAAA', 'SHA256:1', 1, 2)",
+            )
+            connection.execSQL(
+                "INSERT INTO snippets (id, name, body, hostId, tagsJson, defaultAction, runOnConnect, pinnedToDeck) " +
+                    "VALUES ('s1', 'disk', 'df -h', NULL, '[]', 'RUN', 0, 0)",
+            )
+        }
+        helper.runMigrationsAndValidate(2, emptyList()).use { connection ->
+            connection.prepare("SELECT pinned, host FROM known_hosts WHERE id = 'k1'").use { statement ->
+                assertTrue(statement.step())
+                assertEquals(0L, statement.getLong(0), "existing keys start unpinned")
+                assertEquals("example.com", statement.getText(1))
+            }
+            connection.prepare("SELECT workspaceId, body FROM snippets WHERE id = 's1'").use { statement ->
+                assertTrue(statement.step())
+                assertTrue(statement.isNull(0), "existing snippets stay global")
+                assertEquals("df -h", statement.getText(1))
+            }
+        }
     }
 
     @Test

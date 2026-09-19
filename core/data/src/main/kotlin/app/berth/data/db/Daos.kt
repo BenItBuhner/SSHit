@@ -74,6 +74,9 @@ interface KnownHostDao {
 
     @Query("DELETE FROM known_hosts WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("UPDATE known_hosts SET pinned = :pinned WHERE id = :id")
+    suspend fun setPinned(id: String, pinned: Boolean)
 }
 
 @Dao
@@ -120,20 +123,32 @@ interface SessionDao {
 
 @Dao
 interface TunnelDao {
+    @Query("SELECT * FROM tunnels ORDER BY hostId, bindPort")
+    fun observeAll(): Flow<List<TunnelEntity>>
+
     @Query("SELECT * FROM tunnels WHERE hostId = :hostId ORDER BY bindPort")
     fun observeForHost(hostId: String): Flow<List<TunnelEntity>>
+
+    @Query("SELECT * FROM tunnels WHERE id = :id")
+    suspend fun get(id: String): TunnelEntity?
 
     @Upsert
     suspend fun upsert(tunnel: TunnelEntity)
 
     @Query("DELETE FROM tunnels WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("UPDATE tunnels SET enabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(id: String, enabled: Boolean)
 }
 
 @Dao
 interface SnippetDao {
     @Query("SELECT * FROM snippets ORDER BY name COLLATE NOCASE")
     fun observeAll(): Flow<List<SnippetEntity>>
+
+    @Query("SELECT * FROM snippets WHERE id = :id")
+    suspend fun get(id: String): SnippetEntity?
 
     @Upsert
     suspend fun upsert(snippet: SnippetEntity)

@@ -6,6 +6,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,11 +37,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
+import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
+import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.stage.ageText
@@ -50,12 +55,13 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Workspace
 
-enum class Library { HOSTS, KEYS, SETTINGS }
+enum class Library { HOSTS, KEYS, TUNNELS, SNIPPETS, SETTINGS }
 
 /**
  * The drawer: workspace chips across the top, the current workspace's sessions, then the library.
  * 304 dp wide on surface.1; rows on surface.2; the active row on surface.3.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Rail(
     vm: AppViewModel,
@@ -63,6 +69,7 @@ fun Rail(
     onNewSession: () -> Unit,
     onLibrary: (Library) -> Unit,
     modifier: Modifier = Modifier,
+    onTunnels: (hostId: String) -> Unit = {},
 ) {
     val c = Berth.colors
     val workspaces by vm.workspaces.collectAsState()
@@ -70,8 +77,14 @@ fun Rail(
     val sessions by vm.workspaceSessions.collectAsState()
     val active by vm.activeSession.collectAsState()
     val records by vm.records.collectAsState(initial = emptyList())
+    val tunnels by vm.tunnels.collectAsState()
+    val tunnelStatuses by vm.tunnelStatuses.collectAsState()
     var newWorkspace by remember { mutableStateOf(false) }
     val now = ageTicker()
+
+    /** Local ports of the tunnels that are up for [hostId]; the rail shows them as pills. */
+    fun upPorts(hostId: String?): List<Int> =
+        if (hostId == null) emptyList() else tunnels.filter { it.hostId == hostId }.mapNotNull { (tunnelStatuses[it.id] as? TunnelStatus.Up)?.localPort }.sorted()
 
     Column(
         modifier
@@ -122,6 +135,7 @@ fun Rail(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(sessions, key = { it.id }) { session ->
+                val hostId = session.record.collectAsState().value.hostId
                 SessionRow(
                     session = session,
                     selected = active?.id == session.id,
@@ -130,6 +144,8 @@ fun Rail(
                     onReconnect = { vm.reconnect(session.id) },
                     onDetach = { vm.detach(session.id) },
                     onClose = { vm.close(session.id) },
+                    tunnelPorts = upPorts(hostId),
+                    onTunnelTap = hostId?.let { id -> { onTunnels(id) } },
                 )
             }
             item {
@@ -149,14 +165,18 @@ fun Rail(
         }
 
         Spacer(Modifier.height(12.dp))
-        Row(
+        // Three links per line (C7): Hosts Keys Tunnels / Snippets Settings.
+        FlowRow(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
+            maxItemsInEachRow = 3,
         ) {
             LibraryLink("Hosts") { onLibrary(Library.HOSTS) }
             LibraryLink("Keys") { onLibrary(Library.KEYS) }
+            LibraryLink("Tunnels") { onLibrary(Library.TUNNELS) }
+            LibraryLink("Snippets") { onLibrary(Library.SNIPPETS) }
             LibraryLink("Settings") { onLibrary(Library.SETTINGS) }
         }
     }
@@ -193,7 +213,10 @@ private fun WorkspaceChip(ws: Workspace, selected: Boolean, attention: Boolean, 
     }
 }
 
-/** 56 dp session row: swatch with state dot, title, subtitle, and an age when not Live. */
+/**
+ * 56 dp session row: swatch with state dot, title, subtitle, the local ports of tunnels that are
+ * up as Mono pills (tap opens the host's tunnels), and an age when not Live.
+ */
 @Composable
 fun SessionRow(
     session: TerminalSession,
@@ -204,6 +227,8 @@ fun SessionRow(
     onDetach: () -> Unit,
     onClose: () -> Unit,
     surface: androidx.compose.ui.graphics.Color = Berth.colors.surface2,
+    tunnelPorts: List<Int> = emptyList(),
+    onTunnelTap: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
@@ -227,6 +252,13 @@ fun SessionRow(
                 )
             },
             trailing = {
+                if (tunnelPorts.isNotEmpty()) {
+                    val pillModifier = if (onTunnelTap != null) Modifier.clip(CircleShape).clickable(onClick = onTunnelTap) else Modifier
+                    // One tonal step above the row it sits on: the active row is already surface.3.
+                    val pill = if (selected) c.surface4 else c.surface3
+                    for (port in tunnelPorts.take(2)) Pill(port.toString(), mono = true, modifier = pillModifier, color = pill)
+                    if (tunnelPorts.size > 2) Pill("+${tunnelPorts.size - 2}", mono = true, modifier = pillModifier, color = pill)
+                }
                 val trailing = when (record.state) {
                     SessionState.LIVE -> null
                     SessionState.DETACHED -> "Detached"

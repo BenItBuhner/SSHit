@@ -24,6 +24,14 @@ android {
     }
 }
 
+// Exported Room schemas double as unit test assets so migrations can be verified from version 1.
+androidComponents {
+    onVariants { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]
+            ?.sources?.assets?.addStaticSourceDirectory("$projectDir/schemas")
+    }
+}
+
 room {
     schemaDirectory("$projectDir/schemas")
 }
@@ -45,4 +53,6 @@ dependencies {
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
+    testImplementation(libs.room.testing)
+    testImplementation(libs.androidx.test.ext.junit)
 }

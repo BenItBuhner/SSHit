@@ -47,6 +47,7 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
@@ -74,6 +75,7 @@ fun HostsScreen(
     val c = Berth.colors
     val hosts by vm.hosts.collectAsState()
     var quickConnect by remember { mutableStateOf(false) }
+    var importConfig by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     val now = ageTicker()
 
@@ -96,6 +98,7 @@ fun HostsScreen(
                     IconAction(onClick = { menu = true }, description = "More") { Glyph("\u22EE") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                         DropdownMenuItem(text = { Text("Quick connect", style = BerthType.body, color = c.text1) }, onClick = { menu = false; quickConnect = true })
+                        DropdownMenuItem(text = { Text("Import ssh config", style = BerthType.body, color = c.text1) }, onClick = { menu = false; importConfig = true })
                         DropdownMenuItem(text = { Text("Known hosts", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onKnownHosts() })
                     }
                 }
@@ -109,7 +112,8 @@ fun HostsScreen(
                 body = "Hosts, keys and history stay on this device. No account. No telemetry.",
             ) {
                 BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
-                BerthButton("Quick connect", onClick = { quickConnect = true })
+                BerthButton("Quick connect", onClick = { quickConnect = true }, kind = ButtonKind.TEXT)
+                BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)
             }
         } else {
             val recent = hosts.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
@@ -135,6 +139,9 @@ fun HostsScreen(
 
     if (quickConnect) {
         QuickConnectSheet(vm = vm, onDismiss = { quickConnect = false }, onConnected = { quickConnect = false })
+    }
+    if (importConfig) {
+        ImportHostsSheet(vm = vm, onDismiss = { importConfig = false })
     }
 }
 

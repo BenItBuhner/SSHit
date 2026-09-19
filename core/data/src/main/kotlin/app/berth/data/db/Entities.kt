@@ -1,5 +1,6 @@
 package app.berth.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -66,6 +67,7 @@ data class KnownHostEntity(
     val fingerprintSha256: String,
     val firstSeenAt: Long,
     val lastSeenAt: Long,
+    @ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
 )
 
 @Entity(tableName = "workspaces", indices = [Index("sortOrder")])
@@ -129,6 +131,7 @@ data class SnippetEntity(
     val defaultAction: String,
     val runOnConnect: Boolean,
     val pinnedToDeck: Boolean,
+    val workspaceId: String? = null,
 )
 
 /** Small settings, one JSON document per key. Observed as flows so the UI reacts to edits. */

@@ -7,6 +7,9 @@ import app.berth.domain.model.ReconnectBackoff
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TmuxMode
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
+import app.berth.ssh.ForwardHandle
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.ShellChannel
 import app.berth.ssh.SshAuth
@@ -22,6 +25,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,15 +33,22 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.net.BindException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +60,22 @@ interface SessionEnvironment {
     val networkAvailable: Flow<Unit>
     fun onClipboardText(text: String)
     fun now(): Long = System.currentTimeMillis()
+
+    /** The tunnels configured for a host, as they change. */
+    fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = flowOf(emptyList())
+
+    /** Rendered snippet bodies to type into a fresh shell on [host] in [workspaceId]. */
+    suspend fun connectCommands(host: Host, workspaceId: String): List<String> = emptyList()
+}
+
+/** Runtime state of one configured tunnel on the session that carries it. */
+sealed interface TunnelStatus {
+    data object Starting : TunnelStatus
+
+    /** [localPort] is the port actually bound; it matters when 0 was configured. */
+    data class Up(val localPort: Int) : TunnelStatus
+
+    data class Failed(val reason: String) : TunnelStatus
 }
 
 /**
@@ -136,6 +163,133 @@ class TerminalSession(
     /** Geometry the renderer last requested; applied to the PTY once a shell exists. */
     private var cols = 80
     private var rows = 24
+
+    // ---- tunnels -------------------------------------------------------------------------------
+
+    /** Live status of every tunnel this session carries, by tunnel id; empty unless Live and carrying. */
+    private val _tunnels = MutableStateFlow<Map<String, TunnelStatus>>(emptyMap())
+    val tunnels: StateFlow<Map<String, TunnelStatus>> = _tunnels.asStateFlow()
+
+    /**
+     * Set by the manager: exactly one session per host carries that host's tunnels, so a port is
+     * bound once however many terminals are open to the same server.
+     */
+    val carriesTunnels = MutableStateFlow(false)
+
+    private class Slot(val tunnel: Tunnel, val handle: ForwardHandle?, val error: String?)
+    private val slots = HashMap<String, Slot>()
+    private val tunnelGate = Mutex()
+    private val tunnelRetry = MutableStateFlow(0)
+
+    init {
+        val configured = initial.hostId?.let { env.tunnelsFor(it) } ?: flowOf(emptyList())
+        val liveState = _record.map { it.state }.distinctUntilChanged()
+        scope.launch {
+            combine(carriesTunnels, liveState, configured, tunnelRetry) { carry, state, list, _ ->
+                if (carry && state == SessionState.LIVE) list.filter { it.enabled } else emptyList()
+            }.collect { wanted -> reconcileTunnels(wanted) }
+        }
+    }
+
+    /**
+     * Brings the running forwards in line with [wanted]: closes what was removed, disabled or
+     * edited, then starts what is missing on the current connection. Runs again after every
+     * reconnect because the Live transition re-emits, which is what makes tunnels survive drops.
+     */
+    private suspend fun reconcileTunnels(wanted: List<Tunnel>) = tunnelGate.withLock {
+        val byId = wanted.associateBy { it.id }
+        synchronized(slots) {
+            for ((id, slot) in slots.entries.toList()) {
+                if (byId[id] != slot.tunnel) {
+                    slot.handle?.let { runCatching(it::close) }
+                    slots.remove(id)
+                }
+            }
+        }
+        val pending = wanted.filter { synchronized(slots) { !slots.containsKey(it.id) } }.toMutableList()
+        publishTunnels(pending)
+        val conn = connection
+        for (tunnel in pending.toList()) {
+            if (conn == null || !conn.isConnected) break
+            val slot = try {
+                Slot(tunnel, startForward(conn, tunnel), null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Slot(tunnel, null, tunnelError(tunnel, e))
+            }
+            // The connection may have been torn down while the forward was starting.
+            val stale = synchronized(slots) {
+                if (connection !== conn) true else {
+                    slots[tunnel.id] = slot
+                    false
+                }
+            }
+            if (stale) slot.handle?.let { runCatching(it::close) }
+            pending.remove(tunnel)
+            publishTunnels(pending)
+        }
+        publishTunnels(emptyList())
+    }
+
+    /**
+     * Binds one forward. A port still held by the session that just handed the role over, or by
+     * this session's own previous connection, frees up within moments, so one bind failure gets a
+     * second try before it is reported.
+     */
+    private suspend fun startForward(conn: SshConnection, tunnel: Tunnel): ForwardHandle {
+        repeat(BIND_RETRIES) {
+            try {
+                return openForward(conn, tunnel)
+            } catch (e: BindException) {
+                delay(BIND_RETRY_DELAY_MS)
+            }
+        }
+        return openForward(conn, tunnel)
+    }
+
+    private suspend fun openForward(conn: SshConnection, tunnel: Tunnel): ForwardHandle = when (tunnel.type) {
+        TunnelType.LOCAL -> conn.startLocalForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
+        TunnelType.REMOTE -> conn.startRemoteForward(tunnel.bindAddress, tunnel.bindPort, tunnel.destinationHost, tunnel.destinationPort)
+        TunnelType.DYNAMIC -> conn.startDynamicForward(tunnel.bindAddress, tunnel.bindPort)
+    }
+
+    private fun publishTunnels(starting: List<Tunnel>) {
+        _tunnels.value = synchronized(slots) {
+            buildMap {
+                for ((id, slot) in slots) {
+                    put(id, if (slot.handle != null) TunnelStatus.Up(slot.handle.localPort) else TunnelStatus.Failed(slot.error ?: "Couldn't start the tunnel."))
+                }
+                for (t in starting) if (t.id !in this) put(t.id, TunnelStatus.Starting)
+            }
+        }
+    }
+
+    /** Starts a tunnel again after it failed, e.g. once the port it wanted is free. */
+    fun retryTunnel(id: String) {
+        synchronized(slots) { slots.remove(id)?.handle?.let { runCatching(it::close) } }
+        tunnelRetry.update { it + 1 }
+    }
+
+    private fun closeTunnels() {
+        synchronized(slots) {
+            slots.values.forEach { slot -> slot.handle?.let { runCatching(it::close) } }
+            slots.clear()
+        }
+        _tunnels.value = emptyMap()
+    }
+
+    private fun tunnelError(tunnel: Tunnel, e: Throwable): String {
+        val message = e.message.orEmpty()
+        return when {
+            e is BindException || message.contains("Address already in use", ignoreCase = true) ->
+                "Port ${tunnel.bindPort} is already in use on this device."
+            message.contains("Cannot assign requested address", ignoreCase = true) ->
+                "${tunnel.bindAddress} is not an address of this device."
+            tunnel.type == TunnelType.REMOTE -> "The server refused to listen on port ${tunnel.bindPort}."
+            else -> message.ifBlank { "Couldn't start the tunnel." }
+        }
+    }
 
     // ---- lifecycle -----------------------------------------------------------------------------
 
@@ -254,10 +408,12 @@ class TerminalSession(
 
         val sh = conn.openShell(cols, rows, h.terminalType, h.environment + mapOf("COLORTERM" to "truecolor", "TERM_PROGRAM" to "berth"), command)
         shell = sh
+        val firstShell = !everLive
         everLive = true
         if (isReconnect) marker("reconnected")
         transition(SessionState.LIVE, if (h.persistence.tmux != TmuxMode.OFF) PersistenceLayer.TMUX else PersistenceLayer.IN_APP)
         patch { copy(lastLiveAt = env.now(), needsAttention = false, attentionReason = null) }
+        if (firstShell) runOnConnect(sh, h)
 
         val dropped = MutableStateFlow<String?>(null)
         conn.onDisconnected = { dropped.value = it.message ?: "disconnected" }
@@ -277,6 +433,23 @@ class TerminalSession(
 
     private fun tmuxName(h: Host): String =
         (h.persistence.tmuxSessionName ?: "berth-${h.name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}").ifBlank { "berth" }
+
+    /**
+     * Types the host's run-on-connect snippets into the new shell, once per session: a reconnect
+     * lands in the same tmux session or a fresh login shell, and neither should replay them.
+     * The PTY buffers input typed before the shell prompts, so a short grace period is enough.
+     */
+    private suspend fun runOnConnect(sh: ShellChannel, h: Host) {
+        val commands = runCatching { env.connectCommands(h, _record.value.workspaceId) }.getOrDefault(emptyList())
+        if (commands.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            delay(RUN_ON_CONNECT_GRACE_MS)
+            for (command in commands) {
+                if (shell !== sh) return@launch
+                runCatching { sh.write((command.trimEnd('\n', '\r') + "\n").toByteArray(Charsets.UTF_8)) }
+            }
+        }
+    }
 
     private suspend fun waitBeforeRetry(seconds: Int) {
         var remaining = seconds
@@ -303,6 +476,8 @@ class TerminalSession(
     }
 
     private fun teardownConnection() {
+        // Forward listeners hold device ports; release them before the next attempt binds again.
+        closeTunnels()
         shell?.let { runCatching { it.close() } }
         shell = null
         connection?.let { c -> c.onDisconnected = null; runCatching { c.close() } }
@@ -413,6 +588,9 @@ class TerminalSession(
 
     companion object {
         private const val CONNECT_TIMEOUT_MS = 45_000L
+        private const val RUN_ON_CONNECT_GRACE_MS = 400L
+        private const val BIND_RETRIES = 2
+        private const val BIND_RETRY_DELAY_MS = 250L
         private const val FRAME_VERSION = 1
         private const val MAX_FRAME_LINE = 4096
     }

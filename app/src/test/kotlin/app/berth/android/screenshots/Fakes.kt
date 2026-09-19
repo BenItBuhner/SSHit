@@ -13,9 +13,11 @@ import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
+import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
@@ -23,6 +25,8 @@ import app.berth.domain.repository.KnownHostRepository
 import app.berth.domain.repository.SecretStore
 import app.berth.domain.repository.SessionRepository
 import app.berth.domain.repository.SettingsRepository
+import app.berth.domain.repository.SnippetRepository
+import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,6 +73,27 @@ class InMemoryKnownHosts : KnownHostRepository {
     override fun observeAll(): Flow<List<KnownHostKey>> = items
     override suspend fun find(host: String, port: Int): List<KnownHostKey> = items.value.filter { it.host == host && it.port == port }
     override suspend fun upsert(key: KnownHostKey) = items.update { list -> list.filter { it.id != key.id } + key }
+    override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
+    override suspend fun setPinned(id: String, pinned: Boolean) =
+        items.update { list -> list.map { if (it.id == id) it.copy(pinned = pinned) else it } }
+}
+
+class InMemoryTunnels : TunnelRepository {
+    val items = MutableStateFlow<List<Tunnel>>(emptyList())
+    override fun observeAll(): Flow<List<Tunnel>> = items
+    override fun observeForHost(hostId: String): Flow<List<Tunnel>> = items.map { list -> list.filter { it.hostId == hostId } }
+    override suspend fun get(id: String): Tunnel? = items.value.firstOrNull { it.id == id }
+    override suspend fun upsert(tunnel: Tunnel) = items.update { list -> list.filter { it.id != tunnel.id } + tunnel }
+    override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
+    override suspend fun setEnabled(id: String, enabled: Boolean) =
+        items.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
+}
+
+class InMemorySnippets : SnippetRepository {
+    val items = MutableStateFlow<List<Snippet>>(emptyList())
+    override fun observeAll(): Flow<List<Snippet>> = items
+    override suspend fun get(id: String): Snippet? = items.value.firstOrNull { it.id == id }
+    override suspend fun upsert(snippet: Snippet) = items.update { list -> list.filter { it.id != snippet.id } + snippet }
     override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
 }
 
@@ -135,13 +160,15 @@ class TestGraph(private val context: Context) {
     val workspaces = InMemoryWorkspaces()
     val sessionRecords = InMemorySessions()
     val settings = InMemorySettings()
+    val tunnels = InMemoryTunnels()
+    val snippets = InMemorySnippets()
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
     val authResolver = AuthResolver(identities, secrets, hardwareKeys, prompts)
     val sessions: SessionManager by lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context))
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets)
     }
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets)
     }
 }
