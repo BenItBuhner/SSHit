@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
@@ -737,14 +738,18 @@ fun ScreenHeader(
     }
 }
 
-/** 44 dp touch target for a glyph or icon; no fill until pressed. */
+/**
+ * 44 dp touch target for a glyph or icon; no fill until pressed. The size is required rather than
+ * requested, so inside a shorter row (the 40 dp ribbon) the target stays a 44 dp circle centred on
+ * the row instead of squashing to an ellipse.
+ */
 @Composable
 fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable BoxScope.() -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier
-            .size(44.dp)
+            .requiredSize(44.dp)
             .clip(CircleShape)
             .background(if (pressed) Berth.colors.surface3 else Color.Transparent)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
