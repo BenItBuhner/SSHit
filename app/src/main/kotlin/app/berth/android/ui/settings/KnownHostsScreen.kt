@@ -28,8 +28,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
@@ -37,7 +42,6 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
-import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
@@ -48,6 +52,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.SshKeys
 
@@ -101,11 +106,20 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                     val names = hostNamesFor(k, hosts)
                     ListRow(
                         title = k.endpoint + if (names.isNotEmpty()) "  \u00B7  ${names.joinToString(", ")}" else "",
-                        subtitle = "${k.algorithmLabel}  ${SshKeys.groupedFingerprint(k.fingerprintSha256)}",
-                        subtitleStyle = BerthType.mono.copy(fontSize = BerthType.caption.fontSize),
+                        // One Caption line: algorithm, the pin, then the hash and its first four groups in Mono (K1).
+                        subtitle = buildAnnotatedString {
+                            append(k.algorithmLabel)
+                            if (k.pinned) {
+                                append(" \u00B7 ")
+                                withStyle(SpanStyle(color = c.accent)) { append("pinned") }
+                            }
+                            append(" \u00B7 ")
+                            withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp)) {
+                                append("SHA256:" + SshKeys.groupedFingerprint(k.fingerprintSha256).split(' ').take(4).joinToString(" ") + " \u2026")
+                            }
+                        },
                         onClick = { detail = k.id },
                         trailing = {
-                            if (k.pinned) Pill("pinned", color = c.accent.copy(alpha = 0.18f), textColor = c.accent)
                             Text(formatDate(k.lastSeenAt), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         },
                     )
@@ -115,7 +129,7 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 }
                 item {
                     Text(
-                        "A pinned key is the only key accepted for its server: anything else is refused without asking. Unpinned keys raise the key-changed sheet instead.",
+                        "A pinned key is the only one accepted for its server; anything else is refused without asking.",
                         style = BerthType.caption,
                         color = c.text3,
                         modifier = Modifier.padding(start = 4.dp, top = 12.dp),
@@ -156,6 +170,7 @@ fun KnownHostSheet(vm: AppViewModel, key: KnownHostKey, hostNames: List<String>,
         ) {
             SheetTitle(key.endpoint, (listOf(key.algorithmLabel) + hostNames).joinToString(" \u00B7 "))
             Fingerprint(key.keyType, key.fingerprintSha256)
+            Spacer(Modifier.height(4.dp))
             Panel {
                 Fact("First seen", formatDate(key.firstSeenAt))
                 Fact("Last seen", formatDate(key.lastSeenAt))
