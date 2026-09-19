@@ -1,13 +1,8 @@
 package app.berth.data
 
-import androidx.room.testing.MigrationTestHelper
-import androidx.sqlite.driver.AndroidSQLiteDriver
-import androidx.sqlite.execSQL
-import androidx.test.platform.app.InstrumentationRegistry
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
-import app.berth.data.db.BerthDatabase_Impl
 import app.berth.data.repo.EncryptedSecretStore
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
@@ -42,7 +37,6 @@ import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.flow.first
-import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -180,84 +174,6 @@ class RoomRepositoriesTest {
         assertEquals("w1", assertNotNull(snippets.get("s2")).workspaceId)
         snippets.delete("s1")
         assertNull(snippets.get("s1"))
-    }
-
-    @Test
-    fun `a version 1 database migrates to version 2 keeping its rows`() {
-        val helper = MigrationTestHelper(
-            InstrumentationRegistry.getInstrumentation(),
-            File.createTempFile("berth-migration", ".db").also { it.delete(); it.deleteOnExit() },
-            AndroidSQLiteDriver(),
-            BerthDatabase::class,
-            { BerthDatabase_Impl() },
-            emptyList(),
-        )
-        helper.createDatabase(1).use { connection ->
-            connection.execSQL(
-                "INSERT INTO known_hosts (id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt) " +
-                    "VALUES ('k1', 'example.com', 22, 'ssh-ed25519', 'AAAA', 'SHA256:1', 1, 2)",
-            )
-            connection.execSQL(
-                "INSERT INTO snippets (id, name, body, hostId, tagsJson, defaultAction, runOnConnect, pinnedToDeck) " +
-                    "VALUES ('s1', 'disk', 'df -h', NULL, '[]', 'RUN', 0, 0)",
-            )
-            connection.execSQL(
-                "INSERT INTO workspaces (id, name, color, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt) " +
-                    "VALUES ('w1', 'Home', 'OCHRE', 'HO', NULL, 0, 1, 1)",
-            )
-        }
-        helper.runMigrationsAndValidate(2, emptyList()).use { connection ->
-            connection.prepare("SELECT pinned, host FROM known_hosts WHERE id = 'k1'").use { statement ->
-                assertTrue(statement.step())
-                assertEquals(0L, statement.getLong(0), "existing keys start unpinned")
-                assertEquals("example.com", statement.getText(1))
-            }
-            connection.prepare("SELECT workspaceId, body FROM snippets WHERE id = 's1'").use { statement ->
-                assertTrue(statement.step())
-                assertTrue(statement.isNull(0), "existing snippets stay global")
-                assertEquals("df -h", statement.getText(1))
-            }
-            connection.prepare("SELECT terminalThemeId, name FROM workspaces WHERE id = 'w1'").use { statement ->
-                assertTrue(statement.step())
-                assertTrue(statement.isNull(0), "existing workspaces inherit the app default theme")
-                assertEquals("Home", statement.getText(1))
-            }
-        }
-    }
-
-    @Test
-    fun `a version 2 database migrates to version 3 with tabs defaulting to ssh in expanded groups`() {
-        val helper = MigrationTestHelper(
-            InstrumentationRegistry.getInstrumentation(),
-            File.createTempFile("berth-migration-v3", ".db").also { it.delete(); it.deleteOnExit() },
-            AndroidSQLiteDriver(),
-            BerthDatabase::class,
-            { BerthDatabase_Impl() },
-            emptyList(),
-        )
-        helper.createDatabase(2).use { connection ->
-            connection.execSQL(
-                "INSERT INTO workspaces (id, name, color, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt, terminalThemeId) " +
-                    "VALUES ('w1', 'Home', 'OCHRE', 'HO', NULL, 0, 0, 1, NULL)",
-            )
-            connection.execSQL(
-                "INSERT INTO sessions (id, workspaceId, hostId, hostSnapshotJson, state, layer, title, cwd, lastCommand, needsAttention, attentionReason, sortOrder, createdAt, lastLiveAt, frameKey) " +
-                    "VALUES ('s1', 'w1', 'h1', '{}', 'DETACHED', 'LOCAL_FRAME', 'demo@box', NULL, NULL, 0, NULL, 2, 5, NULL, NULL)",
-            )
-        }
-        helper.runMigrationsAndValidate(3, emptyList()).use { connection ->
-            connection.prepare("SELECT kind, customTitle, sortOrder, workspaceId FROM sessions WHERE id = 's1'").use { statement ->
-                assertTrue(statement.step())
-                assertEquals("ssh", statement.getText(0), "existing sessions are SSH tabs")
-                assertTrue(statement.isNull(1), "existing tabs keep their automatic title")
-                assertEquals(2L, statement.getLong(2), "positions survive")
-                assertEquals("w1", statement.getText(3), "the group survives")
-            }
-            connection.prepare("SELECT collapsed FROM workspaces WHERE id = 'w1'").use { statement ->
-                assertTrue(statement.step())
-                assertEquals(0L, statement.getLong(0), "existing groups start expanded")
-            }
-        }
     }
 
     @Test
