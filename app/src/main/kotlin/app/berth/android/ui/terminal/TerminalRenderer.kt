@@ -4,11 +4,35 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.Attr
+import app.berth.terminal.CellRange
 import app.berth.terminal.CursorShape
 import app.berth.terminal.TermColor
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalLine
 import kotlin.math.roundToInt
+
+/**
+ * What one draw highlights over a frame, in the frame's view rows: the selection in the theme's
+ * `selection` colour, search matches in the same, the current match in the accent (spec C17, C18).
+ * Colours are ARGB as given, so the current match can sit translucent over any theme. One instance
+ * is reused between draws; [matches] holds only the ranges that touch the rows in view.
+ */
+class FrameOverlay {
+    var selection: CellRange? = null
+    var selectionColor: Int = 0
+    val matches = ArrayList<CellRange>()
+    var matchColor: Int = 0
+    var current: CellRange? = null
+    var currentColor: Int = 0
+
+    fun clear() {
+        selection = null
+        matches.clear()
+        current = null
+    }
+
+    val isEmpty: Boolean get() = selection == null && matches.isEmpty() && current == null
+}
 
 /**
  * Draws terminal frames cell by cell. Shared by the Stage canvas and the theme editor's preview so
@@ -41,8 +65,9 @@ object TerminalRenderer {
     }
 
     /**
-     * Draws a captured [frame] onto [nc], filling [width] x [height]: backgrounds in runs, then text
-     * in runs of one style, then the cursor when the frame shows the live screen.
+     * Draws a captured [frame] onto [nc], filling [width] x [height]: backgrounds in runs, then the
+     * [overlay]'s selection and search highlights, then text in runs of one style, then the cursor
+     * when the frame shows the live screen.
      */
     fun draw(
         nc: Canvas,
@@ -54,6 +79,7 @@ object TerminalRenderer {
         height: Float,
         showCursor: Boolean = true,
         focused: Boolean = true,
+        overlay: FrameOverlay? = null,
     ) {
         val palette = frame.palette
         val cw = paints.cellWidth
@@ -83,6 +109,14 @@ object TerminalRenderer {
                     nc.drawRect(x * cw, top, end * cw, top + ch, paints.fill)
                 }
                 x = end
+            }
+
+            // Selection and search highlights sit between the cell backgrounds and the glyphs, so the
+            // text keeps its colour over them (spec: selection text unchanged).
+            if (overlay != null) {
+                overlay.selection?.let { fillRange(nc, it, y, cols, cw, ch, top, overlay.selectionColor, paints) }
+                for (m in overlay.matches) if (m.touches(y)) fillRange(nc, m, y, cols, cw, ch, top, overlay.matchColor, paints)
+                overlay.current?.let { if (it.touches(y)) fillRange(nc, it, y, cols, cw, ch, top, overlay.currentColor, paints) }
             }
 
             // Text, in runs of the same style made of plain single-width characters.
@@ -195,6 +229,14 @@ object TerminalRenderer {
                 cellFg(line.fg[col], line.bg[col], attrs, emulator.palette, screenFg, screenBg, boldAsBright, theme.bold)
             }
         }
+    }
+
+    private fun fillRange(nc: Canvas, range: CellRange, y: Int, cols: Int, cw: Float, ch: Float, top: Float, color: Int, paints: TerminalPaints) {
+        val a = range.firstCol(y) ?: return
+        val b = range.lastCol(y, cols) ?: return
+        if (b < a) return
+        paints.fill.color = color
+        nc.drawRect(a * cw, top, (b + 1).coerceAtMost(cols) * cw, top + ch, paints.fill)
     }
 
     private fun isSimple(cp: Int, line: TerminalLine, x: Int): Boolean =
