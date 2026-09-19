@@ -73,7 +73,6 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     BerthTheme(theme) {
         Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
             Shell(vm)
-            PromptHost(vm.prompts)
         }
     }
 }
@@ -234,4 +233,5 @@ private fun Shell(vm: AppViewModel) {
     if (quickConnect) {
         QuickConnectSheet(vm, onDismiss = { quickConnect = false }, onConnected = { quickConnect = false; toStage() })
     }
+    PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
 }
