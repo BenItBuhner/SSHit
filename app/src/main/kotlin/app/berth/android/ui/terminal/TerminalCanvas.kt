@@ -35,6 +35,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
@@ -291,6 +293,7 @@ fun TerminalCanvas(
     Canvas(
         modifier
             .fillMaxSize()
+            .semantics { contentDescription = "Terminal" }
             .onSizeChanged { canvasSize = it }
             .terminalInput(sink)
             .focusRequester(focusRequester)

@@ -299,16 +299,23 @@ class TerminalSession(
     }
 
     /**
-     * Enter without shell marks: the typed line is checked against the row the cursor is on once
-     * the echo has had a moment to land, since a command and its Enter can arrive in one write.
-     * The row is kept as a buffer row plus the lines dropped, which output does not move; a resize
-     * re-wraps history, and then the line is simply not found.
+     * Enter without shell marks: the typed line is checked against the row the cursor is on. Typed
+     * key by key, the echo is already there and the command is recorded at once, before it can
+     * clear the screen; sent in one write with its Enter (a snippet, a test), the echo has not
+     * landed yet, so the check runs again after a moment. The row is kept as a buffer row plus the
+     * lines dropped, which output does not move; a resize re-wraps history, and then the line is
+     * simply not found.
      */
     private fun commitTyped() {
         val pending = typedLine.commit() ?: return
-        val stable = synchronized(emulator.lock) {
+        val (stable, now) = synchronized(emulator.lock) {
             if (emulator.isAlternateScreen) return
-            emulator.scrollbackSize + emulator.cursorY + emulator.linesDropped
+            val row = emulator.scrollbackSize + emulator.cursorY
+            (row + emulator.linesDropped) to TerminalText.extract(emulator.grid, TerminalText.snapToLine(emulator.grid, CellPos(row, 0)))
+        }
+        pending.resolve(now)?.let {
+            recordCommand(it)
+            return
         }
         scope.launch {
             delay(ECHO_GRACE_MS)
