@@ -42,10 +42,10 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
-import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
-import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
@@ -112,9 +112,9 @@ fun ThemesScreen(
             .navigationBarsPadding(),
     ) {
         ScreenHeader("Terminal themes", onBack = onBack) {
-            IconAction(onClick = ::newTheme, description = "New theme") { Glyph("+", size = 24) }
+            IconAction(onClick = ::newTheme, description = "New theme") { BerthIcon(BerthIcons.add) }
             Box {
-                IconAction(onClick = { menu = true }, description = "More") { Glyph("\u22EE") }
+                IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                     MenuItem("Import file") { menu = false; openFile() }
                     MenuItem("Paste theme text") { menu = false; pasteSheet = true }
@@ -157,12 +157,8 @@ fun ThemesScreen(
                         BerthButton("Import file", onClick = openFile)
                         BerthButton("Paste theme text", onClick = { pasteSheet = true })
                     }
-                    Text(
-                        importNote ?: "Berth theme JSON, Windows Terminal schemes and Gogh exports import as they are. Stock themes cannot be deleted; duplicate one to edit it.",
-                        style = BerthType.caption,
-                        color = if (importNote != null) c.text1 else c.text3,
-                        modifier = Modifier.padding(start = 4.dp),
-                    )
+                    val n = importNote
+                    if (n != null) Text(n, style = BerthType.caption, color = c.text1, modifier = Modifier.padding(start = 4.dp))
                 }
             }
         }
@@ -182,7 +178,11 @@ fun ThemesScreen(
     }
 }
 
-/** One gallery tile: the theme's own background, a live mini-render, then the name and state. */
+/**
+ * One gallery tile: the theme's own background at `panel` radius, a live mini-render whose palette
+ * strip is clipped at `swatchSmall` so the tile has a concentric inner element, then the name with
+ * its state in Caption beneath; both in the theme's foreground, so they read on light themes too.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThemeTile(
@@ -209,11 +209,24 @@ private fun ThemeTile(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TerminalPreview(theme = theme, font = font.copy(sizeSp = 9), script = PreviewScript.TILE, showCursor = false)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(theme.name, style = BerthType.label, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (isDefault) Pill("Default", color = fg.copy(alpha = 0.14f), textColor = fg)
-                else if (!theme.builtIn) Pill("Custom", color = fg.copy(alpha = 0.10f), textColor = fg.copy(alpha = 0.8f))
+            TerminalPreview(
+                theme = theme,
+                font = font.copy(sizeSp = 9),
+                script = PreviewScript.TILE,
+                showCursor = false,
+                modifier = Modifier.clip(RoundedCornerShape(BerthRadius.swatchSmall)),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(theme.name, style = BerthType.label, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    when {
+                        isDefault -> "App default"
+                        theme.builtIn -> "Stock"
+                        else -> "Custom"
+                    },
+                    style = BerthType.caption,
+                    color = fg.copy(alpha = if (isDefault) 0.85f else 0.6f),
+                )
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {

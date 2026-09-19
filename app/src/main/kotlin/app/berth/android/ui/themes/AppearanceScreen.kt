@@ -15,11 +15,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -37,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.Panel
@@ -51,6 +53,7 @@ import app.berth.android.ui.io.shareText
 import app.berth.android.ui.stage.Deck
 import app.berth.android.ui.stage.ModifierLatch
 import app.berth.android.ui.stage.StageInput
+import app.berth.android.ui.stage.StatePill
 import app.berth.android.ui.terminal.PreviewScript
 import app.berth.android.ui.terminal.TerminalPreview
 import app.berth.android.ui.theme.Berth
@@ -64,6 +67,7 @@ import app.berth.domain.model.HexColorSerializer
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
+import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 
 private val VARIANTS = listOf(InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK, InterfaceVariant.LIGHT, InterfaceVariant.SYSTEM)
@@ -128,11 +132,12 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 Caption("Tone", top = 14.dp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Warm", style = BerthType.caption, color = c.text3)
-                    Slider(
+                    // Bipolar: the notch is neutral graphite, the fill shows how far warm or cool.
+                    BerthSlider(
                         value = theme.tone,
                         onValueChange = { set(theme.copy(tone = it)) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { contentDescription = "Tone" },
-                        colors = sliderColors(),
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp).semantics { contentDescription = "Tone" },
+                        neutral = 0.5f,
                     )
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
@@ -180,17 +185,16 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Square", style = BerthType.caption, color = c.text3)
-                    Slider(
+                    val radii = InterfaceTheme.MIN_RADIUS_SCALE..InterfaceTheme.MAX_RADIUS_SCALE
+                    BerthSlider(
                         value = theme.radiusScale,
-                        onValueChange = { set(theme.copy(radiusScale = it)) },
-                        valueRange = InterfaceTheme.MIN_RADIUS_SCALE..InterfaceTheme.MAX_RADIUS_SCALE,
-                        steps = 8,
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { contentDescription = "Corner radius" },
-                        colors = sliderColors(),
+                        onValueChange = { set(theme.copy(radiusScale = it.snappedTo(radii, RADIUS_STEP))) },
+                        valueRange = radii,
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp).semantics { contentDescription = "Corner radius" },
                     )
                     Text("Round", style = BerthType.caption, color = c.text3)
                 }
-                Text("Every radius in the app scales together, so nested corners stay concentric.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
+                Spacer(Modifier.height(8.dp))
                 Caption("Interface font")
                 SegmentedControl(listOf("IBM Plex Sans", "System"), if (theme.useSystemFont) 1 else 0, onSelect = { set(theme.copy(useSystemFont = it == 1)) })
             }
@@ -201,7 +205,8 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                     BerthButton("Paste", onClick = { pasteSheet = true })
                     BerthButton("Save to file", onClick = { saver.save("berth-interface.json", theme.toJson()) })
                 }
-                Text(note ?: "Interface JSON carries the variant, tone, accent, contrast, density, radius scale and font choice.", style = BerthType.caption, color = if (note != null) c.text1 else c.text3, modifier = Modifier.padding(start = 4.dp))
+                val n = note
+                if (n != null) Text(n, style = BerthType.caption, color = c.text1, modifier = Modifier.padding(start = 4.dp))
             }
         }
     }
@@ -221,11 +226,22 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     }
 }
 
-/** A Stage in miniature: ribbon, a detached terminal frame, the state pill row and the real Deck. */
+/** The corner-radius slider snaps to tenths, so the shown multiplier is always a round one. */
+private const val RADIUS_STEP = 0.1f
+
+/** [this] moved to the nearest multiple of [step] from the start of [range], clamped to the range. */
+internal fun Float.snappedTo(range: ClosedFloatingPointRange<Float>, step: Float): Float =
+    (range.start + Math.round((this - range.start) / step) * step).coerceIn(range)
+
+/**
+ * A Stage in miniature: the ribbon's anatomy with the drawn rail glyph, a detached terminal frame,
+ * the real [StatePill] and the real Deck, so the preview cannot drift from what the Stage draws.
+ */
 @Composable
 private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font: app.berth.domain.model.TerminalFont, deck: app.berth.domain.model.DeckLayout) {
     val c = Berth.colors
     val input = remember { StageInput(session = { null }, latch = ModifierLatch(), onAppAction = {}) }
+    val detachedAt = remember { System.currentTimeMillis() - 4 * 60_000L }
     Column(
         Modifier
             .fillMaxWidth()
@@ -234,27 +250,22 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
             .semantics { contentDescription = "Interface preview" },
     ) {
         Row(
-            Modifier.fillMaxWidth().height(40.dp).background(c.surface1).padding(start = 12.dp, end = 8.dp),
+            Modifier.fillMaxWidth().height(40.dp).background(c.surface1).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("\u2261", style = BerthType.label, color = c.text2)
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.workspace) }
+            Spacer(Modifier.width(2.dp))
             Swatch(SwatchColor.VERDIGRIS, "HL", 24.dp)
+            Spacer(Modifier.width(10.dp))
             Text("homelab", style = BerthType.label, color = c.text1, modifier = Modifier.weight(1f))
             Pill("1 needs you", color = c.attention.copy(alpha = 0.18f), textColor = c.attention)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.moreVert) }
         }
         Box(Modifier.fillMaxWidth().background(terminalTheme.background.toColor()).padding(horizontal = 10.dp, vertical = 8.dp)) {
             TerminalPreview(theme = terminalTheme, font = font.copy(sizeSp = 10), script = PreviewScript.TILE, showCursor = true)
         }
-        Row(
-            Modifier.fillMaxWidth().background(c.surface1).padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Detached 4 min ago", style = BerthType.label, color = c.text2, modifier = Modifier.weight(1f))
-            BerthButton("Reconnect", onClick = {}, kind = ButtonKind.PRIMARY, modifier = Modifier.height(36.dp))
-            BerthButton("Close", onClick = {}, modifier = Modifier.height(36.dp))
-        }
+        StatePill(state = SessionState.DETACHED, retryIn = null, lastLiveAt = detachedAt, now = detachedAt + 4 * 60_000L, onReconnect = {}, onDetach = {}, onClose = {})
         Deck(layout = deck, layerIndex = 0, onLayerIndexChange = {}, input = input)
     }
 }
@@ -263,9 +274,6 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
 private fun Caption(text: String, top: androidx.compose.ui.unit.Dp = 0.dp, modifier: Modifier = Modifier) {
     Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 4.dp, top = top, bottom = 6.dp))
 }
-
-@Composable
-private fun sliderColors() = SliderDefaults.colors(thumbColor = Berth.colors.accent, activeTrackColor = Berth.colors.accent, inactiveTrackColor = Berth.colors.surface4)
 
 /** A chip with the accent colour as a leading dot, selected chips step up a surface. */
 @Composable

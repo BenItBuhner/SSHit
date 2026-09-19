@@ -435,7 +435,7 @@ private val StatePillHeight = 32.dp
  * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live.
  */
 @Composable
-private fun StatePill(
+internal fun StatePill(
     state: SessionState,
     retryIn: Int?,
     lastLiveAt: Long?,

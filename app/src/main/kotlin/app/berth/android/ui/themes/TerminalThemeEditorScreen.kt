@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,9 +45,10 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
-import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
@@ -161,7 +164,7 @@ fun TerminalThemeEditorScreen(
         ScreenHeader(draft.name, onBack = onDone) {
             BerthButton(if (stored.builtIn) "Save copy" else "Save", onClick = { save() }, kind = ButtonKind.TEXT, enabled = dirty)
             Box {
-                IconAction(onClick = { menu = true }, description = "More") { Glyph("\u22EE") }
+                IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
                     MenuItem("Duplicate") {
                         menu = false
@@ -228,17 +231,21 @@ fun TerminalThemeEditorScreen(
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionLabel("ANSI palette", Modifier.padding(start = 4.dp))
+                // Eight equal cells with a fixed gap; the swatch fills its cell up to 40 dp, so the
+                // row keeps its rhythm from 320 dp phones to tablets instead of drifting apart.
                 for (rowStart in listOf(0, 8)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (i in rowStart until rowStart + 8) {
                             val slot = ThemeSlot.Ansi(i)
-                            PaletteSwatch(
-                                rgb = draft.ansi[i],
-                                label = i.toString(),
-                                title = slot.title,
-                                selected = editing == slot || sampling == slot,
-                                onClick = { editing = slot },
-                            )
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                                PaletteSwatch(
+                                    rgb = draft.ansi[i],
+                                    label = i.toString(),
+                                    title = slot.title,
+                                    selected = editing == slot || sampling == slot,
+                                    onClick = { editing = slot },
+                                )
+                            }
                         }
                     }
                 }
@@ -263,7 +270,7 @@ fun TerminalThemeEditorScreen(
                         trailing = {
                             if (rgb == null) {
                                 Text("Inherit", style = BerthType.body, color = c.text2)
-                                Text("\u203A", style = BerthType.body, color = c.text3)
+                                BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp)
                             } else {
                                 ColorDot(rgb, 24.dp)
                             }
@@ -310,14 +317,19 @@ fun TerminalThemeEditorScreen(
     }
 }
 
-/** 36 dp colour swatch, radius 8, index beneath; the selected one sits on a surface.3 step. */
+/**
+ * One ANSI swatch with its index beneath: a square up to 40 dp that fills its cell, the colour at
+ * `swatch` radius inside a 2 dp step that turns surface.4 when selected (`swatch + 2`, concentric).
+ */
 @Composable
 private fun PaletteSwatch(rgb: Int, label: String, title: String, selected: Boolean, onClick: () -> Unit) {
     val c = Berth.colors
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(
             Modifier
-                .size(40.dp)
+                .fillMaxWidth()
+                .widthIn(max = 40.dp)
+                .aspectRatio(1f)
                 .clip(RoundedCornerShape(BerthRadius.swatch + 2.dp))
                 .background(if (selected) c.surface4 else Color.Transparent)
                 .clickable(onClick = onClick)
@@ -330,9 +342,10 @@ private fun PaletteSwatch(rgb: Int, label: String, title: String, selected: Bool
     }
 }
 
+/** A colour at `indicator` radius: the trailing element of a 44 dp row, one radius step in from the row's. */
 @Composable
 internal fun ColorDot(rgb: Int, size: androidx.compose.ui.unit.Dp) {
-    Box(Modifier.size(size).clip(RoundedCornerShape(BerthRadius.swatchSmall)).background(rgb.toColor()))
+    Box(Modifier.size(size).clip(RoundedCornerShape(BerthRadius.indicator)).background(rgb.toColor()))
 }
 
 /**
@@ -391,14 +404,16 @@ private fun ColourSheet(
         ) {
             SheetTitle(slot.title, "Contrast %.1f : 1 against the ${if (slot == ThemeSlot.Background) "foreground" else "background"} \u00B7 $grade".format(contrast))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // The colour on a hint of what it sits against: `swatch` outside, 4 dp in, `indicator`
+                // inside, the ring translucent so it reads as context rather than as a frame.
                 Box(
                     Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(BerthRadius.row))
-                        .background(against.toColor())
-                        .padding(8.dp),
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(BerthRadius.swatch))
+                        .background(against.toColor().copy(alpha = 0.35f))
+                        .padding(4.dp),
                 ) {
-                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(BerthRadius.swatchSmall)).background(base.toColor()))
+                    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(BerthRadius.indicator)).background(base.toColor()))
                 }
                 BerthField(
                     value = hex,
