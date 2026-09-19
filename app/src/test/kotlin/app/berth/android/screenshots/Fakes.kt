@@ -196,6 +196,9 @@ class InMemorySettings : SettingsRepository {
     val security = MutableStateFlow(SecuritySettings())
     override val securitySettings: Flow<SecuritySettings> = security
     override suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings) = security.update(change)
+    private val commandHistory = MutableStateFlow(true)
+    override val commandHistoryEnabled: Flow<Boolean> = commandHistory
+    override suspend fun setCommandHistoryEnabled(enabled: Boolean) { commandHistory.value = enabled }
 }
 
 /**

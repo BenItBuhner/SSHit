@@ -156,4 +156,65 @@ class CommandHistoryTest {
         line.typed("ls")
         assertEquals("ls", line.commit("$ ls"))
     }
+
+    @Test
+    fun `a Tab anchors the read-back on the typed prefix and the command is read off the screen`() {
+        val line = TypedLine()
+        line.typed("git sta")
+        line.completed()
+        assertEquals("git status", line.commit("ben@host:~/srv$ git status"))
+
+        val more = TypedLine()
+        more.typed("git sta")
+        more.completed()
+        more.typed(" --short")
+        assertEquals("git status --short", more.commit("$ git status --short"))
+    }
+
+    @Test
+    fun `the text typed after a Tab must end the command as shown, unless a second Tab completed past it`() {
+        val edited = TypedLine()
+        edited.typed("git sta")
+        edited.completed()
+        edited.typed(" --short")
+        // The shell moved the cursor and the line no longer ends with what was typed last.
+        assertNull(edited.commit("$ git status --short --branch"))
+
+        val twice = TypedLine()
+        twice.typed("git sta")
+        twice.completed()
+        twice.typed(" --sh")
+        twice.completed()
+        assertEquals("git status --short", twice.commit("$ git status --short"))
+    }
+
+    @Test
+    fun `a prefix that matches the prompt is found where the command starts, and deleting into a completion gives up`() {
+        val line = TypedLine()
+        line.typed("b")
+        line.completed()
+        assertEquals("build.sh", line.commit("ben@box:~$ build.sh"))
+
+        val back = TypedLine()
+        back.typed("git sta")
+        back.completed()
+        back.backspace()
+        assertFalse(back.reliable)
+        assertNull(back.commit("$ git statu"))
+
+        val blank = TypedLine()
+        blank.completed()
+        assertFalse(blank.reliable)
+    }
+
+    @Test
+    fun `a committed line resolves later, once the echo has landed`() {
+        val line = TypedLine()
+        line.typed("uptime")
+        val pending = line.commit()!!
+        assertNull(line.current())
+        assertNull(pending.resolve("$ "))
+        assertEquals("uptime", pending.resolve("$ uptime"))
+        assertNull(TypedLine().apply { typed("   ") }.commit())
+    }
 }

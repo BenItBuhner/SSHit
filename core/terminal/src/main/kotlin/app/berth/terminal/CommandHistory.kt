@@ -41,13 +41,21 @@ class CommandHistory(private val cap: Int = DEFAULT_CAP) {
 
 /**
  * What has been typed at the prompt since the last Enter, for shells without OSC 133 marks. The
- * line is only trusted while it was built from plain characters and Backspace; a Tab, an arrow, a
- * control chord or a paste hands editing to the shell (completion, history recall) and the local
- * copy no longer says what will run, so the line is dropped until the next Enter. The caller also
- * checks that the line was echoed before recording it, which keeps passwords out.
+ * line is trusted while it was built from plain characters and Backspace. A Tab hands part of it to
+ * the shell's completion: what was typed before the Tab is kept as an anchor and, on Enter, the
+ * command is read off the screen from that anchor to the end of the line, checked against whatever
+ * was typed after it. An arrow, a control chord or a multi-line paste hands the whole line to the
+ * shell (history recall, editing) and nothing is recorded until the next Enter. The caller resolves
+ * the committed line against the screen once the echo has landed, which keeps passwords out.
  */
 class TypedLine {
     private val sb = StringBuilder()
+
+    /** Length of the typed text when the first Tab went to the shell; -1 while none has. */
+    private var anchorLen = -1
+
+    /** Whether the text typed after the anchor is the end of the command as typed; a second Tab completes past it. */
+    private var tailKnown = true
 
     /** False once the shell has been asked to edit the line in a way this cannot follow. */
     var reliable: Boolean = true
@@ -68,8 +76,22 @@ class TypedLine {
 
     fun backspace() {
         if (sb.isEmpty()) return
+        // Deleting into what completion wrote is deleting text this never saw.
+        if (anchorLen >= 0 && sb.length <= anchorLen) {
+            reliable = false
+            return
+        }
         val last = sb.codePointBefore(sb.length)
         sb.setLength(sb.length - Character.charCount(last))
+    }
+
+    /** Tab: the shell completes the line from here; what was typed so far anchors the read-back on Enter. */
+    fun completed() {
+        when {
+            anchorLen < 0 && sb.isBlank() -> reliable = false
+            anchorLen < 0 -> anchorLen = sb.length
+            else -> tailKnown = false
+        }
     }
 
     /** The shell now owns the line's contents. */
@@ -80,6 +102,8 @@ class TypedLine {
     /** Ctrl+C or Ctrl+U: the line is abandoned and a fresh one begins. */
     fun reset() {
         sb.setLength(0)
+        anchorLen = -1
+        tailKnown = true
         reliable = true
     }
 
@@ -87,12 +111,37 @@ class TypedLine {
     fun current(): String? = if (reliable) sb.toString().trim().takeIf { it.isNotEmpty() } else null
 
     /**
-     * The command to record on Enter, given the logical line the cursor is on: the typed text
-     * when the screen shows it (so it was echoed), otherwise nothing. Clears the line either way.
+     * Enter: what to look for on the screen once the echo has landed, or null when nothing trusted
+     * was typed. Clears the line either way.
      */
-    fun commit(cursorLine: String): String? {
-        val typed = current()
+    fun commit(): Pending? {
+        val pending = if (reliable && sb.isNotBlank()) Pending(sb.toString(), anchorLen, tailKnown) else null
         reset()
-        return typed?.takeIf { cursorLine.contains(it) }
+        return pending
+    }
+
+    /** [commit] resolved at once against the logical line the cursor is on, for a caller that knows the echo has landed. */
+    fun commit(cursorLine: String): String? = commit()?.resolve(cursorLine)
+
+    /**
+     * A line Enter committed, to be resolved against the logical line it was typed on: the typed
+     * text when the line shows it; after a Tab, the line from the typed prefix to its end, which
+     * must still end with what was typed after the Tab.
+     */
+    class Pending internal constructor(private val typed: String, private val anchorLen: Int, private val tailKnown: Boolean) {
+        fun resolve(line: String): String? {
+            if (anchorLen < 0) {
+                val exact = typed.trim()
+                return exact.takeIf { it.isNotEmpty() && line.contains(it) }
+            }
+            val prefix = typed.substring(0, anchorLen).trimStart()
+            if (prefix.isEmpty()) return null
+            val at = line.lastIndexOf(prefix)
+            if (at < 0) return null
+            val command = line.substring(at).trim()
+            val tail = typed.substring(anchorLen).trim()
+            if (tailKnown && tail.isNotEmpty() && !command.endsWith(tail)) return null
+            return command.takeIf { it.isNotEmpty() }
+        }
     }
 }

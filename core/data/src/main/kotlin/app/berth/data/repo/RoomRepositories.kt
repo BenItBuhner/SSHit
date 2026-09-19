@@ -228,6 +228,8 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
 
     override val ctrlTabKeysReachTerminal: Flow<Boolean> = document(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer()) { false }
     override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) = write(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer(), enabled)
+    override val commandHistoryEnabled: Flow<Boolean> = document(KEY_COMMAND_HISTORY, Boolean.serializer()) { true }
+    override suspend fun setCommandHistoryEnabled(enabled: Boolean) = write(KEY_COMMAND_HISTORY, Boolean.serializer(), enabled)
 
     private val securityLock = Mutex()
     override val securitySettings: Flow<SecuritySettings> = document(KEY_SECURITY, SecuritySettings.serializer()) { SecuritySettings() }
@@ -249,5 +251,6 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_TAB_SWIPE = "tab_swipe_gesture"
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
         const val KEY_SECURITY = "security"
+        const val KEY_COMMAND_HISTORY = "command_history_enabled"
     }
 }

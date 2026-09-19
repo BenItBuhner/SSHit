@@ -71,6 +71,7 @@ fun SessionSheet(
     val up = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Up }
     val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
     var snippets by remember { mutableStateOf(false) }
+    var history by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -132,6 +133,7 @@ fun SessionSheet(
                         if (record.state == SessionState.LIVE) {
                             BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
                         }
+                        BerthButton("History", onClick = { history = true }, modifier = Modifier.weight(1f))
                     } else if (filesTab != null) {
                         when {
                             ride == null -> BerthButton("Connect", kind = ButtonKind.PRIMARY, onClick = { vm.connectFor(filesTab); onDismiss() }, modifier = Modifier.weight(1f))
@@ -170,6 +172,9 @@ fun SessionSheet(
     }
     if (snippets && session != null) {
         SnippetPickerSheet(vm, session, onDismiss = { snippets = false })
+    }
+    if (history && session != null) {
+        CommandHistorySheet(vm, session, onDismiss = { history = false })
     }
 }
 
