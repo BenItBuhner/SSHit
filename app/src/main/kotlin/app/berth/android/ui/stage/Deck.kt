@@ -117,6 +117,7 @@ fun Deck(
     predictiveText: Boolean = false,
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
+    onGripLongPress: () -> Unit = {},
     snippets: List<Snippet> = emptyList(),
     onOpenDeckEditor: (() -> Unit)? = null,
     editing: DeckEditing? = null,
@@ -173,7 +174,7 @@ fun Deck(
                 enabled = enabled,
                 haptics = haptics,
                 height = rowHeight,
-                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown) },
+                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onLongPress = onGripLongPress) },
                 onNext = { strip = null; onLayerIndexChange((index + 1) % layers.size) },
                 onPrevious = { strip = null; onLayerIndexChange((index - 1 + layers.size) % layers.size) },
                 onLayerHold = onOpenDeckEditor,
@@ -468,8 +469,13 @@ private fun Modifier.editableSlot(
         }
     }
 
+/**
+ * The Deck's grip (spec C4): tap for the Session sheet, swipe down to hide the keyboard and Deck,
+ * hold to jump to the most recent unread tab. A hold that fires swallows the release, and a
+ * finger that has moved past the slop is a swipe in the making, never a hold.
+ */
 @Composable
-private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit) {
+private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
     val color by animateColorAsState(if (accent) c.accent else c.text3, tween(120), label = "grip")
     Box(
@@ -479,20 +485,34 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit) {
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
+                    val slop = viewConfiguration.touchSlop
                     var swipedDown = false
+                    var moved = false
+                    var held = false
                     while (true) {
-                        val event = awaitPointerEvent()
+                        val event = withTimeoutOrNull(if (moved || held) Long.MAX_VALUE else viewConfiguration.longPressTimeoutMillis) { awaitPointerEvent() }
+                        if (event == null) {
+                            held = true
+                            onLongPress()
+                            continue
+                        }
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
-                            if (swipedDown) onSwipeDown() else onTap()
+                            when {
+                                held -> Unit
+                                swipedDown -> onSwipeDown()
+                                else -> onTap()
+                            }
                             break
                         }
-                        if (change.position.y - down.position.y > 24.dp.toPx()) swipedDown = true
+                        val dy = change.position.y - down.position.y
+                        if (!moved && (change.position - down.position).getDistance() > slop) moved = true
+                        if (dy > 24.dp.toPx()) swipedDown = true
                         change.consume()
                     }
                 }
             }
-            .semantics { contentDescription = "Grip: tap for the session sheet, swipe down to hide the keyboard" },
+            .semantics { contentDescription = "Grip: tap for the session sheet, swipe down to hide the keyboard, hold to jump to the tab that needs you" },
         contentAlignment = Alignment.Center,
     ) {
         Box(

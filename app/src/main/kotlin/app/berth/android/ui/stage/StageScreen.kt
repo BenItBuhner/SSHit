@@ -89,6 +89,7 @@ import app.berth.android.ui.tabs.CountTile
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabHeader
 import app.berth.android.ui.tabs.TabShortcuts
+import app.berth.android.ui.tabs.rememberTabStripState
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
 import app.berth.android.ui.theme.Berth
@@ -128,8 +129,8 @@ fun StageScreen(
     val groups by vm.workspaces.collectAsState()
     val activeId by vm.activeTabId.collectAsState()
     val restored by vm.restored.collectAsState()
-    val attention by vm.attentionCount.collectAsState()
     val ctrlTabKeysReachTerminal by vm.ctrlTabKeysReachTerminal.collectAsState()
+    val strip = rememberTabStripState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     val shortcuts = remember(vm, actions) {
@@ -142,6 +143,7 @@ fun StageScreen(
             newTab = actions::newTab,
             closeActive = { vm.activeTabId.value?.let(actions::close) },
             switcher = actions::openSwitcher,
+            jumpToUnread = { vm.jumpToUnread() },
         )
     }
 
@@ -187,8 +189,14 @@ fun StageScreen(
             groups = groups,
             activeId = activeId,
             actions = actions,
+            state = strip,
             trailing = {
-                if (slots.isNotEmpty()) CountTile(count = slots.size, attention = attention > 0, onClick = actions::openSwitcher)
+                if (slots.isNotEmpty()) {
+                    // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not laid out in the strip.
+                    val lit by vm.attentionTabIds.collectAsState()
+                    val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
+                    CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
+                }
                 StageOverflow(
                     tab = tab,
                     deckVisible = deckVisible,
@@ -390,6 +398,7 @@ private fun StageBody(
                     DeckAppAction.NEXT_LAYER -> onLayerIndexChange(layerIndex + 1)
                     DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
+                    DeckAppAction.JUMP_TO_UNREAD -> vm.jumpToUnread()
                     else -> Unit
                 }
             },
@@ -489,6 +498,7 @@ private fun StageBody(
                         keyboard?.hide()
                         onDeckVisibleChange(false)
                     },
+                    onGripLongPress = { if (vm.jumpToUnread()) patterns.hold() },
                     snippets = pinnedSnippets,
                     onOpenDeckEditor = onOpenDeckEditor,
                 )
@@ -584,9 +594,11 @@ internal fun StatePill(
     now: Long? = null,
 ) {
     val c = Berth.colors
-    if (state != SessionState.RECONNECTING && state != SessionState.DETACHED) return
+    if (state != SessionState.RECONNECTING && state != SessionState.DETACHED && state != SessionState.CONNECTING && state != SessionState.IDLE) return
     val clock = now ?: ageTicker()
     val (text, actions) = when (state) {
+        // Spec D4: "Connecting…" over the dimmed previous frame, no actions until the connect resolves.
+        SessionState.CONNECTING, SessionState.IDLE -> "Connecting\u2026" to emptyList()
         SessionState.RECONNECTING -> (if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }

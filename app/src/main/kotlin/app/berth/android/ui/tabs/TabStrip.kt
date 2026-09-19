@@ -898,11 +898,12 @@ internal fun TabSwatch(
         } else ring.snapTo(0f)
     }
     val spinning = state == SessionState.CONNECTING || state == SessionState.RECONNECTING
-    val rotation = if (spinning) {
-        val t = rememberInfiniteTransition(label = "tab arc")
-        val r by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
-        r
-    } else 0f
+    // The arc's angle is read in the draw lambda only, so each frame of the spin invalidates the
+    // dot's drawing and nothing recomposes: not this swatch, not the strip item around it.
+    val rotation: State<Float>? = if (spinning) {
+        rememberInfiniteTransition(label = "tab arc")
+            .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
+    } else null
     val dotColor = when (state) {
         SessionState.LIVE -> if (showLiveDot) c.live else null
         SessionState.CONNECTING, SessionState.RECONNECTING, SessionState.IDLE -> c.pending
@@ -946,12 +947,12 @@ internal fun TabSwatch(
                 val dot = 3.dp.toPx()
                 drawCircle(halo, dot + 1.5.dp.toPx(), centre)
                 drawCircle(dotColor, dot, centre)
-                if (spinning) {
+                if (rotation != null) {
                     val stroke = 1.5.dp.toPx()
                     val arc = dot * 2 + stroke * 3
                     drawArc(
                         color = dotColor,
-                        startAngle = rotation,
+                        startAngle = rotation.value,
                         sweepAngle = 270f,
                         useCenter = false,
                         topLeft = Offset(centre.x - arc / 2, centre.y - arc / 2),
@@ -1139,7 +1140,7 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
 /**
  * The count tile (spec C3, Switcher): a 24 dp square on `surface.2` with the tab count in Label;
  * a ring when a tab scrolled out of view needs attention. Sits in the header's fixed slots inside
- * a 44 dp target and opens the switcher.
+ * a 44 dp target and opens the switcher; held, it jumps to the unread tab.
  */
 @Composable
 fun CountTile(
@@ -1147,6 +1148,8 @@ fun CountTile(
     attention: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Hold: the tab that needs the user comes on stage (jump to unread, spec C3), so the ring is one gesture from its cause. */
+    onLongClick: (() -> Unit)? = null,
     style: TabStripStyle = LocalTabStripStyle.current,
 ) {
     val c = Berth.colors
@@ -1156,9 +1159,9 @@ fun CountTile(
     Box(
         modifier
             .size(44.dp)
-            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
             .clearAndSetSemantics {
-                contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention" else ""
+                contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention, hold to jump to it" else ""
                 role = Role.Button
             },
         contentAlignment = Alignment.Center,

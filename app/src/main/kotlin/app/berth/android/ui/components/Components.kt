@@ -54,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -184,20 +185,20 @@ fun StatusDot(state: SessionState, modifier: Modifier = Modifier, size: Dp = 8.d
         SessionState.FAILED -> c.danger
     }
     val spinning = state == SessionState.CONNECTING || state == SessionState.RECONNECTING
-    val rotation = if (spinning) {
-        val t = rememberInfiniteTransition(label = "reconnect-arc")
-        val r by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
-        r
-    } else 0f
+    // Read in the draw lambda only: each frame of the spin redraws this canvas and recomposes nothing.
+    val rotation: State<Float>? = if (spinning) {
+        rememberInfiniteTransition(label = "reconnect-arc")
+            .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
+    } else null
     Canvas(modifier.size(size + if (spinning) 6.dp else 0.dp)) {
         val center = Offset(this.size.width / 2, this.size.height / 2)
         drawCircle(color, radius = size.toPx() / 2, center = center)
-        if (spinning) {
+        if (rotation != null) {
             val stroke = 2.dp.toPx()
             val arcSize = this.size.minDimension - stroke
             drawArc(
                 color = color,
-                startAngle = rotation,
+                startAngle = rotation.value,
                 sweepAngle = 270f,
                 useCenter = false,
                 topLeft = Offset(stroke / 2, stroke / 2),

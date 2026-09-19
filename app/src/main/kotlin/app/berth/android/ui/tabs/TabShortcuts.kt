@@ -12,9 +12,10 @@ import androidx.compose.ui.input.key.type
 
 /**
  * The hardware shortcuts of spec C3: Ctrl+Tab / Ctrl+Shift+Tab step, Ctrl+1…8 jump, Ctrl+9 is the
- * last tab, Ctrl+T new tab, Ctrl+W close, Ctrl+Shift+A the switcher. Ctrl+Tab and the digits never
- * reach a terminal usefully and are always taken; T and W are readline keys, so with
- * [ctrlTabKeysReachTerminal] they pass through and only the Shift chords act.
+ * last tab, Ctrl+T new tab, Ctrl+W close, Ctrl+Shift+A the switcher, Ctrl+Shift+U the most recent
+ * unread tab (C22). Ctrl+Tab and the digits never reach a terminal usefully and are always taken;
+ * T and W are readline keys, so with [ctrlTabKeysReachTerminal] they pass through and only the
+ * Shift chords act.
  */
 class TabShortcuts(
     private val step: (Int) -> Unit,
@@ -23,6 +24,7 @@ class TabShortcuts(
     private val newTab: () -> Unit,
     private val closeActive: () -> Unit,
     private val switcher: () -> Unit,
+    private val jumpToUnread: () -> Unit = {},
 ) {
     fun handle(event: KeyEvent, ctrlTabKeysReachTerminal: Boolean): Boolean {
         if (event.type != KeyEventType.KeyDown || !event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
@@ -35,6 +37,7 @@ class TabShortcuts(
             event.key == Key.T && (shift || !ctrlTabKeysReachTerminal) -> { newTab(); true }
             event.key == Key.W && (shift || !ctrlTabKeysReachTerminal) -> { closeActive(); true }
             event.key == Key.A && shift -> { switcher(); true }
+            event.key == Key.U && shift -> { jumpToUnread(); true }
             else -> false
         }
     }
