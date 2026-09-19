@@ -261,11 +261,16 @@ class RoomRepositoriesTest {
         val theme = TerminalTheme.BERTH_LIGHT.copy(id = "mine", name = "Mine", builtIn = true)
         settings.upsertTerminalTheme(theme)
         val themes = settings.terminalThemes.first()
-        assertEquals(3, themes.size)
+        assertEquals(TerminalTheme.builtIns.size + 1, themes.size)
         assertFalse(themes.last().builtIn, "custom themes can never claim to be built in")
 
         settings.setDefaultTerminalTheme("mine")
         assertEquals("mine", settings.defaultTerminalThemeId.first())
+
+        settings.deleteTerminalTheme("mine")
+        assertEquals(TerminalTheme.builtIns, settings.terminalThemes.first())
+        settings.deleteTerminalTheme(TerminalTheme.BERTH_LIGHT_ID)
+        assertEquals(TerminalTheme.builtIns, settings.terminalThemes.first(), "stock themes cannot be deleted")
 
         assertNull(settings.lastActiveSessionId.first())
         settings.setLastActiveSessionId("s1")
