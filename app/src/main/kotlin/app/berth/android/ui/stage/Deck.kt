@@ -409,8 +409,14 @@ fun DeckKeyView(
 /** Label-centre to lock-bar-centre distance: half the 13 sp label's cap height plus the 3 dp gap plus half the bar. */
 private val LockBarOffset = 9.dp
 
-/** Symbols and key chords (`|`, `\`, `^C`, `M-x`) set in Mono; words (`Esc`, `S-Tab`, `Home`) stay in Plex. */
-private fun String.isSymbolLabel(): Boolean = length <= 2 || startsWith('^') || startsWith("M-") || none { it.isLetter() }
+/**
+ * Symbols, key chords and function keys (`|`, `\`, `:w`, `^C`, `M-x`, `F1`, `F12`) set in Mono; words
+ * (`Esc`, `S-Tab`, `Home`) and two-letter words (`Fn`, `Up`) stay in Plex.
+ */
+private fun String.isSymbolLabel(): Boolean =
+    length == 1 || (length == 2 && !all { it.isLetter() }) || startsWith('^') || startsWith("M-") || none { it.isLetter() } || matches(FunctionKeyLabel)
+
+private val FunctionKeyLabel = Regex("F\\d{1,2}")
 
 /** The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed. */
 @Composable
