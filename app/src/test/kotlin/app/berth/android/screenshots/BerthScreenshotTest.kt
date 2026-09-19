@@ -154,7 +154,7 @@ class BerthScreenshotTest {
         themed { HostEditorScreen(graph.viewModel, hostId = "build-box", onDone = {}) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("build box")).fetchSemanticsNodes().isNotEmpty() }
         capture("host-editor")
-        compose.onNodeWithText("All tunnels").performScrollTo()
+        compose.onNodeWithText("Add tunnel").performScrollTo()
         compose.waitForIdle()
         capture("host-editor-tunnels")
     }
@@ -182,7 +182,10 @@ class BerthScreenshotTest {
         seedLibrary()
         seedTunnels()
         val tunnel = graph.tunnels.items.value.first { it.id == "tn-web" }
-        themed { TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {}) }
+        themed {
+            TunnelsScreen(graph.viewModel, hostId = "prod-api", onBack = {})
+            TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
         capture("tunnel-editor")
     }
@@ -202,7 +205,10 @@ class BerthScreenshotTest {
         seedLibrary()
         seedSnippets()
         val snippet = graph.snippets.items.value.first { it.id == "sn-tail" }
-        themed { SnippetEditorSheet(graph.viewModel, existing = snippet, onDismiss = {}) }
+        themed {
+            SnippetsScreen(graph.viewModel, onBack = {})
+            SnippetEditorSheet(graph.viewModel, existing = snippet, onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit snippet")).fetchSemanticsNodes().isNotEmpty() }
         capture("snippet-editor")
     }
@@ -214,8 +220,12 @@ class BerthScreenshotTest {
         seedDetachedSessions()
         runBlocking { graph.sessions.restore() }
         val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
         val snippet = graph.snippets.items.value.first { it.id == "sn-tail" }
-        themed { SnippetRunSheet(graph.viewModel, session, PendingSnippet(snippet, SnippetAction.RUN), onDismiss = {}) }
+        themed {
+            StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
+            SnippetRunSheet(graph.viewModel, session, PendingSnippet(snippet, SnippetAction.RUN), onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("tail app log")).fetchSemanticsNodes().isNotEmpty() }
         capture("snippet-run")
     }
@@ -233,7 +243,10 @@ class BerthScreenshotTest {
     fun `known host detail`() {
         seedLibrary()
         val key = graph.knownHosts.items.value.first { it.id == "kh-3" }
-        themed { KnownHostSheet(graph.viewModel, key, hostNames = listOf("build box"), onDismiss = {}) }
+        themed {
+            KnownHostsScreen(graph.viewModel, onBack = {})
+            KnownHostSheet(graph.viewModel, key, hostNames = listOf("build box"), onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Forget")).fetchSemanticsNodes().isNotEmpty() }
         capture("known-host-detail")
     }
@@ -245,7 +258,10 @@ class BerthScreenshotTest {
         val pinned = graph.knownHosts.items.value.first { it.id == "kh-3" }
         val offered = SshKeys.generate(KeyAlgorithm.ED25519).public
         val request = HostKeyRequest(host.address, host.port, "ssh-ed25519", offered, SshKeys.openSshPublic(offered).split(" ")[1], SshKeys.fingerprintSha256(offered))
-        themed { PromptHost(graph.prompts) }
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
         CoroutineScope(Dispatchers.IO).launch { graph.prompts.pinnedKeyRefused(host, request, pinned) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.PinnedKeyRefused }
         capture("prompt-pinned-key-refused")
@@ -257,7 +273,10 @@ class BerthScreenshotTest {
     @Test
     fun `import hosts from an ssh config`() {
         seedLibrary()
-        themed { ImportHostsSheet(graph.viewModel, onDismiss = {}) }
+        themed {
+            SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
+            ImportHostsSheet(graph.viewModel, onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasSetTextAction()).performTextInput(SAMPLE_SSH_CONFIG)
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Import 2 hosts")).fetchSemanticsNodes().isNotEmpty() }
@@ -268,7 +287,10 @@ class BerthScreenshotTest {
     fun `import a passphrase protected key`() {
         seedLibrary()
         val pem = SshKeys.openSshPrivate(SshKeys.generate(KeyAlgorithm.ED25519), "ben@old-laptop", "correct horse".toCharArray())
-        themed { ImportKeySheet(graph.viewModel, onDismiss = {}) }
+        themed {
+            KeysScreen(graph.viewModel, onBack = {})
+            ImportKeySheet(graph.viewModel, onDismiss = {})
+        }
         compose.waitUntil(5_000) { compose.onAllNodes(hasSetTextAction()).fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodes(hasSetTextAction())[0].performTextInput(pem)
         compose.onAllNodes(hasSetTextAction())[1].performTextInput("old laptop")
