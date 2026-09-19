@@ -39,6 +39,7 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.deck.DeckEditorScreen
+import app.berth.android.ui.files.FilesScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
@@ -76,6 +77,8 @@ sealed interface Screen : NavKey {
     @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
+    /** One session's SFTP browser, or the active session's when [sessionId] is null; becomes the Files tab kind. */
+    @Serializable data class Files(val sessionId: String? = null) : Screen
 }
 
 @Composable
@@ -149,6 +152,7 @@ private fun Shell(vm: AppViewModel) {
                                 Library.HOSTS -> Screen.Hosts()
                                 Library.KEYS -> Screen.Keys
                                 Library.TUNNELS -> Screen.Tunnels()
+                                Library.FILES -> Screen.Files()
                                 Library.SNIPPETS -> Screen.Snippets
                                 Library.SETTINGS -> Screen.Settings
                             },
@@ -241,6 +245,9 @@ private fun Shell(vm: AppViewModel) {
                     }
                     is Screen.Appearance -> NavEntry(key) { AppearanceScreen(vm, onBack = { back() }) }
                     is Screen.DeckEditor -> NavEntry(key) { DeckEditorScreen(vm, onBack = { back() }) }
+                    is Screen.Files -> NavEntry(key) {
+                        FilesScreen(vm, sessionId = key.sessionId, onBack = { back() }, onNewSession = { go(Screen.Hosts(picker = true)) })
+                    }
                     else -> NavEntry(key) {
                         Spacer(Modifier.statusBarsPadding().height(48.dp))
                         EmptyState("Nothing here.", "This screen has not been built yet.") {
@@ -264,6 +271,10 @@ private fun Shell(vm: AppViewModel) {
             onOpenTunnels = { hostId ->
                 sessionSheet = false
                 go(Screen.Tunnels(hostId))
+            },
+            onOpenFiles = { sessionId ->
+                sessionSheet = false
+                go(Screen.Files(sessionId))
             },
         )
     }

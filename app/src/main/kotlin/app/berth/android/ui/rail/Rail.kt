@@ -60,7 +60,7 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Workspace
 
-enum class Library { HOSTS, KEYS, TUNNELS, SNIPPETS, SETTINGS }
+enum class Library { HOSTS, KEYS, TUNNELS, FILES, SNIPPETS, SETTINGS }
 
 /**
  * The drawer: workspace chips across the top, the current workspace's sessions, then the library.
@@ -172,7 +172,7 @@ fun Rail(
         }
 
         Spacer(Modifier.height(12.dp))
-        // Three links per line (C7): Hosts Keys Tunnels / Snippets Settings.
+        // Three links per line (C7): Hosts Keys Tunnels / Files Snippets Settings.
         FlowRow(
             Modifier
                 .fillMaxWidth()
@@ -183,6 +183,7 @@ fun Rail(
             LibraryLink("Hosts") { onLibrary(Library.HOSTS) }
             LibraryLink("Keys") { onLibrary(Library.KEYS) }
             LibraryLink("Tunnels") { onLibrary(Library.TUNNELS) }
+            LibraryLink("Files") { onLibrary(Library.FILES) }
             LibraryLink("Snippets") { onLibrary(Library.SNIPPETS) }
             LibraryLink("Settings") { onLibrary(Library.SETTINGS) }
         }

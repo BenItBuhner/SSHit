@@ -49,6 +49,7 @@ fun SessionSheet(
     onEditHost: (String) -> Unit,
     onNewSession: () -> Unit,
     onOpenTunnels: (String) -> Unit = {},
+    onOpenFiles: (sessionId: String) -> Unit = {},
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
@@ -105,18 +106,21 @@ fun SessionSheet(
                     )
                 }
             }
-            // Two deliberate rows (C6): the session's own actions, then the host and the exit.
+            // Two deliberate rows (C6): the session's own actions, then the host's and the exit.
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() }, modifier = Modifier.weight(1f))
                     else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                    record.hostId?.let { hostId ->
-                        BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                    if (record.state == SessionState.LIVE) {
+                        BerthButton("Files", onClick = { onOpenFiles(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                        BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
                     }
-                    if (record.state == SessionState.LIVE) BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    record.hostId?.let { hostId -> BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f)) }
+                    record.hostId?.let { hostId ->
+                        BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                        BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                    }
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(session.id); onDismiss() }, modifier = Modifier.weight(1f))
                 }
             }

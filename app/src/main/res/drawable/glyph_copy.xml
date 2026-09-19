@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy: two rounded sheets offset by 4 dp, 1.75 dp stroke. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M10.5,9 H18 A1.5,1.5 0 0 1 19.5,10.5 V18 A1.5,1.5 0 0 1 18,19.5 H10.5 A1.5,1.5 0 0 1 9,18 V10.5 A1.5,1.5 0 0 1 10.5,9 Z" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6,15 H5.5 A1.5,1.5 0 0 1 4,13.5 V6 A1.5,1.5 0 0 1 5.5,4.5 H13 A1.5,1.5 0 0 1 14.5,6 V6.5" />
+</vector>

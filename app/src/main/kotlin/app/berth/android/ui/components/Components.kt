@@ -781,6 +781,21 @@ object BerthIcons {
     @DrawableRes val back: Int = R.drawable.glyph_back
     @DrawableRes val add: Int = R.drawable.glyph_add
     @DrawableRes val chevronRight: Int = R.drawable.glyph_chevron_right
+    @DrawableRes val folder: Int = R.drawable.glyph_folder
+    @DrawableRes val file: Int = R.drawable.glyph_file
+    @DrawableRes val link: Int = R.drawable.glyph_link
+    @DrawableRes val sort: Int = R.drawable.glyph_sort
+    @DrawableRes val close: Int = R.drawable.glyph_close
+    @DrawableRes val check: Int = R.drawable.glyph_check
+    @DrawableRes val edit: Int = R.drawable.glyph_edit
+    @DrawableRes val terminal: Int = R.drawable.glyph_terminal
+    @DrawableRes val upload: Int = R.drawable.glyph_upload
+    @DrawableRes val download: Int = R.drawable.glyph_download
+    @DrawableRes val home: Int = R.drawable.glyph_home
+    @DrawableRes val transfers: Int = R.drawable.glyph_transfers
+    @DrawableRes val lock: Int = R.drawable.glyph_lock
+    @DrawableRes val copy: Int = R.drawable.glyph_copy
+    @DrawableRes val trash: Int = R.drawable.glyph_trash
 }
 
 /** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */
