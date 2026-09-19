@@ -140,7 +140,7 @@ class FolderTransferIntegrationTest {
         assertTrue(File(root, "src/main/nested-empty").isDirectory, "an empty folder three levels down is made")
         assertFalse(File(root, "docs/link-to-src").exists(), "a link to a folder is not followed")
         assertFalse(File(root, "docs/dangling").exists(), "a dangling link is left out")
-        assertTrue(File(root, "locked").isDirectory && File(root, "locked").list()!!.isEmpty(), "the folder that would not list is there and empty")
+        assertFalse(File(root, "locked").exists(), "the folder that would not list is not made; it is one failure in the summary")
 
         val remoteHashes = remoteHashes(remote)
         val expected = remoteHashes + ("docs/link-to-readme" to remoteHashes.getValue("README.txt"))

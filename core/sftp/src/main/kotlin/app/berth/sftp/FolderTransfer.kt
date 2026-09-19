@@ -95,11 +95,12 @@ data class FolderProgress(
 /**
  * Copies a folder tree between an [SftpFileSystem] and a [LocalTree], one file at a time: the tree
  * is walked first so the totals are known, then folders are made (empty ones included) and files
- * copied in a stable order. A file or folder that fails is recorded and the rest goes on; only a
- * lost connection ends the copy early, and then everything still pending is recorded as failed with
- * that reason so a retry covers it. Cancellation stops at the next chunk, removes the half-written
- * file and leaves the complete ones in place. When a file's destination already has something,
- * [resolve] is asked, unless an earlier answer applied to all; folders merge without asking.
+ * copied in a stable order: a folder's files, then its subfolders by name, each the same way. A
+ * file or folder that fails is recorded and the rest goes on; only a lost connection, or the folder
+ * itself not listing, ends the copy early, and then everything still pending is recorded as failed
+ * with that reason so a retry covers it. Cancellation stops at the next chunk, removes the
+ * half-written file and leaves the complete ones in place. When a file's destination already has
+ * something, [resolve] is asked, unless an earlier answer applied to all; folders merge without asking.
  *
  * Every copy lands inside the destination as a folder named after the source: a download of
  * `/srv/app` into the tree makes `app/` under the tree's root, an upload of the tree's root `photos`
@@ -194,7 +195,10 @@ class FolderTransfer(
             val entries = try {
                 remote.list(path)
             } catch (e: SftpError) {
-                if (e.isConnectionLoss()) throw e
+                // The folder itself not listing fails the copy with the server's reason; one inside
+                // is a failure in the summary and is not made at the destination, empty and misleading.
+                if (e.isConnectionLoss() || rel.isEmpty()) throw e
+                plan.dirs.remove(rel)
                 failDir(rel, e.message ?: "Couldn't list the folder.")
                 continue
             }
@@ -367,6 +371,8 @@ class FolderTransfer(
             val children = try {
                 io { local.children(node) }
             } catch (e: IOException) {
+                if (rel.isEmpty()) throw e
+                plan.dirs.remove(rel)
                 failDir(rel, e.message ?: "Couldn't list the folder.")
                 continue
             }
