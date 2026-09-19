@@ -38,6 +38,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -49,7 +51,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -205,6 +210,12 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier, color: Color = Ber
     Text(text.uppercase(), style = BerthType.caption, color = color, modifier = modifier)
 }
 
+/**
+ * The surface a [Panel] paints behind its content, so a control inside it can choose a tonal step
+ * that stays legible against it. Null outside any panel.
+ */
+val LocalPanelSurface = compositionLocalOf<Color?> { null }
+
 /** Radius 20 surface.2 panel with 16 dp padding and an optional caption above the content. */
 @Composable
 fun Panel(
@@ -225,8 +236,9 @@ fun Panel(
                 .background(surface)
                 .padding(padding),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            content = content,
-        )
+        ) {
+            CompositionLocalProvider(LocalPanelSurface provides surface) { content() }
+        }
     }
 }
 
@@ -513,7 +525,11 @@ fun BerthButton(
     }
 }
 
-/** Segmented control: a full pill on surface.2; the selected option is a surface.4 pill. */
+/**
+ * Segmented control (A9): a row-radius track with 2 dp inner padding holding 36 dp options; the
+ * selected option is a surface.4 thumb at the track radius minus the padding, so the corners nest.
+ * The track is surface.2, stepping down to surface.1 inside a surface.2 [Panel] so it still reads.
+ */
 @Composable
 fun SegmentedControl(
     options: List<String>,
@@ -522,26 +538,42 @@ fun SegmentedControl(
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
+    val track = if (LocalPanelSurface.current == c.surface2) c.surface1 else c.surface2
+    val inset = 2.dp
     Row(
         modifier
             .fillMaxWidth()
-            .clip(CircleShape)
-            .background(c.surface2)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .clip(RoundedCornerShape(BerthRadius.row))
+            .background(track)
+            .padding(inset)
+            .selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(inset),
     ) {
         options.forEachIndexed { index, option ->
-            val selected = index == selectedIndex
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(CircleShape)
-                    .background(if (selected) c.surface4 else Color.Transparent)
-                    .clickable { onSelect(index) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(option, style = BerthType.label, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            key(index) {
+                val selected = index == selectedIndex
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val fill by animateColorAsState(
+                    when {
+                        selected -> c.surface4
+                        pressed -> c.surface3
+                        else -> Color.Transparent
+                    },
+                    tween(120),
+                    label = "segment",
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(BerthRadius.row - inset))
+                        .background(fill)
+                        .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.RadioButton) { onSelect(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(option, style = BerthType.label, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
