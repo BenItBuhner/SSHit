@@ -637,11 +637,23 @@ class TerminalEmulatorTest {
         t.write(text)
         assertEquals(5, r.screenChanges)
         assertEquals(24, t.screenText().size)
-        // A multi-byte character straddling a slice boundary still decodes as one glyph.
+    }
+
+    @Test
+    fun `sequences straddling a slice boundary decode and parse as one`() {
+        val slice = TerminalEmulator.WRITE_SLICE_BYTES
+        // A three-byte character with its first byte in one slice and the rest in the next is one glyph.
         val (u, _) = term(cols = 80, rows = 2, scrollback = 0)
-        val bytes = ByteArray(slice - 1) { 'a'.code.toByte() } + "\u4F60".toByteArray(Charsets.UTF_8) + "b".toByteArray()
-        u.write(bytes)
+        val glyph = ByteArray(slice - 1) { 'a'.code.toByte() } + "\u4F60".toByteArray(Charsets.UTF_8) + "b".toByteArray()
+        u.write(glyph)
         assertEquals("a".repeat((slice - 1) % 80) + "\u4F60b", u.text(1))
+        // A control sequence with ESC in one slice and its bracket and parameters in the next is one command.
+        val (v, _) = term(cols = 80, rows = 4, scrollback = 0)
+        val command = ByteArray(slice - 1) { 'a'.code.toByte() } + "\u001b[3;1HZ".toByteArray()
+        v.write(command)
+        assertEquals("Z" + "a".repeat(79), v.text(2))
+        assertEquals(1, v.cursorX)
+        assertEquals(2, v.cursorY)
     }
 
     @Test
