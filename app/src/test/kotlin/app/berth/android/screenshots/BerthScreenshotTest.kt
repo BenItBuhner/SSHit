@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
@@ -153,6 +154,9 @@ class BerthScreenshotTest {
         themed { HostEditorScreen(graph.viewModel, hostId = "build-box", onDone = {}) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("build box")).fetchSemanticsNodes().isNotEmpty() }
         capture("host-editor")
+        compose.onNodeWithText("All tunnels").performScrollTo()
+        compose.waitForIdle()
+        capture("host-editor-tunnels")
     }
 
     // ---- tunnels ------------------------------------------------------------------------------
@@ -284,6 +288,9 @@ class BerthScreenshotTest {
         seedLibrary()
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         capture("settings")
+        compose.onNodeWithText("Import private key").performScrollTo()
+        compose.waitForIdle()
+        capture("settings-trust-data")
     }
 
     @Test
