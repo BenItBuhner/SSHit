@@ -499,6 +499,9 @@ private fun LayerKey(
 ) {
     val c = Berth.colors
     var pressed by remember { mutableStateOf(false) }
+    // The gesture block only restarts when `enabled` changes; the callbacks close over the current layer index.
+    val currentOnNext by rememberUpdatedState(onNext)
+    val currentOnPrevious by rememberUpdatedState(onPrevious)
     Box(
         modifier
             .clip(RoundedCornerShape(BerthRadius.key))
@@ -516,7 +519,7 @@ private fun LayerKey(
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) {
                                 haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                                if (up) onPrevious() else onNext()
+                                if (up) currentOnPrevious() else currentOnNext()
                                 break
                             }
                             up = down.position.y - change.position.y > 24.dp.toPx()
