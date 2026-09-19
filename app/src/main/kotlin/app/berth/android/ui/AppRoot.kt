@@ -18,6 +18,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,6 +48,7 @@ import app.berth.android.ui.rail.Rail
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
+import app.berth.android.ui.stage.LocalHapticLevel
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tunnels.TunnelsScreen
@@ -70,9 +72,12 @@ sealed interface Screen : NavKey {
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
+    val hapticLevel by vm.hapticLevel.collectAsState()
     BerthTheme(theme) {
-        Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
-            Shell(vm)
+        CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
+            Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
+                Shell(vm)
+            }
         }
     }
 }

@@ -34,6 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
@@ -41,6 +44,8 @@ import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Pill
@@ -109,10 +114,12 @@ fun Rail(
                     .width(64.dp)
                     .height(78.dp)
                     .clip(RoundedCornerShape(BerthRadius.row))
-                    .clickable { newWorkspace = true },
+                    .clickable(role = Role.Button) { newWorkspace = true }
+                    // The glyph is decoration; the tile itself carries the name.
+                    .semantics { contentDescription = "New workspace" },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("+", style = BerthType.title, color = c.text2)
+                BerthIcon(BerthIcons.add)
             }
         }
         if (newWorkspace) {
@@ -157,7 +164,7 @@ fun Rail(
                     titleColor = c.text2,
                     leading = {
                         Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                            Text("+", style = BerthType.title, color = c.text2)
+                            BerthIcon(BerthIcons.add)
                         }
                     },
                 )

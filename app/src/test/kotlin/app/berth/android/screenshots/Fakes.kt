@@ -8,6 +8,7 @@ import app.berth.android.session.SessionManager
 import app.berth.android.ui.AppViewModel
 import app.berth.data.crypto.HardwareKeys
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -124,6 +125,7 @@ class InMemorySessions : SessionRepository {
 
 class InMemorySettings : SettingsRepository {
     private val deck = MutableStateFlow(DeckLayout.default())
+    private val haptics = MutableStateFlow(HapticLevel.FULL)
     private val theme = MutableStateFlow(InterfaceTheme.DEFAULT)
     private val font = MutableStateFlow(TerminalFont())
     private val themes = MutableStateFlow(TerminalTheme.builtIns)
@@ -133,6 +135,8 @@ class InMemorySettings : SettingsRepository {
 
     override val deckLayout: Flow<DeckLayout> = deck
     override suspend fun setDeckLayout(layout: DeckLayout) { deck.value = layout }
+    override val hapticLevel: Flow<HapticLevel> = haptics
+    override suspend fun setHapticLevel(level: HapticLevel) { haptics.value = level }
     override val interfaceTheme: Flow<InterfaceTheme> = theme
     override suspend fun setInterfaceTheme(theme: InterfaceTheme) { this.theme.value = theme }
     override val terminalFont: Flow<TerminalFont> = font

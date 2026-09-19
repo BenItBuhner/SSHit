@@ -1,6 +1,7 @@
 package app.berth.domain
 
 import app.berth.domain.model.DeckAction
+import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckModifier
@@ -26,7 +27,7 @@ class DomainModelTest {
         assertEquals(listOf("Base", "Symbols", "Nav/Fn", "tmux", "Snippets"), layout.layers.map { it.name })
         val base = layout.layers[0]
         assertEquals(listOf("Esc", "Tab", "Ctrl", "Alt", "-", "/", "Nub"), base.keys.map { it.label })
-        assertEquals(listOf("`", "S-Tab", "^c", "^r", "|", "\\", null), base.keys.map { it.secondaryLabel })
+        assertEquals(listOf("`", "S-Tab", "^C", "^R", "|", "\\", null), base.keys.map { it.secondaryLabel })
         assertEquals("CTRL b", layout.layers[3].prefix)
 
         val json = layout.toJson()
@@ -41,6 +42,15 @@ class DomainModelTest {
         assertEquals(setOf(DeckModifier.CTRL, DeckModifier.SHIFT), combo.modifiers)
         assertEquals("c", combo.target)
         assertEquals("TAB", DeckAction.Combo("SHIFT TAB").target)
+    }
+
+    @Test
+    fun `secondary labels upper-case control chords and keep meta chords as typed`() {
+        fun label(combo: String) = DeckKey(tap = DeckAction.Key(DeckKeyCode.ESC), up = DeckAction.Combo(combo)).secondaryLabel
+        assertEquals("^C", label("CTRL c"))
+        assertEquals("M-x", label("ALT x"))
+        assertEquals("M-X", label("ALT X"))
+        assertEquals("S-Tab", label("SHIFT TAB"))
     }
 
     @Test

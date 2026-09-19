@@ -1,10 +1,28 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
+import app.berth.android.R
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -36,6 +54,7 @@ import app.berth.android.ui.snippets.SnippetEditorSheet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.snippets.SnippetsScreen
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.tunnels.TunnelEditorSheet
 import app.berth.android.ui.tunnels.TunnelsScreen
@@ -321,6 +340,35 @@ class BerthScreenshotTest {
         capture("settings-trust-data")
     }
 
+    /**
+     * The adaptive icon as launchers mask it (the inner 72 dp of the 108 dp canvas, circle and
+     * squircle), the themed monochrome layer and the 24 dp notification glyph, on surface.0.
+     */
+    @Test
+    fun `launcher icon`() {
+        themed {
+            val c = Berth.colors
+            val bg = colorResource(R.color.ic_launcher_background)
+            Row(
+                Modifier.fillMaxSize().background(c.surface0).padding(32.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(72.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
+                    Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.requiredSize(108.dp))
+                }
+                Box(Modifier.size(72.dp).clip(RoundedCornerShape(24.dp)).background(bg), contentAlignment = Alignment.Center) {
+                    Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null, modifier = Modifier.requiredSize(108.dp))
+                }
+                Box(Modifier.size(72.dp).clip(CircleShape).background(c.surface3), contentAlignment = Alignment.Center) {
+                    Icon(painterResource(R.drawable.ic_launcher_monochrome), contentDescription = null, tint = c.text1, modifier = Modifier.requiredSize(108.dp))
+                }
+                Icon(painterResource(R.drawable.ic_notification), contentDescription = null, tint = c.text1, modifier = Modifier.size(24.dp))
+            }
+        }
+        capture("launcher-icon")
+    }
+
     @Test
     fun `rail with workspaces and detached sessions`() {
         seedLibrary()
@@ -433,10 +481,11 @@ class BerthScreenshotTest {
         settle(1_500)
         capture("stage-live-ls-color")
 
-        // One tap arms Ctrl for the next key; a second tap locks it, a third releases it.
+        // One tap arms Ctrl for the next key; a second tap locks it (the bar under the label), a third releases it.
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
         capture("stage-live-ctrl-latched")
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
+        capture("stage-live-ctrl-locked")
         compose.onNode(hasContentDescription("Ctrl", substring = true)).performClick()
 
         session.sendText("clear && htop\n")

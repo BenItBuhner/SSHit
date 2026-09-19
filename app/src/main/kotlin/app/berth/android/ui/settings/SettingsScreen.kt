@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -31,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
@@ -44,6 +43,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.TerminalFont
@@ -57,6 +57,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
     val themes by vm.terminalThemes.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val deck by vm.deckLayout.collectAsState()
+    val haptics by vm.hapticLevel.collectAsState()
     val known by vm.knownHosts.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
@@ -90,11 +91,12 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 Text("Tone", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Warm", style = BerthType.caption, color = c.text3)
-                    Slider(
+                    // Bipolar: the notch is neutral graphite, the fill shows how far warm or cool.
+                    BerthSlider(
                         value = theme.tone,
                         onValueChange = { vm.setInterfaceTheme(theme.copy(tone = it)) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                        colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.surface4),
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                        neutral = 0.5f,
                     )
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
@@ -129,6 +131,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
 
             Panel(label = "Deck") {
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
+                // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
+                CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
                 Text("Layers: " + deck.layers.joinToString(", ") { it.name }, style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
                 Text("Editing keys and layers arrives with the layout editor; the layout is already data, so it will not require a migration.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 2.dp))
             }

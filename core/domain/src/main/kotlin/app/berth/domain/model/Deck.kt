@@ -97,6 +97,9 @@ data class DeckKey(
             is DeckAction.Key -> keyLabel(u.key)
             is DeckAction.Text -> u.text
             is DeckAction.Combo -> u.combo.replace("CTRL ", "^").replace("SHIFT TAB", "S-Tab").replace("ALT ", "M-")
+                // A control chord on a letter reads as `^C` (UX spec C4) whatever case the target was
+                // typed in; Meta chords keep the letter as typed, because `M-x` and `M-X` are different chords.
+                .let { if (it.length == 2 && it[0] == '^' && it[1].isLetter()) it.uppercase() else it }
             is DeckAction.Macro -> u.macro.replace("PREFIX", "Pfx")
             null -> null
             else -> "..."
@@ -134,6 +137,13 @@ data class DeckLayer(
 enum class DeckReach { LEFT, RIGHT }
 
 enum class DeckArrows { NUB, FOUR_KEYS, BOTH }
+
+/**
+ * Haptic levels (UX spec D3): Off, Subtle (Deck key taps only) and Full. A device preference, so it
+ * lives beside [DeckLayout] rather than in it and an exported layout does not carry it.
+ */
+@Serializable
+enum class HapticLevel { OFF, SUBTLE, FULL }
 
 /** The whole Deck configuration; the shape of Berth Deck JSON (UX spec E1). */
 @Serializable

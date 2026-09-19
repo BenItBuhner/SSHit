@@ -3,6 +3,7 @@ package app.berth.android.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -12,6 +13,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -30,19 +36,31 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.annotation.DrawableRes
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,11 +70,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -65,6 +93,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.berth.android.R
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -72,6 +101,8 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 // ---- Swatch, dots, rings ------------------------------------------------------------------------
 
@@ -181,6 +212,12 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier, color: Color = Ber
     Text(text.uppercase(), style = BerthType.caption, color = color, modifier = modifier)
 }
 
+/**
+ * The surface a [Panel] paints behind its content, so a control inside it can choose a tonal step
+ * that stays legible against it. Null outside any panel.
+ */
+val LocalPanelSurface = compositionLocalOf<Color?> { null }
+
 /** Radius 20 surface.2 panel with 16 dp padding and an optional caption above the content. */
 @Composable
 fun Panel(
@@ -201,8 +238,9 @@ fun Panel(
                 .background(surface)
                 .padding(padding),
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            content = content,
-        )
+        ) {
+            CompositionLocalProvider(LocalPanelSurface provides surface) { content() }
+        }
     }
 }
 
@@ -295,7 +333,7 @@ fun PickerRow(title: String, value: String, onClick: () -> Unit, modifier: Modif
         modifier = modifier,
         trailing = {
             Text(value, style = BerthType.body, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("\u203A", style = BerthType.body, color = c.text3)
+            BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp)
         },
     )
 }
@@ -326,6 +364,110 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
         },
     )
 }
+
+// ---- Slider ---------------------------------------------------------------------------------------
+
+/**
+ * Slider re-skinned with the tokens (A1; C19 draws Tone as `warm ────o──── cool`): a 2 dp track on
+ * surface.4, a 16 dp accent knob cut out of the track by a 2 dp ring in the enclosing [surface]
+ * (the panel's when inside one, otherwise the sheet's surface.1), and a 44 dp touch row. With
+ * [neutral] set the slider is bipolar: a notch marks the neutral point and the accent fill runs from
+ * there to the knob; without it the fill runs from the start of the range. [steps] discrete values
+ * strictly between the ends (as the M3 slider counts them) snap every path that sets the value,
+ * the accessibility one included; 0 keeps it continuous.
+ */
+@Composable
+fun BerthSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    neutral: Float? = null,
+    enabled: Boolean = true,
+    surface: Color = LocalPanelSurface.current ?: Berth.colors.surface1,
+    steps: Int = 0,
+) {
+    val c = Berth.colors
+    val span = valueRange.endInclusive - valueRange.start
+    val insetPx = with(LocalDensity.current) { SliderInset.toPx() }
+    var widthPx by remember { mutableIntStateOf(0) }
+    var dragging by remember { mutableStateOf(false) }
+    var rawX by remember { mutableFloatStateOf(0f) }
+    val knob by animateDpAsState(if (dragging) 10.dp else 8.dp, label = "slider knob")
+    val alpha = if (enabled) 1f else 0.5f
+
+    fun fraction(v: Float) = if (span == 0f) 0f else ((v - valueRange.start) / span).coerceIn(0f, 1f)
+    fun snap(fraction: Float): Float {
+        val f = fraction.coerceIn(0f, 1f)
+        if (steps <= 0) return f
+        val intervals = steps + 1
+        return (f * intervals).roundToInt().toFloat() / intervals
+    }
+    fun set(fraction: Float) = onValueChange(valueRange.start + snap(fraction) * span)
+    fun setFromX(x: Float) {
+        val usable = widthPx - 2 * insetPx
+        if (usable <= 0f) return
+        set((x - insetPx) / usable)
+    }
+    val drag = rememberDraggableState { delta ->
+        // Clamped to the track, so a finger that overshoots an end does not have to travel back
+        // through the overshoot before the knob follows it again.
+        rawX = (rawX + delta).coerceIn(insetPx, (widthPx - insetPx).coerceAtLeast(insetPx))
+        setFromX(rawX)
+    }
+
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .onSizeChanged { widthPx = it.width }
+            .focusable(enabled)
+            .semantics {
+                if (!enabled) disabled()
+                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange, steps)
+                setProgress { set(fraction(it)); true }
+            }
+            .pointerInput(enabled) { if (enabled) detectTapGestures(onTap = { setFromX(it.x) }) }
+            .draggable(
+                state = drag,
+                orientation = Orientation.Horizontal,
+                enabled = enabled,
+                onDragStarted = { start ->
+                    rawX = start.x
+                    dragging = true
+                    setFromX(start.x)
+                },
+                onDragStopped = { dragging = false },
+            )
+            .drawBehind {
+                val y = size.height / 2
+                val x0 = insetPx
+                val x1 = size.width - insetPx
+                fun xAt(f: Float) = x0 + (x1 - x0) * f
+                val track = 2.dp.toPx()
+                drawLine(c.surface4.copy(alpha = alpha), Offset(x0, y), Offset(x1, y), track, StrokeCap.Round)
+                val kx = xAt(fraction(value))
+                val from = xAt(fraction(neutral ?: valueRange.start))
+                if (abs(kx - from) > 0.5f) {
+                    drawLine(c.accent.copy(alpha = alpha), Offset(from, y), Offset(kx, y), track, StrokeCap.Round)
+                }
+                if (neutral != null) {
+                    drawRoundRect(
+                        color = c.text3.copy(alpha = alpha),
+                        topLeft = Offset(from - 1.dp.toPx(), y - 4.dp.toPx()),
+                        size = Size(2.dp.toPx(), 8.dp.toPx()),
+                        cornerRadius = CornerRadius(1.dp.toPx()),
+                    )
+                }
+                val r = knob.toPx()
+                drawCircle(surface, r + 2.dp.toPx(), Offset(kx, y))
+                drawCircle(c.accent.copy(alpha = alpha), r, Offset(kx, y))
+            },
+    )
+}
+
+/** Horizontal inset of the slider track so the 20 dp pressed knob stays inside the row. */
+private val SliderInset = 10.dp
 
 /** 22 dp pill on surface.3 with Caption text; ports use Mono. */
 @Composable
@@ -398,7 +540,11 @@ fun BerthButton(
     }
 }
 
-/** Segmented control: a full pill on surface.2; the selected option is a surface.4 pill. */
+/**
+ * Segmented control (A9): a row-radius track with 2 dp inner padding holding 36 dp options; the
+ * selected option is a surface.4 thumb at the track radius minus the padding, so the corners nest.
+ * The track is surface.2, stepping down to surface.1 inside a surface.2 [Panel] so it still reads.
+ */
 @Composable
 fun SegmentedControl(
     options: List<String>,
@@ -407,26 +553,42 @@ fun SegmentedControl(
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
+    val track = if (LocalPanelSurface.current == c.surface2) c.surface1 else c.surface2
+    val inset = 2.dp
     Row(
         modifier
             .fillMaxWidth()
-            .clip(CircleShape)
-            .background(c.surface2)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+            .clip(RoundedCornerShape(BerthRadius.row))
+            .background(track)
+            .padding(inset)
+            .selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(inset),
     ) {
         options.forEachIndexed { index, option ->
-            val selected = index == selectedIndex
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(CircleShape)
-                    .background(if (selected) c.surface4 else Color.Transparent)
-                    .clickable { onSelect(index) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(option, style = BerthType.label, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            key(index) {
+                val selected = index == selectedIndex
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                val fill by animateColorAsState(
+                    when {
+                        selected -> c.surface4
+                        pressed -> c.surface3
+                        else -> Color.Transparent
+                    },
+                    tween(120),
+                    label = "segment",
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(BerthRadius.row - inset))
+                        .background(fill)
+                        .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.RadioButton) { onSelect(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(option, style = BerthType.label, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -565,7 +727,7 @@ fun ScreenHeader(
     ) {
         if (onBack != null) {
             IconAction(onClick = onBack, description = "Back") {
-                Text("\u2039", style = BerthType.title.copy(fontSize = 26.sp), color = Berth.colors.text2)
+                BerthIcon(BerthIcons.back)
             }
             Spacer(Modifier.width(4.dp))
         } else {
@@ -576,14 +738,18 @@ fun ScreenHeader(
     }
 }
 
-/** 44 dp touch target for a glyph or icon; no fill until pressed. */
+/**
+ * 44 dp touch target for a glyph or icon; no fill until pressed. The size is required rather than
+ * requested, so inside a shorter row (the 40 dp ribbon) the target stays a 44 dp circle centred on
+ * the row instead of squashing to an ellipse.
+ */
 @Composable
 fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable BoxScope.() -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier
-            .size(44.dp)
+            .requiredSize(44.dp)
             .clip(CircleShape)
             .background(if (pressed) Berth.colors.surface3 else Color.Transparent)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
@@ -597,10 +763,30 @@ fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Mo
     )
 }
 
-/** Text glyph used as an icon: Material Symbols are not bundled, so header actions use type. */
+/** Text glyph used as an icon; kept for callers that still pass characters. Prefer [BerthIcon]. */
 @Composable
 fun Glyph(text: String, color: Color = Berth.colors.text2, size: Int = 20) {
     Text(text, style = BerthType.label.copy(fontSize = size.sp, lineHeight = (size + 4).sp), color = color)
+}
+
+/**
+ * The glyph set (A8): custom marks drawn on a 24 dp grid with a 1.75 dp round-capped stroke, shipped
+ * as vector drawables so no icon font or Material icon pack is bundled.
+ */
+object BerthIcons {
+    /** Three stacked rounded rectangles offset by 2 dp; opens the rail. */
+    @DrawableRes val workspace: Int = R.drawable.glyph_workspace
+    @DrawableRes val moreVert: Int = R.drawable.glyph_more_vert
+    @DrawableRes val moreHoriz: Int = R.drawable.glyph_more_horiz
+    @DrawableRes val back: Int = R.drawable.glyph_back
+    @DrawableRes val add: Int = R.drawable.glyph_add
+    @DrawableRes val chevronRight: Int = R.drawable.glyph_chevron_right
+}
+
+/** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */
+@Composable
+fun BerthIcon(@DrawableRes icon: Int, modifier: Modifier = Modifier, tint: Color = Berth.colors.text2, size: Dp = 24.dp) {
+    Icon(painter = painterResource(icon), contentDescription = null, tint = tint, modifier = modifier.size(size))
 }
 
 object Paddings {
