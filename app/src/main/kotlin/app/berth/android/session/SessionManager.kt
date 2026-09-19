@@ -243,7 +243,9 @@ class SessionManager @Inject constructor(
             createdAt = System.currentTimeMillis(),
             customTitle = customTitle,
         )
-        val changes = TabOrder.insertAfter(stripNow(), fresh, afterId?.takeIf { it in _sessions.value }, group)
+        // An anchor in another group would drag the new tab into that group; an explicit group wins.
+        val anchor = afterId?.takeIf { id -> _sessions.value[id]?.record?.value?.let { workspaceId == null || it.workspaceId == workspaceId } == true }
+        val changes = TabOrder.insertAfter(stripNow(), fresh, anchor, group)
         return start(fresh, changes)
     }
 
@@ -392,7 +394,9 @@ class SessionManager @Inject constructor(
 
     // ---- lifecycle -----------------------------------------------------------------------------------
 
-    fun reconnect(id: String) = _sessions.value[id]?.reconnectNow()
+    fun reconnect(id: String) {
+        _sessions.value[id]?.reconnectNow()
+    }
 
     fun detach(id: String) {
         val session = _sessions.value[id] ?: return

@@ -58,8 +58,8 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 
 /**
- * The host library. Tap connects into the current workspace; long-press edits or deletes.
- * [picker] mode is the "New session" flow from the rail: same list, back returns to the Stage.
+ * The host library. Tap opens a tab on the host in the current group (spec C3); long-press edits
+ * or deletes. [picker] mode titles the screen "New tab"; back returns to the Stage.
  */
 @Composable
 fun HostsScreen(
@@ -68,7 +68,7 @@ fun HostsScreen(
     onAddHost: () -> Unit,
     onEditHost: (String) -> Unit,
     onBack: (() -> Unit)?,
-    onOpenRail: (() -> Unit)?,
+    onOpenDrawer: (() -> Unit)?,
     onKnownHosts: () -> Unit,
     picker: Boolean = false,
     modifier: Modifier = Modifier,
@@ -88,11 +88,11 @@ fun HostsScreen(
             .navigationBarsPadding(),
     ) {
         ScreenHeader(
-            title = if (picker) "New session" else "Hosts",
+            title = if (picker) "New tab" else "Hosts",
             onBack = onBack,
             actions = {
-                if (onOpenRail != null && onBack == null) {
-                    IconAction(onClick = onOpenRail, description = "Open the rail") { BerthIcon(BerthIcons.workspace) }
+                if (onOpenDrawer != null && onBack == null) {
+                    IconAction(onClick = onOpenDrawer, description = "Open the drawer") { BerthIcon(BerthIcons.workspace) }
                 }
                 IconAction(onClick = onAddHost, description = "Add host") { BerthIcon(BerthIcons.add) }
                 Box {

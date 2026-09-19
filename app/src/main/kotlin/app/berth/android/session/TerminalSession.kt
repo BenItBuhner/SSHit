@@ -91,11 +91,11 @@ class TerminalSession(
     private val scope: CoroutineScope,
     private val env: SessionEnvironment,
     private val onRecordChanged: suspend (SessionRecord) -> Unit,
-) {
-    val id: String = initial.id
+) : TabSource {
+    override val id: String = initial.id
 
     private val _record = MutableStateFlow(initial)
-    val record: StateFlow<SessionRecord> = _record.asStateFlow()
+    override val record: StateFlow<SessionRecord> = _record.asStateFlow()
     val host: Host get() = _record.value.hostSnapshot
     val state: SessionState get() = _record.value.state
 

@@ -14,12 +14,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import app.berth.android.R
 import androidx.compose.ui.test.click
@@ -28,15 +30,19 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.Prompt
+import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.hosts.HostEditorScreen
@@ -45,7 +51,7 @@ import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.prompts.PromptHost
-import app.berth.android.ui.rail.Rail
+import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.settings.KnownHostSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
@@ -54,6 +60,11 @@ import app.berth.android.ui.snippets.SnippetEditorSheet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.snippets.SnippetsScreen
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.NewTabSheet
+import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabActions
+import app.berth.android.ui.tabs.TabSwitcher
+import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.tunnels.TunnelEditorSheet
@@ -147,13 +158,23 @@ class BerthScreenshotTest {
         }
     }
 
+    /** Tab actions without the shell: data changes reach the manager, sheet requests land in a state nobody renders. */
+    @Composable
+    private fun tabActions(): TabActions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+
+    /** The Stage as the shell mounts it, minus navigation. */
+    @Composable
+    private fun Stage(session: TerminalSession?) {
+        StageScreen(graph.viewModel, session, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+    }
+
     // ---- offline screens ------------------------------------------------------------------------
 
     @Test
     fun `hosts library`() {
         seedLibrary()
         themed {
-            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
         }
         capture("hosts")
     }
@@ -161,7 +182,7 @@ class BerthScreenshotTest {
     @Test
     fun `hosts library empty`() {
         themed {
-            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
         }
         capture("hosts-empty")
     }
@@ -242,7 +263,7 @@ class BerthScreenshotTest {
         graph.sessions.setActive(session.id)
         val snippet = graph.snippets.items.value.first { it.id == "sn-tail" }
         themed {
-            StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
+            Stage(session)
             SnippetRunSheet(graph.viewModel, session, PendingSnippet(snippet, SnippetAction.RUN), onDismiss = {})
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("tail app log")).fetchSemanticsNodes().isNotEmpty() }
@@ -278,7 +299,7 @@ class BerthScreenshotTest {
         val offered = SshKeys.generate(KeyAlgorithm.ED25519).public
         val request = HostKeyRequest(host.address, host.port, "ssh-ed25519", offered, SshKeys.openSshPublic(offered).split(" ")[1], SshKeys.fingerprintSha256(offered))
         themed {
-            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
             PromptHost(graph.prompts)
         }
         CoroutineScope(Dispatchers.IO).launch { graph.prompts.pinnedKeyRefused(host, request, pinned) }
@@ -369,18 +390,9 @@ class BerthScreenshotTest {
         capture("launcher-icon")
     }
 
-    @Test
-    fun `rail with workspaces and detached sessions`() {
-        seedLibrary()
-        seedDetachedSessions()
-        themed {
-            Rail(graph.viewModel, onSessionTap = {}, onNewSession = {}, onLibrary = {})
-        }
-        runBlocking { graph.sessions.restore() }
-        compose.waitUntil(10_000) { graph.viewModel.workspaceSessions.value.size >= 2 }
-        capture("rail-detached-sessions")
-    }
+    // ---- tabs (spec C3) -----------------------------------------------------------------------
 
+    /** Three detached tabs across two groups: the strip with chips, the active tab, the count tile. */
     @Test
     fun `stage with a detached frame`() {
         seedLibrary()
@@ -388,10 +400,79 @@ class BerthScreenshotTest {
         runBlocking { graph.sessions.restore() }
         val session = graph.sessions.get("s-homelab")!!
         graph.sessions.setActive(session.id)
-        themed {
-            StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
-        }
+        themed { Stage(session) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
         capture("stage-detached")
+    }
+
+    /** The Stage with no tab: the empty state under a strip that is only the plus tab. */
+    @Test
+    fun `stage with no tabs`() {
+        seedLibrary()
+        runBlocking { graph.sessions.restore() }
+        themed { Stage(null) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("No tabs")).fetchSemanticsNodes().isNotEmpty() }
+        capture("stage-empty")
+    }
+
+    /** A tab's long-press menu over the strip. */
+    @Test
+    fun `tab menu`() {
+        seedLibrary()
+        seedDetachedSessions()
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        themed { Stage(session) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasContentDescription("pi-hole, detached", substring = true)).performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Close others")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tab-menu")
+    }
+
+    /** The switcher: a grid of frozen frames, grouped, the active card marked. */
+    @Test
+    fun `tab switcher`() {
+        seedLibrary()
+        seedDetachedSessions()
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        themed {
+            Stage(session)
+            TabSwitcher(graph.viewModel, tabActions(), onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tab-switcher")
+    }
+
+    /** The New tab sheet: quick connect, recent hosts, then the library. */
+    @Test
+    fun `new tab sheet`() {
+        seedLibrary()
+        seedDetachedSessions()
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        themed {
+            Stage(session)
+            NewTabSheet(graph.viewModel, groupId = null, onDismiss = {}, onAddHost = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open staging db")).fetchSemanticsNodes().isNotEmpty() }
+        capture("new-tab-sheet")
+    }
+
+    /** The drawer (spec C7): the groups with their tab counts, then the library. */
+    @Test
+    fun `drawer with groups and detached tabs`() {
+        seedLibrary()
+        seedDetachedSessions()
+        runBlocking { graph.sessions.restore() }
+        themed {
+            Drawer(graph.viewModel, tabActions(), onGroupTap = {}, onNewGroup = {}, onLibrary = {})
+        }
+        compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 }
+        capture("drawer-groups")
     }
 
     @Test
@@ -408,7 +489,7 @@ class BerthScreenshotTest {
             fingerprintSha256 = SshKeys.fingerprintSha256(key),
         )
         themed {
-            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenRail = {}, onKnownHosts = {})
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
             PromptHost(graph.prompts)
         }
         val bg = CoroutineScope(Dispatchers.IO)
@@ -466,10 +547,14 @@ class BerthScreenshotTest {
         }
 
         compose.setContent { AppRoot(graph.viewModel) }
-        compose.waitUntil(10_000) { graph.viewModel.workspaces.value.isNotEmpty() }
-        capture("app-hosts-picker")
+        // A cold start: the detached tabs come back onto the strip with nothing active, so the Stage is the empty state.
+        compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 }
+        capture("app-cold-start")
 
-        compose.onNodeWithText("Berth test box").performClick()
+        compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open Berth test box")).fetchSemanticsNodes().isNotEmpty() }
+        capture("new-tab-sheet-live")
+        compose.onNode(hasContentDescription("Open Berth test box")).performClick()
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         capture("prompt-trust-host-key-live")
         compose.onNodeWithText("Trust and connect").performClick()
@@ -523,7 +608,9 @@ class BerthScreenshotTest {
         settle(1_200)
         capture("stage-live-snippet-ran")
 
-        compose.onNodeWithText("Berth test box").performClick()
+        // The Session sheet sits behind the overflow now that the header row is the strip.
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Session").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detach")).fetchSemanticsNodes().isNotEmpty() }
         capture("session-sheet")
         compose.onNodeWithText("Tunnels 1").performClick()
@@ -531,22 +618,32 @@ class BerthScreenshotTest {
         capture("tunnels-live")
         compose.onNodeWithContentDescription("Back").performClick()
 
-        // Second session on the ask-each-time host: the password prompt comes from the transport.
-        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Open the rail").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Open the rail").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("New session")).fetchSemanticsNodes().isNotEmpty() }
-        capture("rail-live")
-        compose.onNodeWithText("New session").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Same box, ask each time").performClick()
+        // Second tab on the ask-each-time host from the plus tab: the password prompt comes from the transport.
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("New tab").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasContentDescription("Open Same box, ask each time")).performClick()
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.Password }
         capture("prompt-password-live")
         (graph.prompts.current.value as Prompt.Password).submit(sshPassword.toCharArray())
         compose.waitUntil(45_000) { graph.sessions.sessions.value.count { it.state == SessionState.LIVE } == 2 }
         settle(800)
-        compose.onNodeWithContentDescription("Open the rail").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("New session")).fetchSemanticsNodes().isNotEmpty() }
-        capture("rail-two-live-sessions")
+        // The new tab landed after the one it was opened from and is active; the strip shows both live dots.
+        assertEquals(listOf(box.id, askBox.id), graph.sessions.sessions.value.filter { it.state == SessionState.LIVE }.map { it.record.value.hostId })
+        capture("stage-live-two-tabs")
+
+        compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
+        settle(400)
+        capture("tab-switcher-live")
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Done").fetchSemanticsNodes().isEmpty() }
+
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Library").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Groups")).fetchSemanticsNodes().isNotEmpty() }
+        settle(400)
+        capture("drawer-live")
 
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
         http.stop(0)

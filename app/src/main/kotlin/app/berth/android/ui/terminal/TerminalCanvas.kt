@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -129,6 +130,7 @@ fun TerminalCanvas(
     showCursor: Boolean = true,
     onFontSizeStep: (Int) -> Unit = {},
     onTap: () -> Unit = {},
+    onTwoFingerSwipe: ((forward: Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -145,6 +147,9 @@ fun TerminalCanvas(
         emulator.applyTheme(theme.ansi.toIntArray(), theme.foreground, theme.background)
     }
     val stepPx = with(density) { 40.dp.toPx() }
+    val swipeTravelPx = with(density) { 24.dp.toPx() }
+    val swipeSpanPx = with(density) { 12.dp.toPx() }
+    val currentSwipe by rememberUpdatedState(onTwoFingerSwipe)
 
     Canvas(
         modifier
@@ -172,11 +177,17 @@ fun TerminalCanvas(
                     var acc = 0f
                     var lastDist = 0f
                     var zoomAcc = 0f
+                    var zoomed = false
+                    // Two-finger swipe (spec C3, Switching): where each finger went down and their span then.
+                    val starts = HashMap<PointerId, Offset>()
+                    var startSpan = 0f
+                    var swipeForward = false
                     val slop = viewConfiguration.touchSlop
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
                         val pressed = event.changes.filter { it.pressed }
                         if (pressed.isEmpty()) {
+                            if (mode == GestureMode.SWIPE) currentSwipe?.invoke(swipeForward)
                             if (mode == GestureMode.NONE) {
                                 val col = (down.position.x / paints.cellWidth).toInt()
                                 val row = (down.position.y / paints.cellHeight).toInt()
@@ -191,22 +202,39 @@ fun TerminalCanvas(
                             break
                         }
                         if (pressed.size >= 2) {
-                            val dist = (pressed[0].position - pressed[1].position).getDistance()
-                            if (mode != GestureMode.PINCH) {
+                            val a = pressed[0]
+                            val b = pressed[1]
+                            val dist = (a.position - b.position).getDistance()
+                            if (mode != GestureMode.PINCH && mode != GestureMode.SWIPE) {
                                 mode = GestureMode.PINCH
                                 lastDist = dist
-                            } else {
-                                zoomAcc += dist - lastDist
-                                lastDist = dist
-                                while (zoomAcc > stepPx) { onFontSizeStep(1); zoomAcc -= stepPx }
-                                while (zoomAcc < -stepPx) { onFontSizeStep(-1); zoomAcc += stepPx }
+                                startSpan = dist
+                                starts.clear()
+                                starts[a.id] = a.position
+                                starts[b.id] = b.position
+                            } else if (mode == GestureMode.PINCH) {
+                                // Both fingers travelling the same way with the span held is a swipe, not a pinch;
+                                // once a zoom step has fired the gesture stays a pinch.
+                                val da = starts[a.id]?.let { a.position.x - it.x }
+                                val db = starts[b.id]?.let { b.position.x - it.x }
+                                val together = da != null && db != null && (da > 0) == (db > 0) &&
+                                    minOf(abs(da), abs(db)) >= swipeTravelPx && abs(dist - startSpan) < swipeSpanPx
+                                if (!zoomed && currentSwipe != null && together) {
+                                    mode = GestureMode.SWIPE
+                                    swipeForward = da!! < 0
+                                } else {
+                                    zoomAcc += dist - lastDist
+                                    lastDist = dist
+                                    while (zoomAcc > stepPx) { onFontSizeStep(1); zoomAcc -= stepPx; zoomed = true }
+                                    while (zoomAcc < -stepPx) { onFontSizeStep(-1); zoomAcc += stepPx; zoomed = true }
+                                }
                             }
                             event.changes.forEach { it.consume() }
                             continue
                         }
                         val c = pressed[0]
                         when (mode) {
-                            GestureMode.PINCH, GestureMode.HORIZONTAL -> Unit
+                            GestureMode.PINCH, GestureMode.HORIZONTAL, GestureMode.SWIPE -> Unit
                             GestureMode.NONE -> {
                                 if (abs(c.position.y - down.position.y) > slop) {
                                     mode = GestureMode.SCROLL
@@ -250,7 +278,7 @@ fun TerminalCanvas(
     }
 }
 
-private enum class GestureMode { NONE, SCROLL, HORIZONTAL, PINCH }
+private enum class GestureMode { NONE, SCROLL, HORIZONTAL, PINCH, SWIPE }
 
 /** Scrolls history when there is any; otherwise gives full-screen applications wheel or arrow events. */
 private fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines: Int, col: Int, row: Int) {

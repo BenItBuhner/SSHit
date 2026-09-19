@@ -7,6 +7,7 @@ import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
+import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.data.crypto.HardwareKeys
@@ -102,6 +103,20 @@ class AppViewModel @Inject constructor(
     /** Every tab in strip order. */
     val tabs: StateFlow<List<TerminalSession>> = sessions.sessions
 
+    /**
+     * The strip's skeleton: each tab with its group, in strip order. Emits only when membership,
+     * order or grouping change (state flows skip equal lists), so titles and states flowing through
+     * [records] never rebuild the strip; each tab observes its own record for those.
+     */
+    val stripSlots: StateFlow<List<TabSlot>> = combine(sessions.records, sessions.sessions) { list, live ->
+        val byId = live.associateBy { it.id }
+        list.mapNotNull { r -> byId[r.id]?.let { TabSlot(it, r.workspaceId) } }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Ids of the tabs whose ring is lit; emits only when the set changes. */
+    val attentionTabIds: StateFlow<Set<String>> = records.map { list -> list.filter { it.needsAttention }.map { it.id }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
     /** Tabs of the current group in strip order; the Session sheet's secondary list. */
     val workspaceSessions: StateFlow<List<TerminalSession>> = combine(sessions.sessions, sessions.currentWorkspaceId) { list, ws ->
         list.filter { ws == null || it.record.value.workspaceId == ws }
@@ -131,7 +146,7 @@ class AppViewModel @Inject constructor(
     }
 
     /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
-    fun quickConnect(spec: String, identityId: String?): Boolean {
+    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): Boolean {
         val parsed = parseQuickConnect(spec) ?: return false
         val (user, address, port) = parsed
         val name = address
@@ -146,13 +161,19 @@ class AppViewModel @Inject constructor(
             auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
             createdAt = System.currentTimeMillis(),
         )
-        viewModelScope.launch { sessions.open(host) }
+        viewModelScope.launch { sessions.open(host, workspaceId) }
         return true
     }
 
     fun setActive(id: String?) = sessions.setActive(id)
-    fun reconnect(id: String) = sessions.reconnect(id)
-    fun detach(id: String) = sessions.detach(id)
+
+    fun reconnect(id: String) {
+        sessions.reconnect(id)
+    }
+
+    fun detach(id: String) {
+        sessions.detach(id)
+    }
 
     /** Closes a tab and returns what a Reopen snackbar needs, or null when there was no such tab. */
     fun close(id: String): ClosedTab? = sessions.close(id)

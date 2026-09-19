@@ -1,25 +1,7 @@
 package app.berth.android.ui.rail
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
@@ -31,28 +13,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
-import app.berth.android.session.TunnelStatus
-import app.berth.android.ui.AppViewModel
-import app.berth.android.ui.components.BerthButton
-import app.berth.android.ui.components.BerthField
-import app.berth.android.ui.components.BerthIcon
-import app.berth.android.ui.components.BerthIcons
-import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.stage.ageText
-import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -60,166 +29,10 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Workspace
 
-enum class Library { HOSTS, KEYS, TUNNELS, FILES, SNIPPETS, SETTINGS }
-
-/**
- * The drawer: workspace chips across the top, the current workspace's sessions, then the library.
- * 304 dp wide on surface.1; rows on surface.2; the active row on surface.3.
+/*
+ * The rail as a session switcher is superseded by the tab strip (spec C3); the drawer in Drawer.kt
+ * is its successor. What remains here are the session rows the Session sheet still lists.
  */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun Rail(
-    vm: AppViewModel,
-    onSessionTap: (String) -> Unit,
-    onNewSession: () -> Unit,
-    onLibrary: (Library) -> Unit,
-    modifier: Modifier = Modifier,
-    onTunnels: (hostId: String) -> Unit = {},
-) {
-    val c = Berth.colors
-    val workspaces by vm.workspaces.collectAsState()
-    val currentWorkspaceId by vm.currentWorkspaceId.collectAsState()
-    val sessions by vm.workspaceSessions.collectAsState()
-    val active by vm.activeSession.collectAsState()
-    val records by vm.records.collectAsState(initial = emptyList())
-    val tunnels by vm.tunnels.collectAsState()
-    val tunnelStatuses by vm.tunnelStatuses.collectAsState()
-    var newWorkspace by remember { mutableStateOf(false) }
-    val now = ageTicker()
-
-    /** Local ports of the tunnels that are up for [hostId]; the rail shows them as pills. */
-    fun upPorts(hostId: String?): List<Int> =
-        if (hostId == null) emptyList() else tunnels.filter { it.hostId == hostId }.mapNotNull { (tunnelStatuses[it.id] as? TunnelStatus.Up)?.localPort }.sorted()
-
-    Column(
-        modifier
-            .width(304.dp)
-            .fillMaxHeight()
-            .background(c.surface1)
-            .statusBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            for (ws in workspaces) {
-                val needs = records.any { it.workspaceId == ws.id && it.needsAttention }
-                WorkspaceChip(ws, selected = ws.id == currentWorkspaceId, attention = needs) { vm.setWorkspace(ws.id) }
-            }
-            Box(
-                Modifier
-                    .width(64.dp)
-                    .height(78.dp)
-                    .clip(RoundedCornerShape(BerthRadius.row))
-                    .clickable(role = Role.Button) { newWorkspace = true }
-                    // The glyph is decoration; the tile itself carries the name.
-                    .semantics { contentDescription = "New workspace" },
-                contentAlignment = Alignment.Center,
-            ) {
-                BerthIcon(BerthIcons.add)
-            }
-        }
-        if (newWorkspace) {
-            var name by remember { mutableStateOf("") }
-            Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BerthField(name, { name = it }, placeholder = "Workspace name")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BerthButton("Create", kind = ButtonKind.PRIMARY, enabled = name.isNotBlank(), onClick = {
-                        vm.createWorkspace(name.trim())
-                        newWorkspace = false
-                    })
-                    BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = { newWorkspace = false })
-                }
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-        LazyColumn(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(sessions, key = { it.id }) { session ->
-                val hostId = session.record.collectAsState().value.hostId
-                SessionRow(
-                    session = session,
-                    selected = active?.id == session.id,
-                    now = now,
-                    onTap = { onSessionTap(session.id) },
-                    onReconnect = { vm.reconnect(session.id) },
-                    onDetach = { vm.detach(session.id) },
-                    onClose = { vm.close(session.id) },
-                    tunnelPorts = upPorts(hostId),
-                    onTunnelTap = hostId?.let { id -> { onTunnels(id) } },
-                )
-            }
-            item {
-                ListRow(
-                    title = "New session",
-                    surface = c.surface1,
-                    minHeight = 48.dp,
-                    onClick = onNewSession,
-                    titleColor = c.text2,
-                    leading = {
-                        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-                            BerthIcon(BerthIcons.add)
-                        }
-                    },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        // Three links per line (C7): Hosts Keys Tunnels / Files Snippets Settings.
-        FlowRow(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(20.dp),
-            maxItemsInEachRow = 3,
-        ) {
-            LibraryLink("Hosts") { onLibrary(Library.HOSTS) }
-            LibraryLink("Keys") { onLibrary(Library.KEYS) }
-            LibraryLink("Tunnels") { onLibrary(Library.TUNNELS) }
-            LibraryLink("Files") { onLibrary(Library.FILES) }
-            LibraryLink("Snippets") { onLibrary(Library.SNIPPETS) }
-            LibraryLink("Settings") { onLibrary(Library.SETTINGS) }
-        }
-    }
-}
-
-@Composable
-private fun LibraryLink(text: String, onClick: () -> Unit) {
-    Text(
-        text,
-        style = BerthType.label,
-        color = Berth.colors.text2,
-        modifier = Modifier
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 10.dp),
-    )
-}
-
-@Composable
-private fun WorkspaceChip(ws: Workspace, selected: Boolean, attention: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
-    Column(
-        Modifier
-            .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (selected) c.surface3 else c.surface1)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-            .width(48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Swatch(ws.color, ws.monogram, 48.dp, attention = attention)
-        Text(ws.name, style = BerthType.caption, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
 
 /**
  * 56 dp session row: swatch with state dot, title, subtitle, the local ports of tunnels that are
@@ -243,7 +56,7 @@ fun SessionRow(
     var menu by remember { mutableStateOf(false) }
     Box {
         ListRow(
-            title = record.title.ifBlank { record.hostSnapshot.name },
+            title = record.displayTitle,
             subtitle = subtitleFor(record),
             selected = selected,
             surface = surface,
@@ -277,8 +90,6 @@ fun SessionRow(
                 }
                 if (trailing != null) {
                     Text(trailing, style = BerthType.caption, color = if (record.state == SessionState.FAILED) c.danger else c.text3)
-                } else if (record.lastLiveAt != null && !selected) {
-                    Text("", style = BerthType.caption)
                 }
                 if (record.state == SessionState.DETACHED && record.lastLiveAt != null) {
                     Text(ageText(record.lastLiveAt, now), style = BerthType.caption, color = c.text3)
