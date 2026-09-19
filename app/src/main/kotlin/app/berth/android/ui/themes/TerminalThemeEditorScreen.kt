@@ -15,13 +15,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -422,9 +423,10 @@ private fun ColourSheet(
                     Chip("Own colour", selected = current != null) { if (current == null) setRgb(theme.foreground) }
                 }
             }
-            HslSlider("Hue", hsl[0], 0f..360f, hueTrack(hsl[1], hsl[2])) { setHsl(it, hsl[1], hsl[2]) }
-            HslSlider("Saturation", hsl[1], 0f..1f, ColorMath.fromHsl(hsl[0], 1f, hsl[2]).toColor()) { setHsl(hsl[0], it, hsl[2]) }
-            HslSlider("Lightness", hsl[2], 0f..1f, Color.White) { setHsl(hsl[0], hsl[1], it) }
+            val (h, s, l) = Triple(hsl[0], hsl[1], hsl[2])
+            HslSlider("Hue", h, 0f..360f, hueTrack(s, l), base) { setHsl(it, s, l) }
+            HslSlider("Saturation", s, 0f..1f, ramp { ColorMath.fromHsl(h, it, l) }, base) { setHsl(h, it, l) }
+            HslSlider("Lightness", l, 0f..1f, ramp { ColorMath.fromHsl(h, s, it) }, base) { setHsl(h, s, it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BerthButton("Done", onClick = onDismiss, kind = ButtonKind.PRIMARY)
                 BerthButton("Pick from preview", onClick = onPickFromPreview)
@@ -435,10 +437,22 @@ private fun ColourSheet(
     }
 }
 
-private fun hueTrack(s: Float, l: Float): Color = ColorMath.fromHsl(0f, s.coerceAtLeast(0.5f), l.coerceIn(0.35f, 0.65f)).toColor()
+/** Twelve stops of [stop] from 0 to 1, the gradient a slider's track is painted with. */
+private fun ramp(stop: (Float) -> Int): List<Color> = (0..12).map { stop(it / 12f).toColor() }
 
+/**
+ * The hue track at the colour's own saturation and lightness, kept vivid enough to read even
+ * for a grey, so the track shows roughly what each hue would give this slot.
+ */
+private fun hueTrack(s: Float, l: Float): List<Color> = ramp { ColorMath.fromHsl(it * 360f, s.coerceAtLeast(0.4f), l.coerceIn(0.3f, 0.7f)) }
+
+/**
+ * A slider whose track is the range of colours the channel can reach and whose thumb is the
+ * colour being edited, so the eye can pick a value before the finger moves.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HslSlider(title: String, value: Float, range: ClosedFloatingPointRange<Float>, tint: Color, onChange: (Float) -> Unit) {
+private fun HslSlider(title: String, value: Float, range: ClosedFloatingPointRange<Float>, track: List<Color>, current: Int, onChange: (Float) -> Unit) {
     val c = Berth.colors
     Column {
         Row(Modifier.fillMaxWidth()) {
@@ -449,8 +463,27 @@ private fun HslSlider(title: String, value: Float, range: ClosedFloatingPointRan
             value = value.coerceIn(range),
             onValueChange = onChange,
             valueRange = range,
-            colors = SliderDefaults.colors(thumbColor = tint, activeTrackColor = tint.copy(alpha = 0.85f), inactiveTrackColor = c.surface4),
             modifier = Modifier.semantics { contentDescription = "$title slider" },
+            thumb = {
+                Box(
+                    Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(c.text1)
+                        .padding(3.dp)
+                        .clip(CircleShape)
+                        .background(current.toColor()),
+                )
+            },
+            track = {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(Brush.horizontalGradient(track)),
+                )
+            },
         )
     }
 }

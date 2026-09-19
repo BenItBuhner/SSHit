@@ -4,17 +4,25 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ui.deck.DeckEditorScreen
@@ -28,6 +36,7 @@ import app.berth.android.ui.themes.ThemesScreen
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKeyCode
+import app.berth.domain.model.DeckModifier
 import app.berth.domain.model.DeckReach
 import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
@@ -56,9 +65,10 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The customisation screens, in Berth Dark on a Pixel-class phone, on in-memory storage: the
- * theme gallery, the terminal theme editor with its colour sheet, the interface editor, the Deck
- * editor with the action catalogue, the presets sheet and a two-row left-reach layout, plus the
- * Stage picking up a workspace theme. Written to `build/outputs/roborazzi`.
+ * theme gallery, the terminal theme editor with its colour sheet and apply panel, the interface
+ * editor, the Deck editor with the action catalogue, the presets sheet, the layout panel, a two-row
+ * left-reach layout and a Termux import, plus the Stage picking up a workspace theme. Written to
+ * `build/outputs/roborazzi`.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -84,7 +94,9 @@ class EditorScreenshotTest {
 
     private fun capture(name: String) {
         compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
+        val file = File(outDir, "$name.png")
+        file.parentFile.mkdirs()
+        captureScreenRoboImage(file.path)
     }
 
     private fun themed(content: @Composable () -> Unit) {
@@ -120,6 +132,11 @@ class EditorScreenshotTest {
         compose.onNode(hasContentDescription("Blue #", substring = true)).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Pick from preview")).fetchSemanticsNodes().isNotEmpty() }
         capture("terminal-theme-colour-sheet")
+        dismissSheet()
+
+        // The end of the page: which scope the theme applies to, the primary action and export.
+        compose.onNodeWithText("Export").performScrollTo()
+        capture("terminal-theme-editor-apply")
     }
 
     @Test
@@ -165,6 +182,10 @@ class EditorScreenshotTest {
         capture("deck-editor-presets")
         dismissSheet()
 
+        // The layout panel and the import, export and preset actions at the end of the page.
+        compose.onNodeWithText("Import").performScrollTo()
+        capture("deck-editor-layout")
+
         compose.onNodeWithText("Two").performScrollTo().performClick()
         compose.onNodeWithText("Left").performScrollTo().performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.rows == 2 && graph.viewModel.deckLayout.value.reach == DeckReach.LEFT }
@@ -176,6 +197,61 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Undo").performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.rows == 1 && graph.viewModel.deckLayout.value.reach == DeckReach.RIGHT }
         assertEquals(DeckAction.Key(DeckKeyCode.PGUP), graph.viewModel.deckLayout.value.layers[0].keys[2].hold)
+
+        // Termux extra-keys pasted into the import sheet become the Deck's layers, one per row.
+        compose.onNodeWithText("Import").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Import a Deck")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasSetTextAction()).performTextInput("extra-keys = [['ESC','/','-','HOME','UP','END'],['TAB','CTRL','ALT','LEFT','DOWN','RIGHT']]")
+        capture("deck-editor-import")
+        compose.onAllNodesWithText("Import").onLast().performClick()
+        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers.size == 2 && graph.viewModel.deckLayout.value.rows == 2 }
+        val imported = graph.viewModel.deckLayout.value
+        assertEquals(listOf("Row 1", "Row 2"), imported.layers.map { it.name })
+        assertEquals(DeckAction.Key(DeckKeyCode.ESC), imported.layers[0].keys[0].tap)
+        assertEquals(DeckAction.Modifier(DeckModifier.CTRL), imported.layers[1].keys[1].tap)
+    }
+
+    /**
+     * The edit-to-Stage loop as a frame sequence, standing in for an emulator recording: the
+     * background of Berth Dark is changed in the colour sheet, applied as the app default, and the
+     * Stage behind the editor comes back painted with the copy. Frames land in `flow/`.
+     */
+    @Test
+    fun `editing a theme repaints the stage`() {
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        var onStage by mutableStateOf(false)
+        var themeId by mutableStateOf(TerminalTheme.BERTH_DARK_ID)
+        themed {
+            if (onStage) {
+                StageScreen(graph.viewModel, session, onOpenRail = {}, onOpenSessionSheet = {}, onEditHost = {}, onNextSession = {}, onPreviousSession = {})
+            } else {
+                TerminalThemeEditorScreen(graph.viewModel, themeId = themeId, scope = ThemeScope.AppDefault, onDone = { onStage = true }, onOpenTheme = { themeId = it })
+            }
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark")).fetchSemanticsNodes().isNotEmpty() }
+        capture("flow/01-editor")
+
+        compose.onNodeWithText("Background").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Pick from preview")).fetchSemanticsNodes().isNotEmpty() }
+        capture("flow/02-background-sheet")
+
+        compose.onNode(hasSetTextAction()).performTextReplacement("#1B2A41")
+        compose.waitForIdle()
+        capture("flow/03-navy-in-the-preview")
+
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("Apply to app default").performScrollTo().performClick()
+        compose.waitUntil(5_000) { graph.viewModel.defaultTerminalTheme.value.background == 0x1B2A41 }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark copy")).fetchSemanticsNodes().isNotEmpty() }
+        capture("flow/04-applied-as-a-copy")
+
+        onStage = true
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Reconnect")).fetchSemanticsNodes().isNotEmpty() }
+        capture("flow/05-stage-in-the-new-theme")
+        assertEquals(0x1B2A41, graph.viewModel.themeFor(session.host, session.record.value.workspaceId).background)
     }
 
     @Test

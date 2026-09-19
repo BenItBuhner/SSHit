@@ -138,26 +138,38 @@ private const val UL = "\u001b[4m"
 private fun paletteRows(): String =
     (0..7).joinToString("") { bg(it) + "  " } + R + "\r\n" + (8..15).joinToString("") { bg(it) + "  " } + R
 
+private val SGR = Regex("\u001b\\[[0-9;]*m")
+
+/** The number of cells a line occupies once its SGR escapes are stripped. */
+internal fun visibleLength(line: String): Int = line.replace(SGR, "").length
+
 /**
- * The sample script for [script]. Long lines wrap at [cols], so the full script trims its
- * decorations on narrow previews instead of spilling onto the next row.
+ * The sample script for [script]. Every line of the full script comes in a few lengths and the
+ * longest that still leaves a cell free at [cols] is used, so the sample never wraps or scrolls
+ * the preview no matter how narrow the panel or how large the font.
  */
 internal fun previewText(theme: TerminalTheme, script: PreviewScript, cols: Int): String {
-    val wide = cols >= 44
+    fun fit(vararg variants: String): String = variants.firstOrNull { visibleLength(it) < cols } ?: variants.last()
     val prompt = "${fg(2)}ben$R@${BOLD}berth$R:${fg(4)}~/srv$R$ "
+    val docs = "$BOLD${fg(4)}docs/$R"
+    val scripts = "$BOLD${fg(4)}scripts/$R"
+    val deploy = "${fg(2)}deploy.sh$R"
+    val config = "${bgRgb(theme.selection)}config.toml$R"
+    val notes = "${fg(5)}notes.md$R"
+    val link = "$UL${fgRgb(theme.links)}https://berth.app$R"
     return when (script) {
         PreviewScript.TILE -> listOf(
             "${fg(2)}~$R$ ls",
-            "$BOLD${fg(4)}docs/$R ${fg(2)}run.sh$R ${fg(5)}notes.md$R",
+            "$docs ${fg(2)}run.sh$R $notes",
             paletteRows(),
         ).joinToString("\r\n")
         PreviewScript.FULL -> listOf(
             prompt + "ls -la",
-            "$BOLD${fg(4)}docs/$R  $BOLD${fg(4)}scripts/$R  ${fg(2)}deploy.sh$R  ${bgRgb(theme.selection)}config.toml$R" + if (wide) "  ${fg(5)}notes.md$R" else "",
-            "${fg(2)}ok$R     configuration loaded",
-            "${fg(1)}error$R  failed to connect to host",
-            "${fg(3)}warn$R   retrying in 4 s" + if (wide) "  ${DIM}(attempt 2 of 5)$R" else "  ${DIM}(2 of 5)$R",
-            "${BOLD}Bold heading$R  " + (if (wide) "${fg(6)}cyan$R ${fg(5)}magenta$R  " else "") + "$UL${fgRgb(theme.links)}https://berth.app$R",
+            fit("$docs  $scripts  $deploy  $config  $notes", "$docs  $scripts  $deploy  $config", "$docs  $deploy  $config", "$docs  $config"),
+            fit("${fg(2)}ok$R     configuration loaded", "${fg(2)}ok$R     config loaded"),
+            fit("${fg(1)}error$R  failed to connect to host", "${fg(1)}error$R  connection refused"),
+            fit("${fg(3)}warn$R   retrying in 4 s  ${DIM}(attempt 2 of 5)$R", "${fg(3)}warn$R   retrying in 4 s  ${DIM}(2 of 5)$R", "${fg(3)}warn$R   retrying in 4 s"),
+            fit("${BOLD}Bold heading$R  ${fg(6)}cyan$R ${fg(5)}magenta$R  $link", "${BOLD}Bold heading$R  $link", "${BOLD}Bold$R  $link"),
             paletteRows(),
             prompt,
         ).joinToString("\r\n")
