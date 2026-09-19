@@ -12,6 +12,7 @@ import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -76,6 +77,7 @@ class AppViewModel @Inject constructor(
     val tunnelStatuses: StateFlow<Map<String, TunnelStatus>> = sessions.tunnelStatuses
 
     val deckLayout: StateFlow<DeckLayout> = settings.deckLayout.stateIn(viewModelScope, SharingStarted.Eagerly, DeckLayout.default())
+    val hapticLevel: StateFlow<HapticLevel> = settings.hapticLevel.stateIn(viewModelScope, SharingStarted.Eagerly, HapticLevel.FULL)
     val interfaceTheme: StateFlow<InterfaceTheme> = settings.interfaceTheme.stateIn(viewModelScope, SharingStarted.Eagerly, InterfaceTheme.DEFAULT)
     val terminalFont: StateFlow<TerminalFont> = settings.terminalFont.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalFont())
     val terminalThemes: StateFlow<List<TerminalTheme>> = settings.terminalThemes.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalTheme.builtIns)
@@ -403,6 +405,10 @@ class AppViewModel @Inject constructor(
 
     fun setInterfaceTheme(theme: InterfaceTheme) {
         viewModelScope.launch { settings.setInterfaceTheme(theme) }
+    }
+
+    fun setHapticLevel(level: HapticLevel) {
+        viewModelScope.launch { settings.setHapticLevel(level) }
     }
 
     fun setDefaultTerminalTheme(id: String) {

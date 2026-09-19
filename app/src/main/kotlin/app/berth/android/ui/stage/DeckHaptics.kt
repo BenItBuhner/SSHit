@@ -8,14 +8,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import app.berth.domain.model.HapticLevel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** D3 levels: Off, Subtle (Deck key taps only) and Full. */
-enum class HapticLevel { OFF, SUBTLE, FULL }
-
-/** The haptic level in force for the Stage; the Settings screen provides it once the preference exists. */
+/** The haptic level in force (D3), provided at the app root from the Settings preference. */
 val LocalHapticLevel = compositionLocalOf { HapticLevel.FULL }
 
 /**

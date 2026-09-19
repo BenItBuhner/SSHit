@@ -8,6 +8,7 @@ import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -162,6 +163,9 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override val deckLayout: Flow<DeckLayout> = document(KEY_DECK, DeckLayout.serializer()) { DeckLayout.default() }
     override suspend fun setDeckLayout(layout: DeckLayout) = write(KEY_DECK, DeckLayout.serializer(), layout)
 
+    override val hapticLevel: Flow<HapticLevel> = document(KEY_HAPTIC_LEVEL, HapticLevel.serializer()) { HapticLevel.FULL }
+    override suspend fun setHapticLevel(level: HapticLevel) = write(KEY_HAPTIC_LEVEL, HapticLevel.serializer(), level)
+
     override val interfaceTheme: Flow<InterfaceTheme> = document(KEY_INTERFACE_THEME, InterfaceTheme.serializer()) { InterfaceTheme.DEFAULT }
     override suspend fun setInterfaceTheme(theme: InterfaceTheme) = write(KEY_INTERFACE_THEME, InterfaceTheme.serializer(), theme)
 
@@ -198,6 +202,7 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
 
     companion object {
         const val KEY_DECK = "deck_layout"
+        const val KEY_HAPTIC_LEVEL = "haptic_level"
         const val KEY_INTERFACE_THEME = "interface_theme"
         const val KEY_TERMINAL_FONT = "terminal_font"
         const val KEY_CUSTOM_THEMES = "terminal_themes_custom"

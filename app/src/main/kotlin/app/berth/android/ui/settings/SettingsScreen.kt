@@ -43,6 +43,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.TerminalFont
@@ -56,6 +57,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
     val themes by vm.terminalThemes.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val deck by vm.deckLayout.collectAsState()
+    val haptics by vm.hapticLevel.collectAsState()
     val known by vm.knownHosts.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
@@ -129,6 +131,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
 
             Panel(label = "Deck") {
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
+                // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
+                CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
                 Text("Layers: " + deck.layers.joinToString(", ") { it.name }, style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
                 Text("Editing keys and layers arrives with the layout editor; the layout is already data, so it will not require a migration.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 2.dp))
             }

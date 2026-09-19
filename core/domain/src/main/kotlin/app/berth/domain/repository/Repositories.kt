@@ -1,6 +1,7 @@
 package app.berth.domain.repository
 
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -94,6 +95,9 @@ interface SnippetRepository {
 interface SettingsRepository {
     val deckLayout: Flow<DeckLayout>
     suspend fun setDeckLayout(layout: DeckLayout)
+
+    val hapticLevel: Flow<HapticLevel>
+    suspend fun setHapticLevel(level: HapticLevel)
 
     val interfaceTheme: Flow<InterfaceTheme>
     suspend fun setInterfaceTheme(theme: InterfaceTheme)

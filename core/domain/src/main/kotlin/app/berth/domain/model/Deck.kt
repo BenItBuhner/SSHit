@@ -137,6 +137,13 @@ enum class DeckReach { LEFT, RIGHT }
 
 enum class DeckArrows { NUB, FOUR_KEYS, BOTH }
 
+/**
+ * Haptic levels (UX spec D3): Off, Subtle (Deck key taps only) and Full. A device preference, so it
+ * lives beside [DeckLayout] rather than in it and an exported layout does not carry it.
+ */
+@Serializable
+enum class HapticLevel { OFF, SUBTLE, FULL }
+
 /** The whole Deck configuration; the shape of Berth Deck JSON (UX spec E1). */
 @Serializable
 data class DeckLayout(
