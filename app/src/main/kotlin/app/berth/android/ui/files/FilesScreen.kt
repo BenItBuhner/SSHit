@@ -81,7 +81,6 @@ import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
-import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.stage.LocalHapticLevel
@@ -778,25 +777,17 @@ private fun NoticeLine(notice: Notice?, onDismiss: () -> Unit, modifier: Modifie
 /** The transfer that is moving, as its row from the sheet; a tap opens the sheet, the trailing pill counts the rest. */
 @Composable
 private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit, onClick: () -> Unit) {
-    val c = Berth.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
+    TransferRow(
+        transfer,
+        onCancel = onCancel,
+        modifier = Modifier
             .padding(horizontal = BerthSpace.screenMargin)
-            .padding(bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        TransferRow(
-            transfer,
-            onCancel = onCancel,
-            modifier = Modifier
-                .weight(1f)
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
-            surface = c.surface2,
-        )
-        if (others > 0) Pill("+$others", color = c.surface3)
-    }
+            .padding(bottom = 8.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+        surface = Berth.colors.surface2,
+        showHost = false,
+        others = others,
+    )
 }
 
 /** The contextual actions for the selected rows, one glyph over one Caption each; Delete in danger. */
@@ -824,7 +815,7 @@ private fun SelectionActions(
         ActionItem(BerthIcons.download, "Download", enabled = files > 0, onClick = onDownload, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.link, "Share", enabled = single && files == 1, onClick = onShare, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.edit, "Rename", enabled = single && canWrite, onClick = onRename, modifier = Modifier.weight(1f))
-        ActionItem(BerthIcons.lock, "chmod", enabled = selected.isNotEmpty() && canWrite, onClick = onChmod, modifier = Modifier.weight(1f))
+        ActionItem(BerthIcons.lock, "Mode", enabled = selected.isNotEmpty() && canWrite, onClick = onChmod, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.copy, "Copy path", enabled = single, onClick = onCopyPath, modifier = Modifier.weight(1f))
         ActionItem(BerthIcons.trash, "Delete", enabled = selected.isNotEmpty() && canWrite, danger = true, onClick = onDelete, modifier = Modifier.weight(1f))
     }

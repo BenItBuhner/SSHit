@@ -438,30 +438,40 @@ fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClear
     }
 }
 
-/** One transfer: the name, a 2 dp progress line, and one Caption line with direction, host, bytes and speed. */
+/**
+ * One transfer: the name, a 2 dp progress line, and one Caption line with bytes and speed. The glyph
+ * carries the direction; [showHost] names the host when transfers from several sessions share a
+ * list, and [others] counts the queue behind this one for the strip.
+ */
 @Composable
-fun TransferRow(t: Transfer, onCancel: () -> Unit, modifier: Modifier = Modifier, surface: Color = Berth.colors.surface2) {
+fun TransferRow(
+    t: Transfer,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    surface: Color = Berth.colors.surface2,
+    showHost: Boolean = true,
+    others: Int = 0,
+) {
     val c = Berth.colors
     val fraction = t.fraction
-    val caption = buildString {
-        append(t.kind.label)
-        append(" \u00B7 ").append(t.hostName)
+    val caption = buildList {
+        if (showHost) add(t.hostName)
         when (t.state) {
-            TransferState.QUEUED -> append(" \u00B7 Queued")
+            TransferState.QUEUED -> add("Queued")
             TransferState.RUNNING -> {
-                append(" \u00B7 ")
-                append(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
-                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let { append(" \u00B7 ").append(it) }
+                add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
+                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
             }
             TransferState.DONE -> {
-                append(" \u00B7 ").append(formatSize(if (t.total > 0) t.total else t.bytes))
+                add(formatSize(if (t.total > 0) t.total else t.bytes))
                 val seconds = ((t.finishedAt - t.startedAt) / 1000).coerceAtLeast(1)
-                append(" \u00B7 ").append(if (seconds < 60) "$seconds s" else "${seconds / 60} min")
+                add(if (seconds < 60) "$seconds s" else "${seconds / 60} min")
             }
-            TransferState.FAILED -> append(" \u00B7 ").append(t.error ?: "Failed")
-            TransferState.CANCELLED -> append(" \u00B7 Cancelled")
+            TransferState.FAILED -> add(t.error ?: "Failed")
+            TransferState.CANCELLED -> add("Cancelled")
         }
-    }
+        if (others > 0) add(if (others == 1) "1 more" else "$others more")
+    }.joinToString(" \u00B7 ")
     val trailing = when (t.state) {
         TransferState.RUNNING -> fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
         TransferState.DONE -> "Done"
@@ -494,7 +504,13 @@ fun TransferRow(t: Transfer, onCancel: () -> Unit, modifier: Modifier = Modifier
                 Text(trailing, style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text2)
             }
             ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else fraction, active = t.state == TransferState.RUNNING, color = lineColor)
-            Text(caption, style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                caption,
+                style = BerthType.caption,
+                color = if (t.state == TransferState.FAILED) c.danger else c.text3,
+                maxLines = if (t.state == TransferState.FAILED) 2 else 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (t.state.isActive) {
             Spacer(Modifier.width(4.dp))
