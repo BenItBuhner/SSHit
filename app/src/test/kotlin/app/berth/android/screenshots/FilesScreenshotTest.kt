@@ -883,12 +883,14 @@ class FilesScreenshotTest {
 
         // The folder comes down as one transfer into a directory standing for the picked tree; the channel is paced so it can be watched.
         val queue = graph.files.transfers
-        queue.channelFor = { s -> PacedChannel(s.openSftp(), perFileMs = 60, perChunkMs = 5) }
+        queue.channelFor = { s -> PacedChannel(s.openSftp(), perFileMs = 60, perChunkMs = 8) }
         val dest = createTempDirectory("berth-folder-down").toFile()
         val entry = runBlocking { session.openSftp().use { it.stat(dir) } }
         val down = queue.downloadFolder(session, entry, Uri.fromFile(dest))
         fun transfer(id: String) = queue.transfers.value.first { it.id == id }
-        compose.waitUntil(30_000) { transfer(down).let { it.state == TransferState.RUNNING && it.folder?.let { f -> f.phase == FolderPhase.COPYING && f.filesCopied > 0 } == true } }
+        // Photographed once a third of the bytes are across: the big file is moving, the speed has settled.
+        fun Transfer.aThirdIn() = state == TransferState.RUNNING && folder?.let { f -> f.phase == FolderPhase.COPYING && f.filesCopied > 0 && f.bytesDone * 3 > f.bytesTotal } == true
+        compose.waitUntil(30_000) { transfer(down).aThirdIn() }
         capture("files-folder-live-download")
         compose.onNodeWithContentDescription("Transfers, 1 running").performClick()
         waitForText("1 running", 5_000)
@@ -923,7 +925,7 @@ class FilesScreenshotTest {
         write("photos/clip.mp4", ByteArray(8 * 1024 * 1024).also(random::nextBytes))
         File(local, "photos/empty").mkdirs()
         val up = queue.uploadFolder(session, Uri.fromFile(local), home)
-        compose.waitUntil(30_000) { transfer(up).let { it.state == TransferState.RUNNING && it.folder?.let { f -> f.phase == FolderPhase.COPYING && f.filesCopied > 0 } == true } }
+        compose.waitUntil(30_000) { transfer(up).aThirdIn() }
         capture("files-folder-live-upload")
         compose.waitUntil(180_000) { transfer(up).state == TransferState.DONE }
         waitForText("berth-folder-upload", 15_000)
@@ -934,8 +936,7 @@ class FilesScreenshotTest {
         dismissSheet()
 
         // Read back through a fresh channel: every file with the bytes that went up, folders 755 and files 644, the empty folder there.
-        val uploaded = transfer(up)
-        assertEquals(32, uploaded.folder!!.filesCopied)
+        assertEquals(32, transfer(up).folder!!.filesCopied)
         runBlocking {
             val fs = session.openSftp()
             try {
