@@ -188,6 +188,28 @@ class SessionLifecycleTest {
     }
 
     @Test
+    fun `with the app away the active tab counts too, and is seen again on return`() {
+        grantNotifications()
+        seed()
+        restore()
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        await("s-a on stage") { graph.sessions.get("s-a")!!.onStage }
+        graph.process.stop()
+        assertFalse("nothing is on stage while the app is away", graph.sessions.get("s-a")!!.onStage)
+        bell("s-a")
+        await("the active tab's bell reaches the shade") { notifications.getNotification(SessionNotifier.attentionTag("s-a"), 2) != null }
+        assertTrue(graph.sessions.get("s-a")!!.record.value.needsAttention)
+        graph.process.start()
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        assertFalse("in front of the user again, so seen", graph.sessions.get("s-a")!!.record.value.needsAttention)
+        await("its notification goes with it") { notifications.getNotification(SessionNotifier.attentionTag("s-a"), 2) == null }
+        // Back on screen, the same bell is the stage's own again.
+        graph.sessions.get("s-a")!!.emulator.write("\u0007")
+        assertFalse(graph.sessions.get("s-a")!!.record.value.needsAttention)
+    }
+
+    @Test
     fun `attention while the app is on screen stays on the strip`() {
         grantNotifications()
         seed()

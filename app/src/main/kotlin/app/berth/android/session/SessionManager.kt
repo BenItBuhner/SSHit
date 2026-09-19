@@ -190,6 +190,9 @@ class SessionManager @Inject constructor(
     private var backgroundSaver: Job? = null
     private var firstLiveSeen = false
 
+    /** True from ON_STOP to ON_START: the app is away and no tab is on stage. */
+    @Volatile private var stageDark = false
+
     private val environment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
@@ -244,8 +247,9 @@ class SessionManager @Inject constructor(
             }
         }
         scope.launch {
-            // Keep the stage flag on the tab that is showing so attention is raised correctly.
-            _activeTabId.collect { id -> tabsNow().forEach { it.onStage = it.id == id } }
+            // Keep the stage flag on the tab that is showing so attention is raised correctly; with the
+            // app away nothing is showing, so the active tab's bells and finished commands count too.
+            _activeTabId.collect { id -> tabsNow().forEach { it.onStage = !stageDark && it.id == id } }
         }
         scope.launch {
             records.collect {
@@ -279,6 +283,10 @@ class SessionManager @Inject constructor(
 
     private fun onForeground() {
         _foreground.value = true
+        stageDark = false
+        // The active tab is in front of the user again: it is on stage, and whatever it raised while
+        // the app was away has been seen (its notification goes with it, through the record).
+        _activeTabId.value?.let { id -> tabNow(id)?.let { it.onStage = true; it.markSeen() } }
         backgroundSaver?.cancel()
         backgroundSaver = null
         // The user may have flipped notifications in system settings while away.
@@ -286,12 +294,15 @@ class SessionManager @Inject constructor(
     }
 
     /**
-     * The app left the screen: every frame is saved now, then again every [BACKGROUND_SAVE_MS]
-     * for tabs whose screen moved while a session is still connected, so however the process ends
-     * the relaunch shows what each tab last showed.
+     * The app left the screen: nothing is on stage any more, so the active tab's bells and long
+     * commands count as attention like any other tab's (spec C21, Attention). Every frame is saved
+     * now, then again every [BACKGROUND_SAVE_MS] for tabs whose screen moved while a session is
+     * still connected, so however the process ends the relaunch shows what each tab last showed.
      */
     private fun onBackground() {
         _foreground.value = false
+        stageDark = true
+        tabsNow().forEach { it.onStage = false }
         saveAllFrames()
         backgroundSaver?.cancel()
         backgroundSaver = scope.launch {
