@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -28,30 +29,40 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.theme.Berth
@@ -59,11 +70,14 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.DeckAction
+import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.DeckReach
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.isEmpty
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
@@ -73,10 +87,24 @@ fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
     layers.filter { layer -> hasSnippets || !(layer.keys.size == 1 && layer.keys[0].snippets) }
 
 /**
+ * Hooks the Deck editor passes so the very same composable becomes the editing surface: a tap
+ * selects a slot instead of sending, and a long-press or a horizontal pull lifts a key and drags
+ * it past its neighbours. Nothing is added to the strip, so its keys measure exactly as the
+ * Stage's do. Slots index the shown layer's keys.
+ */
+class DeckEditing(
+    val selectedSlot: Int?,
+    val onSelectSlot: (Int) -> Unit,
+    val onMoveKey: (from: Int, to: Int) -> Unit,
+)
+
+/**
  * The keyboard accessory bar, rendered from [DeckLayout] rather than a hardcoded row. Each key has
  * tap, swipe-up and hold gestures; modifiers latch one-shot or locked; the Nub sends arrows.
  * [snippets] are the pinned snippets for the session on stage: the snippets slot expands to one
  * key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
+ * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
+ * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
  */
 @Composable
 fun Deck(
@@ -90,6 +118,9 @@ fun Deck(
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
     snippets: List<Snippet> = emptyList(),
+    onOpenDeckEditor: (() -> Unit)? = null,
+    editing: DeckEditing? = null,
+    surface: Color = Berth.colors.surface1,
 ) {
     val c = Berth.colors
     val layers = layout.usableLayers(hasSnippets = snippets.isNotEmpty())
@@ -98,101 +129,76 @@ fun Deck(
     val layer = layers[index]
     var strip by remember { mutableStateOf<List<DeckKeyCode>?>(null) }
     val haptics = LocalHapticFeedback.current
-    // The setting is the key height (A9: 44, range 40 to 52); the strip adds the 4 dp gap above and below.
+    // The setting is the key height (A9: 44, range 40 to 52); each row adds the 4 dp gap above and below.
     val keyHeight = layout.heightDp.coerceIn(40, 52).dp
     val rowHeight = keyHeight + DeckGap * 2
+    // The second row keeps its own layer and starts on Nav/Fn when the layout has one (spec C4).
+    var secondIndex by rememberSaveable(layers.size) {
+        mutableIntStateOf(layers.indexOfFirst { it.name.equals("Nav/Fn", ignoreCase = true) }.takeIf { it >= 0 } ?: 1)
+    }
 
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(c.surface1)
-            .alpha(if (enabled) 1f else 0.5f),
-    ) {
-        strip?.let { keys ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = DeckEdge + GripWidth + DeckGap, vertical = DeckGap),
-                horizontalArrangement = Arrangement.spacedBy(DeckGap),
-            ) {
-                for (k in keys) {
-                    DeckKeyView(
-                        key = DeckKey(tap = DeckAction.Key(k)),
-                        latch = input.latch,
-                        enabled = enabled,
-                        haptics = haptics,
-                        modifier = Modifier.width(48.dp).fillMaxHeight(),
-                        onAction = { input.dispatch(it, layer) },
-                        onHold = {},
-                    )
-                }
-            }
-        }
-        Row(
-            Modifier
+    CompositionLocalProvider(LocalLayoutDirection provides if (layout.reach == DeckReach.LEFT) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+        Column(
+            modifier
                 .fillMaxWidth()
-                .height(rowHeight)
-                .padding(horizontal = DeckEdge, vertical = DeckGap),
-            horizontalArrangement = Arrangement.spacedBy(DeckGap),
-            verticalAlignment = Alignment.CenterVertically,
+                .background(surface)
+                .alpha(if (enabled) 1f else 0.5f),
         ) {
-            Grip(
-                accent = predictiveText,
-                onTap = onGripTap,
-                onSwipeDown = onGripSwipeDown,
-            )
-            for (key in layer.keys) {
-                when {
-                    key.nub -> Nub(
-                        enabled = enabled,
-                        haptics = haptics,
-                        modifier = Modifier.weight(1f).widthIn(min = 40.dp),
-                        onArrow = { input.onKey(it) },
-                    )
-                    key.snippets -> if (snippets.isNotEmpty()) {
-                        Row(
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            for (s in snippets) {
-                                DeckKeyView(
-                                    key = DeckKey(tap = DeckAction.Snippet(s.id), display = s.name.take(16)),
-                                    latch = input.latch,
-                                    enabled = enabled,
-                                    haptics = haptics,
-                                    modifier = Modifier.widthIn(min = 56.dp).fillMaxHeight(),
-                                    onAction = { input.dispatch(it, layer) },
-                                    onHold = {},
-                                    labelPadding = 12.dp,
-                                )
-                            }
-                        }
+            strip?.let { keys ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(rowHeight)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = DeckEdge + GripWidth + DeckGap, vertical = DeckGap),
+                    horizontalArrangement = Arrangement.spacedBy(DeckGap),
+                ) {
+                    for (k in keys) {
+                        DeckKeyView(
+                            key = DeckKey(tap = DeckAction.Key(k)),
+                            latch = input.latch,
+                            enabled = enabled && editing == null,
+                            haptics = haptics,
+                            modifier = Modifier.width(48.dp).fillMaxHeight(),
+                            onAction = { input.dispatch(it, layer) },
+                            onHold = {},
+                        )
                     }
-                    else -> DeckKeyView(
-                        key = key.withSnippetName(snippets),
-                        latch = input.latch,
-                        enabled = enabled,
-                        haptics = haptics,
-                        modifier = Modifier.weight(1f).widthIn(min = 40.dp).fillMaxHeight(),
-                        onAction = { input.dispatch(it, layer) },
-                        onHold = { held ->
-                            if (held is DeckAction.Strip) strip = if (strip == held.strip) null else held.strip
-                        },
-                    )
                 }
             }
-            LayerKey(
+            DeckRow(
+                layout = layout,
+                layer = layer,
+                input = input,
                 enabled = enabled,
                 haptics = haptics,
-                modifier = Modifier.width(40.dp).fillMaxHeight(),
+                height = rowHeight,
+                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown) },
                 onNext = { strip = null; onLayerIndexChange((index + 1) % layers.size) },
                 onPrevious = { strip = null; onLayerIndexChange((index - 1 + layers.size) % layers.size) },
+                onLayerHold = onOpenDeckEditor,
+                onStrip = { held -> strip = if (strip == held) null else held },
+                editing = editing,
+                snippets = snippets,
             )
+            if (layout.rows >= 2 && layers.size > 1) {
+                val second = secondIndex.coerceIn(0, layers.lastIndex).let { if (it == index) (it + 1) % layers.size else it }
+                DeckRow(
+                    layout = layout,
+                    layer = layers[second],
+                    input = input,
+                    enabled = enabled,
+                    haptics = haptics,
+                    height = rowHeight,
+                    grip = null,
+                    onNext = { secondIndex = (second + 1) % layers.size },
+                    onPrevious = { secondIndex = (second - 1 + layers.size) % layers.size },
+                    onLayerHold = onOpenDeckEditor,
+                    onStrip = { held -> strip = if (strip == held) null else held },
+                    editing = null,
+                    snippets = snippets,
+                )
+            }
         }
     }
 }
@@ -213,6 +219,254 @@ private val DeckEdge = 8.dp
 
 /** Touch column of the Grip; the 6 × 24 pill is centred in it. */
 private val GripWidth = 20.dp
+
+/** One row of the Deck: grip or its spacer, the layer's slots, the layer key. */
+@Composable
+private fun DeckRow(
+    layout: DeckLayout,
+    layer: DeckLayer,
+    input: StageInput,
+    enabled: Boolean,
+    haptics: HapticFeedback,
+    height: Dp,
+    grip: (@Composable () -> Unit)?,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onLayerHold: (() -> Unit)?,
+    onStrip: (List<DeckKeyCode>) -> Unit,
+    editing: DeckEditing?,
+    snippets: List<Snippet>,
+) {
+    val c = Berth.colors
+    val patterns = rememberDeckHaptics(haptics)
+    val drag = remember { DragState() }
+    val editingState = rememberUpdatedState(editing)
+    val keyCount = rememberUpdatedState(layer.keys.size)
+    val mirror = LocalLayoutDirection.current == LayoutDirection.Rtl
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(height)
+            .padding(horizontal = DeckEdge, vertical = DeckGap),
+        horizontalArrangement = Arrangement.spacedBy(DeckGap),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (grip != null) grip() else Spacer(Modifier.width(GripWidth))
+        layer.keys.forEachIndexed { slot, key ->
+            val weight = if (key.nub) {
+                when (layout.arrows) {
+                    DeckArrows.NUB -> 1f
+                    DeckArrows.FOUR_KEYS -> 3f
+                    DeckArrows.BOTH -> 4f
+                }
+            } else 1f
+            val base = Modifier
+                .weight(weight)
+                .then(if (weight == 1f) Modifier.widthIn(min = 40.dp) else Modifier)
+                .fillMaxHeight()
+            val selected = editing != null && editing.selectedSlot == slot
+            Box(
+                if (editing == null) base else base.editableSlot(slot, editingState, keyCount, drag, patterns, mirror),
+                contentAlignment = Alignment.Center,
+            ) {
+                SlotContent(
+                    key = key,
+                    arrows = layout.arrows,
+                    layer = layer,
+                    input = input,
+                    enabled = enabled && editing == null,
+                    haptics = haptics,
+                    selected = selected,
+                    onStrip = onStrip,
+                    snippets = snippets,
+                )
+                if (editing != null && key.isEmpty) {
+                    Text("empty", style = BerthType.caption, color = c.text3)
+                }
+                if (selected) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 4.dp)
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(c.accent),
+                    )
+                }
+            }
+        }
+        LayerKey(
+            enabled = enabled,
+            haptics = haptics,
+            modifier = Modifier.width(40.dp).fillMaxHeight(),
+            onNext = onNext,
+            onPrevious = onPrevious,
+            onHold = onLayerHold,
+        )
+    }
+}
+
+/**
+ * What a slot shows: the Nub, four arrow keys or both for the arrow slot; one key per pinned
+ * snippet for the snippets slot; otherwise the key itself, named after its snippet when bound to one.
+ */
+@Composable
+private fun SlotContent(
+    key: DeckKey,
+    arrows: DeckArrows,
+    layer: DeckLayer,
+    input: StageInput,
+    enabled: Boolean,
+    haptics: HapticFeedback,
+    selected: Boolean,
+    onStrip: (List<DeckKeyCode>) -> Unit,
+    snippets: List<Snippet>,
+) {
+    @Composable
+    fun arrowKeys(modifier: Modifier) {
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (code in listOf(DeckKeyCode.LEFT, DeckKeyCode.DOWN, DeckKeyCode.UP, DeckKeyCode.RIGHT)) {
+                DeckKeyView(
+                    key = DeckKey(tap = DeckAction.Key(code)),
+                    latch = input.latch,
+                    enabled = enabled,
+                    haptics = haptics,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    selected = selected,
+                    onAction = { input.dispatch(it, layer) },
+                    onHold = {},
+                )
+            }
+        }
+    }
+    when {
+        key.nub -> when (arrows) {
+            DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, onArrow = { input.onKey(it) })
+            DeckArrows.FOUR_KEYS -> arrowKeys(Modifier.fillMaxSize())
+            DeckArrows.BOTH -> Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, onArrow = { input.onKey(it) })
+                arrowKeys(Modifier.weight(3f).fillMaxHeight())
+            }
+        }
+        key.snippets -> if (snippets.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxSize().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(DeckGap),
+            ) {
+                for (s in snippets) {
+                    DeckKeyView(
+                        key = DeckKey(tap = DeckAction.Snippet(s.id), display = s.name.take(16)),
+                        latch = input.latch,
+                        enabled = enabled,
+                        haptics = haptics,
+                        modifier = Modifier.widthIn(min = 56.dp).fillMaxHeight(),
+                        selected = selected,
+                        onAction = { input.dispatch(it, layer) },
+                        onHold = {},
+                        labelPadding = 12.dp,
+                    )
+                }
+            }
+        }
+        else -> DeckKeyView(
+            key = key.withSnippetName(snippets),
+            latch = input.latch,
+            enabled = enabled,
+            haptics = haptics,
+            modifier = Modifier.fillMaxSize(),
+            selected = selected,
+            onAction = { input.dispatch(it, layer) },
+            onHold = { held -> if (held is DeckAction.Strip) onStrip(held.strip) },
+        )
+    }
+}
+
+/** Drag bookkeeping for one Deck row: which slot is lifted and how far it has been pulled. */
+private class DragState {
+    var slot by mutableStateOf<Int?>(null)
+    var dx by mutableFloatStateOf(0f)
+}
+
+/**
+ * Editing gestures for a slot. A tap selects. A long-press, or a horizontal pull past touch slop,
+ * lifts the key; while lifted it follows the finger and swaps places with a neighbour each time it
+ * crosses half a key, so the row reorders live under the drag. Vertical movement is left to the
+ * page so the editor still scrolls.
+ */
+private fun Modifier.editableSlot(
+    slot: Int,
+    editing: State<DeckEditing?>,
+    keyCount: State<Int>,
+    drag: DragState,
+    patterns: DeckHaptics,
+    mirror: Boolean,
+): Modifier = this
+    .zIndex(if (drag.slot == slot) 1f else 0f)
+    .graphicsLayer {
+        if (drag.slot == slot) {
+            translationX = drag.dx
+            scaleX = 1.06f
+            scaleY = 1.06f
+        }
+    }
+    .semantics { contentDescription = "Slot ${slot + 1}" }
+    .pointerInput(slot, mirror) {
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            val slop = viewConfiguration.touchSlop
+            val step = size.width + DeckGap.toPx()
+            val dir = if (mirror) -1 else 1
+            var lifted = false
+            var lastX = down.position.x
+            fun lift() {
+                lifted = true
+                drag.slot = slot
+                drag.dx = 0f
+                editing.value?.onSelectSlot(slot)
+                patterns.hold()
+            }
+            try {
+                while (true) {
+                    val event = withTimeoutOrNull(if (lifted) Long.MAX_VALUE else viewConfiguration.longPressTimeoutMillis) { awaitPointerEvent() }
+                    if (event == null) {
+                        if (!lifted) lift()
+                        continue
+                    }
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) {
+                        if (!lifted) editing.value?.onSelectSlot(slot)
+                        break
+                    }
+                    val dx = change.position.x - down.position.x
+                    val dy = change.position.y - down.position.y
+                    if (!lifted) {
+                        if (abs(dx) > slop && abs(dx) > abs(dy)) lift() else if (abs(dy) > slop) break
+                    }
+                    if (lifted) {
+                        change.consume()
+                        drag.dx += change.position.x - lastX
+                        while (true) {
+                            val from = drag.slot ?: break
+                            val to = when {
+                                drag.dx > step / 2 -> from + dir
+                                drag.dx < -step / 2 -> from - dir
+                                else -> break
+                            }
+                            if (to !in 0 until keyCount.value) break
+                            editing.value?.onMoveKey(from, to)
+                            drag.slot = to
+                            drag.dx += if (drag.dx > 0) -step else step
+                            patterns.reorderStep()
+                        }
+                    }
+                    lastX = change.position.x
+                }
+            } finally {
+                drag.slot = null
+                drag.dx = 0f
+            }
+        }
+    }
 
 @Composable
 private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit) {
@@ -261,6 +515,7 @@ fun DeckKeyView(
     enabled: Boolean,
     haptics: HapticFeedback,
     modifier: Modifier = Modifier,
+    selected: Boolean = false,
     onAction: (DeckAction) -> Unit,
     onHold: (DeckAction) -> Unit,
     labelPadding: Dp = 0.dp,
@@ -276,6 +531,7 @@ fun DeckKeyView(
         when {
             latched -> c.accent
             pressed -> c.surface4
+            selected -> c.surface3
             else -> c.surface2
         },
         tween(80),
@@ -296,112 +552,117 @@ fun DeckKeyView(
         key.secondaryLabel?.let { append(", swipe up for $it") }
     }
 
-    Box(
-        modifier
-            .clip(RoundedCornerShape(BerthRadius.key))
-            .background(bg)
-            .semantics { contentDescription = description }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    pressed = true
-                    swipe = 0
-                    var moved = false
-                    var holdFired = false
-                    val threshold = 24.dp.toPx()
-                    val slop = viewConfiguration.touchSlop
-                    val k = currentKey
-                    val repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true
-                    try {
-                        while (true) {
-                            val timeout = when {
-                                holdFired && repeating -> 55L
-                                !holdFired && !moved && (k.hold != null || repeating) -> 400L
-                                else -> Long.MAX_VALUE
-                            }
-                            val event = withTimeoutOrNull(timeout) { awaitPointerEvent() }
-                            if (event == null) {
-                                if (!holdFired) {
-                                    holdFired = true
-                                    val hold = k.hold
-                                    if (hold != null) {
-                                        patterns.hold()
-                                        currentOnHold(hold)
+    // Left reach mirrors the strip by flipping its layout direction; the inside of a key is not
+    // mirrored, or `^C` would reorder to `C^` under bidi rules and the alternate would jump to the
+    // top-left. The weight the Row gave [modifier] still applies: the provider emits no node.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Box(
+            modifier
+                .clip(RoundedCornerShape(BerthRadius.key))
+                .background(bg)
+                .semantics { contentDescription = description }
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        pressed = true
+                        swipe = 0
+                        var moved = false
+                        var holdFired = false
+                        val threshold = 24.dp.toPx()
+                        val slop = viewConfiguration.touchSlop
+                        val k = currentKey
+                        val repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true
+                        try {
+                            while (true) {
+                                val timeout = when {
+                                    holdFired && repeating -> 55L
+                                    !holdFired && !moved && (k.hold != null || repeating) -> 400L
+                                    else -> Long.MAX_VALUE
+                                }
+                                val event = withTimeoutOrNull(timeout) { awaitPointerEvent() }
+                                if (event == null) {
+                                    if (!holdFired) {
+                                        holdFired = true
+                                        val hold = k.hold
+                                        if (hold != null) {
+                                            patterns.hold()
+                                            currentOnHold(hold)
+                                        } else if (repeating) {
+                                            k.tap?.let(currentOnAction)
+                                        }
                                     } else if (repeating) {
                                         k.tap?.let(currentOnAction)
+                                        patterns.repeatTick()
                                     }
-                                } else if (repeating) {
-                                    k.tap?.let(currentOnAction)
-                                    patterns.repeatTick()
+                                    continue
                                 }
-                                continue
-                            }
-                            val change: PointerInputChange = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                if (!holdFired) {
-                                    val action = when (swipe) {
-                                        1 -> k.up ?: k.tap
-                                        -1 -> k.down ?: k.tap
-                                        else -> k.tap
+                                val change: PointerInputChange = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    if (!holdFired) {
+                                        val action = when (swipe) {
+                                            1 -> k.up ?: k.tap
+                                            -1 -> k.down ?: k.tap
+                                            else -> k.tap
+                                        }
+                                        if (action != null) {
+                                            currentOnAction(action)
+                                            // The latch has settled by now, so the pattern can tell one-shot from lock.
+                                            if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
+                                        }
                                     }
-                                    if (action != null) {
-                                        currentOnAction(action)
-                                        // The latch has settled by now, so the pattern can tell one-shot from lock.
-                                        if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
-                                    }
+                                    break
                                 }
-                                break
+                                val dy = change.position.y - down.position.y
+                                val dx = change.position.x - down.position.x
+                                if (abs(dy) > slop || abs(dx) > slop) moved = true
+                                swipe = when {
+                                    dy < -threshold -> 1
+                                    dy > threshold -> -1
+                                    else -> 0
+                                }
+                                change.consume()
                             }
-                            val dy = change.position.y - down.position.y
-                            val dx = change.position.x - down.position.x
-                            if (abs(dy) > slop || abs(dx) > slop) moved = true
-                            swipe = when {
-                                dy < -threshold -> 1
-                                dy > threshold -> -1
-                                else -> 0
-                            }
-                            change.consume()
+                        } finally {
+                            pressed = false
+                            swipe = 0
                         }
-                    } finally {
-                        pressed = false
-                        swipe = 0
                     }
-                }
-            },
-    ) {
-        val secondary = key.secondaryLabel
-        val previewing = swipe == 1 && secondary != null
-        val shown = if (previewing) secondary!! else key.label
-        Text(
-            text = shown,
-            style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
-            color = labelColor,
-            maxLines = 1,
-            modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
-        )
-        if (secondary != null && !previewing) {
-            // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
+                },
+        ) {
+            val secondary = key.secondaryLabel
+            val previewing = swipe == 1 && secondary != null
+            val shown = if (previewing) secondary!! else key.label
             Text(
-                text = secondary,
-                style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
-                color = secondaryColor,
+                text = shown,
+                style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
+                color = labelColor,
                 maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 3.dp, end = 6.dp),
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
             )
-        }
-        if (latchState == LatchState.LOCKED) {
-            // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
-            Box(
-                Modifier
-                    .align(Alignment.Center)
-                    .offset(y = LockBarOffset)
-                    .size(16.dp, 2.dp)
-                    .clip(CircleShape)
-                    .background(c.onAccent),
-            )
+            if (secondary != null && !previewing) {
+                // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
+                Text(
+                    text = secondary,
+                    style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
+                    color = secondaryColor,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 3.dp, end = 6.dp),
+                )
+            }
+            if (latchState == LatchState.LOCKED) {
+                // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .offset(y = LockBarOffset)
+                        .size(16.dp, 2.dp)
+                        .clip(CircleShape)
+                        .background(c.onAccent),
+                )
+            }
         }
     }
 }
@@ -424,6 +685,7 @@ fun Nub(
     enabled: Boolean,
     haptics: HapticFeedback,
     modifier: Modifier = Modifier,
+    selected: Boolean = false,
     onArrow: (TerminalKey) -> Unit,
 ) {
     val c = Berth.colors
@@ -436,7 +698,7 @@ fun Nub(
             Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (pressed) c.surface4 else c.surface2)
+                .background(if (pressed) c.surface4 else if (selected) c.surface3 else c.surface2)
                 .semantics { contentDescription = "Nub, tap for Up, drag to move the cursor" }
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
@@ -521,7 +783,7 @@ fun Nub(
     }
 }
 
-/** The trailing layer key: tap for the next layer, swipe up for the previous one. */
+/** The trailing layer key: tap for the next layer, swipe up for the previous one, hold for the Deck editor. */
 @Composable
 private fun LayerKey(
     enabled: Boolean,
@@ -529,31 +791,44 @@ private fun LayerKey(
     modifier: Modifier = Modifier,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onHold: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
     val patterns = rememberDeckHaptics(haptics)
     var pressed by remember { mutableStateOf(false) }
-    // The gesture block only restarts when `enabled` changes; the callbacks close over the current layer index.
+    // The gesture block only restarts when `enabled` changes, so it reads the latest callbacks
+    // rather than the ones captured when the key first composed (those hold that moment's layer index).
     val currentOnNext by rememberUpdatedState(onNext)
     val currentOnPrevious by rememberUpdatedState(onPrevious)
+    val currentOnHold by rememberUpdatedState(onHold)
     Box(
         modifier
             .clip(RoundedCornerShape(BerthRadius.key))
             .background(if (pressed) c.surface4 else c.surface2)
-            .semantics { contentDescription = "Layer: tap for the next layer, swipe up for the previous" }
+            .semantics { contentDescription = "Layer: tap for the next layer, swipe up for the previous" + if (onHold != null) ", hold for the Deck editor" else "" }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     pressed = true
                     var up = false
+                    var held = false
                     try {
                         while (true) {
-                            val event = awaitPointerEvent()
+                            val hold = currentOnHold
+                            val event = withTimeoutOrNull(if (hold != null && !held && !up) viewConfiguration.longPressTimeoutMillis else Long.MAX_VALUE) { awaitPointerEvent() }
+                            if (event == null) {
+                                held = true
+                                patterns.hold()
+                                hold?.invoke()
+                                continue
+                            }
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) {
-                                patterns.keyTap()
-                                if (up) currentOnPrevious() else currentOnNext()
+                                if (!held) {
+                                    patterns.keyTap()
+                                    if (up) currentOnPrevious() else currentOnNext()
+                                }
                                 break
                             }
                             up = down.position.y - change.position.y > 24.dp.toPx()

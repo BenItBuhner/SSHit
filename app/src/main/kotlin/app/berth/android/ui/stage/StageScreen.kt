@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -104,6 +105,7 @@ fun StageScreen(
     onNextSession: () -> Unit,
     onPreviousSession: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenDeckEditor: () -> Unit = {},
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
@@ -114,8 +116,10 @@ fun StageScreen(
     val fontSetting by vm.terminalFont.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
+    val workspaces by vm.workspaces.collectAsState()
     val host = record.hostSnapshot
-    val theme = host.appearance.terminalThemeId?.let { id -> themes.firstOrNull { it.id == id } } ?: defaultTheme
+    // Host override, then the workspace's theme, then the app default; all three flows are live, so a theme edit lands here at once.
+    val theme = AppViewModel.resolveTerminalTheme(themes, defaultTheme, host, workspaces.byId(record.workspaceId))
     val font: TerminalFont = host.appearance.fontSizeSp?.let { fontSetting.copy(sizeSp = it) } ?: fontSetting
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
@@ -168,6 +172,7 @@ fun StageScreen(
                     DeckAppAction.OPEN_SESSION_SHEET -> onOpenSessionSheet()
                     DeckAppAction.NEXT_LAYER -> layerIndex += 1
                     DeckAppAction.PREVIOUS_LAYER -> layerIndex -= 1
+                    DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     else -> Unit
                 }
             },
@@ -288,6 +293,7 @@ fun StageScreen(
                         deckVisible = false
                     },
                     snippets = pinnedSnippets,
+                    onOpenDeckEditor = onOpenDeckEditor,
                 )
             }
             if (!deckVisible && deckStateOk) {
@@ -429,7 +435,7 @@ private val StatePillHeight = 32.dp
  * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live.
  */
 @Composable
-private fun StatePill(
+internal fun StatePill(
     state: SessionState,
     retryIn: Int?,
     lastLiveAt: Long?,

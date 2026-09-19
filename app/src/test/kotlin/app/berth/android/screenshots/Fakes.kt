@@ -143,7 +143,8 @@ class InMemorySettings : SettingsRepository {
     override suspend fun setTerminalFont(font: TerminalFont) { this.font.value = font }
     override val terminalThemes: Flow<List<TerminalTheme>> = themes
     override val defaultTerminalThemeId: Flow<String> = defaultTheme
-    override suspend fun upsertTerminalTheme(theme: TerminalTheme) = themes.update { list -> list.filter { it.id != theme.id } + theme }
+    override suspend fun upsertTerminalTheme(theme: TerminalTheme) = themes.update { list -> list.filter { it.id != theme.id } + theme.copy(builtIn = false) }
+    override suspend fun deleteTerminalTheme(id: String) = themes.update { list -> list.filter { it.id != id || it.builtIn } }
     override suspend fun setDefaultTerminalTheme(id: String) { defaultTheme.value = id }
     override val lastActiveSessionId: Flow<String?> = lastActive
     override suspend fun setLastActiveSessionId(id: String?) { lastActive.value = id }
@@ -173,6 +174,6 @@ class TestGraph(private val context: Context) {
         SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets)
     }
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces)
     }
 }

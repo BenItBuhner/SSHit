@@ -80,6 +80,8 @@ data class WorkspaceEntity(
     val sortOrder: Int,
     val reconnectAtLaunch: Boolean,
     val createdAt: Long,
+    /** Added in schema version 2; null inherits the app default. */
+    @ColumnInfo(defaultValue = "NULL") val terminalThemeId: String? = null,
 )
 
 @Entity(tableName = "sessions", indices = [Index("workspaceId"), Index("hostId")])

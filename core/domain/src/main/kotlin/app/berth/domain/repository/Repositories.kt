@@ -108,6 +108,9 @@ interface SettingsRepository {
     val terminalThemes: Flow<List<TerminalTheme>>
     val defaultTerminalThemeId: Flow<String>
     suspend fun upsertTerminalTheme(theme: TerminalTheme)
+
+    /** Removes a custom theme; stock themes are left alone. */
+    suspend fun deleteTerminalTheme(id: String)
     suspend fun setDefaultTerminalTheme(id: String)
 
     val lastActiveSessionId: Flow<String?>

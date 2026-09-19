@@ -38,6 +38,7 @@ import androidx.navigation3.ui.NavDisplay
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
+import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
@@ -54,6 +55,10 @@ import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.android.ui.themes.AppearanceScreen
+import app.berth.android.ui.themes.TerminalThemeEditorScreen
+import app.berth.android.ui.themes.ThemeScope
+import app.berth.android.ui.themes.ThemesScreen
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -67,6 +72,10 @@ sealed interface Screen : NavKey {
     /** One host's tunnels, or every host's when [hostId] is null. */
     @Serializable data class Tunnels(val hostId: String? = null) : Screen
     @Serializable data object Snippets : Screen
+    @Serializable data object Themes : Screen
+    @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
+    @Serializable data object Appearance : Screen
+    @Serializable data object DeckEditor : Screen
 }
 
 @Composable
@@ -173,6 +182,7 @@ private fun Shell(vm: AppViewModel) {
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onNextSession = { step(true) },
                                 onPreviousSession = { step(false) },
+                                onOpenDeckEditor = { go(Screen.DeckEditor) },
                             )
                         } else {
                             HostsScreen(
@@ -205,10 +215,32 @@ private fun Shell(vm: AppViewModel) {
                         HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() })
                     }
                     is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
-                    is Screen.Settings -> NavEntry(key) { SettingsScreen(vm, onBack = { back() }, onKnownHosts = { go(Screen.KnownHosts) }) }
+                    is Screen.Settings -> NavEntry(key) {
+                        SettingsScreen(
+                            vm,
+                            onBack = { back() },
+                            onKnownHosts = { go(Screen.KnownHosts) },
+                            onThemes = { go(Screen.Themes) },
+                            onAppearance = { go(Screen.Appearance) },
+                            onDeckEditor = { go(Screen.DeckEditor) },
+                        )
+                    }
                     is Screen.KnownHosts -> NavEntry(key) { KnownHostsScreen(vm, onBack = { back() }) }
                     is Screen.Tunnels -> NavEntry(key) { TunnelsScreen(vm, hostId = key.hostId, onBack = { back() }) }
                     is Screen.Snippets -> NavEntry(key) { SnippetsScreen(vm, onBack = { back() }) }
+                    is Screen.Themes -> NavEntry(key) { ThemesScreen(vm, onBack = { back() }, onOpen = { go(Screen.ThemeEditor(it)) }) }
+                    is Screen.ThemeEditor -> NavEntry(key) {
+                        TerminalThemeEditorScreen(
+                            vm,
+                            themeId = key.themeId,
+                            scope = key.scope,
+                            onDone = { back() },
+                            // Duplicating or saving a copy of a stock theme continues in the new theme without growing the stack.
+                            onOpenTheme = { id -> backStack[backStack.lastIndex] = Screen.ThemeEditor(id, key.scope) },
+                        )
+                    }
+                    is Screen.Appearance -> NavEntry(key) { AppearanceScreen(vm, onBack = { back() }) }
+                    is Screen.DeckEditor -> NavEntry(key) { DeckEditorScreen(vm, onBack = { back() }) }
                     else -> NavEntry(key) {
                         Spacer(Modifier.statusBarsPadding().height(48.dp))
                         EmptyState("Nothing here.", "This screen has not been built yet.") {

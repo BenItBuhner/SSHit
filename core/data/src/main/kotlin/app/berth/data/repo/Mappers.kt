@@ -121,7 +121,7 @@ internal fun KnownHostKey.toEntity() = KnownHostEntity(id, host, port, keyType, 
 
 internal fun KnownHostEntity.toDomain() = KnownHostKey(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
-internal fun Workspace.toEntity() = WorkspaceEntity(id, name, color.name, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt)
+internal fun Workspace.toEntity() = WorkspaceEntity(id, name, color.name, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt, terminalThemeId)
 
 internal fun WorkspaceEntity.toDomain() = Workspace(
     id = id,
@@ -129,6 +129,7 @@ internal fun WorkspaceEntity.toDomain() = Workspace(
     color = color.toEnumOr(SwatchColor.forName(name)),
     monogram = monogram,
     accentRgb = accentRgb,
+    terminalThemeId = terminalThemeId,
     sortOrder = sortOrder,
     reconnectAtLaunch = reconnectAtLaunch,
     createdAt = createdAt,

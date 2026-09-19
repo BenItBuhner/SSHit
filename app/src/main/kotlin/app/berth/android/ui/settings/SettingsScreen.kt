@@ -29,6 +29,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
@@ -50,7 +52,15 @@ import app.berth.domain.model.TerminalFont
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
 @Composable
-fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    vm: AppViewModel,
+    onBack: () -> Unit,
+    onKnownHosts: () -> Unit,
+    modifier: Modifier = Modifier,
+    onThemes: () -> Unit = {},
+    onAppearance: () -> Unit = {},
+    onDeckEditor: () -> Unit = {},
+) {
     val c = Berth.colors
     val theme by vm.interfaceTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
@@ -81,6 +91,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
         ) {
+            // Rows that navigate end in the drawn chevron, never a text glyph.
+            val chevron: @Composable RowScope.() -> Unit = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }
             Panel(label = "Interface") {
                 Text("Appearance", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
                 SegmentedControl(
@@ -118,9 +130,11 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
                 ToggleRow("Material You accent", theme.materialYou, { vm.setInterfaceTheme(theme.copy(materialYou = it)) }, caption = "Follow the wallpaper colour on Android 12 and later")
                 ToggleRow("High contrast", theme.contrast == InterfaceContrast.HIGH, { vm.setInterfaceTheme(theme.copy(contrast = if (it) InterfaceContrast.HIGH else InterfaceContrast.STANDARD)) })
                 ToggleRow("System font", theme.useSystemFont, { vm.setInterfaceTheme(theme.copy(useSystemFont = it)) }, caption = "Use the device's interface font instead of Plex Sans")
+                ListRow("Interface editor", subtitle = "Presets, corner radius, density and a live preview", surface = Color.Transparent, minHeight = 44.dp, onClick = onAppearance, trailing = chevron)
             }
 
             Panel(label = "Terminal") {
+                ListRow("Terminal themes", subtitle = "${themes.size} themes \u00B7 ${defaultTheme.name} is the default", surface = Color.Transparent, minHeight = 44.dp, onClick = onThemes, trailing = chevron)
                 CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
                 CyclePicker("Font", listOf("JetBrains Mono", "System monospace"), font.family, { it }) { vm.setTerminalFont(font.copy(family = it)) }
                 CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
@@ -130,15 +144,13 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onKnownHosts: () -> Uni
             }
 
             Panel(label = "Deck") {
+                ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
                 // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
                 CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
-                Text("Layers: " + deck.layers.joinToString(", ") { it.name }, style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
-                Text("Editing keys and layers arrives with the layout editor; the layout is already data, so it will not require a migration.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 2.dp))
+                Text("Hold the Deck's layer key on the Stage to open the editor from a session.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
             }
 
-            // Rows that navigate end in the same chevron the Terminal pickers use.
-            val chevron: @Composable RowScope.() -> Unit = { Text("\u203A", style = BerthType.body, color = c.text3) }
             Panel(label = "Trust") {
                 ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
             }
