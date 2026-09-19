@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import app.berth.android.R
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -649,6 +650,9 @@ class BerthScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithText("No tabs").assertCountEquals(0)
         settle(300)
+        // The strip opens at its start, Home's chip heading the run: the groups can land a frame after the tabs, and
+        // a chip that arrives ahead of the first tab must not be left behind the edge.
+        compose.onNode(hasContentDescription("Group Home, 2 tabs")).assertIsDisplayed()
         capture("app-cold-start")
 
         openNewTabSheet()

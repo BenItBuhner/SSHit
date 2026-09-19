@@ -41,7 +41,9 @@ class TabStripLayoutTest {
 
     private val style = TabStripStyle(tabMinWidth = 120.dp, tabMaxWidth = 120.dp)
     private val home = group(Workspace.DEFAULT_ID, "Home", 0)
-    private val slots = fakeSlots(6, home.id)
+    private val work = group("ws-work", "Work", 1)
+    private val slots = mutableStateOf(fakeSlots(6, home.id))
+    private val groups = mutableStateOf(listOf(home))
     private val active = mutableStateOf<String?>("t0")
     private lateinit var state: TabStripState
     private var insetPx = 0
@@ -57,14 +59,16 @@ class TabStripLayoutTest {
                 }
                 // requiredWidth: the strip is laid out at [width] even past the 411 dp device the test runs on.
                 Box(Modifier.requiredWidth(width).height(style.height)) {
-                    TabStrip(slots, listOf(home), active.value, object : TabActions {}, Modifier.fillMaxSize(), state, style)
+                    TabStrip(slots.value, groups.value, active.value, object : TabActions {}, Modifier.fillMaxSize(), state, style)
                 }
             }
         }
         compose.waitForIdle()
     }
 
-    private fun item(id: String) = state.listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == tabKey(id) }
+    private fun itemByKey(key: String) = state.listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+    private fun item(id: String) = itemByKey(tabKey(id))
+    private fun chip(groupId: String) = itemByKey(chipKey(groupId))
 
     /** The active item's distance in from the physical start and end of the viewport. */
     private fun margins(id: String): Pair<Int, Int> {
@@ -142,6 +146,42 @@ class TabStripLayoutTest {
         val (_, end) = margins("t5")
         assertTrue("t5 is wholly in view, end margin $end", end >= insetPx)
         assertTrue(state.listState.canScrollBackward)
+    }
+
+    @Test
+    fun `a chip arriving ahead of the first tab shows at the start rather than behind the edge`() {
+        // A cold start's groups can land a frame after its tabs: the strip is laid out headless, then the chips arrive.
+        // The active tab does not lead its run, so only the strip staying at its start can show the chip; the strip
+        // is wide enough that the active tab stays wholly in view once the chip is ahead of it, so nothing else scrolls.
+        slots.value = fakeSlots(3, home.id) + fakeSlots(1, work.id, prefix = "w", from = 3)
+        active.value = "t1"
+        strip(width = 360.dp)
+        assertEquals(null, chip(home.id))
+        val (t0Before, _) = margins("t0")
+        assertEquals(insetPx, t0Before)
+        compose.runOnIdle { groups.value = listOf(home, work) }
+        compose.waitForIdle()
+        // LazyList would keep t0 where it was and leave the chip at a negative offset behind a fade; the strip stays at its start.
+        val chip = checkNotNull(chip(home.id)) { "the chip is not visible; visible: ${state.listState.layoutInfo.visibleItemsInfo.map { it.key }}" }
+        assertEquals(insetPx, chip.offset - state.listState.layoutInfo.viewportStartOffset)
+        assertFalse(state.listState.canScrollBackward)
+        assertEquals(0, state.listState.firstVisibleItemIndex)
+    }
+
+    @Test
+    fun `a leading tab brought back from off the start brings its chip along`() {
+        slots.value = fakeSlots(3, home.id) + fakeSlots(3, work.id, prefix = "w", from = 3)
+        groups.value = listOf(home, work)
+        strip()
+        compose.runOnIdle { runBlocking { state.listState.scrollToItem(7) } }
+        compose.waitForIdle()
+        assertEquals(null, chip(work.id))
+        activate("w0")
+        // The chip rests at the inset, its tab directly after it.
+        val chip = checkNotNull(chip(work.id))
+        assertEquals(insetPx, chip.offset - state.listState.layoutInfo.viewportStartOffset)
+        val tab = checkNotNull(item("w0"))
+        assertTrue(tab.offset > chip.offset + chip.size)
     }
 
     @Test

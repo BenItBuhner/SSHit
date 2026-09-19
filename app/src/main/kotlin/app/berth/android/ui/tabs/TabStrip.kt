@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -146,6 +147,10 @@ internal sealed interface StripEntry {
         override val key: String get() = PLUS_KEY
     }
 }
+
+/** True once this layout was measured for [entries]: it counts them all and every visible item carries the key its index has in them. */
+internal fun LazyListLayoutInfo.laidOut(entries: List<StripEntry>): Boolean =
+    visibleItemsInfo.isNotEmpty() && totalItemsCount == entries.size && visibleItemsInfo.all { it.index < entries.size && it.key == entries[it.index].key }
 
 /**
  * Groups in order, each run headed by its chip once a second group holds tabs; a collapsed group
@@ -308,19 +313,27 @@ fun TabStrip(
         if (state.drag != null) return@LaunchedEffect
         val index = entries.indexOfFirst { it is StripEntry.Tab && it.slot.id == activeId }
         if (index < 0) return@LaunchedEffect
-        // The first run precedes the first layout pass; a decision then would scroll a visible tab to the edge.
-        snapshotFlow { state.listState.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
-        val info = state.listState.layoutInfo
         // A tab that leads its group brings the group's chip along, so the strip never opens on a headless group.
         val groupId = (entries[index] as StripEntry.Tab).group?.id
         val leadIndex = if (index > 0 && groupId != null && (entries[index - 1] as? StripEntry.Chip)?.group?.id == groupId) index - 1 else index
-        val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+        val key = entries[index].key
+        val leadKey = entries[leadIndex].key
+        // Layout follows this effect within the frame, so the list is measured for these entries only after the
+        // first wait: before it the list is empty or still laid out for the entries before this change, and a
+        // decision read off that would scroll a visible tab to the edge or take a stale index for the active tab.
+        val info = snapshotFlow { state.listState.layoutInfo }.first { it.laidOut(entries) }
+        val item = info.visibleItemsInfo.firstOrNull { it.key == key }
         if (item == null) {
             // Item offsets count from the end of the start inset, so offset 0 is the resting place: the inset in from the edge.
             state.listState.animateScrollToItem(if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
             return@LaunchedEffect
         }
-        val lead = info.visibleItemsInfo.firstOrNull { it.index == leadIndex } ?: item
+        val lead = if (leadIndex == index) item else info.visibleItemsInfo.firstOrNull { it.key == leadKey }
+        if (lead == null) {
+            // The tab is in view but its chip is off the start: brought to rest at the inset, tab following.
+            state.listState.animateScrollToItem(leadIndex)
+            return@LaunchedEffect
+        }
         // The viewport's ends are the physical edges (negative by the inset at the start); the tab rests the inset inside them,
         // so its × never sits against the count tile and its swatch never against the screen edge.
         val restStart = info.viewportStartOffset + insetPx
@@ -333,16 +346,21 @@ fun TabStrip(
         if (delta != 0) state.listState.animateScrollBy(delta.toFloat(), tween(120))
     }
 
-    // Our own reorder changed the entries under a lifted item: pin the viewport by index so the
-    // list does not scroll to follow the lifted key (LazyList anchors on the first visible item's key).
+    // The entries changed under the viewport. LazyList keeps the first visible item's key in place, which is right
+    // for a change further along the strip and wrong for two: our own reorder under a lifted item, where the list
+    // would follow the lifted key (pinned by index instead), and a change ahead of a strip at its very start, where
+    // what arrived ahead of the first item would sit behind the edge (pinned to the start instead), as a cold
+    // start's group chips do when the groups land a frame after the tabs.
     val lastEntries = remember { mutableStateOf(entries) }
-    if (state.drag != null && lastEntries.value !== entries) {
+    if (lastEntries.value !== entries) {
         SideEffect {
             lastEntries.value = entries
-            state.listState.requestScrollToItem(state.listState.firstVisibleItemIndex, state.listState.firstVisibleItemScrollOffset)
+            val list = state.listState
+            when {
+                state.drag != null -> list.requestScrollToItem(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset)
+                !list.canScrollBackward -> list.requestScrollToItem(0)
+            }
         }
-    } else if (lastEntries.value !== entries) {
-        SideEffect { lastEntries.value = entries }
     }
 
     // Auto-scroll while a lifted item is held within the edge zone; crossings are re-checked per frame.
