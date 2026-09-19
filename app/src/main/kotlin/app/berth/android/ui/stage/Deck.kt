@@ -4,9 +4,12 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,7 +48,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -574,16 +576,17 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
         if (latch.alt != LatchState.NONE) add("Alt")
         if (latch.shift != LatchState.NONE) add("Shift")
     }
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     Row(
         modifier
             .fillMaxWidth()
             .height(20.dp)
-            .background(c.surface1)
-            .semantics {
-                contentDescription = "Deck collapsed, tap to show it"
-                role = Role.Button
-            }
-            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(); onExpand() } }
+            .background(if (pressed) c.surface2 else c.surface1)
+            // A real click, so a touch that merely starts here (or a swipe passing through) does not
+            // open the Deck, and the announced button can be activated.
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
+            .semantics { contentDescription = "Deck collapsed, tap to show it" }
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
