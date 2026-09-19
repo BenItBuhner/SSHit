@@ -1059,7 +1059,8 @@ private val FootHeight = 64.dp
 /**
  * The transfer that is moving, as a full-width band like the action band, with the 2 dp progress
  * line as its top edge: direction glyph, name, one Caption line of bytes, speed and how many wait,
- * the percentage, and Cancel. A tap anywhere else opens the sheet.
+ * the percentage, and Cancel. A folder puts its files done of total where the percentage goes, so
+ * the one line keeps its bytes of total and speed. A tap anywhere else opens the sheet.
  */
 @Composable
 private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit, onClick: () -> Unit) {
@@ -1090,10 +1091,10 @@ private fun TransferStrip(transfer: Transfer, others: Int, onCancel: () -> Unit,
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(transfer.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0)), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(transferCaption(transfer, showHost = false, others = others.coerceAtLeast(0), compact = true), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(12.dp))
-            Text(transferTrailing(transfer), style = BerthType.caption, color = c.text2)
+            Text(transferTrailing(transfer, compact = true), style = BerthType.caption, color = c.text2)
             Spacer(Modifier.width(4.dp))
             IconAction(onClick = onCancel, description = "Cancel ${transfer.name}") { BerthIcon(BerthIcons.close, size = 20.dp) }
         }

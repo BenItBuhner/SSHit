@@ -7,6 +7,8 @@ import app.berth.android.screenshots.FakeSftpFileSystem
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.files.formatSize
+import app.berth.android.ui.files.formatSizeOf
 import app.berth.android.ui.files.transferCaption
 import app.berth.android.ui.files.transferTrailing
 import app.berth.domain.model.Host
@@ -151,7 +153,15 @@ class TransferManagerTest {
         assertMonotonic("files copied", snapshots.map { it.folder!!.filesCopied.toLong() })
         assertMonotonic("bytes done", snapshots.map { it.bytes })
         assertMonotonic("bytes done inside the folder", snapshots.map { it.folder!!.bytesDone })
-        assertTrue("a running snapshot in the copying phase", snapshots.any { it.state == TransferState.RUNNING && it.folder?.phase == FolderPhase.COPYING && it.folder.current != null })
+        val moving = snapshots.firstOrNull { it.state == TransferState.RUNNING && it.folder?.phase == FolderPhase.COPYING && it.folder.current != null }
+        assertNotNull("a running snapshot in the copying phase", moving)
+        // The sheet's row reads files done of total, then bytes of total; the strip's one line puts the files where a file's percentage goes and keeps the bytes of total in the short form.
+        val done = moving!!.folder!!.filesDone
+        assertTrue(transferCaption(moving), transferCaption(moving).startsWith("prod-web \u00B7 $done of 4 files \u00B7 ${formatSize(moving.bytes)} of 3 MB"))
+        assertEquals("$done of 4", transferTrailing(moving, compact = true))
+        assertTrue(transferCaption(moving, showHost = false, compact = true), transferCaption(moving, showHost = false, compact = true).startsWith(formatSizeOf(moving.bytes, moving.total)))
+        assertEquals("1.5 of 3 MB", formatSizeOf(1536L * 1024, 3L * 1024 * 1024))
+        assertEquals("512 KB of 3 MB", formatSizeOf(512L * 1024, 3L * 1024 * 1024))
         assertTrue("the strip's states in order", snapshots.map { it.state }.distinct().let { it == listOf(TransferState.QUEUED, TransferState.RUNNING, TransferState.DONE) || it == listOf(TransferState.RUNNING, TransferState.DONE) })
 
         // The tree came across whole, the empty folder included.

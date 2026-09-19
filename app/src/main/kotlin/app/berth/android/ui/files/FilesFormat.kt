@@ -39,6 +39,14 @@ fun formatSize(bytes: Long): String {
 /** `2.1 MB/s`; blank below a byte a second so a stalled transfer shows nothing rather than `0 B/s`. */
 fun formatSpeed(bytesPerSecond: Double): String = if (bytesPerSecond < 1) "" else formatSize(bytesPerSecond.toLong()) + "/s"
 
+/** `233 of 612 MB` while the two share a unit, `512 KB of 612 MB` until they do: the strip's short form of `done of total`. */
+fun formatSizeOf(done: Long, total: Long): String {
+    val a = formatSize(done)
+    val b = formatSize(total)
+    val unit = " " + b.substringAfterLast(' ')
+    return if (a.endsWith(unit)) "${a.removeSuffix(unit)} of $b" else "$a of $b"
+}
+
 /**
  * Extensions that are binary wherever they turn up, so the viewer offers a download without reading
  * a byte. Deliberately short: an unknown extension on a server is more often text than not.
@@ -58,12 +66,14 @@ fun looksBinary(name: String): Boolean = name.substringAfterLast('.', "").lowerc
  * far it got when cancelled, the reason when it failed, and how many more wait behind it when
  * [others] is given. A folder reads in files as well as bytes: how many are done of how many, the
  * file that already exists while it waits for an answer, and once over how many copied, failed and
- * were skipped. The state word itself is [transferTrailing]'s, so it is not repeated here.
+ * were skipped. The state word itself is [transferTrailing]'s, so it is not repeated here. [compact]
+ * is the strip's one line, where a moving folder's files done of total stand in the trailing slot
+ * ([transferTrailing] with the same flag) so its bytes of total, speed and what waits behind it fit.
  */
-fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): String = buildList {
+fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0, compact: Boolean = false): String = buildList {
     if (showHost) add(t.hostName)
     val f = t.folder
-    if (f != null) addAll(folderCaption(t, f)) else when (t.state) {
+    if (f != null) addAll(folderCaption(t, f, compact)) else when (t.state) {
         TransferState.QUEUED -> add(if (t.total > 0) formatSize(t.total) else "Queued")
         TransferState.RUNNING -> {
             add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
@@ -79,7 +89,7 @@ fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): Str
     if (others > 0) add(if (others == 1) "1 more" else "$others more")
 }.joinToString(" \u00B7 ")
 
-private fun folderCaption(t: Transfer, f: FolderProgress): List<String> = buildList {
+private fun folderCaption(t: Transfer, f: FolderProgress, compact: Boolean): List<String> = buildList {
     val conflict = f.conflict
     when (t.state) {
         TransferState.QUEUED -> add("Folder")
@@ -87,8 +97,13 @@ private fun folderCaption(t: Transfer, f: FolderProgress): List<String> = buildL
             conflict != null -> add("${conflict.name} already exists")
             f.phase == FolderPhase.SCANNING -> add(if (f.filesTotal > 0) "${f.filesTotal} files so far" else "Folder")
             else -> {
-                add("${f.filesDone} of ${f.filesTotal} files")
-                if (f.bytesTotal > 0) add("${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}")
+                val bytes = when {
+                    f.bytesTotal <= 0 -> null
+                    compact -> formatSizeOf(f.bytesDone, f.bytesTotal)
+                    else -> "${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}"
+                }
+                if (!compact || bytes == null) add("${f.filesDone} of ${f.filesTotal} files")
+                bytes?.let(::add)
                 formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
             }
         }
@@ -118,12 +133,19 @@ private fun transferDuration(t: Transfer): String {
     return if (seconds < 60) "$seconds s" else "${seconds / 60} min"
 }
 
-/** The trailing word or percentage beside a transfer's name. */
-fun transferTrailing(t: Transfer): String = when (t.state) {
-    TransferState.RUNNING -> when {
-        t.waiting -> "Waiting"
-        t.folder?.phase == FolderPhase.SCANNING -> "Scanning"
-        else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
+/**
+ * The trailing word or percentage beside a transfer's name; on the strip ([compact]) a moving
+ * folder shows its files done of total there, the percentage being the line above.
+ */
+fun transferTrailing(t: Transfer, compact: Boolean = false): String = when (t.state) {
+    TransferState.RUNNING -> {
+        val f = t.folder
+        when {
+            t.waiting -> "Waiting"
+            f?.phase == FolderPhase.SCANNING -> "Scanning"
+            compact && f != null && f.bytesTotal > 0 -> "${f.filesDone} of ${f.filesTotal}"
+            else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
+        }
     }
     TransferState.DONE -> "Done"
     TransferState.FAILED -> t.folder?.filesFailed?.takeIf { it > 0 }?.let { "$it failed" } ?: "Failed"

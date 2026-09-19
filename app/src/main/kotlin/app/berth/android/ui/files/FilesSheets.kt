@@ -515,7 +515,7 @@ fun TransferSheet(
 /**
  * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
  * one Caption line naming the host, then bytes and speed. The glyph carries the direction. A folder
- * carries the aggregate on that line and a chevron; [expanded] it adds the file moving now with its
+ * carries the aggregate on that line, given two like a failure's reason, and a chevron; [expanded] it adds the file moving now with its
  * own line, the last few failures while it runs, and once over everything that failed with Retry
  * failed. The per-file rows are as they were.
  */
@@ -563,7 +563,7 @@ fun TransferRow(
                     transferCaption(t),
                     style = BerthType.caption,
                     color = if (failed) c.danger else c.text3,
-                    maxLines = if (failed) 2 else 1,
+                    maxLines = if (failed || folder != null) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

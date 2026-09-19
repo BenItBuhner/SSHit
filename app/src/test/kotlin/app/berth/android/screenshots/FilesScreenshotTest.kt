@@ -469,9 +469,9 @@ class FilesScreenshotTest {
         val retried = ArrayList<String>()
         themed { Pane(b, transfers = transfers, onRetryFailed = { retried += it }) }
         waitForText("deploy.sh")
-        // The whole folder is one row on the strip: files done of total (copied and failed alike), bytes of total, speed, what waits behind it.
-        waitForText("513 of 1240 files \u00B7 233 MB of 612 MB \u00B7 3.8 MB/s \u00B7 1 more")
-        waitForText("38%")
+        // The whole folder is one row on the strip: files done of total (copied and failed alike) where a file's percentage goes, then bytes of total in the short form, speed, what waits behind it.
+        waitForText("233 of 612 MB \u00B7 3.8 MB/s \u00B7 1 more")
+        waitForText("513 of 1240")
         capture("files-folder-transfer-strip")
 
         compose.onNodeWithContentDescription("Transfers, 2 running").performClick()
