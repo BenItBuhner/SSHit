@@ -1,8 +1,6 @@
 package app.berth.android.ui.snippets
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,15 +11,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
@@ -40,10 +38,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
@@ -55,9 +54,10 @@ import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.Glyph
 import app.berth.android.ui.components.IconAction
+import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
-import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.ScreenHeader
+import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
@@ -67,11 +67,9 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
-import app.berth.domain.model.Host
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
-import app.berth.domain.model.Workspace
 import java.util.UUID
 
 /** One chip on the Snippets screen: everything, only global ones, or one workspace's or host's. */
@@ -162,7 +160,6 @@ fun SnippetsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
                 items(shown, key = { it.id }) { s ->
                     SnippetRow(
                         snippet = s,
-                        scopeLabel = scopeLabel(s, hosts, workspaces),
                         canRun = liveSession != null,
                         onTap = { start(s, s.defaultAction) },
                         onRun = { start(s, SnippetAction.RUN) },
@@ -196,13 +193,6 @@ fun SnippetsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Mo
 
 class SnippetEditorTarget(val snippet: Snippet?)
 
-private fun scopeLabel(s: Snippet, hosts: List<Host>, workspaces: List<Workspace>): String? {
-    val parts = ArrayList<String>()
-    s.hostId?.let { id -> parts += hosts.firstOrNull { it.id == id }?.name ?: "removed host" }
-    s.workspaceId?.let { id -> parts += workspaces.firstOrNull { it.id == id }?.name ?: "removed workspace" }
-    return parts.takeIf { it.isNotEmpty() }?.joinToString(" \u00B7 ")
-}
-
 /** The body with every `{{placeholder}}` in accent, for previews and the run sheet. */
 @Composable
 fun highlightedBody(body: String, oneLine: Boolean = true): AnnotatedString {
@@ -219,12 +209,14 @@ fun highlightedBody(body: String, oneLine: Boolean = true): AnnotatedString {
     }
 }
 
-/** 56 dp row: name, Mono preview with placeholders in accent, scope and Deck pills. */
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * A snippet as a [ListRow] (C15): the name and one Mono preview line with placeholders in accent.
+ * Pinned to the Deck is the row's 4 dp accent dot in the leading padding; run-on-connect is a
+ * Caption suffix on the preview. Scope is the filter chips' job, so the row carries no badge.
+ */
 @Composable
 fun SnippetRow(
     snippet: Snippet,
-    scopeLabel: String?,
     canRun: Boolean,
     onTap: () -> Unit,
     onRun: () -> Unit,
@@ -238,34 +230,24 @@ fun SnippetRow(
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .clip(RoundedCornerShape(BerthRadius.row))
-                .background(surface)
-                .combinedClickable(onClick = onTap, onLongClick = { menu = true })
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(snippet.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    highlightedBody(snippet.body),
-                    style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize, lineHeight = BerthType.caption.lineHeight),
-                    color = c.text2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (scopeLabel != null) Pill(scopeLabel)
-                if (snippet.runOnConnect) Pill("on connect")
-                if (snippet.pinnedToDeck) Pill("Deck", color = c.accent.copy(alpha = 0.18f), textColor = c.accent)
+    val preview = buildAnnotatedString {
+        append(highlightedBody(snippet.body))
+        if (snippet.runOnConnect) {
+            withStyle(SpanStyle(fontFamily = BerthType.caption.fontFamily, fontWeight = BerthType.caption.fontWeight, letterSpacing = BerthType.caption.letterSpacing, color = c.text3)) {
+                append(" \u00B7 on connect")
             }
         }
+    }
+    Box(modifier) {
+        ListRow(
+            title = snippet.name,
+            subtitle = preview,
+            subtitleStyle = BerthType.mono.copy(fontSize = BerthType.caption.fontSize, lineHeight = BerthType.caption.lineHeight),
+            surface = surface,
+            onClick = onTap,
+            onLongClick = { menu = true },
+            leading = if (snippet.pinnedToDeck) ({ PinnedDot() }) else null,
+        )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
             @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
                 DropdownMenuItem(text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) }, onClick = { menu = false; action() })
@@ -280,6 +262,18 @@ fun SnippetRow(
             if (onDelete != null) item("Delete", destructive = true, action = onDelete)
         }
     }
+}
+
+/** The ListRow selection idiom borrowed for "on the Deck": a 4 dp accent dot in the leading padding. */
+@Composable
+private fun PinnedDot() {
+    Box(
+        Modifier
+            .size(4.dp)
+            .clip(CircleShape)
+            .background(Berth.colors.accent)
+            .semantics { contentDescription = "Pinned to the Deck" },
+    )
 }
 
 /**
@@ -419,7 +413,8 @@ fun SnippetRunSheet(vm: AppViewModel, session: TerminalSession, pending: Pending
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                 )
             }
-            Panel(label = "Will send") {
+            Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SectionLabel("Will send")
                 Text(highlightedBody(rendered, oneLine = false), style = BerthType.mono, color = c.text1)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -443,8 +438,6 @@ fun SnippetRunSheet(vm: AppViewModel, session: TerminalSession, pending: Pending
 fun SnippetPickerSheet(vm: AppViewModel, session: TerminalSession, onDismiss: () -> Unit) {
     val c = Berth.colors
     val snippets by vm.snippets.collectAsState()
-    val hosts by vm.hosts.collectAsState()
-    val workspaces by vm.workspaces.collectAsState()
     val record by session.record.collectAsState()
     var pending by remember { mutableStateOf<PendingSnippet?>(null) }
     var editor by remember { mutableStateOf(false) }
@@ -475,7 +468,6 @@ fun SnippetPickerSheet(vm: AppViewModel, session: TerminalSession, onDismiss: ()
                     for (s in visible) {
                         SnippetRow(
                             snippet = s,
-                            scopeLabel = scopeLabel(s, hosts, workspaces),
                             canRun = true,
                             onTap = { start(s, s.defaultAction) },
                             onRun = { start(s, SnippetAction.RUN) },
