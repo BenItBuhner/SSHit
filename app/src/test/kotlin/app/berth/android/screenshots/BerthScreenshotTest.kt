@@ -707,6 +707,9 @@ class BerthScreenshotTest {
         compose.onNode(hasContentDescription("uptime")).performClick()
         settle(1_200)
         capture("stage-live-snippet-ran")
+        // Back to Base (the fifth tap wraps), so the captures that follow show the Deck as a launch does, not the layer this test stepped to.
+        compose.onNode(hasContentDescription("Layer", substring = true)).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("uptime")).fetchSemanticsNodes().isEmpty() }
 
         // The Session sheet sits behind the overflow now that the header row is the strip.
         compose.onNodeWithContentDescription("More").performClick()

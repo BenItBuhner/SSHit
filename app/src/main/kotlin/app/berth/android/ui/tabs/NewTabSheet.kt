@@ -191,8 +191,9 @@ fun NewTabSheet(
                     leading = { Swatch(host.color, host.monogram, 36.dp) },
                     trailing = {
                         if (host.lastConnectedAt != null) Text(ageText(host.lastConnectedAt, now), style = BerthType.caption, color = c.text3)
+                        // Quiet until pressed (the target's own press fill marks it), so it reads as a second action, not a file attribute of the row.
                         IconAction(onClick = { files(host) }, description = "Files on ${host.name}") {
-                            BerthIcon(BerthIcons.folder, tint = c.text2, size = 20.dp)
+                            BerthIcon(BerthIcons.folder, tint = c.text3, size = 20.dp)
                         }
                     },
                 )
