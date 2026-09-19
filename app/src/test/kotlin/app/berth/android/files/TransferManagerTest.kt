@@ -230,9 +230,10 @@ class TransferManagerTest {
         assertNotNull(conflict.existingModified)
         assertNull(conflict.incomingModified)
         assertNull("no comparison without both dates", conflict.incomingIsNewer)
-        assertEquals("Waiting", transferTrailing(t))
+        // The trailing word says what a tap does; the strip's Caption keeps to the file, so a long name never cuts the cue.
+        assertEquals("Answer", transferTrailing(t))
         assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(t))
-        assertEquals("a.txt already exists \u00B7 tap to answer", transferCaption(t, showHost = false, compact = true))
+        assertEquals("a.txt already exists \u00B7 2 more", transferCaption(t, showHost = false, others = 2, compact = true))
         // The notification counts a copy stopped on a question apart from those that move.
         assertEquals(1, graph.sessions.activeTransfers.value)
         assertEquals(1, graph.sessions.waitingTransfers.value)
@@ -393,9 +394,9 @@ class TransferManagerTest {
         assertEquals(5L, conflict.existingSize)
         assertEquals("the only file of the selection: apply to all has nothing to cover", 0, conflict.remaining)
         assertNotNull(conflict.existingModified)
-        assertEquals("Waiting", transferTrailing(file))
+        assertEquals("Answer", transferTrailing(file))
         assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(file))
-        assertEquals("a.txt already exists \u00B7 tap to answer", transferCaption(file, showHost = false, compact = true))
+        assertEquals("a.txt already exists", transferCaption(file, showHost = false, compact = true))
         assertEquals(TransferState.QUEUED, transfer(folderId).state)
         assertEquals(1, graph.sessions.waitingTransfers.value)
 

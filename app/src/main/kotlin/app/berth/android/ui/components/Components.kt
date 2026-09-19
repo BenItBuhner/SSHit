@@ -251,7 +251,8 @@ fun Panel(
 /**
  * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
  * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
- * The subtitle takes a plain String or an [AnnotatedString] (mixed Mono and Caption, accent spans).
+ * The subtitle takes a plain String or an [AnnotatedString] (mixed Mono and Caption, accent spans),
+ * on one line unless [subtitleMaxLines] gives it more, for a caption that is a sentence.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -269,6 +270,7 @@ fun ListRow(
     titleColor: Color = Berth.colors.text1,
     titleStyle: TextStyle = BerthType.bodyMedium,
     subtitleStyle: TextStyle = BerthType.caption,
+    subtitleMaxLines: Int = 1,
 ) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
@@ -313,8 +315,8 @@ fun ListRow(
             Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
             when (subtitle) {
                 null -> Unit
-                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                else -> Text(subtitle.toString(), style = subtitleStyle, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = c.text2, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                else -> Text(subtitle.toString(), style = subtitleStyle, color = c.text2, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
             }
         }
         if (trailing != null) {
@@ -342,12 +344,14 @@ fun PickerRow(title: String, value: String, onClick: () -> Unit, modifier: Modif
     )
 }
 
+/** A switch row; the [caption] under the title has one line unless [captionLines] gives it more. */
 @Composable
-fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, caption: String? = null) {
+fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, caption: String? = null, captionLines: Int = 1) {
     val c = Berth.colors
     ListRow(
         title = title,
         subtitle = caption,
+        subtitleMaxLines = captionLines,
         minHeight = 44.dp,
         surface = Color.Transparent,
         onClick = { onCheckedChange(!checked) },

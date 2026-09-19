@@ -72,7 +72,8 @@ data class CaptionPart(val text: String, val danger: Boolean = false)
  * were skipped. The state word itself is [transferTrailing]'s, so it is not repeated here. [compact]
  * is the strip's one line, which keeps a moving folder's files done of total and its speed and
  * leaves the bytes of total to the sheet, so no line carries two `X of Y` pairs. A single file
- * that found its name taken says so while it waits and, once over, what became of it.
+ * that found its name taken says so while it waits (the trailing `Answer` says what to do) and,
+ * once over, what became of it.
  */
 fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0, compact: Boolean = false): String =
     transferCaptionParts(t, showHost, others, compact).joinToString(" \u00B7 ") { it.text }
@@ -87,7 +88,6 @@ fun transferCaptionParts(t: Transfer, showHost: Boolean = true, others: Int = 0,
             val conflict = t.conflict
             if (conflict != null) {
                 plain("${conflict.name} already exists")
-                if (compact) plain("tap to answer")
             } else {
                 plain(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
                 formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::plain)
@@ -131,10 +131,7 @@ private fun folderCaption(t: Transfer, f: FolderProgress, compact: Boolean): Lis
     when (t.state) {
         TransferState.QUEUED -> plain("Folder")
         TransferState.RUNNING -> when {
-            conflict != null -> {
-                plain("${conflict.name} already exists")
-                if (compact) plain("tap to answer")
-            }
+            conflict != null -> plain("${conflict.name} already exists")
             f.phase == FolderPhase.SCANNING -> plain(if (f.filesTotal > 0) "${f.filesTotal} files so far" else "Folder")
             else -> {
                 plain(filesOf(f.filesDone, f.filesTotal))
@@ -189,11 +186,13 @@ private fun transferDuration(t: Transfer): String {
 /**
  * The trailing word or percentage beside a transfer's name, the strip and the sheet alike: the
  * percentage is the measure of the line above it, so a folder shows it too and keeps its files
- * done of total for the Caption.
+ * done of total for the Caption. A copy stopped on a file that exists already reads `Answer`,
+ * the one word that says both that it waits and what a tap on the row does; it survives a name
+ * too long for the strip's Caption, where a hint after the name would be the part cut.
  */
 fun transferTrailing(t: Transfer): String = when (t.state) {
     TransferState.RUNNING -> when {
-        t.waiting -> "Waiting"
+        t.waiting -> "Answer"
         t.folder?.phase == FolderPhase.SCANNING -> "Scanning"
         else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
     }

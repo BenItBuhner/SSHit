@@ -742,6 +742,7 @@ fun FolderConflictSheet(transfer: Transfer, now: Long, onChoose: (ConflictChoice
                 onCheckedChange = { applyToAll = it },
                 // The answer is consulted only for a file that turns out to exist; the rest copy regardless, so the count is of candidates, not of files skipped.
                 caption = if (conflict.remaining == 1) "For the 1 file still to copy, if it already exists" else "For any of the ${conflict.remaining} files still to copy that already exist",
+                captionLines = 2,
             )
         }
         // Destructive furthest from the thumb's resting side, the safe choice in the affirmative position.

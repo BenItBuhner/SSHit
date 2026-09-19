@@ -550,13 +550,13 @@ class FilesScreenshotTest {
         compose.onNodeWithText("Keep both").performClick()
         assertEquals(listOf(Triple("f1", ConflictChoice.KEEP_BOTH, true)), answers)
 
-        // Dismissed, the copy keeps waiting: the strip says so in a word and that a tap answers, and the tap brings the question back.
+        // Dismissed, the copy keeps waiting: the strip's trailing word says what a tap does, the Caption names the file, and the tap brings the question back.
         dismissSheet()
         waitForNoText("In berth/app \u00B7 prod-web")
-        waitForText("Waiting")
-        waitForText("build.gradle.kts already exists \u00B7 tap to answer")
+        waitForText("Answer")
+        waitForText("build.gradle.kts already exists")
         capture("files-folder-conflict-put-aside")
-        compose.onNodeWithText("build.gradle.kts already exists \u00B7 tap to answer").performClick()
+        compose.onNodeWithText("build.gradle.kts already exists").performClick()
         waitForText("In berth/app \u00B7 prod-web")
     }
 
@@ -586,12 +586,12 @@ class FilesScreenshotTest {
         compose.onNodeWithText("Skip").performClick()
         assertEquals(listOf(Triple("t9", ConflictChoice.SKIP, false)), answers)
 
-        // Put aside, the strip reads the same as a folder's: Waiting, the file, and that a tap answers.
+        // Put aside, the strip reads the same as a folder's: Answer, the file, what waits behind it; the tap brings the question back.
         dismissSheet()
         waitForNoText("In Download \u00B7 prod-web")
-        waitForText("Waiting")
-        waitForText("notes.txt already exists \u00B7 tap to answer \u00B7 1 more")
-        compose.onNodeWithText("notes.txt already exists \u00B7 tap to answer \u00B7 1 more").performClick()
+        waitForText("Answer")
+        waitForText("notes.txt already exists \u00B7 1 more")
+        compose.onNodeWithText("notes.txt already exists \u00B7 1 more").performClick()
         waitForText("In Download \u00B7 prod-web")
     }
 
