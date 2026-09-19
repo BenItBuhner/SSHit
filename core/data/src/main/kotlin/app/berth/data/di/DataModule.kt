@@ -3,6 +3,7 @@ package app.berth.data.di
 import android.content.Context
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreCrypto
+import app.berth.data.crypto.KeystoreSigning
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
 import app.berth.data.repo.EncryptedSecretStore
@@ -41,6 +42,9 @@ object DataModule {
 
     @Provides @Singleton
     fun hardwareKeys(@ApplicationContext context: Context): HardwareKeys = HardwareKeys(context)
+
+    @Provides @Singleton
+    fun keystoreSigning(hardwareKeys: HardwareKeys): KeystoreSigning = hardwareKeys
 
     @Provides @Singleton
     fun secretStore(db: BerthDatabase, crypto: SecretCrypto): SecretStore = EncryptedSecretStore(db, crypto)
