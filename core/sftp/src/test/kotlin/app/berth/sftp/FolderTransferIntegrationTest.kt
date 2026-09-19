@@ -163,9 +163,13 @@ class FolderTransferIntegrationTest {
         assertEquals(1, result.filesFailed)
         val leftOut = result.failures.filter { !it.retryable }.associate { it.relativePath to it.message }
         assertEquals(setOf("docs/link-to-src", "docs/dangling"), leftOut.keys)
-        assertEquals("Link to a folder; skipped.", leftOut["docs/link-to-src"])
-        assertEquals("Broken link; skipped.", leftOut["docs/dangling"])
+        // "Skipped" is the user's word in the conflict sheet; what the link policy passes over is "left out", and counted on its own.
+        assertEquals("Link to a folder; left out.", leftOut["docs/link-to-src"])
+        assertEquals("Broken link; left out.", leftOut["docs/dangling"])
+        assertTrue(result.failures.filter { !it.retryable }.all { it.isLink })
         assertEquals(2, result.filesLeftOut)
+        assertEquals(2, result.linksLeftOut)
+        assertEquals(0, result.filesSkipped)
 
         // Progress: scanning first with the count growing, then copying with ticks inside the big file, bytes never going backwards.
         assertEquals(FolderPhase.SCANNING, seen.first().phase)
@@ -242,6 +246,30 @@ class FolderTransferIntegrationTest {
             assertEquals(1f, result.fraction, "skipped bytes still bring the fraction to the end")
             assertTrue(result.failures.isEmpty(), "a skip is not a failure")
             assertEquals(3, localHashes(File(dest, "tree")).size, "only the three named files are touched")
+        }
+
+        // Skip for all: asked once, for the first clash. The answer covers only the files after it that turn out to exist;
+        // the one that is not there comes down regardless, which is what the sheet's Apply to all caption promises.
+        run {
+            val dest = seed()
+            // The copies on the device are dated two days back, so the server's are the newer side of the question.
+            val twoDaysAgo = System.currentTimeMillis() - 2 * 24 * 3600 * 1000L
+            File(dest, "tree/README.txt").setLastModified(twoDaysAgo)
+            File(dest, "tree/src/main/a000.txt").setLastModified(twoDaysAgo)
+            val asked = ArrayList<FolderConflict>()
+            val result = FolderTransfer(fs, FileTree(dest), resolve = { asked += it; ConflictResolution(ConflictChoice.SKIP, applyToAll = true) }).download(remote, only)
+            assertEquals(listOf("README.txt"), asked.map { it.relativePath })
+            assertEquals(2, asked[0].remaining)
+            assertEquals(twoDaysAgo / 1000, asked[0].existingModified!! / 1000, "the device's time on the file already there")
+            assertNotNull(asked[0].incomingModified, "the server's time on the file coming in")
+            assertEquals(true, asked[0].incomingIsNewer)
+            assertEquals("old", File(dest, "tree/README.txt").readText())
+            assertEquals("old", File(dest, "tree/src/main/a000.txt").readText())
+            assertEquals(remoteHashes.getValue("src/main/a001.txt"), sha256(File(dest, "tree/src/main/a001.txt").readBytes()))
+            assertEquals(1, result.filesCopied)
+            assertEquals(2, result.filesSkipped)
+            assertEquals(3, result.filesDone)
+            assertTrue(result.failures.isEmpty())
         }
 
         // Overwrite for all: asked once, both replaced with the server's bytes.

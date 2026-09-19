@@ -12,11 +12,11 @@ enum class LinkPolicy {
     /**
      * A link to a regular file is copied as the file it points at. A link to a folder is not
      * followed (a cycle, or a link out of the tree, would copy without end) and a dangling link
-     * points at nothing; both are skipped and named in the summary.
+     * points at nothing; both are left out and named in the summary.
      */
     FOLLOW_FILE_LINKS,
 
-    /** Every link is skipped and named in the summary. */
+    /** Every link is left out and named in the summary. */
     SKIP_LINKS,
 }
 
@@ -25,7 +25,12 @@ enum class ConflictChoice { SKIP, OVERWRITE, KEEP_BOTH }
 
 data class ConflictResolution(val choice: ConflictChoice, val applyToAll: Boolean)
 
-/** A file about to be copied has something at its destination already; the copy waits for an answer. */
+/**
+ * A file about to be copied has something at its destination already; the copy waits for an
+ * answer. Sizes and modified times of both sides are what the answer is weighed on; a time is
+ * null when its side did not say. A single file copied on its own uses this too, its path the
+ * name of the folder it is going into and its own, `Download/notes.txt`.
+ */
 data class FolderConflict(
     /** Where in the folder being copied, `logs/app.log`. */
     val relativePath: String,
@@ -33,20 +38,33 @@ data class FolderConflict(
     val existingSize: Long,
     /** Files still to copy after this one, so an apply-to-all can say how many it covers. */
     val remaining: Int,
+    /** Epoch milliseconds the incoming file was last changed, when known. */
+    val incomingModified: Long? = null,
+    /** Epoch milliseconds the file already there was last changed, when known. */
+    val existingModified: Long? = null,
 ) {
     val name: String get() = relativePath.substringAfterLast('/')
+
+    /** True when the incoming file is the newer, false when the existing one is; null when either time is unknown or they are the same. */
+    val incomingIsNewer: Boolean? get() {
+        val a = incomingModified ?: return null
+        val b = existingModified ?: return null
+        return if (a == b) null else a > b
+    }
 }
 
 /**
  * One thing in a folder that did not copy: a file or folder the server or the device refused, or
- * a link the [LinkPolicy] left out. Only the former are [retryable]; a retry of the latter would
- * end the same way.
+ * a link or special file the [LinkPolicy] left out. Only the former are [retryable]; a retry of
+ * the latter would end the same way. [isLink] tells the summary which of the left-out ones were
+ * links, so it can count them as such rather than as anything the user skipped.
  */
 data class FolderFailure(
     val relativePath: String,
     val message: String,
     val isDirectory: Boolean = false,
     val retryable: Boolean = true,
+    val isLink: Boolean = false,
 )
 
 enum class FolderPhase { SCANNING, COPYING, FINISHED }
@@ -54,8 +72,8 @@ enum class FolderPhase { SCANNING, COPYING, FINISHED }
 /**
  * Where a folder copy stands. Files are counted once the scan has walked the tree; a folder that
  * would not list has no count, so it is one failure rather than an unknown number. [bytesDone] is
- * what actually moved; [bytesPassed] is the size of what was skipped or failed, so the fraction
- * still reaches the end.
+ * what actually moved; [bytesSkipped] and [bytesFailed] are the sizes of what was skipped and what
+ * failed, so the fraction still reaches the end and the outcome can be drawn in its parts.
  */
 data class FolderProgress(
     val phase: FolderPhase = FolderPhase.SCANNING,
@@ -65,7 +83,8 @@ data class FolderProgress(
     val filesSkipped: Int = 0,
     val bytesTotal: Long = 0L,
     val bytesDone: Long = 0L,
-    val bytesPassed: Long = 0L,
+    val bytesSkipped: Long = 0L,
+    val bytesFailed: Long = 0L,
     /** The relative path of the file moving now. */
     val current: String? = null,
     val currentBytes: Long = 0L,
@@ -74,10 +93,16 @@ data class FolderProgress(
     /** Set while the copy waits for the user's answer. */
     val conflict: FolderConflict? = null,
 ) {
+    /** Bytes that will not move: skipped or failed. */
+    val bytesPassed: Long get() = bytesSkipped + bytesFailed
+
     val filesFailed: Int get() = failures.count { it.retryable }
 
     /** Links and special files the policy left out. */
     val filesLeftOut: Int get() = failures.count { !it.retryable }
+
+    /** Of [filesLeftOut], the links. */
+    val linksLeftOut: Int get() = failures.count { !it.retryable && it.isLink }
 
     /** Files no longer pending: copied, skipped or failed. */
     val filesDone: Int get() = filesCopied + filesSkipped + failures.count { it.retryable && !it.isDirectory }
@@ -125,10 +150,13 @@ class FolderTransfer(
         var bytes = 0L
     }
 
-    private class PlannedFile(val relativePath: String, val size: Long, val remotePath: String? = null, val localNode: LocalNode? = null) {
+    private class PlannedFile(val relativePath: String, val size: Long, val modifiedAt: Long?, val remotePath: String? = null, val localNode: LocalNode? = null) {
         val name: String get() = relativePath.substringAfterLast('/')
         val dir: String get() = relativePath.substringBeforeLast('/', "")
     }
+
+    /** What a destination folder on the server holds, by name, as far as a conflict needs to know. */
+    private class Present(val size: Long, val modifiedAt: Long?)
 
     // ---- download ----------------------------------------------------------------------------------
 
@@ -211,9 +239,9 @@ class FolderTransfer(
                         plan.dirs += childRel
                         below += childRel
                     }
-                    SftpFileType.REGULAR -> plan.add(PlannedFile(childRel, entry.size, remotePath = entry.path))
+                    SftpFileType.REGULAR -> plan.add(PlannedFile(childRel, entry.size, entry.modifiedAt.known(), remotePath = entry.path))
                     SftpFileType.SYMLINK -> planLink(entry, childRel, plan)
-                    SftpFileType.OTHER -> leaveOut(childRel, "Special file; skipped.")
+                    SftpFileType.OTHER -> leaveOut(childRel, "Special file; left out.")
                 }
             }
             for (dir in below.asReversed()) stack.addLast(dir)
@@ -225,17 +253,17 @@ class FolderTransfer(
     /** Applies the [LinkPolicy]: a link to a file joins the plan with the size behind it, anything else is named and left out. */
     private suspend fun planLink(entry: SftpEntry, rel: String, plan: Plan) {
         if (linkPolicy == LinkPolicy.SKIP_LINKS) {
-            leaveOut(rel, "Link; skipped.")
+            leaveOut(rel, "Link; left out.", isLink = true)
             return
         }
         if (entry.linkTarget == SftpFileType.DIRECTORY) {
-            leaveOut(rel, "Link to a folder; skipped.")
+            leaveOut(rel, "Link to a folder; left out.", isLink = true)
             return
         }
         val target = try {
             remote.stat(entry.path)
         } catch (e: SftpError.NotFound) {
-            leaveOut(rel, "Broken link; skipped.")
+            leaveOut(rel, "Broken link; left out.", isLink = true)
             return
         } catch (e: SftpError) {
             if (e.isConnectionLoss()) throw e
@@ -243,9 +271,9 @@ class FolderTransfer(
             return
         }
         when (target.type) {
-            SftpFileType.REGULAR -> plan.add(PlannedFile(rel, target.size, remotePath = entry.path))
-            SftpFileType.DIRECTORY -> leaveOut(rel, "Link to a folder; skipped.")
-            else -> leaveOut(rel, "Link to a special file; skipped.")
+            SftpFileType.REGULAR -> plan.add(PlannedFile(rel, target.size, target.modifiedAt.known(), remotePath = entry.path))
+            SftpFileType.DIRECTORY -> leaveOut(rel, "Link to a folder; left out.", isLink = true)
+            else -> leaveOut(rel, "Link to a special file; left out.", isLink = true)
         }
     }
 
@@ -253,7 +281,7 @@ class FolderTransfer(
         var target: LocalNode? = existing[file.name]
         var targetName = file.name
         if (target != null) {
-            when (decide(file, target.size, remaining)) {
+            when (decide(file, target.size, target.modifiedAt, remaining)) {
                 ConflictChoice.SKIP -> {
                     skip(file)
                     return
@@ -332,7 +360,7 @@ class FolderTransfer(
         }
 
         // A folder made just now is known empty; one that was there is listed once for the conflict checks.
-        val listings = HashMap<String, MutableMap<String, Long>?>()
+        val listings = HashMap<String, MutableMap<String, Present>?>()
         for ((index, file) in plan.files.withIndex()) {
             if (file.dir !in made) {
                 failFile(file, "The folder it belongs in couldn't be made.")
@@ -341,7 +369,7 @@ class FolderTransfer(
             try {
                 if (file.dir !in listings) {
                     listings[file.dir] = if (file.dir in fresh) LinkedHashMap() else try {
-                        remote.list(pathFor(file.dir)).associateTo(LinkedHashMap()) { it.name to it.size }
+                        remote.list(pathFor(file.dir)).associateTo(LinkedHashMap()) { it.name to Present(it.size, it.modifiedAt.known()) }
                     } catch (e: SftpError) {
                         if (e.isConnectionLoss()) throw e
                         null
@@ -384,7 +412,7 @@ class FolderTransfer(
                     plan.dirs += childRel
                     below += childRel to child
                 } else {
-                    plan.add(PlannedFile(childRel, child.size, localNode = child))
+                    plan.add(PlannedFile(childRel, child.size, child.modifiedAt, localNode = child))
                 }
             }
             for (pair in below.asReversed()) stack.addLast(pair)
@@ -393,11 +421,11 @@ class FolderTransfer(
         return plan
     }
 
-    private suspend fun copyUp(file: PlannedFile, remoteDir: String, existing: MutableMap<String, Long>, remaining: Int) {
+    private suspend fun copyUp(file: PlannedFile, remoteDir: String, existing: MutableMap<String, Present>, remaining: Int) {
         var targetName = file.name
         val there = existing[file.name]
         if (there != null) {
-            when (decide(file, there, remaining)) {
+            when (decide(file, there.size, there.modifiedAt, remaining)) {
                 ConflictChoice.SKIP -> {
                     skip(file)
                     return
@@ -424,7 +452,7 @@ class FolderTransfer(
             } finally {
                 withContext(NonCancellable + Dispatchers.IO) { runCatching { input.close() } }
             }
-            existing[targetName] = moved
+            existing[targetName] = Present(moved, file.modifiedAt)
             done(file, moved)
         } catch (e: CancellationException) {
             withContext(NonCancellable) { runCatching { remote.delete(remotePath) } }
@@ -438,9 +466,16 @@ class FolderTransfer(
 
     // ---- shared ------------------------------------------------------------------------------------
 
-    private suspend fun decide(file: PlannedFile, existingSize: Long, remaining: Int): ConflictChoice {
+    private suspend fun decide(file: PlannedFile, existingSize: Long, existingModified: Long?, remaining: Int): ConflictChoice {
         sticky?.let { return it }
-        val conflict = FolderConflict(file.relativePath, incomingSize = file.size, existingSize = existingSize, remaining = remaining)
+        val conflict = FolderConflict(
+            file.relativePath,
+            incomingSize = file.size,
+            existingSize = existingSize,
+            remaining = remaining,
+            incomingModified = file.modifiedAt,
+            existingModified = existingModified,
+        )
         publish(progress.copy(conflict = conflict))
         val answer = try {
             resolve(conflict)
@@ -480,28 +515,29 @@ class FolderTransfer(
         publish(progress.copy(filesCopied = progress.filesCopied + 1, bytesDone = bytesBefore, bytesTotal = progress.bytesTotal + (moved - planned), current = null, currentBytes = 0L, currentTotal = 0L))
     }
 
-    private fun skip(file: PlannedFile) = publish(progress.copy(filesSkipped = progress.filesSkipped + 1, bytesPassed = progress.bytesPassed + file.size.coerceAtLeast(0L)))
+    private fun skip(file: PlannedFile) = publish(progress.copy(filesSkipped = progress.filesSkipped + 1, bytesSkipped = progress.bytesSkipped + file.size.coerceAtLeast(0L)))
 
     private fun failFile(file: PlannedFile, message: String) {
-        publish(progress.copy(bytesDone = bytesBefore, bytesPassed = progress.bytesPassed + file.size.coerceAtLeast(0L), current = null, currentBytes = 0L, currentTotal = 0L, failures = progress.failures + FolderFailure(file.relativePath, message)))
+        publish(progress.copy(bytesDone = bytesBefore, bytesFailed = progress.bytesFailed + file.size.coerceAtLeast(0L), current = null, currentBytes = 0L, currentTotal = 0L, failures = progress.failures + FolderFailure(file.relativePath, message)))
     }
 
     private fun failFile(rel: String, message: String) = publish(progress.copy(failures = progress.failures + FolderFailure(rel, message)))
 
     private fun failDir(rel: String, message: String) = publish(progress.copy(failures = progress.failures + FolderFailure(rel, message, isDirectory = true)))
 
-    private fun leaveOut(rel: String, message: String) = publish(progress.copy(failures = progress.failures + FolderFailure(rel, message, retryable = false)))
+    private fun leaveOut(rel: String, message: String, isLink: Boolean = false) =
+        publish(progress.copy(failures = progress.failures + FolderFailure(rel, message, retryable = false, isLink = isLink)))
 
     /** The connection is gone: everything after [index] is recorded with that reason so a retry covers it. */
     private fun failRest(files: List<PlannedFile>, index: Int, cause: SftpError) {
         val reason = cause.message ?: "The connection dropped."
-        var passed = progress.bytesPassed
+        var failed = progress.bytesFailed
         val failures = ArrayList(progress.failures)
         for (i in index + 1 until files.size) {
-            passed += files[i].size.coerceAtLeast(0L)
+            failed += files[i].size.coerceAtLeast(0L)
             failures += FolderFailure(files[i].relativePath, reason)
         }
-        publish(progress.copy(phase = FolderPhase.FINISHED, bytesPassed = passed, failures = failures, current = null, conflict = null))
+        publish(progress.copy(phase = FolderPhase.FINISHED, bytesFailed = failed, failures = failures, current = null, conflict = null))
     }
 
     private fun finish(): FolderProgress {
@@ -515,6 +551,9 @@ class FolderTransfer(
      * can go on.
      */
     private fun SftpError.isConnectionLoss(): Boolean = this is SftpError.NotConnected || (this is SftpError.Io && !remote.isOpen)
+
+    /** A server time as the entry carries it: epoch milliseconds, or 0 when it sent none, which is unknown here. */
+    private fun Long.known(): Long? = takeIf { it > 0 }
 
     private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 

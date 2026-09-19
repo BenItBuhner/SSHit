@@ -14,6 +14,8 @@ interface LocalNode {
     val isDirectory: Boolean
     /** Bytes in a file, or -1 when the tree does not know; meaningless for a folder. */
     val size: Long
+    /** Epoch milliseconds the file was last changed, or null when the tree does not say. */
+    val modifiedAt: Long?
 }
 
 /**
@@ -55,6 +57,7 @@ class FileTree(rootDir: File) : LocalTree {
         override val name: String get() = file.name
         override val isDirectory: Boolean get() = file.isDirectory && !Files.isSymbolicLink(file.toPath())
         override val size: Long get() = if (file.isFile) file.length() else -1L
+        override val modifiedAt: Long? get() = file.lastModified().takeIf { it > 0 }
     }
 
     override val root: LocalNode = Node(rootDir)

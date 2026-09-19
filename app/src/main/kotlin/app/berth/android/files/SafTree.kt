@@ -18,7 +18,7 @@ import java.io.OutputStream
 class SafTree(private val context: Context, private val tree: Uri) : LocalTree {
     private val resolver: ContentResolver get() = context.contentResolver
 
-    private class Node(val uri: Uri, override val name: String, override val isDirectory: Boolean, override val size: Long) : LocalNode
+    private class Node(val uri: Uri, override val name: String, override val isDirectory: Boolean, override val size: Long, override val modifiedAt: Long? = null) : LocalNode
 
     override val root: LocalNode by lazy {
         val uri = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
@@ -42,13 +42,15 @@ class SafTree(private val context: Context, private val tree: Uri) : LocalTree {
             val nameColumn = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val mimeColumn = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
             val sizeColumn = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            val modifiedColumn = c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
             val out = ArrayList<LocalNode>(c.count)
             while (c.moveToNext()) {
                 val id = c.getString(idColumn) ?: continue
                 val name = c.getString(nameColumn) ?: continue
                 val mime = if (mimeColumn >= 0) c.getString(mimeColumn) else null
                 val size = if (sizeColumn >= 0 && !c.isNull(sizeColumn)) c.getLong(sizeColumn) else -1L
-                out += Node(DocumentsContract.buildDocumentUriUsingTree(tree, id), name, mime == DocumentsContract.Document.MIME_TYPE_DIR, size)
+                val modified = if (modifiedColumn >= 0 && !c.isNull(modifiedColumn)) c.getLong(modifiedColumn).takeIf { it > 0 } else null
+                out += Node(DocumentsContract.buildDocumentUriUsingTree(tree, id), name, mime == DocumentsContract.Document.MIME_TYPE_DIR, size, modified)
             }
             out
         }
@@ -96,6 +98,7 @@ class SafTree(private val context: Context, private val tree: Uri) : LocalTree {
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
             DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
     }
 }
