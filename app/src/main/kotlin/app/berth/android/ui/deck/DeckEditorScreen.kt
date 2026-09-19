@@ -79,8 +79,8 @@ import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.themes.MenuItem
 import app.berth.android.ui.themes.PasteTextSheet
 import app.berth.android.ui.themes.RenameSheet
-import app.berth.android.ui.themes.snappedTo
 import app.berth.domain.model.DECK_MAX_KEYS_PER_LAYER
+import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckGesture
 import app.berth.domain.model.DeckKey
@@ -88,6 +88,7 @@ import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckPreset
 import app.berth.domain.model.DeckPresets
 import app.berth.domain.model.DeckReach
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.TermuxExtraKeys
 import app.berth.domain.model.action
 import app.berth.domain.model.addLayer
@@ -109,7 +110,9 @@ private const val UNDO_DEPTH = 60
 
 /** Deck heights the spec allows (A11: 44, 40–52) and the step the Height slider snaps to. */
 private val HEIGHTS = 40f..52f
-private const val HEIGHT_STEP = 4f
+
+/** The A9 heights 40, 44, 48 and 52: two stops strictly between the ends. */
+private const val HEIGHT_STOPS = 2
 
 /**
  * The Deck editor (UX spec C5). The preview is the real [Deck] composable in editing mode, so what
@@ -123,6 +126,9 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     val context = LocalContext.current
     val stored by vm.deckLayout.collectAsState()
     val terminalTheme by vm.defaultTerminalTheme.collectAsState()
+    val snippets by vm.snippets.collectAsState()
+    // The Stage shows the pinned snippets in scope for its session; the editor, with no session, shows every pinned one.
+    val pinned = remember(snippets) { snippets.filter { it.pinnedToDeck }.sortedBy { it.name.lowercase() } }
     var draft by remember { mutableStateOf(stored) }
     val history = remember { mutableStateListOf<DeckLayout>() }
     var layer by rememberSaveable { mutableIntStateOf(0) }
@@ -179,7 +185,7 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     }
     val openFile = rememberOpenTextFile { text -> importing = true; importText(text) }
 
-    val usable = draft.usableLayers()
+    val usable = draft.usableLayers(hasSnippets = pinned.isNotEmpty())
     val previewIndex = current?.let { usable.indexOf(it) } ?: -1
     val editing = remember(slotIndex, layerIndex, keys.size) {
         DeckEditing(
@@ -240,10 +246,11 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                             onLayerIndexChange = { i -> usable.getOrNull(i)?.let { shown -> layer = draft.layers.indexOf(shown); slot = null } },
                             input = previewInput,
                             editing = editing,
+                            snippets = pinned,
                         )
                     } else {
                         Text(
-                            "The Snippets layer expands to your pinned snippets and arrives with the snippets screen; it has no keys to edit.",
+                            "This layer is only the Snippets slot, which fills with the snippets pinned to the Deck; none are pinned yet, so the Stage skips it.",
                             style = BerthType.caption,
                             color = c.text3,
                             modifier = Modifier.background(c.surface1).fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
@@ -307,10 +314,15 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                             BerthButton("Remove", onClick = { edit(draft.removeKey(layerIndex, slotIndex!!)); slot = null }, kind = ButtonKind.DESTRUCTIVE)
                         }
                     }
-                    key.snippets -> Text("Expands to the pinned snippet chips; the snippets screen arrives later.", style = BerthType.body, color = c.text2)
+                    key.snippets -> Text(
+                        if (pinned.isEmpty()) "Expands to one key per snippet pinned to the Deck. None are pinned yet; the Snippets screen pins them."
+                        else "Expands to one key per pinned snippet: ${pinned.joinToString { it.name }}.",
+                        style = BerthType.body,
+                        color = c.text2,
+                    )
                     else -> {
                         for (g in DeckGesture.entries) {
-                            PickerRow(g.title, key.action(g)?.describe() ?: "None", onClick = { gesture = g })
+                            PickerRow(g.title, key.action(g)?.describeWith(snippets) ?: "None", onClick = { gesture = g })
                         }
                         PickerRow("Label", key.display ?: "From the tap action", onClick = { labelling = true })
                         Spacer(Modifier.height(4.dp))
@@ -341,8 +353,9 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                     // walks back a drag a step at a time and the Stage's Deck follows the knob.
                     BerthSlider(
                         value = draft.heightDp.toFloat(),
-                        onValueChange = { v -> edit(draft.copy(heightDp = v.snappedTo(HEIGHTS, HEIGHT_STEP).roundToInt())) },
+                        onValueChange = { v -> edit(draft.copy(heightDp = v.roundToInt())) },
                         valueRange = HEIGHTS,
+                        steps = HEIGHT_STOPS,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp).semantics { contentDescription = "Deck height" },
                     )
                     Text("52", style = BerthType.caption, color = c.text3)
@@ -379,11 +392,13 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             onPick = { a -> edit(draft.setKey(layerIndex, slotIndex, key.withAction(g, a))); gesture = null },
             onNub = { edit(draft.setKey(layerIndex, slotIndex, DeckKey(nub = true))); gesture = null },
             onDismiss = { gesture = null },
+            snippets = snippets,
         )
     }
     if (presets) {
         PresetsSheet(
             previewInput = previewInput,
+            snippets = pinned,
             onPick = { p -> edit(p.layout); layer = 0; slot = null; presets = false; note = "${p.name} preset applied." },
             onDismiss = { presets = false },
         )
@@ -514,7 +529,7 @@ private fun AddLayerChip(onClick: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PresetsSheet(previewInput: StageInput, onPick: (DeckPreset) -> Unit, onDismiss: () -> Unit) {
+private fun PresetsSheet(previewInput: StageInput, snippets: List<Snippet>, onPick: (DeckPreset) -> Unit, onDismiss: () -> Unit) {
     val c = Berth.colors
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -555,6 +570,7 @@ private fun PresetsSheet(previewInput: StageInput, onPick: (DeckPreset) -> Unit,
                             input = previewInput,
                             modifier = Modifier.clip(RoundedCornerShape(BerthRadius.row)),
                             surface = lift,
+                            snippets = snippets,
                         )
                         // The preview is for looking at; a tap anywhere on it picks the preset, and
                         // it shares the interaction so the strip lifts whichever part is pressed.
@@ -564,4 +580,10 @@ private fun PresetsSheet(previewInput: StageInput, onPick: (DeckPreset) -> Unit,
             }
         }
     }
+}
+
+/** [describe], with a snippet binding named after the snippet when it is one of [snippets]. */
+private fun DeckAction.describeWith(snippets: List<Snippet>): String {
+    val id = (this as? DeckAction.Snippet)?.snippetId ?: return describe()
+    return snippets.firstOrNull { it.id == id }?.let { "Snippet \u00B7 ${it.name}" } ?: describe()
 }

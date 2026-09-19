@@ -70,6 +70,7 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import kotlin.math.roundToInt
 
 private val VARIANTS = listOf(InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK, InterfaceVariant.LIGHT, InterfaceVariant.SYSTEM)
 
@@ -186,11 +187,12 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Square", style = BerthType.caption, color = c.text3)
-                    val radii = InterfaceTheme.MIN_RADIUS_SCALE..InterfaceTheme.MAX_RADIUS_SCALE
+                    // Tenths from 0.5 to 1.4: eight stops between the ends, rounded so the JSON stays clean.
                     BerthSlider(
                         value = theme.radiusScale,
-                        onValueChange = { set(theme.copy(radiusScale = it.snappedTo(radii, RADIUS_STEP))) },
-                        valueRange = radii,
+                        onValueChange = { set(theme.copy(radiusScale = (it * 100).roundToInt() / 100f)) },
+                        valueRange = InterfaceTheme.MIN_RADIUS_SCALE..InterfaceTheme.MAX_RADIUS_SCALE,
+                        steps = RADIUS_STOPS,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp).semantics { contentDescription = "Corner radius" },
                     )
                     Text("Round", style = BerthType.caption, color = c.text3)
@@ -227,12 +229,8 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     }
 }
 
-/** The corner-radius slider snaps to tenths, so the shown multiplier is always a round one. */
-private const val RADIUS_STEP = 0.1f
-
-/** [this] moved to the nearest multiple of [step] from the start of [range], clamped to the range. */
-internal fun Float.snappedTo(range: ClosedFloatingPointRange<Float>, step: Float): Float =
-    (range.start + Math.round((this - range.start) / step) * step).coerceIn(range)
+/** The corner-radius slider stops at tenths: the values strictly between 0.5 and 1.4. */
+private const val RADIUS_STOPS = 8
 
 /**
  * A Stage in miniature: the ribbon's anatomy with the drawn rail glyph, a detached terminal frame,

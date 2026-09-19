@@ -41,14 +41,15 @@ import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckGesture
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckModifier
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.describe
 import app.berth.domain.model.pretty
 import app.berth.domain.model.title
 
 /**
- * The searchable action catalogue (UX spec C5): type to find a key or app action, or browse by
- * kind. Text, combos, macros and snippets are composed in place. Picking an entry binds it to
- * [gesture] at once and closes the sheet.
+ * The searchable action catalogue (UX spec C5): type to find a key, an app action or one of the
+ * saved [snippets], or browse by kind. Text, combos and macros are composed in place; a snippet is
+ * picked by name and bound by id. Picking an entry binds it to [gesture] at once and closes the sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -60,11 +61,12 @@ internal fun ActionCatalogueSheet(
     onPick: (DeckAction?) -> Unit,
     onNub: () -> Unit,
     onDismiss: () -> Unit,
+    snippets: List<Snippet> = emptyList(),
 ) {
     val c = Berth.colors
     var query by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf(ActionKind.of(current)) }
-    val results = remember(query) { DeckCatalogue.search(query) }
+    val results = remember(query, snippets) { DeckCatalogue.search(query, snippets) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -116,7 +118,7 @@ internal fun ActionCatalogueSheet(
                     ActionKind.TEXT -> TextComposer(current as? DeckAction.Text, onPick)
                     ActionKind.COMBO -> ComboComposer(current as? DeckAction.Combo, onPick)
                     ActionKind.MACRO -> MacroComposer(current as? DeckAction.Macro, onPick)
-                    ActionKind.SNIPPET -> SnippetComposer(current as? DeckAction.Snippet, onPick)
+                    ActionKind.SNIPPET -> SnippetPicker(current as? DeckAction.Snippet, snippets, onPick)
                     ActionKind.APP -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         for (entry in DeckCatalogue.app) EntryRow(entry, selected = entry.action == current) { onPick(entry.action) }
                     }
@@ -188,11 +190,22 @@ private fun MacroComposer(current: DeckAction.Macro?, onPick: (DeckAction) -> Un
     }
 }
 
+/**
+ * The saved snippets as rows; the key binds to the one picked and takes its name as its label.
+ * Without any, the id field stays so a layout shared from another device can still be wired.
+ */
 @Composable
-private fun SnippetComposer(current: DeckAction.Snippet?, onPick: (DeckAction) -> Unit) {
-    var id by remember { mutableStateOf(current?.snippetId ?: "") }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BerthField(id, { id = it }, label = "Snippet id", mono = true, placeholder = "restart-nginx", helper = "The key sends the snippet with this id.")
-        BerthButton("Use", onClick = { onPick(DeckAction.Snippet(id.trim())) }, kind = ButtonKind.PRIMARY, enabled = id.isNotBlank())
+private fun SnippetPicker(current: DeckAction.Snippet?, snippets: List<Snippet>, onPick: (DeckAction) -> Unit) {
+    if (snippets.isEmpty()) {
+        var id by remember { mutableStateOf(current?.snippetId ?: "") }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            BerthField(id, { id = it }, label = "Snippet id", mono = true, placeholder = "restart-nginx", helper = "No snippets saved yet; the Snippets screen makes them. The key sends the snippet with this id.")
+            BerthButton("Use", onClick = { onPick(DeckAction.Snippet(id.trim())) }, kind = ButtonKind.PRIMARY, enabled = id.isNotBlank())
+        }
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        for (entry in DeckCatalogue.snippets(snippets)) EntryRow(entry, selected = entry.action == current) { entry.action?.let(onPick) }
+        Text("Tap runs the snippet, or asks for its placeholders first. Pinned snippets also fill the Snippets slot.", style = BerthType.caption, color = Berth.colors.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
     }
 }

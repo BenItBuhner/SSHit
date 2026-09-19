@@ -5,6 +5,7 @@ import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckModifier
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.fullName
 import app.berth.domain.model.title
 
@@ -62,11 +63,19 @@ object DeckCatalogue {
     /** Everything that can be found by typing, in catalogue order. */
     val searchable: List<CatalogueEntry> = keys + modifiers + app + special
 
-    /** Case-insensitive match on title, caption or key name; an empty query returns nothing so the browse view shows. */
-    fun search(query: String): List<CatalogueEntry> {
+    /** The saved snippets as entries, so a key binds to one by picking it rather than typing its id. */
+    fun snippets(snippets: List<Snippet>): List<CatalogueEntry> = snippets
+        .sortedBy { it.name.lowercase() }
+        .map { s -> CatalogueEntry(s.name, s.preview.ifBlank { null }, DeckAction.Snippet(s.id), ActionKind.SNIPPET) }
+
+    /**
+     * Case-insensitive match on title, caption or key name across the catalogue and [snippets];
+     * an empty query returns nothing so the browse view shows.
+     */
+    fun search(query: String, snippets: List<Snippet> = emptyList()): List<CatalogueEntry> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
-        return searchable.filter { e ->
+        return (searchable + snippets(snippets)).filter { e ->
             e.title.contains(q, ignoreCase = true) ||
                 e.caption?.contains(q, ignoreCase = true) == true ||
                 (e.action as? DeckAction.Key)?.key?.name?.contains(q, ignoreCase = true) == true

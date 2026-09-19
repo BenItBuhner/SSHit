@@ -43,6 +43,7 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.ThemeSlot
@@ -168,7 +169,14 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Search keys and actions")).fetchSemanticsNodes().isNotEmpty() }
         capture("deck-editor-catalogue")
 
-        dismissSheet()
+        // The Snippet chip lists the saved snippets by name; picking one binds its id to the gesture.
+        compose.onNodeWithText("Snippet").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("tail caddy")).fetchSemanticsNodes().isNotEmpty() }
+        capture("deck-editor-catalogue-snippets")
+        compose.onNodeWithText("Disk").performClick()
+        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers[0].keys[2].up == DeckAction.Snippet("snip-disk") }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("Snippet \u00B7 Disk").assertExists()
 
         // Picking Page up for hold is written straight through to settings, which is what the Stage reads.
         compose.onNodeWithText("Hold").performScrollTo().performClick()
@@ -176,6 +184,16 @@ class EditorScreenshotTest {
         compose.onNodeWithText("PgUp").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers[0].keys[2].hold == DeckAction.Key(DeckKeyCode.PGUP) }
+
+        // The Snippets layer previews as one key per pinned snippet, named after them.
+        compose.onNodeWithText("Snippets").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("compose ps")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("tail caddy").assertExists()
+        compose.onNodeWithContentDescription("Slot 1").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Expands to one key per pinned snippet: compose ps, tail caddy.")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Deck preview").performScrollTo()
+        capture("deck-editor-snippets-layer")
+        compose.onNodeWithText("Base").performClick()
 
         compose.onNodeWithText("Presets").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim").fetchSemanticsNodes().isNotEmpty() }
@@ -197,6 +215,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Undo").performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.rows == 1 && graph.viewModel.deckLayout.value.reach == DeckReach.RIGHT }
         assertEquals(DeckAction.Key(DeckKeyCode.PGUP), graph.viewModel.deckLayout.value.layers[0].keys[2].hold)
+        assertEquals(DeckAction.Snippet("snip-disk"), graph.viewModel.deckLayout.value.layers[0].keys[2].up)
 
         // Termux extra-keys pasted into the import sheet become the Deck's layers, one per row.
         compose.onNodeWithText("Import").performScrollTo().performClick()
@@ -281,6 +300,10 @@ class EditorScreenshotTest {
         graph.workspaces.upsert(Workspace("ws-work", "Work", SwatchColor.SLATE, "W", sortOrder = 1, createdAt = now - TimeUnit.DAYS.toMillis(20)))
         graph.settings.setCurrentWorkspaceId(Workspace.DEFAULT_ID)
         graph.settings.upsertTerminalTheme(TerminalTheme.GRUVBOX_DARK.duplicate("theme-warm", "Gruvbox warm").with(ThemeSlot.Background, 0x1E1A17))
+        // Two snippets pinned to the Deck fill its Snippets slot; the third only appears in the catalogue.
+        graph.snippets.upsert(Snippet(id = "snip-compose", name = "compose ps", body = "docker compose ps", pinnedToDeck = true))
+        graph.snippets.upsert(Snippet(id = "snip-tail", name = "tail caddy", body = "docker compose logs -f --tail {{lines:100}} caddy", pinnedToDeck = true))
+        graph.snippets.upsert(Snippet(id = "snip-disk", name = "Disk", body = "df -h /"))
 
         val homelab = graph.hosts.items.value.first { it.id == "homelab" }
         graph.sessionRecords.upsert(

@@ -4,6 +4,7 @@ import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckModifier
+import app.berth.domain.model.Snippet
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -33,6 +34,23 @@ class DeckCatalogueTest {
         assertTrue(DeckCatalogue.search("layer").any { it.action == DeckAction.App(DeckAppAction.NEXT_LAYER) })
         assertTrue(DeckCatalogue.search("clear").any { it.action == null })
         assertTrue(DeckCatalogue.search("xyzzy").isEmpty())
+    }
+
+    @Test
+    fun `saved snippets join the catalogue by name, sorted, and bind by id`() {
+        val snippets = listOf(
+            Snippet(id = "snip-tail", name = "tail syslog", body = "tail -f /var/log/syslog", pinnedToDeck = true),
+            Snippet(id = "snip-disk", name = "Disk", body = "df -h\ndu -sh *"),
+        )
+        val entries = DeckCatalogue.snippets(snippets)
+        assertEquals(listOf("Disk", "tail syslog"), entries.map { it.title })
+        assertEquals(listOf("df -h", "tail -f /var/log/syslog"), entries.map { it.caption })
+        assertEquals(listOf(DeckAction.Snippet("snip-disk"), DeckAction.Snippet("snip-tail")), entries.map { it.action })
+        assertTrue(entries.all { it.kind == ActionKind.SNIPPET })
+
+        assertEquals(listOf(DeckAction.Snippet("snip-tail")), DeckCatalogue.search("syslog", snippets).map { it.action })
+        assertTrue(DeckCatalogue.search("disk", snippets).any { it.action == DeckAction.Snippet("snip-disk") })
+        assertTrue(DeckCatalogue.search("disk").none { it.action is DeckAction.Snippet })
     }
 
     @Test
