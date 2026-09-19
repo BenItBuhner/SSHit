@@ -68,6 +68,22 @@ class TabOrderTest {
     }
 
     @Test
+    fun `a reopened tab returns to its old slot in its old group`() {
+        val strip = listOf(tab("a", "home", 0), tab("b", "home", 1), tab("c", "work", 0))
+        val again = tab("n", "home", 0, created = 99)
+        assertEquals(listOf("n", "a", "b", "c"), strip.applying(TabOrder.insertAt(strip, again, "home", 0)).ids())
+        assertEquals(listOf("a", "n", "b", "c"), strip.applying(TabOrder.insertAt(strip, again, "home", 1)).ids())
+        assertEquals(listOf("a", "b", "n", "c"), strip.applying(TabOrder.insertAt(strip, again, "home", 7)).ids())
+        val intoWork = TabOrder.insertAt(strip, again, "work", 0)
+        assertEquals(listOf("a", "b", "n", "c"), strip.applying(intoWork).ids())
+        assertEquals("work", intoWork.first { it.id == "n" }.workspaceId)
+        val spare = Workspace(id = "spare", name = "Spare", color = SwatchColor.MOSS, monogram = "SP", sortOrder = 2, createdAt = 2)
+        val intoEmpty = TabOrder.insertAt(strip, again, "spare", 3)
+        assertEquals(0, intoEmpty.first { it.id == "n" }.sortOrder)
+        assertEquals(listOf("a", "b", "c", "n"), strip.applying(intoEmpty, listOf(home, work, spare)).ids())
+    }
+
+    @Test
     fun `move reorders within a group and returns the moved tab even when its number is unchanged`() {
         val strip = listOf(tab("a", "home", 0), tab("b", "home", 1), tab("c", "home", 2))
         val changed = TabOrder.move(strip, "c", 0)

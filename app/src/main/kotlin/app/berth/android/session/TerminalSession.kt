@@ -547,6 +547,16 @@ class TerminalSession(
         if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
     }
 
+    /** Sets the tab's custom title; blank restores the automatic one (spec C3, Rename). */
+    fun rename(title: String?) = patch { copy(customTitle = title?.trim()?.takeIf { it.isNotEmpty() }) }
+
+    /**
+     * Applies a placement (group and position) to the record without persisting it. The manager
+     * writes whole batches in one transaction after a reorder, so this stays a memory-only step.
+     */
+    fun place(workspaceId: String, sortOrder: Int): SessionRecord =
+        _record.updateAndGet { if (it.workspaceId == workspaceId && it.sortOrder == sortOrder) it else it.copy(workspaceId = workspaceId, sortOrder = sortOrder) }
+
     private fun attention(reason: String) = patch { copy(needsAttention = true, attentionReason = reason) }
 
     private fun transition(state: SessionState, layer: PersistenceLayer) = patch { copy(state = state, layer = layer) }

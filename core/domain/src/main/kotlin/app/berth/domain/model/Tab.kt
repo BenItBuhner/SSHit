@@ -100,6 +100,22 @@ object TabOrder {
     }
 
     /**
+     * Inserts [tab] into [groupId] at [position] within that group (clamped to the group's size), so
+     * a closed tab can be reopened in its old slot. Returns [tab] with its placement plus the tabs it shifted.
+     */
+    fun insertAt(strip: List<SessionRecord>, tab: SessionRecord, groupId: String, position: Int): List<SessionRecord> {
+        val others = strip.filter { it.id != tab.id }
+        val groupIndices = others.indices.filter { others[it].workspaceId == groupId }
+        val at = when {
+            groupIndices.isEmpty() -> others.size
+            position >= groupIndices.size -> groupIndices.last() + 1
+            else -> groupIndices[position.coerceAtLeast(0)]
+        }
+        val result = ArrayList(others).apply { add(at, tab.copy(workspaceId = groupId)) }
+        return renumber(result, setOf(tab.id))
+    }
+
+    /**
      * Moves [tabId] so that it sits at [toIndex] in the resulting strip. It joins [groupId] when given;
      * otherwise it stays in its own group when that group touches the drop point (so dragging to the
      * end of its run never changes group), and else joins the group of the tab it lands before, or

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
 import app.berth.android.session.AuthResolver
+import app.berth.android.session.ClosedTab
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.TerminalSession
@@ -25,6 +26,7 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
@@ -90,20 +92,28 @@ class AppViewModel @Inject constructor(
         themes.firstOrNull { it.id == id } ?: TerminalTheme.BERTH_DARK
     }.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalTheme.BERTH_DARK)
 
-    val records: Flow<List<SessionRecord>> = sessions.records
+    /** Every tab's record in strip order (spec C3). */
+    val records: StateFlow<List<SessionRecord>> = sessions.records
     val workspaces: StateFlow<List<Workspace>> = sessions.workspaces
     val currentWorkspaceId: StateFlow<String?> = sessions.currentWorkspaceId
+    val activeSessionId: StateFlow<String?> = sessions.activeSessionId
     val activeSession: StateFlow<TerminalSession?> = sessions.activeSession
 
-    /** Sessions of the current workspace in rail order. */
+    /** Every tab in strip order. */
+    val tabs: StateFlow<List<TerminalSession>> = sessions.sessions
+
+    /** Tabs of the current group in strip order; the Session sheet's secondary list. */
     val workspaceSessions: StateFlow<List<TerminalSession>> = combine(sessions.sessions, sessions.currentWorkspaceId) { list, ws ->
         list.filter { ws == null || it.record.value.workspaceId == ws }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    /** Sessions elsewhere that need attention; drives the "needs you" pill. */
+    /** Tabs other than the active one that need attention; drives the count tile's ring and the grip jump. */
     val attentionCount: StateFlow<Int> = combine(records, sessions.activeSessionId) { list, active ->
         list.count { it.needsAttention && it.id != active }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
+    val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
         resolveTerminalTheme(terminalThemes.value, defaultTerminalTheme.value, host, workspaces.value.byId(workspaceId))
@@ -143,14 +153,53 @@ class AppViewModel @Inject constructor(
     fun setActive(id: String?) = sessions.setActive(id)
     fun reconnect(id: String) = sessions.reconnect(id)
     fun detach(id: String) = sessions.detach(id)
-    fun close(id: String) = sessions.close(id)
+
+    /** Closes a tab and returns what a Reopen snackbar needs, or null when there was no such tab. */
+    fun close(id: String): ClosedTab? = sessions.close(id)
+    fun closeOthers(id: String) = sessions.closeOthers(id)
+
+    fun reopen(closed: ClosedTab) {
+        viewModelScope.launch { sessions.reopen(closed) }
+    }
+
+    fun duplicate(id: String) {
+        viewModelScope.launch { sessions.duplicate(id) }
+    }
+
+    fun rename(id: String, title: String?) = sessions.rename(id, title)
+    fun moveTab(id: String, toIndex: Int, groupId: String? = null) = sessions.moveTab(id, toIndex, groupId)
+    fun moveToGroup(id: String, groupId: String) = sessions.moveToGroup(id, groupId)
+
+    /** Ctrl+Tab / Ctrl+Shift+Tab and the tab swipe. */
+    fun stepTab(delta: Int) = sessions.stepActive(delta)
+
+    /** Ctrl+1…9. */
+    fun activateTabAt(index: Int) = sessions.activateAt(index)
+
     fun setWorkspace(id: String) = sessions.setCurrentWorkspace(id)
 
-    fun createWorkspace(name: String, switchTo: Boolean = true) {
+    /** Creates a group; with [switchTo] it becomes the target for the next new tab. Returns its id through [onCreated]. */
+    fun createWorkspace(name: String, switchTo: Boolean = true, color: SwatchColor? = null, onCreated: (Workspace) -> Unit = {}) {
         viewModelScope.launch {
-            val ws = sessions.createWorkspace(name)
+            val ws = sessions.createWorkspace(name, color ?: SwatchColor.forName(name))
             if (switchTo) sessions.setCurrentWorkspace(ws.id)
+            onCreated(ws)
         }
+    }
+
+    fun renameWorkspace(id: String, name: String) = sessions.renameWorkspace(id, name)
+    fun setWorkspaceColor(id: String, color: SwatchColor) = sessions.setWorkspaceColor(id, color)
+    fun setWorkspaceCollapsed(id: String, collapsed: Boolean) = sessions.setWorkspaceCollapsed(id, collapsed)
+    fun moveGroup(id: String, toIndex: Int) = sessions.moveGroup(id, toIndex)
+    fun closeGroup(id: String) = sessions.closeGroup(id)
+    fun deleteWorkspace(id: String, closeTabs: Boolean) = sessions.deleteWorkspace(id, closeTabs)
+
+    fun setTabSwipeGesture(gesture: TabSwipeGesture) {
+        viewModelScope.launch { settings.setTabSwipeGesture(gesture) }
+    }
+
+    fun setCtrlTabKeysReachTerminal(enabled: Boolean) {
+        viewModelScope.launch { settings.setCtrlTabKeysReachTerminal(enabled) }
     }
 
     // ---- hosts --------------------------------------------------------------------------------------
