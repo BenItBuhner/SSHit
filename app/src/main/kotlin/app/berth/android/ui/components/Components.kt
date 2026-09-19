@@ -101,6 +101,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 // ---- Swatch, dots, rings ------------------------------------------------------------------------
 
@@ -367,9 +368,12 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
 
 /**
  * Slider re-skinned with the tokens (A1; C19 draws Tone as `warm ────o──── cool`): a 2 dp track on
- * surface.4, a 16 dp accent knob cut out of the track by a 2 dp ring in the panel's [surface], and
- * a 44 dp touch row. With [neutral] set the slider is bipolar: a notch marks the neutral point and
- * the accent fill runs from there to the knob; without it the fill runs from the start of the range.
+ * surface.4, a 16 dp accent knob cut out of the track by a 2 dp ring in the enclosing [surface]
+ * (the panel's when inside one, otherwise the sheet's surface.1), and a 44 dp touch row. With
+ * [neutral] set the slider is bipolar: a notch marks the neutral point and the accent fill runs from
+ * there to the knob; without it the fill runs from the start of the range. [steps] discrete values
+ * strictly between the ends (as the M3 slider counts them) snap every path that sets the value,
+ * the accessibility one included; 0 keeps it continuous.
  */
 @Composable
 fun BerthSlider(
@@ -379,7 +383,8 @@ fun BerthSlider(
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     neutral: Float? = null,
     enabled: Boolean = true,
-    surface: Color = Berth.colors.surface2,
+    surface: Color = LocalPanelSurface.current ?: Berth.colors.surface1,
+    steps: Int = 0,
 ) {
     val c = Berth.colors
     val span = valueRange.endInclusive - valueRange.start
@@ -391,13 +396,22 @@ fun BerthSlider(
     val alpha = if (enabled) 1f else 0.5f
 
     fun fraction(v: Float) = if (span == 0f) 0f else ((v - valueRange.start) / span).coerceIn(0f, 1f)
+    fun snap(fraction: Float): Float {
+        val f = fraction.coerceIn(0f, 1f)
+        if (steps <= 0) return f
+        val intervals = steps + 1
+        return (f * intervals).roundToInt().toFloat() / intervals
+    }
+    fun set(fraction: Float) = onValueChange(valueRange.start + snap(fraction) * span)
     fun setFromX(x: Float) {
         val usable = widthPx - 2 * insetPx
         if (usable <= 0f) return
-        onValueChange(valueRange.start + ((x - insetPx) / usable).coerceIn(0f, 1f) * span)
+        set((x - insetPx) / usable)
     }
     val drag = rememberDraggableState { delta ->
-        rawX += delta
+        // Clamped to the track, so a finger that overshoots an end does not have to travel back
+        // through the overshoot before the knob follows it again.
+        rawX = (rawX + delta).coerceIn(insetPx, (widthPx - insetPx).coerceAtLeast(insetPx))
         setFromX(rawX)
     }
 
@@ -409,8 +423,8 @@ fun BerthSlider(
             .focusable(enabled)
             .semantics {
                 if (!enabled) disabled()
-                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange)
-                setProgress { onValueChange(it.coerceIn(valueRange)); true }
+                progressBarRangeInfo = ProgressBarRangeInfo(value, valueRange, steps)
+                setProgress { set(fraction(it)); true }
             }
             .pointerInput(enabled) { if (enabled) detectTapGestures(onTap = { setFromX(it.x) }) }
             .draggable(
