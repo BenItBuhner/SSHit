@@ -9,6 +9,7 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
@@ -59,6 +60,9 @@ interface WorkspaceRepository {
     fun observeAll(): Flow<List<Workspace>>
     suspend fun get(id: String): Workspace?
     suspend fun upsert(workspace: Workspace)
+
+    /** Writes several groups at once, e.g. after reordering them. */
+    suspend fun upsertAll(workspaces: List<Workspace>) = workspaces.forEach { upsert(it) }
     suspend fun delete(id: String)
 
     /** Creates the default workspace when none exists and returns it. */
@@ -69,6 +73,9 @@ interface SessionRepository {
     fun observeAll(): Flow<List<SessionRecord>>
     suspend fun getAll(): List<SessionRecord>
     suspend fun upsert(record: SessionRecord)
+
+    /** Writes several records at once, e.g. the tabs a reorder shifted. */
+    suspend fun upsertAll(records: List<SessionRecord>) = records.forEach { upsert(it) }
     suspend fun delete(id: String)
 
     /** Saved terminal frame (scrollback plus screen) for session restore. */
@@ -114,6 +121,7 @@ interface SettingsRepository {
     suspend fun deleteTerminalTheme(id: String)
     suspend fun setDefaultTerminalTheme(id: String)
 
+    /** The active tab, written on every switch so it survives process death (spec C3, Persistence). */
     val lastActiveSessionId: Flow<String?>
     suspend fun setLastActiveSessionId(id: String?)
 
@@ -122,4 +130,12 @@ interface SettingsRepository {
 
     val filesPrefs: Flow<FilesPrefs>
     suspend fun setFilesPrefs(prefs: FilesPrefs)
+
+    /** How the terminal switches tabs by touch (spec C3, Switching). */
+    val tabSwipeGesture: Flow<TabSwipeGesture>
+    suspend fun setTabSwipeGesture(gesture: TabSwipeGesture)
+
+    /** Ctrl+T and Ctrl+W go to the terminal as readline keys instead of opening and closing tabs. */
+    val ctrlTabKeysReachTerminal: Flow<Boolean>
+    suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean)
 }

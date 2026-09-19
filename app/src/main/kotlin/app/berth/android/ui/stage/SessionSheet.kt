@@ -18,6 +18,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import app.berth.android.session.FilesTab
+import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
@@ -36,24 +38,31 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionState
 
 /**
- * The session sheet from the Grip or the ribbon title: this session's facts and actions, then the
- * other sessions in the workspace for a quick switch.
+ * The session sheet from the Grip or the ribbon title: the tab's facts and actions, then the other
+ * tabs in the workspace for a quick switch. A terminal tab offers Detach or Reconnect, Files (the
+ * host's Files tab, opened or brought on stage) and Snippets; a Files tab offers Connect or
+ * Reconnect for the terminal it rides and Terminal to go there.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionSheet(
     vm: AppViewModel,
-    session: TerminalSession,
+    tab: ManagedTab,
     onDismiss: () -> Unit,
     onSwitch: (String) -> Unit,
     onEditHost: (String) -> Unit,
     onNewSession: () -> Unit,
     onOpenTunnels: (String) -> Unit = {},
-    onOpenFiles: (sessionId: String) -> Unit = {},
+    onOpenFiles: (tabId: String) -> Unit = {},
+    onOpenTerminal: (filesTabId: String) -> Unit = {},
 ) {
     val c = Berth.colors
-    val record by session.record.collectAsState()
-    val others by vm.workspaceSessions.collectAsState()
+    val record by tab.record.collectAsState()
+    val session = tab as? TerminalSession
+    val filesTab = tab as? FilesTab
+    val ride = filesTab?.ride?.collectAsState()?.value
+    val rideRecord = ride?.record?.collectAsState()?.value
+    val others by vm.workspaceTabs.collectAsState()
     val tunnels by vm.tunnels.collectAsState()
     val tunnelStatuses by vm.tunnelStatuses.collectAsState()
     val now = ageTicker()
@@ -78,21 +87,28 @@ fun SessionSheet(
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Swatch(host.color, host.monogram, 40.dp, state = record.state)
-                SheetTitle(record.title.ifBlank { host.name }, host.userAtHost + if (host.port != 22) ":${host.port}" else "")
+                SheetTitle(record.displayTitle.ifBlank { host.name }, host.userAtHost + if (host.port != 22) ":${host.port}" else "")
             }
             Panel {
-                Fact("State", stateLabel(record.state, record.lastLiveAt, now))
-                record.cwd?.let { Fact("Directory", it) }
-                record.lastCommand?.let { Fact("Running", it) }
-                Fact("Size", "${session.emulator.cols} \u00D7 ${session.emulator.rows}")
-                Fact(
-                    "Layer",
-                    when (record.layer) {
-                        PersistenceLayer.LOCAL_FRAME -> "Saved frame"
-                        PersistenceLayer.IN_APP -> "Live socket in Berth"
-                        PersistenceLayer.TMUX -> "tmux on the server"
-                    },
-                )
+                if (filesTab != null && ride == null) Fact("State", "Not connected")
+                else Fact("State", stateLabel(record.state, record.lastLiveAt, now))
+                if (session != null) {
+                    record.cwd?.let { Fact("Directory", it) }
+                    record.lastCommand?.let { Fact("Running", it) }
+                    Fact("Size", "${session.emulator.cols} \u00D7 ${session.emulator.rows}")
+                    Fact(
+                        "Layer",
+                        when (record.layer) {
+                            PersistenceLayer.LOCAL_FRAME -> "Saved frame"
+                            PersistenceLayer.IN_APP -> "Live socket in Berth"
+                            PersistenceLayer.TMUX -> "tmux on the server"
+                        },
+                    )
+                } else {
+                    record.cwd?.let { Fact("Folder", it) }
+                    // The browser has no login of its own; it rides one of the host's terminal tabs.
+                    Fact("Terminal", rideRecord?.displayTitle ?: "None on this host", valueColor = if (rideRecord == null) c.text2 else c.text1)
+                }
                 if (hostTunnels.isNotEmpty()) {
                     val enabled = hostTunnels.count { it.enabled }
                     Fact(
@@ -106,14 +122,22 @@ fun SessionSheet(
                     )
                 }
             }
-            // Two deliberate rows (C6): the session's own actions, then the host's and the exit.
+            // Two deliberate rows (C6): the tab's own actions, then the host's and the exit.
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                    else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                    if (record.state == SessionState.LIVE) {
+                    if (session != null) {
+                        if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                        else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() }, modifier = Modifier.weight(1f))
                         BerthButton("Files", onClick = { onOpenFiles(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                        BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
+                        if (record.state == SessionState.LIVE) {
+                            BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
+                        }
+                    } else if (filesTab != null) {
+                        when {
+                            ride == null -> BerthButton("Connect", kind = ButtonKind.PRIMARY, onClick = { vm.connectFor(filesTab); onDismiss() }, modifier = Modifier.weight(1f))
+                            !record.state.isActive -> BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
+                        }
+                        BerthButton("Terminal", onClick = { onOpenTerminal(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -121,22 +145,22 @@ fun SessionSheet(
                         BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
                         BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f))
                     }
-                    BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                    BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
                 }
             }
-            val rest = others.filter { it.id != session.id }
+            val rest = others.filter { it.id != tab.id }
             if (rest.isNotEmpty()) {
                 Text("Also in this workspace".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (s in rest) {
+                    for (t in rest) {
                         SessionRow(
-                            session = s,
+                            tab = t,
                             selected = false,
                             now = now,
-                            onTap = { onSwitch(s.id); onDismiss() },
-                            onReconnect = { vm.reconnect(s.id) },
-                            onDetach = { vm.detach(s.id) },
-                            onClose = { vm.close(s.id) },
+                            onTap = { onSwitch(t.id); onDismiss() },
+                            onReconnect = { vm.reconnect(t.id) },
+                            onDetach = { vm.detach(t.id) },
+                            onClose = { vm.close(t.id) },
                         )
                     }
                 }
@@ -144,7 +168,7 @@ fun SessionSheet(
             BerthButton("New session", kind = ButtonKind.TEXT, onClick = { onNewSession(); onDismiss() })
         }
     }
-    if (snippets) {
+    if (snippets && session != null) {
         SnippetPickerSheet(vm, session, onDismiss = { snippets = false })
     }
 }
@@ -162,7 +186,7 @@ fun stateLabel(state: SessionState, lastLiveAt: Long?, now: Long): String = when
     SessionState.LIVE -> "Live"
     SessionState.IDLE, SessionState.CONNECTING -> "Connecting"
     SessionState.RECONNECTING -> "Reconnecting"
-    SessionState.DETACHED -> "Detached ${ageText(lastLiveAt, now)}"
+    SessionState.DETACHED -> "Detached ${ageText(lastLiveAt, now)}".trimEnd()
     SessionState.FAILED -> "Couldn't connect"
     SessionState.CLOSED -> "Closed"
 }

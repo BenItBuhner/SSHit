@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -28,11 +30,11 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,9 +54,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
@@ -65,6 +71,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.berth.android.session.FilesTab
+import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.byId
@@ -74,9 +82,13 @@ import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
-import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
+import app.berth.android.ui.tabs.CountTile
+import app.berth.android.ui.tabs.TabActions
+import app.berth.android.ui.tabs.TabHeader
+import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
 import app.berth.android.ui.theme.Berth
@@ -85,33 +97,254 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TabKind
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
- * The terminal on stage: ribbon, cell-accurate terminal, state pill and the Deck. The ribbon owns
- * the status-bar inset and the bottom chrome owns the keyboard and navigation-bar insets, so both
+ * The Stage (spec C3): the tab header, then the active tab's body (a terminal with its state pill
+ * and Deck, or a Files browser), or the empty state when no tab is open. The header owns the
+ * status-bar inset and the bottom chrome owns the keyboard and navigation-bar insets, so both
  * surfaces run edge to edge (A4) and the Deck rides the keyboard's top edge without jumping.
+ * Hardware tab shortcuts are taken here, before the terminal. Each tab's body keeps its own
+ * saveable state across switches (a Files tab's selection, sheet, viewer and per-folder scroll),
+ * dropped when the tab closes; the Deck's visibility and layer are the Stage's, shared by every tab.
  */
-@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun StageScreen(
     vm: AppViewModel,
-    session: TerminalSession,
-    onOpenRail: () -> Unit,
+    tab: ManagedTab?,
+    actions: TabActions,
+    onOpenDrawer: () -> Unit,
     onOpenSessionSheet: () -> Unit,
     onEditHost: (String) -> Unit,
-    onNextSession: () -> Unit,
-    onPreviousSession: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
+) {
+    val c = Berth.colors
+    val slots by vm.stripSlots.collectAsState()
+    val groups by vm.workspaces.collectAsState()
+    val activeId by vm.activeTabId.collectAsState()
+    val restored by vm.restored.collectAsState()
+    val attention by vm.attentionCount.collectAsState()
+    val ctrlTabKeysReachTerminal by vm.ctrlTabKeysReachTerminal.collectAsState()
+    var deckVisible by rememberSaveable { mutableStateOf(true) }
+    var layerIndex by rememberSaveable { mutableIntStateOf(0) }
+    val shortcuts = remember(vm, actions) {
+        TabShortcuts(
+            step = vm::stepTab,
+            jump = { index ->
+                val list = vm.stripSlots.value
+                (if (index < 0) list.lastOrNull() else list.getOrNull(index))?.let { actions.activate(it.id) }
+            },
+            newTab = actions::newTab,
+            closeActive = { vm.activeTabId.value?.let(actions::close) },
+            switcher = actions::openSwitcher,
+        )
+    }
+
+    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
+    // and the user's own choice survives otherwise. Remembered by the Stage, not the tab, so a tab
+    // switch never re-collapses a Deck the user opened.
+    val configuration = LocalConfiguration.current
+    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
+        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+    var seenHardwareKeyboard by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(hardwareKeyboard) {
+        if (hardwareKeyboard != seenHardwareKeyboard) {
+            val first = seenHardwareKeyboard == null
+            seenHardwareKeyboard = hardwareKeyboard
+            if (!first || hardwareKeyboard) deckVisible = !hardwareKeyboard
+        }
+    }
+
+    // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
+    val holder = rememberSaveableStateHolder()
+    val known = remember { HashSet<String>() }
+    LaunchedEffect(slots) {
+        val ids = slots.mapTo(HashSet()) { it.id }
+        for (id in known) if (id !in ids) holder.removeState(id)
+        known.retainAll(ids)
+        known.addAll(ids)
+    }
+    // A Files tab's body lends the overflow its folder rows so the screen has one ⋮ (spec C3, tab
+    // kinds); the body writes them, the header reads them, and only while a Files tab is on stage.
+    var lentRows by remember { mutableStateOf<OverflowRows?>(null) }
+
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(c.surface0)
+            // The header absorbs the status bar and the bottom chrome the navigation bar and IME; in
+            // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
+    ) {
+        TabHeader(
+            slots = slots,
+            groups = groups,
+            activeId = activeId,
+            actions = actions,
+            trailing = {
+                if (slots.isNotEmpty()) CountTile(count = slots.size, attention = attention > 0, onClick = actions::openSwitcher)
+                StageOverflow(
+                    tab = tab,
+                    deckVisible = deckVisible,
+                    onToggleDeck = { deckVisible = !deckVisible },
+                    onOpenSessionSheet = onOpenSessionSheet,
+                    onEditHost = onEditHost,
+                    onOpenDrawer = onOpenDrawer,
+                    actions = actions,
+                    extra = if (tab is FilesTab) lentRows else null,
+                )
+            },
+        )
+        val body = Modifier.weight(1f).fillMaxWidth()
+        when {
+            tab != null -> holder.SaveableStateProvider(tab.id) {
+                when (tab) {
+                    is TerminalSession -> StageBody(
+                        vm = vm,
+                        session = tab,
+                        deckVisible = deckVisible,
+                        onDeckVisibleChange = { deckVisible = it },
+                        layerIndex = layerIndex,
+                        onLayerIndexChange = { layerIndex = it },
+                        onOpenSessionSheet = onOpenSessionSheet,
+                        onEditHost = onEditHost,
+                        onOpenDeckEditor = onOpenDeckEditor,
+                        modifier = body,
+                    )
+                    is FilesTab -> FilesTabBody(vm = vm, tab = tab, onLendOverflow = { lentRows = it }, modifier = body)
+                    else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
+                }
+            }
+            // The tab flows run a frame behind the manager: while an active id is set but its tab has not
+            // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
+            // that has them (spec C3, Persistence: restore is instant).
+            activeId != null || !restored -> Spacer(body)
+            slots.isNotEmpty() -> {
+                // Tabs but no active id: never the empty state; the first tab goes on stage (the manager
+                // ignores an id that no longer resolves, so a strip a frame old cannot re-stage a closed tab).
+                Spacer(body)
+                LaunchedEffect(slots) { vm.setActive(slots.first().id) }
+            }
+            else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
+        }
+    }
+}
+
+/** "No tabs" with the primary way forward (spec C3, Closing); focusable so Ctrl+T works with nothing on stage. */
+@Composable
+private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Berth.colors
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Column(
+        modifier
+            .focusRequester(focus)
+            .focusable()
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("No tabs", style = BerthType.body, color = c.text2)
+        Spacer(Modifier.height(16.dp))
+        BerthButton("New tab", kind = ButtonKind.PRIMARY, onClick = onNewTab)
+    }
+}
+
+/**
+ * Rows a tab's body lends the Stage overflow as its first section, so a screen has one ⋮ (spec C3,
+ * tab kinds); a row calls [dismiss] before it acts, since the menu is the Stage's.
+ */
+typealias OverflowRows = @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
+
+/**
+ * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Library,
+ * Close. A Files tab has no Deck and no connection of its own, so it offers Connect (no terminal on
+ * the host) or Reconnect (its terminal is down) and Terminal in their place, and its body lends the
+ * folder rows as a leading section over an 8 dp break, [extra]. Without a tab it offers New tab
+ * and Library.
+ */
+@Composable
+private fun StageOverflow(
+    tab: ManagedTab?,
+    deckVisible: Boolean,
+    onToggleDeck: () -> Unit,
+    onOpenSessionSheet: () -> Unit,
+    onEditHost: (String) -> Unit,
+    onOpenDrawer: () -> Unit,
+    actions: TabActions,
+    extra: OverflowRows? = null,
+) {
+    val c = Berth.colors
+    var menu by remember { mutableStateOf(false) }
+    val record = tab?.record?.collectAsState()?.value
+    val ride = (tab as? FilesTab)?.ride?.collectAsState()?.value
+    Box {
+        IconAction(onClick = { menu = true }, description = "More") {
+            BerthIcon(BerthIcons.moreVert)
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface3, shape = RoundedCornerShape(BerthRadius.row)) {
+            @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
+                DropdownMenuItem(
+                    text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },
+                    onClick = { menu = false; action() },
+                )
+            }
+            if (extra != null) {
+                extra { menu = false }
+                // The break between the lent section and the tab's rows is room, not a rule.
+                Spacer(Modifier.height(8.dp))
+            }
+            if (tab != null && record != null) {
+                if (tab.kind == TabKind.Files) {
+                    when {
+                        ride == null -> item("Connect") { actions.reconnect(tab.id) }
+                        record.state != SessionState.LIVE && record.state != SessionState.CONNECTING -> item("Reconnect") { actions.reconnect(tab.id) }
+                    }
+                    item("Terminal") { actions.openTerminal(tab.id) }
+                } else {
+                    if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(tab.id) }
+                    if (record.state.isActive) item("Detach") { actions.detach(tab.id) }
+                    item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
+                }
+                item("Session", action = onOpenSessionSheet)
+                record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
+                item("Tabs", action = actions::openSwitcher)
+                item("Library", action = onOpenDrawer)
+                item("Close", destructive = true) { actions.close(tab.id) }
+            } else {
+                item("New tab", action = actions::newTab)
+                item("Library", action = onOpenDrawer)
+            }
+        }
+    }
+}
+
+/** Everything below the header for one terminal tab; the caller keys it on the session's id. */
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
+@Composable
+private fun StageBody(
+    vm: AppViewModel,
+    session: TerminalSession,
+    deckVisible: Boolean,
+    onDeckVisibleChange: (Boolean) -> Unit,
+    layerIndex: Int,
+    onLayerIndexChange: (Int) -> Unit,
+    onOpenSessionSheet: () -> Unit,
+    onEditHost: (String) -> Unit,
+    onOpenDeckEditor: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
     val retryIn by session.retryIn.collectAsState()
     val failure by session.failure.collectAsState()
-    val attention by vm.attentionCount.collectAsState()
+    val swipeGesture by vm.tabSwipeGesture.collectAsState()
     val deckLayout by vm.deckLayout.collectAsState()
     val fontSetting by vm.terminalFont.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
@@ -129,23 +362,7 @@ fun StageScreen(
         snippets.filter { it.pinnedToDeck && it.visibleFor(record.hostId, record.workspaceId) }.sortedBy { it.name.lowercase() }
     }
     var pendingSnippet by remember { mutableStateOf<PendingSnippet?>(null) }
-    val configuration = LocalConfiguration.current
-    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
-        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
     val patterns = rememberDeckHaptics()
-    val now = ageTicker()
-
-    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
-    // and the user's own choice survives otherwise.
-    var deckVisible by rememberSaveable { mutableStateOf(!hardwareKeyboard) }
-    var seenHardwareKeyboard by rememberSaveable { mutableStateOf(hardwareKeyboard) }
-    LaunchedEffect(hardwareKeyboard) {
-        if (hardwareKeyboard != seenHardwareKeyboard) {
-            seenHardwareKeyboard = hardwareKeyboard
-            deckVisible = !hardwareKeyboard
-        }
-    }
-    var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = remember(session.id) { TerminalViewport() }
     val focusRequester = remember { FocusRequester() }
@@ -166,12 +383,12 @@ fun StageScreen(
                         session.paste(it)
                         patterns.paste()
                     }
-                    DeckAppAction.NEXT_SESSION -> onNextSession()
-                    DeckAppAction.PREVIOUS_SESSION -> onPreviousSession()
+                    DeckAppAction.NEXT_SESSION -> vm.stepTab(1)
+                    DeckAppAction.PREVIOUS_SESSION -> vm.stepTab(-1)
                     DeckAppAction.DETACH -> vm.detach(session.id)
                     DeckAppAction.OPEN_SESSION_SHEET -> onOpenSessionSheet()
-                    DeckAppAction.NEXT_LAYER -> layerIndex += 1
-                    DeckAppAction.PREVIOUS_LAYER -> layerIndex -= 1
+                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(layerIndex + 1)
+                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     else -> Unit
                 }
@@ -202,31 +419,7 @@ fun StageScreen(
     val deckStateOk = record.state != SessionState.DETACHED && record.state != SessionState.FAILED && record.state != SessionState.CLOSED
     val deckAllowed = deckVisible && deckStateOk
 
-    Column(
-        modifier
-            .fillMaxSize()
-            .background(c.surface0)
-            // The ribbon absorbs the status bar and the bottom chrome the navigation bar and IME; in
-            // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-    ) {
-        Ribbon(
-            session = session,
-            attention = attention,
-            now = now,
-            onOpenRail = onOpenRail,
-            onTitleTap = onOpenSessionSheet,
-            onSwipe = { forward -> if (forward) onNextSession() else onPreviousSession() },
-            onReconnect = { vm.reconnect(session.id) },
-            onDetach = { vm.detach(session.id) },
-            onClose = { vm.close(session.id) },
-            onEditHost = { record.hostId?.let(onEditHost) },
-            onToggleDeck = { deckVisible = !deckVisible },
-            deckVisible = deckVisible,
-            scrolled = viewport.scrollOffset > 0,
-            onReturnToBottom = { viewport.scrollOffset = 0 },
-        )
-
+    Column(modifier) {
         Box(
             Modifier
                 .weight(1f)
@@ -248,7 +441,12 @@ fun StageScreen(
                     patterns.fontStep()
                     vm.setFontSize(font.sizeSp + step)
                 },
+                onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
             )
+            if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
+                EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+            }
+            ScrolledPill(viewport, Modifier.align(Alignment.TopEnd))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
                     plain = failure?.first ?: "Couldn't connect.",
@@ -266,7 +464,6 @@ fun StageScreen(
             state = record.state,
             retryIn = retryIn,
             lastLiveAt = record.lastLiveAt,
-            now = now,
             onReconnect = { vm.reconnect(session.id) },
             onDetach = { vm.detach(session.id) },
             onClose = { vm.close(session.id) },
@@ -284,13 +481,13 @@ fun StageScreen(
                 Deck(
                     layout = deckLayout,
                     layerIndex = layerIndex,
-                    onLayerIndexChange = { layerIndex = it },
+                    onLayerIndexChange = onLayerIndexChange,
                     input = input,
                     enabled = live,
                     onGripTap = onOpenSessionSheet,
                     onGripSwipeDown = {
                         keyboard?.hide()
-                        deckVisible = false
+                        onDeckVisibleChange(false)
                     },
                     snippets = pinnedSnippets,
                     onOpenDeckEditor = onOpenDeckEditor,
@@ -300,7 +497,7 @@ fun StageScreen(
                 DeckStrip(
                     layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
                     latch = latch,
-                    onExpand = { deckVisible = true },
+                    onExpand = { onDeckVisibleChange(true) },
                 )
             }
         }
@@ -310,120 +507,61 @@ fun StageScreen(
 }
 
 /**
- * 40 dp strip over the Stage on surface.1, drawn under the status bar: rail glyph, swatch, title,
- * state, "needs you" pill, overflow. Swipe switches sessions.
+ * The right-edge alternative to the two-finger swipe (spec C3, Switching): a 24 dp zone, kept out
+ * of the system back gesture, where a one-finger horizontal drag past 56 dp steps tabs. Vertical
+ * movement is left to the terminal.
  */
 @Composable
-private fun Ribbon(
-    session: TerminalSession,
-    attention: Int,
-    now: Long,
-    onOpenRail: () -> Unit,
-    onTitleTap: () -> Unit,
-    onSwipe: (forward: Boolean) -> Unit,
-    onReconnect: () -> Unit,
-    onDetach: () -> Unit,
-    onClose: () -> Unit,
-    onEditHost: () -> Unit,
-    onToggleDeck: () -> Unit,
-    deckVisible: Boolean,
-    scrolled: Boolean,
-    onReturnToBottom: () -> Unit,
-) {
-    val c = Berth.colors
-    val record by session.record.collectAsState()
-    val retryIn by session.retryIn.collectAsState()
-    var menu by remember { mutableStateOf(false) }
-    val host = record.hostSnapshot
-    val title = record.title.ifBlank { host.name }
-    val subtitle = if (record.title.isNotBlank() && record.title != host.name) host.name else null
-    val stateText = when (record.state) {
-        SessionState.LIVE -> null
-        SessionState.IDLE, SessionState.CONNECTING -> "Connecting\u2026"
-        SessionState.RECONNECTING -> if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026"
-        SessionState.DETACHED -> "Detached \u00B7 ${ageText(record.lastLiveAt, now)}"
-        SessionState.FAILED -> "Couldn't connect"
-        SessionState.CLOSED -> "Closed"
-    }
-
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(c.surface1)
-            .statusBarsPadding()
-            .height(40.dp)
+private fun EdgeSwipeZone(onSwipe: (forward: Boolean) -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .width(24.dp)
+            .systemGestureExclusion()
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    val down = awaitFirstDown()
+                    val down = awaitFirstDown(pass = PointerEventPass.Initial)
                     var dx = 0f
+                    var claimed = false
                     while (true) {
-                        val event = awaitPointerEvent()
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
-                            if (abs(dx) > 56.dp.toPx()) onSwipe(dx < 0)
+                            if (claimed && abs(dx) > 56.dp.toPx()) onSwipe(dx < 0)
                             break
                         }
                         dx = change.position.x - down.position.x
-                        if (abs(dx) > viewConfiguration.touchSlop) change.consume()
+                        val dy = change.position.y - down.position.y
+                        if (!claimed && abs(dy) > viewConfiguration.touchSlop && abs(dy) > abs(dx)) break
+                        if (abs(dx) > viewConfiguration.touchSlop) claimed = true
+                        if (claimed) change.consume()
                     }
                 }
+            },
+    )
+}
+
+/**
+ * The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target, one
+ * surface step when pressed. The label names the state; the description names the action. Reads
+ * the viewport itself, so a scroll through history recomposes this and nothing around it.
+ */
+@Composable
+private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifier) {
+    if (viewport.scrollOffset <= 0) return
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        modifier
+            .padding(end = 8.dp)
+            .clickable(interactionSource = interaction, indication = null, onClick = { viewport.scrollOffset = 0 })
+            .clearAndSetSemantics {
+                contentDescription = "Scrolled up, return to the bottom"
+                role = Role.Button
             }
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 4.dp, vertical = 9.dp),
     ) {
-        IconAction(onClick = onOpenRail, description = "Open the rail") {
-            BerthIcon(BerthIcons.workspace)
-        }
-        Spacer(Modifier.width(2.dp))
-        Swatch(host.color, host.monogram, 24.dp, state = record.state.takeIf { it != SessionState.LIVE }, attention = record.needsAttention)
-        Spacer(Modifier.width(10.dp))
-        Column(
-            Modifier
-                .weight(1f)
-                .clickable(onClick = onTitleTap),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(title, style = BerthType.label, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (stateText != null) Text(stateText, style = BerthType.caption, color = if (record.state == SessionState.FAILED) c.danger else c.text2, maxLines = 1)
-                if (attention > 0) Pill("$attention needs you", color = c.attention.copy(alpha = 0.18f), textColor = c.attention)
-            }
-            if (subtitle != null) Text(subtitle, style = BerthType.caption, color = c.text3, maxLines = 1)
-        }
-        if (scrolled) {
-            // The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target,
-            // one surface step when pressed. The label names the state; the description names the action.
-            val interaction = remember { MutableInteractionSource() }
-            val pressed by interaction.collectIsPressedAsState()
-            Box(
-                Modifier
-                    .clickable(interactionSource = interaction, indication = null, onClick = onReturnToBottom)
-                    .clearAndSetSemantics {
-                        contentDescription = "Scrolled up, return to the bottom"
-                        role = Role.Button
-                    }
-                    .padding(horizontal = 4.dp, vertical = 9.dp),
-            ) {
-                Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
-            }
-        }
-        Box {
-            IconAction(onClick = { menu = true }, description = "More") {
-                BerthIcon(BerthIcons.moreVert)
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
-                    DropdownMenuItem(
-                        text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },
-                        onClick = { menu = false; action() },
-                    )
-                }
-                if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect", action = onReconnect)
-                if (record.state.isActive) item("Detach", action = onDetach)
-                item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
-                if (record.hostId != null) item("Host settings", action = onEditHost)
-                item("Close", destructive = true, action = onClose)
-            }
-        }
+        Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
     }
 }
 
@@ -432,23 +570,25 @@ private val StatePillHeight = 32.dp
 
 /**
  * One floating pill for the non-live states (C2, A9): `Detached · 4 min ago · Reconnect · Close`,
- * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live.
+ * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live. The age
+ * follows its own clock unless a [now] is given, so the minute tick recomposes the pill alone.
  */
 @Composable
 internal fun StatePill(
     state: SessionState,
     retryIn: Int?,
     lastLiveAt: Long?,
-    now: Long,
     onReconnect: () -> Unit,
     onDetach: () -> Unit,
     onClose: () -> Unit,
+    now: Long? = null,
 ) {
     val c = Berth.colors
+    if (state != SessionState.RECONNECTING && state != SessionState.DETACHED) return
+    val clock = now ?: ageTicker()
     val (text, actions) = when (state) {
         SessionState.RECONNECTING -> (if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
-        SessionState.DETACHED -> "Detached \u00B7 ${ageText(lastLiveAt, now)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
-        else -> return
+        else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
     Box(
         Modifier

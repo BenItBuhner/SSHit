@@ -123,11 +123,22 @@ class TerminalEmulator(
     // ---------------------------------------------------------------------------------------------
     // Input
 
+    /**
+     * Feeds host output. Large chunks are parsed in slices of [WRITE_SLICE_BYTES] with [lock]
+     * released between them, so a renderer waiting to copy a frame is never held for a whole
+     * network read; the decoder and parser keep their state across the slices.
+     */
     fun write(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size - offset) {
-        synchronized(lock) {
-            decoder.decode(bytes, offset, length) { parser.feed(it) }
-        }
-        flushChanges()
+        var pos = offset
+        val end = offset + length
+        do {
+            val n = minOf(WRITE_SLICE_BYTES, end - pos)
+            synchronized(lock) {
+                decoder.decode(bytes, pos, n) { parser.feed(it) }
+            }
+            pos += n
+            flushChanges()
+        } while (pos < end)
     }
 
     fun write(text: String) = write(text.toByteArray(Charsets.UTF_8))
@@ -1086,6 +1097,9 @@ class TerminalEmulator(
         const val DEFAULT_SCROLLBACK = 5000
         const val MIN_COLS = 2
         const val MIN_ROWS = 1
+
+        /** The most input parsed under [lock] in one go; about a quarter of a millisecond of work. */
+        const val WRITE_SLICE_BYTES = 8 * 1024
         private const val TAB_WIDTH = 8
         private const val TERMINAL_NAME = "berth"
         private const val TERMINAL_VERSION = "0.1"

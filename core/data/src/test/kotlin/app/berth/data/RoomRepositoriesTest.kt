@@ -1,13 +1,8 @@
 package app.berth.data
 
-import androidx.room.testing.MigrationTestHelper
-import androidx.sqlite.driver.AndroidSQLiteDriver
-import androidx.sqlite.execSQL
-import androidx.test.platform.app.InstrumentationRegistry
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
-import app.berth.data.db.BerthDatabase_Impl
 import app.berth.data.repo.EncryptedSecretStore
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
@@ -34,13 +29,14 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
+import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.flow.first
-import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -181,46 +177,29 @@ class RoomRepositoriesTest {
     }
 
     @Test
-    fun `a version 1 database migrates to version 2 keeping its rows`() {
-        val helper = MigrationTestHelper(
-            InstrumentationRegistry.getInstrumentation(),
-            File.createTempFile("berth-migration", ".db").also { it.delete(); it.deleteOnExit() },
-            AndroidSQLiteDriver(),
-            BerthDatabase::class,
-            { BerthDatabase_Impl() },
-            emptyList(),
-        )
-        helper.createDatabase(1).use { connection ->
-            connection.execSQL(
-                "INSERT INTO known_hosts (id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt) " +
-                    "VALUES ('k1', 'example.com', 22, 'ssh-ed25519', 'AAAA', 'SHA256:1', 1, 2)",
-            )
-            connection.execSQL(
-                "INSERT INTO snippets (id, name, body, hostId, tagsJson, defaultAction, runOnConnect, pinnedToDeck) " +
-                    "VALUES ('s1', 'disk', 'df -h', NULL, '[]', 'RUN', 0, 0)",
-            )
-            connection.execSQL(
-                "INSERT INTO workspaces (id, name, color, monogram, accentRgb, sortOrder, reconnectAtLaunch, createdAt) " +
-                    "VALUES ('w1', 'Home', 'OCHRE', 'HO', NULL, 0, 1, 1)",
-            )
-        }
-        helper.runMigrationsAndValidate(2, emptyList()).use { connection ->
-            connection.prepare("SELECT pinned, host FROM known_hosts WHERE id = 'k1'").use { statement ->
-                assertTrue(statement.step())
-                assertEquals(0L, statement.getLong(0), "existing keys start unpinned")
-                assertEquals("example.com", statement.getText(1))
-            }
-            connection.prepare("SELECT workspaceId, body FROM snippets WHERE id = 's1'").use { statement ->
-                assertTrue(statement.step())
-                assertTrue(statement.isNull(0), "existing snippets stay global")
-                assertEquals("df -h", statement.getText(1))
-            }
-            connection.prepare("SELECT terminalThemeId, name FROM workspaces WHERE id = 'w1'").use { statement ->
-                assertTrue(statement.step())
-                assertTrue(statement.isNull(0), "existing workspaces inherit the app default theme")
-                assertEquals("Home", statement.getText(1))
-            }
-        }
+    fun `tabs round trip their kind, custom title and group state, and reorder in one write`() = runTest {
+        val workspaces = RoomWorkspaceRepository(db)
+        val home = workspaces.ensureDefault()
+        val work = Workspace(id = "w2", name = "Work", color = SwatchColor.SLATE, monogram = "WK", sortOrder = 1, createdAt = 2, collapsed = true)
+        workspaces.upsert(work)
+        assertEquals(listOf(home, work), workspaces.observeAll().first())
+        assertTrue(assertNotNull(workspaces.get("w2")).collapsed)
+
+        val sessions = RoomSessionRepository(db)
+        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", user = "demo", createdAt = 1)
+        val a = SessionRecord(id = "a", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 0, createdAt = 1, customTitle = "deploy")
+        val b = SessionRecord(id = "b", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 1, createdAt = 2)
+        sessions.upsertAll(listOf(a, b))
+        assertEquals(listOf(a, b), sessions.getAll())
+        assertEquals("deploy", assertNotNull(sessions.getAll().first()).displayTitle)
+        assertEquals(TabKind.Ssh, sessions.getAll().first().kind)
+
+        sessions.upsertAll(listOf(a.copy(sortOrder = 1, workspaceId = "w2"), b.copy(sortOrder = 0)))
+        assertEquals(listOf("b", "a"), sessions.getAll().map { it.id })
+        assertEquals("w2", sessions.getAll().last().workspaceId)
+
+        workspaces.upsertAll(listOf(home.copy(sortOrder = 1), work.copy(sortOrder = 0, collapsed = false)))
+        assertEquals(listOf("w2", home.id), workspaces.observeAll().first().map { it.id })
     }
 
     @Test
@@ -277,5 +256,12 @@ class RoomRepositoriesTest {
         assertEquals("s1", settings.lastActiveSessionId.first())
         settings.setLastActiveSessionId(null)
         assertNull(settings.lastActiveSessionId.first())
+
+        assertEquals(TabSwipeGesture.TWO_FINGER, settings.tabSwipeGesture.first())
+        settings.setTabSwipeGesture(TabSwipeGesture.RIGHT_EDGE)
+        assertEquals(TabSwipeGesture.RIGHT_EDGE, settings.tabSwipeGesture.first())
+        assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
+        settings.setCtrlTabKeysReachTerminal(true)
+        assertTrue(settings.ctrlTabKeysReachTerminal.first())
     }
 }

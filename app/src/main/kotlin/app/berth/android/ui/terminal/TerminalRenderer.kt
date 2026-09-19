@@ -15,10 +15,13 @@ import kotlin.math.roundToInt
  * a theme looks in the editor exactly as it will on stage.
  */
 object TerminalRenderer {
+    /** For the emulator overload: one capture buffer, since drawing happens on the UI thread. */
+    private val scratch = TerminalFrame()
+
     /**
      * Draws the screen of [emulator] scrolled [scrollOffset] lines into history onto [nc], filling
-     * [width] x [height]. Takes [TerminalEmulator.lock] for the duration of the frame. Returns the
-     * offset actually used, clamped to the available scrollback.
+     * [width] x [height]. Copies the screen under [TerminalEmulator.lock], then draws the copy.
+     * Returns the offset actually used, clamped to the available scrollback.
      */
     fun draw(
         nc: Canvas,
@@ -31,129 +34,145 @@ object TerminalRenderer {
         scrollOffset: Int = 0,
         showCursor: Boolean = true,
         focused: Boolean = true,
-    ): Int {
-        val palette = emulator.palette
+    ): Int = synchronized(scratch) {
+        val used = scratch.capture(emulator, scrollOffset)
+        draw(nc, scratch, paints, theme, boldAsBright, width, height, showCursor, focused)
+        used
+    }
+
+    /**
+     * Draws a captured [frame] onto [nc], filling [width] x [height]: backgrounds in runs, then text
+     * in runs of one style, then the cursor when the frame shows the live screen.
+     */
+    fun draw(
+        nc: Canvas,
+        frame: TerminalFrame,
+        paints: TerminalPaints,
+        theme: TerminalTheme,
+        boldAsBright: Boolean,
+        width: Float,
+        height: Float,
+        showCursor: Boolean = true,
+        focused: Boolean = true,
+    ) {
+        val palette = frame.palette
         val cw = paints.cellWidth
         val ch = paints.cellHeight
         val boldRgb = theme.bold
-        synchronized(emulator.lock) {
-            val rows = emulator.rows
-            val cols = emulator.cols
-            val offset = scrollOffset.coerceIn(0, emulator.scrollbackSize)
-            val reverse = emulator.reverseVideo
-            val screenBg = if (reverse) theme.foreground else theme.background
-            val screenFg = if (reverse) theme.background else theme.foreground
-            paints.fill.color = opaque(screenBg)
-            nc.drawRect(0f, 0f, width, height, paints.fill)
-            val sb = StringBuilder()
-            for (y in 0 until rows) {
-                val line = emulator.viewLine(y, offset)
-                val top = y * ch
-                val lineCols = minOf(cols, line.cols)
+        val rows = frame.rows
+        val cols = frame.cols
+        val reverse = frame.reverseVideo
+        val screenBg = if (reverse) theme.foreground else theme.background
+        val screenFg = if (reverse) theme.background else theme.foreground
+        paints.fill.color = opaque(screenBg)
+        nc.drawRect(0f, 0f, width, height, paints.fill)
+        val sb = StringBuilder()
+        for (y in 0 until rows) {
+            val line = frame.line(y)
+            val top = y * ch
+            val lineCols = minOf(cols, line.cols)
 
-                // Backgrounds, in runs.
-                var x = 0
-                while (x < lineCols) {
-                    val bg = cellBg(line.fg[x], line.bg[x], line.attrs[x], palette, screenFg, screenBg)
-                    var end = x + 1
-                    while (end < lineCols && cellBg(line.fg[end], line.bg[end], line.attrs[end], palette, screenFg, screenBg) == bg) end++
-                    if (bg != screenBg) {
-                        paints.fill.color = opaque(bg)
-                        nc.drawRect(x * cw, top, end * cw, top + ch, paints.fill)
-                    }
-                    x = end
+            // Backgrounds, in runs.
+            var x = 0
+            while (x < lineCols) {
+                val bg = cellBg(line.fg[x], line.bg[x], line.attrs[x], palette, screenFg, screenBg)
+                var end = x + 1
+                while (end < lineCols && cellBg(line.fg[end], line.bg[end], line.attrs[end], palette, screenFg, screenBg) == bg) end++
+                if (bg != screenBg) {
+                    paints.fill.color = opaque(bg)
+                    nc.drawRect(x * cw, top, end * cw, top + ch, paints.fill)
                 }
+                x = end
+            }
 
-                // Text, in runs of the same style made of plain single-width characters.
-                x = 0
-                while (x < lineCols) {
-                    val cp = line.chars[x]
-                    val attrs = line.attrs[x]
-                    if (cp == 0 || attrs and Attr.WIDE_TAIL != 0 || attrs and Attr.INVISIBLE != 0) {
-                        x++
-                        continue
-                    }
-                    val fg = cellFg(line.fg[x], line.bg[x], attrs, palette, screenFg, screenBg, boldAsBright, boldRgb)
-                    val styleKey = attrs and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH)
-                    val paint = paints.forAttrs(attrs)
-                    paint.color = opaque(fg)
-                    sb.setLength(0)
-                    var end = x
-                    val simple = isSimple(cp, line, x)
-                    if (simple) {
-                        while (end < lineCols) {
-                            val c2 = line.chars[end]
-                            val a2 = line.attrs[end]
-                            if (a2 and Attr.WIDE_TAIL != 0 || a2 and Attr.INVISIBLE != 0) break
-                            if (a2 and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH) != styleKey) break
-                            if (cellFg(line.fg[end], line.bg[end], a2, palette, screenFg, screenBg, boldAsBright, boldRgb) != fg) break
-                            if (c2 == 0) {
-                                sb.append(' ')
-                                end++
-                                continue
-                            }
-                            if (!isSimple(c2, line, end)) break
-                            sb.append(c2.toChar())
+            // Text, in runs of the same style made of plain single-width characters.
+            x = 0
+            while (x < lineCols) {
+                val cp = line.chars[x]
+                val attrs = line.attrs[x]
+                if (cp == 0 || attrs and Attr.WIDE_TAIL != 0 || attrs and Attr.INVISIBLE != 0) {
+                    x++
+                    continue
+                }
+                val fg = cellFg(line.fg[x], line.bg[x], attrs, palette, screenFg, screenBg, boldAsBright, boldRgb)
+                val styleKey = attrs and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH)
+                val paint = paints.forAttrs(attrs)
+                paint.color = opaque(fg)
+                sb.setLength(0)
+                var end = x
+                val simple = isSimple(cp, line, x)
+                if (simple) {
+                    while (end < lineCols) {
+                        val c2 = line.chars[end]
+                        val a2 = line.attrs[end]
+                        if (a2 and Attr.WIDE_TAIL != 0 || a2 and Attr.INVISIBLE != 0) break
+                        if (a2 and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH) != styleKey) break
+                        if (cellFg(line.fg[end], line.bg[end], a2, palette, screenFg, screenBg, boldAsBright, boldRgb) != fg) break
+                        if (c2 == 0) {
+                            sb.append(' ')
                             end++
+                            continue
                         }
-                        // Trailing blanks carry no glyphs; trim them from the draw call.
-                        var len = sb.length
-                        while (len > 0 && sb[len - 1] == ' ') len--
-                        if (len > 0) nc.drawText(sb, 0, len, x * cw, top + paints.baseline, paint)
-                    } else {
-                        val text = line.cellText(x)
-                        val wide = attrs and Attr.WIDE != 0
-                        nc.drawText(text, x * cw, top + paints.baseline, paint)
-                        end = x + if (wide) 2 else 1
+                        if (!isSimple(c2, line, end)) break
+                        sb.append(c2.toChar())
+                        end++
                     }
-                    if (attrs and Attr.UNDERLINE != 0) {
-                        paints.line.color = opaque(fg)
-                        val uy = top + paints.baseline + paints.line.strokeWidth * 1.5f
-                        nc.drawLine(x * cw, uy, end * cw, uy, paints.line)
-                    }
-                    if (attrs and Attr.STRIKETHROUGH != 0) {
-                        paints.line.color = opaque(fg)
-                        val sy = top + ch * 0.55f
-                        nc.drawLine(x * cw, sy, end * cw, sy, paints.line)
-                    }
-                    x = maxOf(end, x + 1)
+                    // Trailing blanks carry no glyphs; trim them from the draw call.
+                    var len = sb.length
+                    while (len > 0 && sb[len - 1] == ' ') len--
+                    if (len > 0) nc.drawText(sb, 0, len, x * cw, top + paints.baseline, paint)
+                } else {
+                    val text = line.cellText(x)
+                    val wide = attrs and Attr.WIDE != 0
+                    nc.drawText(text, x * cw, top + paints.baseline, paint)
+                    end = x + if (wide) 2 else 1
                 }
+                if (attrs and Attr.UNDERLINE != 0) {
+                    paints.line.color = opaque(fg)
+                    val uy = top + paints.baseline + paints.line.strokeWidth * 1.5f
+                    nc.drawLine(x * cw, uy, end * cw, uy, paints.line)
+                }
+                if (attrs and Attr.STRIKETHROUGH != 0) {
+                    paints.line.color = opaque(fg)
+                    val sy = top + ch * 0.55f
+                    nc.drawLine(x * cw, sy, end * cw, sy, paints.line)
+                }
+                x = maxOf(end, x + 1)
             }
+        }
 
-            // Cursor, only on the live screen.
-            if (showCursor && offset == 0 && emulator.cursorVisible) {
-                val cx = emulator.cursorX
-                val cy = emulator.cursorY
-                if (cy in 0 until rows && cx in 0 until cols) {
-                    val left = cx * cw
-                    val top = cy * ch
-                    val line = emulator.line(cy)
-                    val wide = line.attrs[cx] and Attr.WIDE != 0
-                    val w = if (wide) cw * 2 else cw
-                    val shape = emulator.cursorStyle.shape
-                    paints.fill.color = opaque(theme.cursor)
-                    when {
-                        !focused -> {
-                            paints.line.color = opaque(theme.cursor)
-                            val s = paints.line.strokeWidth
-                            nc.drawRect(left + s / 2, top + s / 2, left + w - s / 2, top + ch - s / 2, paints.line.apply { style = Paint.Style.STROKE })
-                            paints.line.style = Paint.Style.FILL
-                        }
-                        shape == CursorShape.BLOCK -> {
-                            nc.drawRect(left, top, left + w, top + ch, paints.fill)
-                            val cp = line.chars[cx]
-                            if (cp != 0) {
-                                val paint = paints.forAttrs(line.attrs[cx])
-                                paint.color = opaque(theme.cursorText)
-                                nc.drawText(line.cellText(cx), left, top + paints.baseline, paint)
-                            }
-                        }
-                        shape == CursorShape.UNDERLINE -> nc.drawRect(left, top + ch - paints.line.strokeWidth * 2, left + w, top + ch, paints.fill)
-                        else -> nc.drawRect(left, top, left + paints.line.strokeWidth * 1.5f, top + ch, paints.fill)
+        // Cursor, only on the live screen.
+        if (showCursor && frame.offset == 0 && frame.cursorVisible) {
+            val cx = frame.cursorX
+            val cy = frame.cursorY
+            if (cy in 0 until rows && cx in 0 until cols) {
+                val left = cx * cw
+                val top = cy * ch
+                val line = frame.line(cy)
+                val wide = cx < line.cols && line.attrs[cx] and Attr.WIDE != 0
+                val w = if (wide) cw * 2 else cw
+                val shape = frame.cursorStyle.shape
+                paints.fill.color = opaque(theme.cursor)
+                when {
+                    !focused -> {
+                        paints.line.color = opaque(theme.cursor)
+                        val s = paints.line.strokeWidth
+                        nc.drawRect(left + s / 2, top + s / 2, left + w - s / 2, top + ch - s / 2, paints.line.apply { style = Paint.Style.STROKE })
+                        paints.line.style = Paint.Style.FILL
                     }
+                    shape == CursorShape.BLOCK -> {
+                        nc.drawRect(left, top, left + w, top + ch, paints.fill)
+                        val cp = if (cx < line.cols) line.chars[cx] else 0
+                        if (cp != 0) {
+                            val paint = paints.forAttrs(line.attrs[cx])
+                            paint.color = opaque(theme.cursorText)
+                            nc.drawText(line.cellText(cx), left, top + paints.baseline, paint)
+                        }
+                    }
+                    shape == CursorShape.UNDERLINE -> nc.drawRect(left, top + ch - paints.line.strokeWidth * 2, left + w, top + ch, paints.fill)
+                    else -> nc.drawRect(left, top, left + paints.line.strokeWidth * 1.5f, top + ch, paints.fill)
                 }
             }
-            return offset
         }
     }
 

@@ -855,6 +855,7 @@ object BerthIcons {
     @DrawableRes val folder: Int = R.drawable.glyph_folder
     @DrawableRes val file: Int = R.drawable.glyph_file
     @DrawableRes val link: Int = R.drawable.glyph_link
+    /** A cross; closes the active tab, switcher cards and a Files selection. */
     @DrawableRes val close: Int = R.drawable.glyph_close
     @DrawableRes val check: Int = R.drawable.glyph_check
     @DrawableRes val edit: Int = R.drawable.glyph_edit
@@ -866,6 +867,8 @@ object BerthIcons {
     @DrawableRes val lock: Int = R.drawable.glyph_lock
     @DrawableRes val copy: Int = R.drawable.glyph_copy
     @DrawableRes val trash: Int = R.drawable.glyph_trash
+    /** A ring with a handle; the New tab sheet's host filter. */
+    @DrawableRes val search: Int = R.drawable.glyph_search
 }
 
 /** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */

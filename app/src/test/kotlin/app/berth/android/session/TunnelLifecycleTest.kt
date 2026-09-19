@@ -131,7 +131,7 @@ class TunnelLifecycleTest {
     }
 
     @Test
-    fun `dynamic forward answers SOCKS5 and a fixed port can be reached through it`() = runBlocking {
+    fun `dynamic forward answers SOCKS5 and a fixed port can be reached through it`() = runBlocking<Unit> {
         val port = freePort()
         val socks = Tunnel("t-socks", box.id, TunnelType.DYNAMIC, "127.0.0.1", port, "", 0, enabled = true)
         graph.tunnels.upsert(socks)
@@ -148,7 +148,7 @@ class TunnelLifecycleTest {
     }
 
     @Test
-    fun `a second session to the same host does not rebind, and takes over when the carrier closes`() = runBlocking {
+    fun `a second session to the same host does not rebind, and takes over when the carrier closes`() = runBlocking<Unit> {
         val port = freePort()
         val tunnel = Tunnel("t-shared", box.id, TunnelType.LOCAL, "127.0.0.1", port, "127.0.0.1", http.address.port, enabled = true)
         graph.tunnels.upsert(tunnel)

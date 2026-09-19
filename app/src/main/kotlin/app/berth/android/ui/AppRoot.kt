@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -39,20 +40,23 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.deck.DeckEditorScreen
-import app.berth.android.ui.files.FilesScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
-import app.berth.android.ui.hosts.QuickConnectSheet
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.prompts.PromptHost
+import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
-import app.berth.android.ui.rail.Rail
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
 import app.berth.android.ui.stage.LocalHapticLevel
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.ReopenBar
+import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabSheets
+import app.berth.android.ui.tabs.rememberTabUiState
 import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
@@ -77,8 +81,6 @@ sealed interface Screen : NavKey {
     @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
-    /** One session's SFTP browser, or the active session's when [sessionId] is null; becomes the Files tab kind. */
-    @Serializable data class Files(val sessionId: String? = null) : Screen
 }
 
 @Composable
@@ -99,10 +101,9 @@ private fun Shell(vm: AppViewModel) {
     val backStack = rememberNavBackStack(Screen.Stage)
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val active by vm.activeSession.collectAsState()
-    val workspaceSessions by vm.workspaceSessions.collectAsState()
+    val active by vm.activeTab.collectAsState()
     var sessionSheet by remember { mutableStateOf(false) }
-    var quickConnect by remember { mutableStateOf(false) }
+    val tabUi = rememberTabUiState()
 
     LaunchedEffect(Unit) { vm.sessions.restore() }
 
@@ -115,18 +116,12 @@ private fun Shell(vm: AppViewModel) {
     fun toStage() {
         while (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
-    fun openRail() = scope.launch { drawer.open() }
-    fun closeRail() = scope.launch { drawer.close() }
-    fun step(forward: Boolean) {
-        val list = workspaceSessions
-        if (list.size < 2) return
-        val i = list.indexOfFirst { it.id == active?.id }
-        val next = if (i < 0) 0 else (i + (if (forward) 1 else -1) + list.size) % list.size
-        vm.setActive(list[next].id)
-    }
+    fun openDrawer() = scope.launch { drawer.open() }
+    fun closeDrawer() = scope.launch { drawer.close() }
+    val tabActions = remember(vm, tabUi) { ShellTabActions(vm, tabUi, onActivated = { toStage() }) }
 
     val onStage = backStack.lastOrNull() == Screen.Stage
-    BackHandler(enabled = drawer.isOpen) { closeRail() }
+    BackHandler(enabled = drawer.isOpen) { closeDrawer() }
 
     ModalNavigationDrawer(
         drawerState = drawer,
@@ -134,33 +129,29 @@ private fun Shell(vm: AppViewModel) {
         scrimColor = Berth.colors.scrim,
         drawerContent = {
             ModalDrawerSheet(drawerContainerColor = Color.Transparent, drawerShape = androidx.compose.ui.graphics.RectangleShape, drawerTonalElevation = 0.dp) {
-                Rail(
+                Drawer(
                     vm = vm,
-                    onSessionTap = { id ->
-                        vm.setActive(id)
+                    actions = tabActions,
+                    onGroupTap = { id ->
+                        vm.setWorkspace(id)
                         toStage()
-                        closeRail()
+                        closeDrawer()
                     },
-                    onNewSession = {
-                        closeRail()
-                        go(Screen.Hosts(picker = true))
+                    onNewGroup = {
+                        closeDrawer()
+                        tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
                     },
                     onLibrary = { lib ->
-                        closeRail()
+                        closeDrawer()
                         go(
                             when (lib) {
                                 Library.HOSTS -> Screen.Hosts()
                                 Library.KEYS -> Screen.Keys
                                 Library.TUNNELS -> Screen.Tunnels()
-                                Library.FILES -> Screen.Files()
                                 Library.SNIPPETS -> Screen.Snippets
                                 Library.SETTINGS -> Screen.Settings
                             },
                         )
-                    },
-                    onTunnels = { hostId ->
-                        closeRail()
-                        go(Screen.Tunnels(hostId))
                     },
                 )
             }
@@ -176,29 +167,15 @@ private fun Shell(vm: AppViewModel) {
             entryProvider = { key ->
                 when (key) {
                     is Screen.Stage -> NavEntry(key) {
-                        val session = active
-                        if (session != null) {
-                            StageScreen(
-                                vm = vm,
-                                session = session,
-                                onOpenRail = { openRail() },
-                                onOpenSessionSheet = { sessionSheet = true },
-                                onEditHost = { go(Screen.HostEditor(it)) },
-                                onNextSession = { step(true) },
-                                onPreviousSession = { step(false) },
-                                onOpenDeckEditor = { go(Screen.DeckEditor) },
-                            )
-                        } else {
-                            HostsScreen(
-                                vm = vm,
-                                onConnect = { host -> vm.open(host) },
-                                onAddHost = { go(Screen.HostEditor(null)) },
-                                onEditHost = { go(Screen.HostEditor(it)) },
-                                onBack = null,
-                                onOpenRail = { openRail() },
-                                onKnownHosts = { go(Screen.KnownHosts) },
-                            )
-                        }
+                        StageScreen(
+                            vm = vm,
+                            tab = active,
+                            actions = tabActions,
+                            onOpenDrawer = { openDrawer() },
+                            onOpenSessionSheet = { sessionSheet = true },
+                            onEditHost = { go(Screen.HostEditor(it)) },
+                            onOpenDeckEditor = { go(Screen.DeckEditor) },
+                        )
                     }
                     is Screen.Hosts -> NavEntry(key) {
                         HostsScreen(
@@ -207,10 +184,14 @@ private fun Shell(vm: AppViewModel) {
                                 vm.open(host)
                                 toStage()
                             },
+                            onFiles = { host ->
+                                vm.openFilesForHost(host)
+                                toStage()
+                            },
                             onAddHost = { go(Screen.HostEditor(null)) },
                             onEditHost = { go(Screen.HostEditor(it)) },
                             onBack = { back() },
-                            onOpenRail = null,
+                            onOpenDrawer = null,
                             onKnownHosts = { go(Screen.KnownHosts) },
                             picker = key.picker,
                         )
@@ -245,9 +226,6 @@ private fun Shell(vm: AppViewModel) {
                     }
                     is Screen.Appearance -> NavEntry(key) { AppearanceScreen(vm, onBack = { back() }) }
                     is Screen.DeckEditor -> NavEntry(key) { DeckEditorScreen(vm, onBack = { back() }) }
-                    is Screen.Files -> NavEntry(key) {
-                        FilesScreen(vm, sessionId = key.sessionId, onBack = { back() }, onNewSession = { go(Screen.Hosts(picker = true)) })
-                    }
                     else -> NavEntry(key) {
                         Spacer(Modifier.statusBarsPadding().height(48.dp))
                         EmptyState("Nothing here.", "This screen has not been built yet.") {
@@ -259,27 +237,27 @@ private fun Shell(vm: AppViewModel) {
         )
     }
 
-    val sheetSession = active
-    if (sessionSheet && sheetSession != null) {
+    val sheetTab = active
+    if (sessionSheet && sheetTab != null) {
         SessionSheet(
             vm = vm,
-            session = sheetSession,
+            tab = sheetTab,
             onDismiss = { sessionSheet = false },
             onSwitch = { vm.setActive(it) },
             onEditHost = { go(Screen.HostEditor(it)) },
-            onNewSession = { go(Screen.Hosts(picker = true)) },
+            onNewSession = { tabActions.newTab() },
             onOpenTunnels = { hostId ->
                 sessionSheet = false
                 go(Screen.Tunnels(hostId))
             },
-            onOpenFiles = { sessionId ->
-                sessionSheet = false
-                go(Screen.Files(sessionId))
-            },
+            // The host's Files tab, opened or brought on stage; and back to the terminal it rides.
+            onOpenFiles = tabActions::openFiles,
+            onOpenTerminal = tabActions::openTerminal,
         )
     }
-    if (quickConnect) {
-        QuickConnectSheet(vm, onDismiss = { quickConnect = false }, onConnected = { quickConnect = false; toStage() })
+    TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
+    Box(Modifier.fillMaxSize()) {
+        ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
 }

@@ -19,3 +19,5 @@
 /keystore/
 *.jks
 *.keystore
+# The shared debug key (passwords "android", alias "androiddebugkey") is committed so every machine's debug build installs over another's.
+!/app/keystore/debug.keystore

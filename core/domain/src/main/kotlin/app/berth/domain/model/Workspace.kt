@@ -2,7 +2,10 @@ package app.berth.domain.model
 
 import kotlinx.serialization.Serializable
 
-/** A named, coloured group of sessions; the unit the rail navigates. */
+/**
+ * A named, coloured group of sessions. With tabs (UX spec C3) a workspace is a tab group: a
+ * contiguous run of tabs in the strip, headed by its chip once a second group exists.
+ */
 @Serializable
 data class Workspace(
     val id: String,
@@ -17,6 +20,8 @@ data class Workspace(
     /** Reconnect Live sessions at launch instead of restoring frames only. */
     val reconnectAtLaunch: Boolean = false,
     val createdAt: Long,
+    /** The group's run is folded into its chip in the tab strip (spec C3, Groups). */
+    val collapsed: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_ID = "workspace-default"
@@ -52,12 +57,14 @@ enum class PersistenceLayer {
 }
 
 /**
- * Persisted metadata for a session. The live connection and terminal are runtime objects owned
- * by the session manager; this is what survives process death so the rail can be restored.
+ * Persisted metadata for a session, which is one tab (UX spec C3). The live connection and
+ * terminal are runtime objects owned by the session manager; this is what survives process death
+ * so the strip comes back in the same order with the same active tab.
  */
 @Serializable
 data class SessionRecord(
     val id: String,
+    /** The tab's group; [sortOrder] is its position within the group. */
     val workspaceId: String,
     /** Null for unsaved quick-connect sessions; [hostSnapshot] carries what is needed to reconnect. */
     val hostId: String?,
@@ -78,7 +85,14 @@ data class SessionRecord(
     val lastLiveAt: Long? = null,
     /** Frozen frame stored by the data layer, referenced by key. */
     val frameKey: String? = null,
-)
+    /** What this tab runs; every session today is [TabKind.Ssh]. */
+    val kind: TabKind = TabKind.Ssh,
+    /** A title the user set from the tab's menu; null shows the automatic one ([displayTitle]). */
+    val customTitle: String? = null,
+) {
+    /** The tab's title: the rename when set, then the OSC or tmux title, then the host name. */
+    val displayTitle: String get() = customTitle?.takeIf { it.isNotBlank() } ?: title.ifBlank { hostSnapshot.name }
+}
 
 /** Reconnect schedule: 1, 2, 4, 8, 15, 30 s then every 60 s until the policy's limit. */
 object ReconnectBackoff {
