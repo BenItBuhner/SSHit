@@ -30,7 +30,7 @@ fun NotificationsSection(notifier: SessionNotifier) {
     Panel(label = "Notifications") {
         ListRow(
             "System notifications",
-            subtitle = if (enabled) "On \u00B7 Sessions, Attention and Problems" else "Off \u00B7 no Detach all outside the app, no word when a tab needs you",
+            subtitle = if (enabled) "On \u00B7 Sessions, Attention and Problems" else "Off \u00B7 nothing reaches you outside the app",
             surface = Color.Transparent,
             minHeight = 44.dp,
             onClick = { context.startActivity(notifier.systemSettingsIntent()) },
