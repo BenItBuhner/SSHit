@@ -62,6 +62,22 @@ class FilesBrowser(
     /** Folders shown before the current one, most recent last; the back gesture pops them. */
     private val history = ArrayDeque<String>()
 
+    /**
+     * Where each folder's list was scrolled to (first visible row and its offset). It lives here rather
+     * than in the pane so coming back to a folder, or back to the screen after a tab switch or a
+     * rotation, lands where you left. Only the UI thread touches it.
+     */
+    private val scrollPositions = LinkedHashMap<String, Pair<Int, Int>>()
+
+    fun rememberScroll(path: String, index: Int, offset: Int) {
+        scrollPositions.remove(path)
+        scrollPositions[path] = index to offset
+        while (scrollPositions.size > SCROLL_MAX) scrollPositions.remove(scrollPositions.keys.first())
+    }
+
+    /** The saved scroll of [path], or the top when it was never left. */
+    fun scrollFor(path: String): Pair<Int, Int> = scrollPositions[path] ?: (0 to 0)
+
     /** Resolves home, then lists [initialPath] when it is still there or home otherwise. */
     fun start(initialPath: String?) {
         listJob?.cancel()
@@ -227,6 +243,7 @@ class FilesBrowser(
         /** Files above this are not read for the viewer at all; the sheet offers a download instead. */
         const val VIEWER_SKIP_BYTES = 8L * 1024 * 1024
         private const val HISTORY_MAX = 32
+        private const val SCROLL_MAX = 64
         private const val NOTICE_MS = 2_500L
         private const val ERROR_NOTICE_MS = 6_000L
     }
