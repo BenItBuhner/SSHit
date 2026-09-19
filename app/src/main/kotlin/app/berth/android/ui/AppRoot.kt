@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +37,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
+import app.berth.android.security.LockState
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -47,6 +49,9 @@ import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
+import app.berth.android.ui.security.BerthClipboardLocals
+import app.berth.android.ui.security.LockScreen
+import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
@@ -88,10 +93,21 @@ sealed interface Screen : NavKey {
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
     val hapticLevel by vm.hapticLevel.collectAsState()
+    val lock by vm.security.lock.state.collectAsState()
     BerthTheme(theme) {
         CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
-                Shell(vm)
+                // The lock screen stands in for the shell rather than covering it: sheets, menus and
+                // prompts are windows of their own and would float over an overlay. The shell's saved
+                // state (its back stack) is held meanwhile, so unlocking returns to the same screen.
+                val holder = rememberSaveableStateHolder()
+                when (lock) {
+                    LockState.UNKNOWN -> Unit
+                    LockState.LOCKED -> LockScreen(vm.security)
+                    LockState.UNLOCKED -> holder.SaveableStateProvider("shell") {
+                        BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
+                    }
+                }
             }
         }
     }
@@ -271,4 +287,5 @@ private fun Shell(vm: AppViewModel) {
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)
+    RemoteClipboardNoticeSheet(vm.security.remoteClipboard)
 }

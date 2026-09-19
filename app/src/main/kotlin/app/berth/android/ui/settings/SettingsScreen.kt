@@ -71,7 +71,6 @@ fun SettingsScreen(
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
     val ctrlTabKeys by vm.ctrlTabKeysReachTerminal.collectAsState()
-    val known by vm.knownHosts.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
 
@@ -166,9 +165,7 @@ fun SettingsScreen(
 
             NotificationsSection(vm.notifier)
 
-            Panel(label = "Trust") {
-                ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
-            }
+            SecurityPanel(vm, onKnownHosts)
 
             Panel(label = "Data") {
                 ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)

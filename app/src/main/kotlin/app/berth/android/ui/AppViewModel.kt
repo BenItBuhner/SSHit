@@ -3,6 +3,7 @@ package app.berth.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
+import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.FilesTab
@@ -78,6 +79,8 @@ class AppViewModel @Inject constructor(
     private val workspaceRepository: WorkspaceRepository,
     /** File browsers and the transfer queue; the Files screen talks to this directly. */
     val files: FilesCenter,
+    /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
+    val security: SecurityCenter,
 ) : ViewModel() {
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

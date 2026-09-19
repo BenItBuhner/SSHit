@@ -7,6 +7,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import app.berth.android.files.FilesCenter
+import app.berth.android.security.AppLockController
+import app.berth.android.security.BerthClipboard
+import app.berth.android.security.FakeAuthenticator
+import app.berth.android.security.FakeClock
+import app.berth.android.security.ForegroundActivity
+import app.berth.android.security.KeyUnlocker
+import app.berth.android.security.RemoteClipboardGate
+import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.NetworkMonitor
 import app.berth.android.session.PromptCenter
@@ -14,6 +22,7 @@ import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppViewModel
 import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
@@ -21,6 +30,7 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
@@ -38,6 +48,9 @@ import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -179,6 +192,10 @@ class InMemorySettings : SettingsRepository {
     override suspend fun setTabSwipeGesture(gesture: TabSwipeGesture) { tabSwipe.value = gesture }
     override val ctrlTabKeysReachTerminal: Flow<Boolean> = ctrlTabKeys
     override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) { ctrlTabKeys.value = enabled }
+
+    val security = MutableStateFlow(SecuritySettings())
+    override val securitySettings: Flow<SecuritySettings> = security
+    override suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings) = security.update(change)
 }
 
 /**
@@ -226,16 +243,32 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val snippets = InMemorySnippets()
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
-    val authResolver = AuthResolver(identities, secrets, hardwareKeys, prompts)
+
+    /** The security pieces with a scripted prompt and a hand-stepped clock; [keystore] stands in for Android Keystore. */
+    val clock = FakeClock()
+    val authenticator = FakeAuthenticator()
+    val foreground = ForegroundActivity()
+    val appLock = AppLockController(settings, clock, authenticator, scope)
+    val clipboard = BerthClipboard(context, settings, clock, scope)
+    val remoteClipboard = RemoteClipboardGate(settings, clipboard, scope)
+    val security = SecurityCenter(settings, appLock, clipboard, remoteClipboard, authenticator, foreground, scope)
+    var keystore: KeystoreSigning = hardwareKeys
+    val keyUnlocker: KeyUnlocker by lazy { KeyUnlocker(keystore, identities, authenticator, prompts, appLock) }
+    val authResolver: AuthResolver by lazy { AuthResolver(identities, secrets, keyUnlocker, prompts) }
     val process = FakeLifecycleOwner()
     val notifier = SessionNotifier(context)
     private val manager = lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, notifier, process.lifecycle)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, notifier, process.lifecycle)
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security)
+    }
+
+    private companion object {
+        /** Unconfined, so the settings land in the security pieces before the first frame, as Room's do behind the splash. */
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     }
 
     /**

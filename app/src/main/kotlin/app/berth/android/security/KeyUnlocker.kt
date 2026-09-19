@@ -1,0 +1,126 @@
+package app.berth.android.security
+
+import android.security.keystore.KeyPermanentlyInvalidatedException
+import android.security.keystore.UserNotAuthenticatedException
+import app.berth.android.session.Prompt
+import app.berth.android.session.PromptCenter
+import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
+import app.berth.data.crypto.KeystoreSigning
+import app.berth.domain.model.Host
+import app.berth.domain.model.Identity
+import app.berth.domain.repository.IdentityRepository
+import app.berth.ssh.SshAuth
+import app.berth.ssh.SshKeys
+import app.berth.ssh.SshSigner
+import app.berth.ssh.encodeEcdsaP256Signature
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import java.security.Signature
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Turns a Keystore-backed identity into the `publickey` method for one connection, getting the
+ * user past the key's authentication on the way (spec C20, Biometric gating). A key that needs
+ * the user for every use is unlocked through the system prompt carrying the very `Signature` that
+ * will sign; a key with a timed window is tried first and the prompt shown only when the window
+ * has closed, then tried once more. A key Android has invalidated (new biometrics enrolled) is
+ * named to the user, who may have it regenerated.
+ */
+@Singleton
+class KeyUnlocker @Inject constructor(
+    private val keystore: KeystoreSigning,
+    private val identities: IdentityRepository,
+    private val authenticator: DeviceAuthenticator,
+    private val prompts: PromptCenter,
+    private val appLock: AppLockController,
+) {
+    /**
+     * The `publickey` auth for [identity] against [host], with the user's authentication done.
+     * Throws [IllegalStateException] with the plain reason when the user cancelled or the key
+     * cannot sign, which the session shows as its failure state.
+     */
+    suspend fun authFor(host: Host, identity: Identity): SshAuth.PublicKey {
+        val alias = identity.keystoreAlias ?: HardwareKeys.aliasFor(identity.id)
+        val provider = keystore.keyProvider(alias)
+        val signature = try {
+            when (keystore.authModel(alias)) {
+                KeyAuthModel.NONE -> keystore.beginSign(alias)
+                KeyAuthModel.PER_USE -> unlockPerUse(host, identity, alias)
+                KeyAuthModel.TIMED_WINDOW -> unlockTimedWindow(host, identity, alias)
+            }
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            invalidated(host, identity, alias)
+        }
+        return SshAuth.PublicKey(provider, SshSigner { data ->
+            signature.update(data)
+            encodeEcdsaP256Signature(signature.sign())
+        })
+    }
+
+    private suspend fun unlockPerUse(host: Host, identity: Identity, alias: String): Signature {
+        // Invalidation surfaces here, before any prompt; the prompt then authorises this very object.
+        val fresh = keystore.beginSign(alias)
+        return when (val outcome = prompt(host, identity, fresh)) {
+            is AuthOutcome.Succeeded -> outcome.signature ?: fresh
+            AuthOutcome.Cancelled -> throw IllegalStateException("Unlocking ${identity.name} was cancelled, so ${host.name} was not signed in to.")
+            is AuthOutcome.Failed -> throw IllegalStateException("${identity.name} could not be unlocked: ${outcome.message}")
+        }
+    }
+
+    private suspend fun unlockTimedWindow(host: Host, identity: Identity, alias: String): Signature {
+        try {
+            return keystore.beginSign(alias)
+        } catch (_: UserNotAuthenticatedException) {
+            // The window has closed; one prompt reopens it, then one more try.
+        }
+        when (val outcome = prompt(host, identity, signature = null)) {
+            is AuthOutcome.Succeeded -> Unit
+            AuthOutcome.Cancelled -> throw IllegalStateException("Unlocking ${identity.name} was cancelled, so ${host.name} was not signed in to.")
+            is AuthOutcome.Failed -> throw IllegalStateException("${identity.name} could not be unlocked: ${outcome.message}")
+        }
+        return try {
+            keystore.beginSign(alias)
+        } catch (e: UserNotAuthenticatedException) {
+            throw IllegalStateException("${identity.name} stayed locked after unlocking. Try connecting again.", e)
+        }
+    }
+
+    /** The system prompt under a sheet that says why it is up; the sheet's Cancel cancels the prompt. */
+    private suspend fun prompt(host: Host, identity: Identity, signature: Signature?): AuthOutcome {
+        appLock.awaitUnlocked()
+        return prompts.unlockKey(host, identity.name) { prompt -> authenticate(prompt, host, identity, signature) }
+    }
+
+    private suspend fun authenticate(prompt: Prompt.UnlockKey, host: Host, identity: Identity, signature: Signature?): AuthOutcome = coroutineScope {
+        val auth = async { authenticator.authenticate("Unlock ${identity.name}", "Signing in to ${host.userAtHost}", signature) }
+        val watcher = launch {
+            prompt.cancelled.await()
+            auth.cancel()
+        }
+        try {
+            auth.await()
+        } catch (e: CancellationException) {
+            if (prompt.cancelled.isCompleted) AuthOutcome.Cancelled else throw e
+        } finally {
+            watcher.cancel()
+        }
+    }
+
+    private suspend fun invalidated(host: Host, identity: Identity, alias: String): Nothing {
+        appLock.awaitUnlocked()
+        val regenerate = prompts.keyInvalidated(host, identity)
+        if (!regenerate) throw IllegalStateException("${identity.name} can no longer sign: this device's fingerprints or face changed since the key was made.")
+        val public = keystore.regenerate(alias, identity.protection)
+        identities.update(
+            identity.copy(
+                publicKeyOpenSsh = SshKeys.openSshPublic(public, identity.comment),
+                fingerprintSha256 = SshKeys.fingerprintSha256(public),
+            ),
+        )
+        throw IllegalStateException("${identity.name} has a new key pair. Add its public key to ${host.name} (Keys, Copy public key), then connect again.")
+    }
+}

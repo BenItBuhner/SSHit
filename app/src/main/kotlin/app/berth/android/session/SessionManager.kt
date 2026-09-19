@@ -1,7 +1,5 @@
 package app.berth.android.session
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
@@ -11,6 +9,7 @@ import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.berth.android.di.ProcessLifecycle
+import app.berth.android.security.RemoteClipboardGate
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
@@ -92,6 +91,7 @@ class SessionManager @Inject constructor(
     private val network: NetworkMonitor,
     private val tunnelRepository: TunnelRepository,
     private val snippetRepository: SnippetRepository,
+    private val remoteClipboard: RemoteClipboardGate,
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
 ) : SessionCommands {
@@ -204,10 +204,7 @@ class SessionManager @Inject constructor(
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
         override val networkAvailable: Flow<Unit> = network.available
-        override fun onClipboardText(text: String) {
-            val clipboard = context.getSystemService(ClipboardManager::class.java)
-            clipboard.setPrimaryClip(ClipData.newPlainText("terminal", text))
-        }
+        override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
         override suspend fun connectCommands(host: Host, workspaceId: String): List<String> =
             snippetRepository.observeAll().first()

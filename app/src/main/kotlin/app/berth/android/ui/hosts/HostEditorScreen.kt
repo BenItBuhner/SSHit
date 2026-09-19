@@ -45,6 +45,7 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -269,6 +270,7 @@ fun HostEditorScreen(
                 ToggleRow("Compression", compression, { compression = it })
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
+                if (hostId != null) HostRemoteClipboardPicker(vm, hostId)
             }
 
             if (original != null) {

@@ -44,6 +44,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
+import app.berth.domain.model.Host
 import app.berth.ssh.SshKeys
 
 /**
@@ -74,10 +75,12 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
             onCancel = p::cancel,
             host = p,
         )
+        is Prompt.UnlockKey -> UnlockKeySheet(p)
+        is Prompt.KeyInvalidated -> KeyInvalidatedSheet(p)
     }
 }
 
-/** The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows. */
+/** The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows; the OSC 52 notice (not a transport prompt) borrows it too. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
@@ -102,10 +105,51 @@ internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit)
 }
 
 @Composable
-private fun HostLine(prompt: Prompt) {
+private fun HostLine(prompt: Prompt) = HostLine(prompt.host)
+
+@Composable
+internal fun HostLine(host: Host) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Swatch(prompt.host.color, prompt.host.monogram, 24.dp)
-        Text(prompt.host.userAtHost + if (prompt.host.port != 22) ":${prompt.host.port}" else "", style = BerthType.body.copy(fontFamily = JetBrainsMono), color = Berth.colors.text2)
+        Swatch(host.color, host.monogram, 24.dp)
+        Text(host.userAtHost + if (host.port != 22) ":${host.port}" else "", style = BerthType.body.copy(fontFamily = JetBrainsMono), color = Berth.colors.text2)
+    }
+}
+
+/**
+ * The connect flow paused on the key: the system prompt is up over this sheet, which names the key
+ * and the server and offers the one way out. Nothing to type here; the answer is the fingerprint.
+ */
+@Composable
+private fun UnlockKeySheet(p: Prompt.UnlockKey) {
+    val c = Berth.colors
+    PromptSheet(onDismiss = p::cancel) {
+        SheetTitle("Unlock ${p.identityName}", "This key signs in only after you confirm it is you.")
+        HostLine(p)
+        Text("Confirm with your fingerprint, face or screen lock when the system asks. Cancelling leaves ${p.host.name} unconnected.", style = BerthType.body, color = c.text2)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.weight(1f))
+            BerthButton("Cancel", onClick = p::cancel, kind = ButtonKind.TEXT)
+        }
+    }
+}
+
+/** Android destroyed the key after a biometric change; the fix is a new pair, and the server has to learn it. */
+@Composable
+private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
+    val c = Berth.colors
+    PromptSheet(onDismiss = p::cancel) {
+        SheetTitle("Key no longer usable", "${p.identity.name} cannot sign any more.", color = c.danger)
+        HostLine(p)
+        Fingerprint(p.identity.algorithm.sshName, p.identity.fingerprintSha256, label = "Key")
+        Text(
+            "A key that needs your fingerprint or face is tied to the biometrics enrolled when it was made. Those changed, so Android destroyed it. A new key pair can take its place under the same name; ${p.host.name} needs its new public key before the next connection.",
+            style = BerthType.body,
+            color = c.text2,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            BerthButton("Regenerate ${p.identity.name}", onClick = p::regenerate, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            BerthButton("Not now", onClick = p::cancel, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 

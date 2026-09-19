@@ -62,7 +62,9 @@ interface SessionEnvironment {
     suspend fun authFor(host: Host): List<SshAuth>
     fun hostKeyPolicyFor(host: Host): HostKeyPolicy
     val networkAvailable: Flow<Unit>
-    fun onClipboardText(text: String)
+
+    /** A program on [host] asked to write the phone's clipboard (OSC 52); the app decides whether it may. */
+    fun onClipboardText(host: Host, text: String)
     fun now(): Long = System.currentTimeMillis()
 
     /** The tunnels configured for a host, as they change. */
@@ -168,7 +170,7 @@ class TerminalSession(
 
             override fun onResponse(data: ByteArray) = send(data)
 
-            override fun onClipboardWrite(text: String) = env.onClipboardText(text)
+            override fun onClipboardWrite(text: String) = env.onClipboardText(host, text)
 
             override fun onWorkingDirectoryChanged(url: String) {
                 val path = url.substringAfter("://", url).let { rest -> rest.substring(rest.indexOf('/').coerceAtLeast(0)) }
