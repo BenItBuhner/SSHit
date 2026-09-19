@@ -169,12 +169,20 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Search keys and actions")).fetchSemanticsNodes().isNotEmpty() }
         capture("deck-editor-catalogue")
 
-        // The Snippet chip lists the saved snippets by name; picking one binds its id to the gesture.
+        // The Snippet chip lists the saved snippets by name, the unpinned one included.
         compose.onNodeWithText("Snippet").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("tail caddy")).fetchSemanticsNodes().isNotEmpty() }
         capture("deck-editor-catalogue-snippets")
+        dismissSheet()
+
+        // Picking a snippet binds its id to the gesture, and the row names it; the free swipe-down
+        // takes it so the key's ^C hint stays in the strip.
+        compose.onNodeWithText("Swipe down").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Search keys and actions")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Snippet").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Disk")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Disk").performClick()
-        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers[0].keys[2].up == DeckAction.Snippet("snip-disk") }
+        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers[0].keys[2].down == DeckAction.Snippet("snip-disk") }
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Snippet \u00B7 Disk").assertExists()
 
@@ -215,7 +223,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Undo").performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.rows == 1 && graph.viewModel.deckLayout.value.reach == DeckReach.RIGHT }
         assertEquals(DeckAction.Key(DeckKeyCode.PGUP), graph.viewModel.deckLayout.value.layers[0].keys[2].hold)
-        assertEquals(DeckAction.Snippet("snip-disk"), graph.viewModel.deckLayout.value.layers[0].keys[2].up)
+        assertEquals(DeckAction.Snippet("snip-disk"), graph.viewModel.deckLayout.value.layers[0].keys[2].down)
 
         // Termux extra-keys pasted into the import sheet become the Deck's layers, one per row.
         compose.onNodeWithText("Import").performScrollTo().performClick()
