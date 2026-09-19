@@ -35,6 +35,27 @@ class TerminalEmulator(
     val isAlternateScreen: Boolean get() = buffer === altBuffer
     val scrollbackSize: Int get() = buffer.scrollbackSize
 
+    /** History plus screen of the current buffer as one run of rows; the alternate screen has no history. */
+    val bufferRows: Int get() = buffer.bufferRows
+
+    /**
+     * Lines gone from the top of the current buffer's history (see [ScreenBuffer.dropped]). A row
+     * kept as its buffer index plus this count still names the same text after any amount of
+     * output; a width change re-wraps history and is the one thing that does invalidate such rows.
+     */
+    val linesDropped: Long get() = buffer.dropped
+
+    /** The current buffer as a [TextGrid] for selection, search and copy; callers hold [lock]. */
+    val grid: TextGrid = object : TextGrid {
+        override val cols: Int get() = this@TerminalEmulator.cols
+        override val rowCount: Int get() = buffer.bufferRows
+        override fun line(row: Int): TerminalLine = buffer.bufferLine(row)
+    }
+
+    /** Where the OSC 133 `B` mark put the start of the command being typed, as a buffer row plus [linesDropped]; -1 between commands. */
+    private var commandStartRow = -1L
+    private var commandStartCol = 0
+
     var cursorX: Int = 0
         private set
     var cursorY: Int = 0
@@ -216,8 +237,20 @@ class TerminalEmulator(
 
     fun line(row: Int): TerminalLine = buffer.line(row)
 
+    /** Row [row] of [bufferRows]: history first, then the screen. */
+    fun bufferLine(row: Int): TerminalLine = buffer.bufferLine(row)
+
     /** Text of the visible screen; used by tests. */
     fun screenText(): List<String> = synchronized(lock) { (0 until rows).map { buffer.line(it).toText() } }
+
+    /**
+     * The logical line under the cursor, soft wraps rejoined and trailing blanks trimmed: the
+     * prompt and whatever has been typed and echoed after it.
+     */
+    fun cursorLineText(): String = synchronized(lock) {
+        val row = buffer.scrollbackSize + cursorY
+        TerminalText.extract(grid, TerminalText.snapToLine(grid, CellPos(row, 0)))
+    }
 
     // ---------------------------------------------------------------------------------------------
     // Resize
@@ -481,7 +514,7 @@ class TerminalEmulator(
             8 -> Unit // Hyperlinks: the URL is accepted; per-cell link ids are not stored yet.
             9 -> oscNotification9(arg)
             99 -> oscNotification99(arg)
-            133 -> if (arg.isNotEmpty()) listener.onShellIntegration(arg[0], arg.substringAfter(';', ""))
+            133 -> if (arg.isNotEmpty()) shellMark(arg[0], arg.substringAfter(';', ""))
             777 -> oscNotification777(arg)
             10 -> if (arg == "?") respond(colorReport(10, defaultForegroundRgb)) else parseColorSpec(arg)?.let { defaultForegroundRgb = it }
             11 -> if (arg == "?") respond(colorReport(11, defaultBackgroundRgb)) else parseColorSpec(arg)?.let { defaultBackgroundRgb = it }
@@ -496,6 +529,54 @@ class TerminalEmulator(
             else -> Unit
         }
         markDirty()
+    }
+
+    /**
+     * OSC 133 prompt marks (spec C16). `B` notes where the command line begins; `C`, sent as the
+     * shell starts running it, yields the command: the `cmdline=` or `cmdline_url=` parameter when
+     * the shell supplies one (kitty's form), otherwise the cells between the two marks read off the
+     * screen with soft wraps rejoined. Nothing typed with echo off is on screen, so a password
+     * answered inside a command's output is never captured.
+     */
+    private fun shellMark(mark: Char, param: String) {
+        when (mark) {
+            'B' -> {
+                commandStartRow = buffer.scrollbackSize + cursorY + buffer.dropped
+                commandStartCol = cursorX
+            }
+            'C' -> {
+                val command = commandLineParam(param) ?: commandOnScreen()
+                commandStartRow = -1L
+                command?.trim()?.takeIf { it.isNotEmpty() }?.let(listener::onCommandEntered)
+            }
+            'A' -> commandStartRow = -1L
+        }
+        listener.onShellIntegration(mark, param)
+    }
+
+    private fun commandLineParam(param: String): String? {
+        for (part in param.split(';')) {
+            val eq = part.indexOf('=')
+            if (eq < 0) continue
+            val value = part.substring(eq + 1)
+            when (part.substring(0, eq)) {
+                "cmdline" -> return value
+                "cmdline_url" -> return runCatching { java.net.URLDecoder.decode(value.replace("+", "%2B"), "UTF-8") }.getOrNull()
+            }
+        }
+        return null
+    }
+
+    private fun commandOnScreen(): String? {
+        if (commandStartRow < 0) return null
+        val startRow = (commandStartRow - buffer.dropped).toInt()
+        val endExclusive = CellPos(buffer.scrollbackSize + cursorY, cursorX)
+        if (startRow < 0 || startRow >= buffer.bufferRows) return null
+        val start = CellPos(startRow, commandStartCol.coerceIn(0, cols - 1))
+        // The mark lands after the shell's own newline, so the last command cell is the one before the cursor.
+        val end = if (endExclusive.col > 0) CellPos(endExclusive.row, endExclusive.col - 1) else CellPos(endExclusive.row - 1, cols - 1)
+        if (end < start || end.row >= buffer.bufferRows) return null
+        return TerminalText.extract(grid, CellRange(start, end))
     }
 
     /** OSC 9 in its iTerm2 form: `9;message`. ConEmu progress reports (`9;4;...`) are ignored. */
@@ -860,6 +941,7 @@ class TerminalEmulator(
         Palette.defaultPalette().copyInto(palette)
         cursorX = 0
         cursorY = 0
+        commandStartRow = -1L
         title = ""
         listener.onTitleChanged(title)
     }

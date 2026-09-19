@@ -26,6 +26,12 @@ interface TerminalListener {
      * executed) or 'D' (command finished, [param] carries the exit code when present).
      */
     fun onShellIntegration(mark: Char, param: String)
+
+    /**
+     * A command the shell has started running, as reported by its OSC 133 marks (spec C16): the
+     * text between the `B` and `C` marks, trimmed. Never called for a shell without integration.
+     */
+    fun onCommandEntered(command: String)
 }
 
 /** No-op base to subclass. */
@@ -38,4 +44,5 @@ open class TerminalListenerAdapter : TerminalListener {
     override fun onWorkingDirectoryChanged(url: String) = Unit
     override fun onNotification(title: String, body: String) = Unit
     override fun onShellIntegration(mark: Char, param: String) = Unit
+    override fun onCommandEntered(command: String) = Unit
 }
