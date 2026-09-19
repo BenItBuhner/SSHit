@@ -11,6 +11,8 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.FilesSort
+import app.berth.sftp.FolderPhase
+import app.berth.sftp.FolderProgress
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpFileType
 import java.text.SimpleDateFormat
@@ -54,11 +56,14 @@ fun looksBinary(name: String): Boolean = name.substringAfterLast('.', "").lowerc
  * The Caption line under a transfer's name: the host when transfers from several sessions share a
  * list, then the size while it waits, bytes and speed while it moves, size and time once done, how
  * far it got when cancelled, the reason when it failed, and how many more wait behind it when
- * [others] is given. The state word itself is [transferTrailing]'s, so it is not repeated here.
+ * [others] is given. A folder reads in files as well as bytes: how many are done of how many, the
+ * file that already exists while it waits for an answer, and once over how many copied, failed and
+ * were skipped. The state word itself is [transferTrailing]'s, so it is not repeated here.
  */
 fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): String = buildList {
     if (showHost) add(t.hostName)
-    when (t.state) {
+    val f = t.folder
+    if (f != null) addAll(folderCaption(t, f)) else when (t.state) {
         TransferState.QUEUED -> add(if (t.total > 0) formatSize(t.total) else "Queued")
         TransferState.RUNNING -> {
             add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else formatSize(t.bytes))
@@ -66,8 +71,7 @@ fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): Str
         }
         TransferState.DONE -> {
             add(formatSize(if (t.total > 0) t.total else t.bytes))
-            val seconds = ((t.finishedAt - t.startedAt) / 1000).coerceAtLeast(1)
-            add(if (seconds < 60) "$seconds s" else "${seconds / 60} min")
+            add(transferDuration(t))
         }
         TransferState.FAILED -> add(t.error ?: "Failed")
         TransferState.CANCELLED -> add(if (t.total > 0) "${formatSize(t.bytes)} of ${formatSize(t.total)}" else "Cancelled")
@@ -75,11 +79,54 @@ fun transferCaption(t: Transfer, showHost: Boolean = true, others: Int = 0): Str
     if (others > 0) add(if (others == 1) "1 more" else "$others more")
 }.joinToString(" \u00B7 ")
 
+private fun folderCaption(t: Transfer, f: FolderProgress): List<String> = buildList {
+    val conflict = f.conflict
+    when (t.state) {
+        TransferState.QUEUED -> add("Folder")
+        TransferState.RUNNING -> when {
+            conflict != null -> add("${conflict.name} already exists")
+            f.phase == FolderPhase.SCANNING -> add(if (f.filesTotal > 0) "${f.filesTotal} files so far" else "Folder")
+            else -> {
+                add("${f.filesDone} of ${f.filesTotal} files")
+                if (f.bytesTotal > 0) add("${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}")
+                formatSpeed(t.bytesPerSecond).takeIf { it.isNotEmpty() }?.let(::add)
+            }
+        }
+        TransferState.DONE -> {
+            addAll(folderSummary(f))
+            add(formatSize(f.bytesDone))
+            add(transferDuration(t))
+        }
+        TransferState.FAILED -> if (f.filesTotal == 0 && f.failures.isEmpty()) add(t.error ?: "Failed") else addAll(folderSummary(f))
+        TransferState.CANCELLED -> {
+            add("${f.filesCopied} of ${f.filesTotal} files")
+            if (f.bytesTotal > 0) add("${formatSize(f.bytesDone)} of ${formatSize(f.bytesTotal)}")
+        }
+    }
+}
+
+/** `309 copied · 3 failed · 2 skipped`, only the parts that are not zero; skipped covers Skip answers and links the policy left out. */
+fun folderSummary(f: FolderProgress): List<String> = buildList {
+    add(if (f.filesCopied == 1) "1 file copied" else "${f.filesCopied} files copied")
+    if (f.filesFailed > 0) add("${f.filesFailed} failed")
+    val skipped = f.filesSkipped + f.filesLeftOut
+    if (skipped > 0) add("$skipped skipped")
+}
+
+private fun transferDuration(t: Transfer): String {
+    val seconds = ((t.finishedAt - t.startedAt) / 1000).coerceAtLeast(1)
+    return if (seconds < 60) "$seconds s" else "${seconds / 60} min"
+}
+
 /** The trailing word or percentage beside a transfer's name. */
 fun transferTrailing(t: Transfer): String = when (t.state) {
-    TransferState.RUNNING -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
+    TransferState.RUNNING -> when {
+        t.waiting -> "Waiting"
+        t.folder?.phase == FolderPhase.SCANNING -> "Scanning"
+        else -> t.fraction?.let { "${(it * 100).toInt()}%" } ?: formatSize(t.bytes)
+    }
     TransferState.DONE -> "Done"
-    TransferState.FAILED -> "Failed"
+    TransferState.FAILED -> t.folder?.filesFailed?.takeIf { it > 0 }?.let { "$it failed" } ?: "Failed"
     TransferState.CANCELLED -> "Cancelled"
     TransferState.QUEUED -> "Queued"
 }

@@ -1,6 +1,7 @@
 package app.berth.android.ui.files
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,15 +37,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferKind
@@ -61,11 +68,14 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
+import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.stage.MonoBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionState
+import app.berth.sftp.ConflictChoice
+import app.berth.sftp.FolderProgress
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpFileType
 import app.berth.sftp.SftpPaths
@@ -447,10 +457,19 @@ private fun ViewerNote(text: String, danger: Boolean = false) {
  * Every transfer this process has run, newest first: per-file progress, speed, and Cancel while it
  * moves. The list is the one weighted child, measured after the title and Clear finished have their
  * height, so it scrolls inside what is left and the button never gets squeezed out. More than a
- * handful of rows opens the sheet fully expanded rather than at the half stop.
+ * handful of rows opens the sheet fully expanded rather than at the half stop. A folder is one row
+ * that opens on a tap to the file moving now and what has failed; one waiting for an answer goes to
+ * its question through [onAnswer] instead.
  */
 @Composable
-fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClearFinished: () -> Unit, onDismiss: () -> Unit) {
+fun TransferSheet(
+    transfers: List<Transfer>,
+    onCancel: (String) -> Unit,
+    onClearFinished: () -> Unit,
+    onDismiss: () -> Unit,
+    onRetryFailed: (String) -> Unit = {},
+    onAnswer: (String) -> Unit = {},
+) {
     val c = Berth.colors
     val active = transfers.count { it.state.isActive }
     val done = transfers.count { it.state == TransferState.DONE }
@@ -462,6 +481,7 @@ fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClear
         if (failed > 0) add("$failed failed")
         if (cancelled > 0) add("$cancelled cancelled")
     }.joinToString(" \u00B7 ").ifEmpty { "Nothing moving" }
+    var opened by remember { mutableStateOf(emptySet<String>()) }
     FilesSheet(onDismiss, expanded = transfers.size > 4, fillHeight = false) {
         SheetTitle("Transfers", caption)
         if (transfers.isEmpty()) {
@@ -474,7 +494,15 @@ fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClear
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 for (t in transfers.sortedByDescending { if (it.state.isActive) Long.MAX_VALUE else it.finishedAt }) {
-                    TransferRow(t, onCancel = { onCancel(t.id) })
+                    TransferRow(
+                        t,
+                        onCancel = { onCancel(t.id) },
+                        expanded = t.id in opened,
+                        onToggle = if (!t.isFolder) null else {
+                            { if (t.waiting) onAnswer(t.id) else opened = if (t.id in opened) opened - t.id else opened + t.id }
+                        },
+                        onRetryFailed = { onRetryFailed(t.id) },
+                    )
                 }
             }
         }
@@ -486,45 +514,188 @@ fun TransferSheet(transfers: List<Transfer>, onCancel: (String) -> Unit, onClear
 
 /**
  * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
- * one Caption line naming the host, then bytes and speed. The glyph carries the direction.
+ * one Caption line naming the host, then bytes and speed. The glyph carries the direction. A folder
+ * carries the aggregate on that line and a chevron; [expanded] it adds the file moving now with its
+ * own line, the last few failures while it runs, and once over everything that failed with Retry
+ * failed. The per-file rows are as they were.
  */
 @Composable
-fun TransferRow(t: Transfer, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+fun TransferRow(
+    t: Transfer,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    expanded: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+    onRetryFailed: (() -> Unit)? = null,
+) {
     val c = Berth.colors
     val failed = t.state == TransferState.FAILED
-    Row(
+    val folder = t.folder
+    Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(c.surface2)
-            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .then(if (onToggle != null) Modifier.clickable(onClick = onToggle).semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" } else Modifier),
     ) {
-        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
-            BerthIcon(t.kind.icon, size = 20.dp, tint = if (failed) c.danger else c.text2)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(12.dp))
-                Text(transferTrailing(t), style = BerthType.caption, color = if (failed) c.danger else c.text2)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                BerthIcon(t.kind.icon, size = 20.dp, tint = if (failed) c.danger else c.text2)
             }
-            ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else t.fraction, active = t.state == TransferState.RUNNING, color = t.lineColor)
-            Text(
-                transferCaption(t),
-                style = BerthType.caption,
-                color = if (failed) c.danger else c.text3,
-                maxLines = if (failed) 2 else 1,
-                overflow = TextOverflow.Ellipsis,
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    Text(transferTrailing(t), style = BerthType.caption, color = if (failed) c.danger else c.text2)
+                    if (folder != null) {
+                        Spacer(Modifier.width(4.dp))
+                        BerthIcon(BerthIcons.chevronRight, size = 16.dp, tint = c.text3, modifier = Modifier.rotate(if (expanded) 90f else 0f))
+                    }
+                }
+                ProgressLine(fraction = if (t.state == TransferState.DONE) 1f else t.fraction, active = t.state == TransferState.RUNNING, color = t.lineColor)
+                Text(
+                    transferCaption(t),
+                    style = BerthType.caption,
+                    color = if (failed) c.danger else c.text3,
+                    maxLines = if (failed) 2 else 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (t.state.isActive) {
+                Spacer(Modifier.width(4.dp))
+                IconAction(onClick = onCancel, description = "Cancel ${t.name}") { BerthIcon(BerthIcons.close, size = 20.dp) }
+            } else {
+                Spacer(Modifier.width(8.dp))
+            }
+        }
+        if (folder != null && expanded) {
+            FolderDetail(t, folder, onRetryFailed = onRetryFailed?.takeIf { !t.state.isActive && folder.filesFailed > 0 })
+        }
+    }
+}
+
+/**
+ * Under an expanded folder row, aligned with its text: the file moving now with its own 2 dp line
+ * and bytes; then the failures, the last three while the copy runs and up to eight once it is over,
+ * each as its path and the reason in one Caption; then Retry failed when there is something to retry.
+ */
+@Composable
+private fun FolderDetail(t: Transfer, f: FolderProgress, onRetryFailed: (() -> Unit)?) {
+    val c = Berth.colors
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 60.dp, end = 12.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val current = f.current
+        if (current != null && t.state == TransferState.RUNNING) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(current, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (f.currentTotal > 0) "${formatSize(f.currentBytes)} of ${formatSize(f.currentTotal)}" else formatSize(f.currentBytes),
+                        style = BerthType.caption,
+                        color = c.text3,
+                    )
+                }
+                ProgressLine(fraction = if (f.currentTotal > 0) (f.currentBytes.toDouble() / f.currentTotal).coerceIn(0.0, 1.0).toFloat() else null, active = true)
+            }
+        }
+        if (f.failures.isNotEmpty()) {
+            val shown = if (t.state.isActive) f.failures.takeLast(RECENT_FAILURES) else f.failures.take(SUMMARY_FAILURES)
+            val more = f.failures.size - shown.size
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    if (t.state.isActive) "Didn't copy so far" else "Didn't copy",
+                    style = BerthType.caption,
+                    color = c.text2,
+                )
+                for (failure in shown) {
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = if (failure.retryable) c.danger else c.text3)) { append(failure.relativePath) }
+                            append(" \u00B7 ")
+                            append(failure.message)
+                        },
+                        style = BerthType.caption,
+                        color = c.text3,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (more > 0) Text(if (more == 1) "and 1 more" else "and $more more", style = BerthType.caption, color = c.text3)
+            }
+        }
+        if (onRetryFailed != null) {
+            BerthButton("Retry failed", onClick = onRetryFailed)
+        }
+    }
+}
+
+private const val RECENT_FAILURES = 3
+private const val SUMMARY_FAILURES = 8
+
+// ---- A file that exists already ------------------------------------------------------------------
+
+/**
+ * A folder copy has met a file that already exists where it is going, and waits. The sheet says
+ * which file and where in the folder, what is coming and what is there by size, and offers Skip,
+ * Keep both and Overwrite, with Apply to all for the files still to come; folders never ask, they
+ * merge. Dismissing leaves the copy waiting; the strip and the transfer's row bring the question back.
+ */
+@Composable
+fun FolderConflictSheet(transfer: Transfer, onChoose: (ConflictChoice, applyToAll: Boolean) -> Unit, onDismiss: () -> Unit) {
+    val c = Berth.colors
+    val conflict = transfer.folder?.conflict ?: return
+    var applyToAll by remember(conflict) { mutableStateOf(false) }
+    val download = transfer.kind == TransferKind.DOWNLOAD
+    val incomingWhere = if (download) "On the server" else "On this device"
+    val existingWhere = if (download) "On this device" else "On the server"
+    val within = conflict.relativePath.substringBeforeLast('/', "").let { if (it.isEmpty()) transfer.name else "${transfer.name}/$it" }
+    fun sizeLine(size: Long, then: String) = listOfNotNull(formatSize(size).takeIf { it.isNotEmpty() }, then).joinToString(" \u00B7 ")
+    FilesSheet(onDismiss) {
+        SheetTitle("${conflict.name} already exists", "In $within")
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ListRow(
+                title = incomingWhere,
+                subtitle = sizeLine(conflict.incomingSize, "coming in"),
+                minHeight = 48.dp,
+                leading = { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { BerthIcon(transfer.kind.icon, size = 20.dp) } },
+            )
+            ListRow(
+                title = existingWhere,
+                subtitle = sizeLine(conflict.existingSize, "already there"),
+                minHeight = 48.dp,
+                leading = { Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.file, size = 20.dp, tint = c.text3) } },
             )
         }
-        if (t.state.isActive) {
-            Spacer(Modifier.width(4.dp))
-            IconAction(onClick = onCancel, description = "Cancel ${t.name}") { BerthIcon(BerthIcons.close, size = 20.dp) }
-        } else {
-            Spacer(Modifier.width(8.dp))
+        if (conflict.remaining > 0) {
+            ToggleRow(
+                title = "Apply to all",
+                checked = applyToAll,
+                onCheckedChange = { applyToAll = it },
+                caption = if (conflict.remaining == 1) "The same answer for the 1 file still to copy" else "The same answer for the ${conflict.remaining} files still to copy",
+            )
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BerthButton("Skip", onClick = { onChoose(ConflictChoice.SKIP, applyToAll) }, modifier = Modifier.weight(1f))
+            BerthButton("Keep both", onClick = { onChoose(ConflictChoice.KEEP_BOTH, applyToAll) }, modifier = Modifier.weight(1f))
+            BerthButton("Overwrite", kind = ButtonKind.DESTRUCTIVE, onClick = { onChoose(ConflictChoice.OVERWRITE, applyToAll) }, modifier = Modifier.weight(1f))
+        }
+        Text(
+            "Skip leaves what is there. Keep both saves the new one as ${SftpPaths.keepBothName(conflict.name, emptySet())}. Overwrite replaces it.",
+            style = BerthType.caption,
+            color = c.text3,
+            modifier = Modifier.padding(start = 4.dp),
+        )
     }
 }
 
