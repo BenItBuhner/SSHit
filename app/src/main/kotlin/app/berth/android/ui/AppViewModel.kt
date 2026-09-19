@@ -2,6 +2,7 @@ package app.berth.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.berth.android.files.FilesCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
@@ -68,6 +69,8 @@ class AppViewModel @Inject constructor(
     private val tunnelRepository: TunnelRepository,
     private val snippetRepository: SnippetRepository,
     private val workspaceRepository: WorkspaceRepository,
+    /** File browsers and the transfer queue; the Files screen talks to this directly. */
+    val files: FilesCenter,
 ) : ViewModel() {
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

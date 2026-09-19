@@ -69,6 +69,7 @@ dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:terminal"))
     implementation(project(":core:ssh"))
+    implementation(project(":core:sftp"))
     implementation(project(":core:data"))
 
     implementation(libs.kotlinx.coroutines.android)

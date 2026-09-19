@@ -43,7 +43,8 @@ class SessionService : Service() {
         }
         val count = intent?.getIntExtra(EXTRA_COUNT, 1) ?: 1
         val tunnels = intent?.getIntExtra(EXTRA_TUNNELS, 0) ?: 0
-        val notification = buildNotification(count, tunnels)
+        val transfers = intent?.getIntExtra(EXTRA_TRANSFERS, 0) ?: 0
+        val notification = buildNotification(count, tunnels, transfers)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -57,7 +58,7 @@ class SessionService : Service() {
         super.onDestroy()
     }
 
-    private fun buildNotification(count: Int, tunnels: Int): Notification {
+    private fun buildNotification(count: Int, tunnels: Int, transfers: Int): Notification {
         val open = PendingIntent.getActivity(
             this, 0, SessionManager.openAppIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -67,10 +68,18 @@ class SessionService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val sessionsText = if (count == 1) getString(R.string.notification_one_session) else getString(R.string.notification_sessions, count)
-        val text = when (tunnels) {
-            0 -> sessionsText
-            1 -> "$sessionsText \u00B7 " + getString(R.string.notification_one_tunnel)
-            else -> "$sessionsText \u00B7 " + getString(R.string.notification_tunnels, tunnels)
+        val text = buildString {
+            append(sessionsText)
+            when (tunnels) {
+                0 -> Unit
+                1 -> append(" \u00B7 ").append(getString(R.string.notification_one_tunnel))
+                else -> append(" \u00B7 ").append(getString(R.string.notification_tunnels, tunnels))
+            }
+            when (transfers) {
+                0 -> Unit
+                1 -> append(" \u00B7 ").append(getString(R.string.notification_one_transfer))
+                else -> append(" \u00B7 ").append(getString(R.string.notification_transfers, transfers))
+            }
         }
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
@@ -102,11 +111,13 @@ class SessionService : Service() {
         private const val ACTION_STOP = "app.berth.android.action.STOP"
         private const val EXTRA_COUNT = "count"
         private const val EXTRA_TUNNELS = "tunnels"
+        private const val EXTRA_TRANSFERS = "transfers"
 
-        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0) {
+        fun start(context: Context, activeCount: Int, tunnelCount: Int = 0, transferCount: Int = 0) {
             val intent = Intent(context, SessionService::class.java)
                 .putExtra(EXTRA_COUNT, activeCount)
                 .putExtra(EXTRA_TUNNELS, tunnelCount)
+                .putExtra(EXTRA_TRANSFERS, transferCount)
             runCatching { context.startForegroundService(intent) }
         }
 

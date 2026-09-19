@@ -32,6 +32,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Hands a downloaded file to the share sheet without copying it anywhere the user can see. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
+
         <!-- Keeps SSH sockets alive while the app is in the background; there is no better-fitting
              foreground service type for an interactive remote shell. -->
         <service

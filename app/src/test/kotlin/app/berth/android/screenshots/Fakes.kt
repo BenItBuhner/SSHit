@@ -1,6 +1,7 @@
 package app.berth.android.screenshots
 
 import android.content.Context
+import app.berth.android.files.FilesCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.NetworkMonitor
 import app.berth.android.session.PromptCenter
@@ -8,6 +9,7 @@ import app.berth.android.session.SessionManager
 import app.berth.android.ui.AppViewModel
 import app.berth.data.crypto.HardwareKeys
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -150,6 +152,9 @@ class InMemorySettings : SettingsRepository {
     override suspend fun setLastActiveSessionId(id: String?) { lastActive.value = id }
     override val currentWorkspaceId: Flow<String?> = currentWorkspace
     override suspend fun setCurrentWorkspaceId(id: String) { currentWorkspace.value = id }
+    private val files = MutableStateFlow(FilesPrefs())
+    override val filesPrefs: Flow<FilesPrefs> = files
+    override suspend fun setFilesPrefs(prefs: FilesPrefs) { files.value = prefs }
 }
 
 /**
@@ -173,7 +178,8 @@ class TestGraph(private val context: Context) {
     val sessions: SessionManager by lazy {
         SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets)
     }
+    val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files)
     }
 }
