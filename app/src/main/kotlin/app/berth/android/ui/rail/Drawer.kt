@@ -114,7 +114,7 @@ fun Drawer(
     }
 }
 
-/** A 44 dp library row: Label `text.1`, a 24 dp leading slot for the glyph. */
+/** A 44 dp library row: Label `text.1` with the trailing chevron every navigating row in Settings carries. */
 @Composable
 private fun LibraryRow(text: String, onClick: () -> Unit) {
     val c = Berth.colors
@@ -124,6 +124,6 @@ private fun LibraryRow(text: String, onClick: () -> Unit) {
         minHeight = 44.dp,
         titleStyle = BerthType.label,
         onClick = onClick,
-        leading = { Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) } },
+        trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
     )
 }

@@ -32,6 +32,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -458,7 +459,9 @@ class BerthScreenshotTest {
             Stage(session)
             NewTabSheet(graph.viewModel, groupId = null, onDismiss = {}, onAddHost = {})
         }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open staging db")).fetchSemanticsNodes().isNotEmpty() }
+        // The Recent row exposes its swatches as "Open …"; the library below is rows by name.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open homelab")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("build box")).fetchSemanticsNodes().isNotEmpty() }
         capture("new-tab-sheet")
     }
 
@@ -552,9 +555,9 @@ class BerthScreenshotTest {
         capture("app-cold-start")
 
         compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open Berth test box")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth test box")).fetchSemanticsNodes().isNotEmpty() }
         capture("new-tab-sheet-live")
-        compose.onNode(hasContentDescription("Open Berth test box")).performClick()
+        compose.onNodeWithText("Berth test box").performClick()
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         capture("prompt-trust-host-key-live")
         compose.onNodeWithText("Trust and connect").performClick()
@@ -621,8 +624,12 @@ class BerthScreenshotTest {
         // Second tab on the ask-each-time host from the plus tab: the password prompt comes from the transport.
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("New tab").fetchSemanticsNodes().isNotEmpty() }
         compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Open Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(hasContentDescription("Open Same box, ask each time")).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Search hosts")).fetchSemanticsNodes().isNotEmpty() }
+        // The host sits low in the half-height sheet; the search field brings it up.
+        compose.onAllNodes(hasSetTextAction()).onLast().performTextInput("same box")
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Same box, ask each time")).fetchSemanticsNodes().isNotEmpty() }
+        capture("new-tab-sheet-search")
+        compose.onNodeWithText("Same box, ask each time").performClick()
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.Password }
         capture("prompt-password-live")
         (graph.prompts.current.value as Prompt.Password).submit(sshPassword.toCharArray())

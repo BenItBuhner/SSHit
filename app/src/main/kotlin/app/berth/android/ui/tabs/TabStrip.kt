@@ -57,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -85,6 +86,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -106,6 +108,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -279,14 +282,20 @@ fun TabStrip(
         if (state.drag != null) return@LaunchedEffect
         val index = entries.indexOfFirst { it is StripEntry.Tab && it.slot.id == activeId }
         if (index < 0) return@LaunchedEffect
+        // The first run precedes the first layout pass; a decision then would scroll a visible tab to the edge.
+        snapshotFlow { state.listState.layoutInfo.visibleItemsInfo.isNotEmpty() }.first { it }
         val info = state.listState.layoutInfo
+        // A tab that leads its group brings the group's chip along, so the strip never opens on a headless group.
+        val groupId = (entries[index] as StripEntry.Tab).group?.id
+        val leadIndex = if (index > 0 && groupId != null && (entries[index - 1] as? StripEntry.Chip)?.group?.id == groupId) index - 1 else index
         val item = info.visibleItemsInfo.firstOrNull { it.index == index }
         if (item == null) {
-            state.listState.animateScrollToItem(index)
+            state.listState.animateScrollToItem(if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
             return@LaunchedEffect
         }
+        val lead = info.visibleItemsInfo.firstOrNull { it.index == leadIndex } ?: item
         val delta = when {
-            item.offset < info.viewportStartOffset -> item.offset - info.viewportStartOffset
+            lead.offset < info.viewportStartOffset -> lead.offset - info.viewportStartOffset
             item.offset + item.size > info.viewportEndOffset -> item.offset + item.size - info.viewportEndOffset
             else -> 0
         }
@@ -324,7 +333,8 @@ fun TabStrip(
     LazyRow(
         modifier
             .selectableGroup()
-            .clearAndSetSemantics { contentDescription = "Tabs, $tabCount open" },
+            // Plain semantics: the strip announces itself, and the tabs stay reachable as their own nodes.
+            .semantics { contentDescription = "Tabs, $tabCount open" },
         state = state.listState,
         contentPadding = PaddingValues(horizontal = style.edgeInset),
         horizontalArrangement = Arrangement.spacedBy(style.gap),

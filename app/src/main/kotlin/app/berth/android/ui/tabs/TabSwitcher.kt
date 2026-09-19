@@ -287,7 +287,8 @@ private fun TabCard(
                     .alpha(if (detached) 0.8f else 1f),
             ) {
                 if (session != null) {
-                    FrameThumbnail(session, theme, font, live = active, modifier = Modifier.fillMaxWidth().fillMaxHeight())
+                    // The same cursor rule as the Stage: only a live screen shows one, and only the active card follows changes.
+                    FrameThumbnail(session, theme, font, live = active && record.state == SessionState.LIVE, modifier = Modifier.fillMaxWidth().fillMaxHeight())
                 }
             }
         }
