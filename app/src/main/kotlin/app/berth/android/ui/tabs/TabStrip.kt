@@ -664,11 +664,13 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
 private val CARRY_REACH = 24.dp
 
 /**
- * A tab a lifted item can leave the strip as (spec C23): the carry to feed, what the tab is, where
- * the item sits in the root, and what a drop on a pane does. Null where there is no pane to drop on.
+ * A tab a lifted item can leave the strip as (spec C23): the carry to feed, which tab, what the
+ * tab is, where the item sits in the root, and what a drop on a target does. Null where the window
+ * has no panes; where it has, the carry itself says whether anything takes this tab right now.
  */
 internal class CarryTarget(
     val carry: TabCarry,
+    val id: String,
     val tab: () -> CarriedTab,
     val bounds: () -> Rect,
     val onDrop: (id: String, side: PaneSide) -> Unit,
@@ -678,9 +680,11 @@ internal class CarryTarget(
  * Tap, long-press and drag for one strip item. Consumes nothing until the item is lifted, so a
  * horizontal pull scrolls the strip as usual; once lifted every change is consumed in the Main
  * pass (this node sees it before the row's scroll does), so the row stays still while the item moves.
- * With a [carryTarget], a lifted tab pulled [CARRY_REACH] below the strip leaves it: the item
- * settles back into its slot and the tab travels with the finger over the panes, to be dropped on
- * one (spec C23) or let go over nothing.
+ * With a [carryTarget], a lifted tab pulled [CARRY_REACH] below the strip leaves it while the
+ * Stage has somewhere to drop it: the item settles back into its slot and the tab travels with the
+ * finger over the panes, or over the halves of the one body on a Stage not yet split, to be dropped
+ * on one (spec C23) or let go over nothing. When nothing takes the tab the drag stays the reorder it
+ * is on a phone.
  */
 private fun Modifier.stripItemGestures(
     key: String,
@@ -730,7 +734,7 @@ private fun Modifier.stripItemGestures(
                             moved = true
                             state.menuKey = null
                         }
-                        if (carryTarget != null && !isChip && finger.y > carryTarget.bounds().bottom + carryReach) {
+                        if (carryTarget != null && !isChip && carryTarget.carry.accepts(carryTarget.id) && finger.y > carryTarget.bounds().bottom + carryReach) {
                             carrying = true
                             moved = true
                             state.menuKey = null
@@ -820,6 +824,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         remember(c, id) {
             CarryTarget(
                 carry = c,
+                id = id,
                 tab = { CarriedTab(id, entry.slot.tab.record.value.displayTitle, entry.slot.tab.record.value.hostSnapshot.color, entry.slot.tab.record.value.hostSnapshot.monogram) },
                 bounds = { bounds },
                 onDrop = { tabId, side -> actions.openInPane(tabId, side) },

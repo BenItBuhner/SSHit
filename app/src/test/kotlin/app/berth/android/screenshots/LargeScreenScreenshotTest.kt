@@ -7,6 +7,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -223,48 +224,57 @@ class LargeScreenScreenshotTest {
     // ---- the tablet ------------------------------------------------------------------------------
 
     /**
-     * The tablet on its side: the rail, one tab on the Stage, then two; the divider dragged toward a
-     * third settles on the snap; a tab held in the strip and pulled onto the right pane lands there;
-     * the switcher opens as a dialog.
+     * The tablet on its side: the rail, one tab on the Stage; the one tab itself cannot be carried
+     * (nothing takes it: below the strip its drag stays a reorder, no ghost); a tab held in the strip
+     * and pulled onto the body's right half steps that half up and, let go, splits the Stage with it
+     * there (spec C23); the divider dragged toward a third settles on the snap; a tab carried onto the
+     * right pane lands there; the switcher opens as a dialog.
      */
     @Test
     @Config(qualifiers = TABLET_LANDSCAPE)
-    fun `tablet on its side, the rail, the divider's snap, a tab carried onto a pane, a dialog`() {
+    fun `tablet on its side, the rail, a tab carried onto the Stage splits it, the divider's snap, a tab carried onto a pane, a dialog`() {
         mountApp()
         compose.onNodeWithText("New group").assertIsDisplayed()
         capture("tablet-landscape-stage")
 
-        split("s-pihole", PaneSide.RIGHT)
+        // The tab filling the Stage has no beside-itself: held and pulled below the strip (with a nudge
+        // sideways, so letting go is not a long-press menu) it is never lifted out, and the Stage stays one.
+        val homelab = tab("homelab")
+        homelab.performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.waitForIdle()
+        homelab.performTouchInput { moveBy(Offset(touchSlop() + 8f, 30f)) }
+        homelab.performTouchInput { moveBy(Offset(0f, 200f)) }
+        compose.waitForIdle()
+        compose.onAllNodes(hasContentDescription("Carrying", substring = true)).assertCountEquals(0)
+        homelab.performTouchInput { up() }
+        compose.waitForIdle()
+        assertNull(graph.sessions.panes.value)
+
+        // Another tab carried onto the one body (spec C23): over its right half the half steps up and the
+        // ghost travels with the finger; letting go splits the Stage, pi-hole on the right with the keys.
+        val body = compose.onNode(hasContentDescription("Terminal")).fetchSemanticsNode().boundsInRoot
+        val pihole = carry("pi-hole", Offset(body.left + body.width * 0.75f, body.center.y))
+        capture("tablet-landscape-carry-to-split")
+        pihole.performTouchInput { up() }
+        waitForPane("s-pihole", PaneSide.RIGHT)
+        assertEquals("s-homelab", graph.sessions.panes.value!!.left.id)
+        assertEquals("s-pihole", graph.sessions.activeTabId.value)
+        compose.onAllNodes(hasContentDescription("Carrying", substring = true)).assertCountEquals(0)
         capture("tablet-landscape-split")
 
         // The divider: let go within reach of a third, it snaps there.
         val divider = compose.onNode(hasContentDescription("Divider between the panes"))
         divider.assert(hasStateDescription("Left pane 50 percent"))
-        val usable = paneBounds("s-homelab", PaneSide.LEFT).width + paneBounds("s-pihole", PaneSide.RIGHT).width
-        val slop = ViewConfiguration.get(ApplicationProvider.getApplicationContext()).scaledTouchSlop.toFloat()
-        divider.performTouchInput {
-            down(center)
-            moveBy(Offset(-(slop + 1f), 0f))
-            moveBy(Offset(-usable / 6f, 0f))
-            up()
-        }
+        dragDivider("s-homelab", "s-pihole", -1f / 6f)
         compose.waitUntil(5_000) {
             compose.onAllNodes(hasContentDescription("Divider between the panes") and hasStateDescription("Left pane 33 percent")).fetchSemanticsNodes().isNotEmpty()
         }
         capture("tablet-landscape-split-third")
 
-        // A tab carried from the strip (spec C23): held, then pulled below the strip, it travels with the
-        // finger; over the right pane the pane steps up to take it, and letting go puts it there.
-        val build = tab("build box")
-        val buildBounds = build.fetchSemanticsNode().boundsInRoot
-        val target = paneBounds("s-pihole", PaneSide.RIGHT).center
-        build.performTouchInput { down(center) }
-        compose.mainClock.advanceTimeBy(700)
-        compose.waitForIdle()
-        build.performTouchInput { moveBy(Offset(0f, 30f)) }
-        build.performTouchInput { moveBy(Offset(0f, 200f)) }
-        build.performTouchInput { moveTo(target - buildBounds.topLeft) }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Carrying build box")).fetchSemanticsNodes().isNotEmpty() }
+        // A tab carried from the strip onto a pane (spec C23): over the right pane the pane steps up to
+        // take it, and letting go puts it there.
+        val build = carry("build box", paneBounds("s-pihole", PaneSide.RIGHT).center)
         capture("tablet-landscape-tab-carry")
         build.performTouchInput { up() }
         waitForPane("s-build", PaneSide.RIGHT)
@@ -278,6 +288,35 @@ class LargeScreenScreenshotTest {
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
         capture("tablet-landscape-switcher-dialog")
+    }
+
+    /**
+     * A carry's targets are the layer's that is up, never a layer's that was. After a split whose
+     * divider was moved to a third and a pane closed, the one body's halves take the drop either side
+     * of the window's middle: a tab let go at 40 percent of the way across lands on the left, where
+     * the bounds of the right pane as it was (from a third on) would have put it on the right.
+     */
+    @Test
+    @Config(qualifiers = TABLET_LANDSCAPE)
+    fun `tablet on its side, after a split and a close the one body's halves take the drop, not the panes that were`() {
+        mountApp()
+        split("s-pihole", PaneSide.RIGHT)
+        dragDivider("s-homelab", "s-pihole", -1f / 6f)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasContentDescription("Divider between the panes") and hasStateDescription("Left pane 33 percent")).fetchSemanticsNodes().isNotEmpty()
+        }
+        // × on the focused (right) pane: homelab alone on the Stage, with the keys.
+        compose.onNodeWithContentDescription("Close pane").performClick()
+        compose.waitUntil(5_000) { graph.sessions.panes.value == null && graph.sessions.activeTabId.value == "s-homelab" }
+        compose.waitForIdle()
+
+        val body = compose.onNode(hasContentDescription("Terminal")).fetchSemanticsNode().boundsInRoot
+        carry("build box", Offset(body.left + body.width * 0.4f, body.center.y)).performTouchInput { up() }
+        waitForPane("s-build", PaneSide.LEFT)
+        val panes = graph.sessions.panes.value!!
+        assertEquals("s-build", panes.left.id)
+        assertEquals("s-homelab", panes.right.id)
+        assertEquals("s-build", graph.sessions.activeTabId.value)
     }
 
     /**
@@ -421,6 +460,38 @@ class LargeScreenScreenshotTest {
 
     /** The strip item for the detached tab titled [title]. */
     private fun tab(title: String) = compose.onNode(hasContentDescription("$title, detached", substring = true))
+
+    private fun touchSlop(): Float = ViewConfiguration.get(ApplicationProvider.getApplicationContext()).scaledTouchSlop.toFloat()
+
+    /**
+     * Holds the strip item titled [title] until it lifts, pulls it below the strip and carries it to
+     * [to] (root coordinates), returning once the ghost is up; the finger is still down, for the
+     * caller to let go or capture first.
+     */
+    private fun carry(title: String, to: Offset): SemanticsNodeInteraction {
+        val item = tab(title)
+        val itemBounds = item.fetchSemanticsNode().boundsInRoot
+        item.performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(700)
+        compose.waitForIdle()
+        item.performTouchInput { moveBy(Offset(0f, 30f)) }
+        item.performTouchInput { moveBy(Offset(0f, 200f)) }
+        item.performTouchInput { moveTo(to - itemBounds.topLeft) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Carrying $title")).fetchSemanticsNodes().isNotEmpty() }
+        return item
+    }
+
+    /** Drags the divider by [fraction] of the two panes' width (past the touch slop first) and lets go, for the snap to settle it. */
+    private fun dragDivider(leftId: String, rightId: String, fraction: Float) {
+        val usable = paneBounds(leftId, PaneSide.LEFT).width + paneBounds(rightId, PaneSide.RIGHT).width
+        val slop = touchSlop()
+        compose.onNode(hasContentDescription("Divider between the panes")).performTouchInput {
+            down(center)
+            moveBy(Offset(if (fraction < 0f) -(slop + 1f) else slop + 1f, 0f))
+            moveBy(Offset(usable * fraction, 0f))
+            up()
+        }
+    }
 
     /** The strip's height in dp: the style's height, since Robolectric's window has no status-bar inset to reach into. */
     private fun stripHeightDp(): Float =

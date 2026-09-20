@@ -45,10 +45,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -109,8 +113,9 @@ private const val DividerRestAlpha = 0.4f
  * keys and the keyboard follows it; one Deck sits under both panes, the focused terminal's, or the
  * other pane's while the focused one has none to show, so a focus change never resizes a live frame.
  * Focus follows the last touched pane, and a tab from the strip can be dropped on either pane or sent
- * there from its menu. With no companion the active tab fills the width, as it always has, and
- * Overflow offers Split.
+ * there from its menu. With no companion the active tab fills the width, as it always has, its
+ * body's two halves take a tab carried from the strip (which splits the Stage with it on that
+ * side), and Overflow offers Split.
  *
  * A layer over [StageScreen], not a second Stage: the strip, the overflow, the shortcuts and each
  * tab's body are the Stage's own, composed through [StageBodies.TabBody]; this only decides where
@@ -182,8 +187,11 @@ fun PaneStageScreen(
             layer = { tab, body ->
                 val two = panes
                 if (two == null || two.sideOf(tab.id) == null) {
-                    // One tab on the Stage: its body fills the width, the chrome where the body puts it.
-                    TabBody(tab, toolsFor(tab.id), body.then(tracking(tab.id)), focusRequester = focusFor(tab.id))
+                    // One tab on the Stage: its body fills the width, the chrome where the body puts it, and
+                    // the body's halves take a tab from the strip, which splits the Stage (spec C23).
+                    SplitTargets(carry, modifier = body) {
+                        TabBody(tab, toolsFor(tab.id), Modifier.fillMaxSize().then(tracking(tab.id)), focusRequester = focusFor(tab.id))
+                    }
                 } else {
                     PaneLayer(
                         panes = two,
@@ -208,7 +216,7 @@ fun PaneStageScreen(
  * bottom. Bodies are composed through [bodies] so a tab's kind picks its body in one place; each
  * terminal hands its Deck to a [StageChromeHost] and the layer lays out the focused pane's, or the
  * other pane's when the focused one has none, under both panes, paying the bottom insets once for
- * everything above it.
+ * everything above it. The panes are the carry's targets while this is up, and not a moment longer.
  */
 @Composable
 private fun PaneLayer(
@@ -242,6 +250,10 @@ private fun PaneLayer(
         val nearest = SnapFractions.minByOrNull { abs(it - f) * usable } ?: return f
         return if (abs(nearest - f) * usable <= snapPx) clampFraction(nearest) else f
     }
+
+    // The panes' bounds are this layer's word. When it leaves (a pane closed, the window narrowed) the
+    // rectangles they occupied go with it, or a later carry would drop a tab into a pane that is not there.
+    DisposableEffect(carry) { onDispose { carry.bounds = emptyMap() } }
 
     val bottomInsets = WindowInsets.navigationBars.union(WindowInsets.ime)
     Column(modifier.onGloballyPositioned { layerOrigin = it.positionInRoot() }) {
@@ -305,14 +317,7 @@ private fun PaneLayer(
                     .fillMaxHeight()
                     .zIndex(1f),
             )
-            carry.carried?.let { carried ->
-                CarryGhost(
-                    title = carried.title,
-                    color = carried.color.rgb.toColor(),
-                    monogram = carried.monogram,
-                    at = carry.position - layerOrigin,
-                )
-            }
+            CarryOverlay(carry, layerOrigin)
         }
         // The chrome across the bottom belongs to the terminal that has one: the focused pane's when it
         // has a Deck to show, else the other pane's. So a tap that moves the focus onto a detached frame
@@ -490,6 +495,57 @@ private fun Divider(
                 .background(c.text3),
         )
     }
+}
+
+/**
+ * The one body on a Stage not yet split, as two drop targets (spec C23): a tab carried from the
+ * strip and let go over the left or right half splits the Stage with that tab on that side and this
+ * one on the other, what `Open in left pane` and `Open in right pane` on the tab's menu do. The half
+ * under the finger steps up as a pane does, its ground to `surface.2`: a terminal paints its own
+ * ground, so the step is laid over the half in a lighten blend, which lifts the ground and leaves
+ * the text as it is. The ghost travels with the finger as it does over two panes. The one tab
+ * already on the Stage has no beside-itself, so the carry turns it down (see [TabCarry.accepts]).
+ * The halves' bounds are set as this lays out and cleared as it leaves, so a target is never a
+ * rectangle nothing occupies any more.
+ */
+@Composable
+private fun SplitTargets(carry: TabCarry, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val c = Berth.colors
+    val radius = BerthRadius.row
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    val target = carry.target
+    val left by animateColorAsState(if (target == PaneSide.LEFT) c.surface2 else Color.Transparent, tween(120), label = "left half")
+    val right by animateColorAsState(if (target == PaneSide.RIGHT) c.surface2 else Color.Transparent, tween(120), label = "right half")
+    DisposableEffect(carry) { onDispose { carry.bounds = emptyMap() } }
+    Box(
+        modifier
+            .onGloballyPositioned {
+                val b = it.boundsInRoot()
+                origin = b.topLeft
+                val middle = b.left + b.width / 2f
+                carry.bounds = mapOf(
+                    PaneSide.LEFT to Rect(b.left, b.top, middle, b.bottom),
+                    PaneSide.RIGHT to Rect(middle, b.top, b.right, b.bottom),
+                )
+            }
+            .drawWithContent {
+                drawContent()
+                val half = Size(size.width / 2f, size.height)
+                val corner = CornerRadius(radius.toPx())
+                if (left.alpha > 0f) drawRoundRect(left, Offset.Zero, half, corner, blendMode = BlendMode.Lighten)
+                if (right.alpha > 0f) drawRoundRect(right, Offset(half.width, 0f), half, corner, blendMode = BlendMode.Lighten)
+            },
+    ) {
+        content()
+        CarryOverlay(carry, origin)
+    }
+}
+
+/** The carried tab's ghost where the finger is, in the coordinates of the layer whose top-left is at [origin] in the root; nothing while no tab is carried. */
+@Composable
+private fun CarryOverlay(carry: TabCarry, origin: Offset) {
+    val carried = carry.carried ?: return
+    CarryGhost(title = carried.title, color = carried.color.rgb.toColor(), monogram = carried.monogram, at = carry.position - origin)
 }
 
 /** The carried tab under the finger: its swatch and title on `surface.3` at the row radius, a little above the touch. */
