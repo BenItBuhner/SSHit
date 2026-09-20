@@ -457,13 +457,19 @@ class TransferManager(
     private fun patch(id: String, change: (Transfer) -> Transfer) {
         _transfers.update { list -> list.map { if (it.id == id) change(it) else it } }
         // A conflict comes and goes through here; the notification says when a copy waits on the user.
-        sessions.waitingTransfers.value = _transfers.value.count { it.waiting }
+        publishWaiting(_transfers.value)
     }
 
     private fun publishCount() {
         val list = _transfers.value
         sessions.activeTransfers.value = list.count { it.state.isActive }
+        publishWaiting(list)
+    }
+
+    /** How many copies wait on the user, and whose Files tab the notification's tap should open: the one that has waited longest, in queue order. */
+    private fun publishWaiting(list: List<Transfer>) {
         sessions.waitingTransfers.value = list.count { it.waiting }
+        sessions.waitingTransferSession.value = list.firstOrNull { it.waiting }?.sessionId
     }
 
     /** Display name and size of a picked document: the name null when nothing usable is known, the size -1 when the provider does not say. */

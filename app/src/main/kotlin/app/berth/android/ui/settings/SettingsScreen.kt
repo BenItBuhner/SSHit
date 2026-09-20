@@ -164,6 +164,8 @@ fun SettingsScreen(
                 Text("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
             }
 
+            NotificationsSection(vm.notifier)
+
             Panel(label = "Trust") {
                 ListRow("Known hosts", subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" }, surface = Color.Transparent, minHeight = 44.dp, onClick = onKnownHosts, trailing = chevron)
             }

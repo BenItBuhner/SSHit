@@ -346,20 +346,45 @@ private fun ConfirmSheet(
 
 private fun plural(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun}s"
 
+/** How long a [NoticeBar] stays before its owner takes it down. */
+const val NOTICE_BAR_MS = 6_000L
+
 /**
- * "Closed prod-web · Reopen" for six seconds after a connected tab closes (spec C3, Closing): a
- * full-radius bar on `surface.3` above the keyboard and the navigation bar. Reopen recreates the tab
- * in its old slot and connects again.
+ * "Closed prod-web · Reopen" for six seconds after a connected tab closes (spec C3, Closing).
+ * Reopen recreates the tab in its old slot and connects again.
  */
 @Composable
 fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
-    val c = Berth.colors
     val closed = ui.closed
     LaunchedEffect(closed) {
         if (closed == null) return@LaunchedEffect
-        delay(6_000)
+        delay(NOTICE_BAR_MS)
         if (ui.closed === closed) ui.closed = null
     }
+    // The last closed tab is kept through the bar's exit, so the text does not blank as it slides away.
+    val shown = remember { mutableStateOf(closed) }
+    if (closed != null) shown.value = closed
+    NoticeBar(
+        visible = closed != null,
+        text = "Closed ${shown.value?.record?.displayTitle ?: ""}",
+        action = "Reopen",
+        onAction = {
+            shown.value?.let(vm::reopen)
+            ui.closed = null
+        },
+        modifier = modifier,
+    )
+}
+
+/**
+ * The Stage's one-line notice with one action, `Closed prod-web · Reopen` (spec C3, Closing) and
+ * `Notifications are off · Settings` (spec C21): a full-radius bar on `surface.3` above the
+ * keyboard and the navigation bar, Caption text, a middle dot, the action in accent. It stays
+ * composed and [visible] drives it, so the exit animates; the owner decides when it goes.
+ */
+@Composable
+fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Berth.colors
     Box(
         modifier
             .fillMaxWidth()
@@ -367,13 +392,10 @@ fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.BottomCenter,
     ) {
         AnimatedVisibility(
-            visible = closed != null,
+            visible = visible,
             enter = fadeIn() + slideInVertically { it / 2 },
             exit = fadeOut() + slideOutVertically { it / 2 },
         ) {
-            val shown = remember { mutableStateOf(closed) }
-            if (closed != null) shown.value = closed
-            val record = shown.value?.record
             Row(
                 Modifier
                     .padding(bottom = 12.dp)
@@ -386,7 +408,7 @@ fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "Closed ${record?.displayTitle ?: ""}",
+                    text,
                     style = BerthType.caption,
                     color = c.text2,
                     maxLines = 1,
@@ -394,10 +416,7 @@ fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
                 Text("\u00B7", style = BerthType.caption, color = c.text3)
-                BarAction("Reopen") {
-                    shown.value?.let(vm::reopen)
-                    ui.closed = null
-                }
+                BarAction(action, onAction)
             }
         }
     }

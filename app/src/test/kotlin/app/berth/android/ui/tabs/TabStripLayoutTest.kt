@@ -185,6 +185,22 @@ class TabStripLayoutTest {
     }
 
     @Test
+    fun `only a tab wholly inside the viewport is in view, so one cut by an edge lights the count tile`() {
+        strip()
+        // At rest: two whole tabs, the third cut by the end. Laid out, but its swatch may be under the fade.
+        assertTrue(item("t2") != null)
+        assertEquals(setOf("t0", "t1"), state.visibleTabIds)
+        activate("t2")
+        // Scroll-to-active leaves t0's tail behind the leading fade: the strip's normal resting state,
+        // where a lit t0 would show no ring anywhere unless the tile carried it.
+        val cut = checkNotNull(item("t0"))
+        assertTrue(cut.offset < state.listState.layoutInfo.viewportStartOffset)
+        assertFalse("t0" in state.visibleTabIds)
+        assertTrue(state.visibleTabIds.containsAll(listOf("t1", "t2")))
+        assertFalse("t3 is past the end", "t3" in state.visibleTabIds)
+    }
+
+    @Test
     fun `a strip that fits fades neither end`() {
         strip(width = 900.dp)
         assertFalse(state.listState.canScrollBackward)

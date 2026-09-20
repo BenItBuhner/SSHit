@@ -9,6 +9,7 @@ import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
+import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
@@ -49,6 +50,7 @@ import app.berth.ssh.SshKeys
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -136,6 +138,12 @@ class AppViewModel @Inject constructor(
     val attentionCount: StateFlow<Int> = combine(records, sessions.activeTabId) { list, active ->
         list.count { it.needsAttention && it.id != active }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** The notification permission's sheet or notice when one is due, and whether the shade is reachable (spec C21). */
+    val notifier: SessionNotifier get() = sessions.notifier
+
+    /** A tab a notification put on stage; the shell pops back to the Stage so it is seen. */
+    val stageRequests: SharedFlow<String> = sessions.stageRequests
 
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -233,6 +241,9 @@ class AppViewModel @Inject constructor(
 
     /** Ctrl+1…9. */
     fun activateTabAt(index: Int) = sessions.activateAt(index)
+
+    /** Jump to unread (spec C3, C4, C22): the tab lit most recently goes on stage; false when no other tab needs the user. */
+    fun jumpToUnread(): Boolean = sessions.jumpToUnread()
 
     fun setWorkspace(id: String) = sessions.setCurrentWorkspace(id)
 

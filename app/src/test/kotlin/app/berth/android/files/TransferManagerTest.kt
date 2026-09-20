@@ -234,9 +234,10 @@ class TransferManagerTest {
         assertEquals("Answer", transferTrailing(t))
         assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(t))
         assertEquals("a.txt already exists \u00B7 2 more", transferCaption(t, showHost = false, others = 2, compact = true))
-        // The notification counts a copy stopped on a question apart from those that move.
+        // The notification counts a copy stopped on a question apart from those that move, and its tap opens the Files tab of the terminal it names.
         assertEquals(1, graph.sessions.activeTransfers.value)
         assertEquals(1, graph.sessions.waitingTransfers.value)
+        assertEquals("s1", graph.sessions.waitingTransferSession.value)
         // An answer for a transfer that is not waiting goes nowhere.
         manager.resolveConflict("not-a-transfer", ConflictChoice.OVERWRITE, applyToAll = true)
 
@@ -249,6 +250,7 @@ class TransferManagerTest {
         t = awaitFinished(id)
         assertEquals(TransferState.DONE, t.state)
         assertEquals(0, graph.sessions.waitingTransfers.value)
+        assertNull(graph.sessions.waitingTransferSession.value)
         val f = t.folder!!
         assertNull(f.conflict)
         assertEquals(4, f.filesTotal)

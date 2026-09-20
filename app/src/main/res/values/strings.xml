@@ -3,6 +3,10 @@
     <!-- app_name is generated from gradle.properties (app.name); do not define it here. -->
     <string name="notification_channel_sessions">Sessions</string>
     <string name="notification_channel_sessions_description">Shown while terminal sessions are connected</string>
+    <string name="notification_channel_attention">Attention</string>
+    <string name="notification_channel_attention_description">A tab needs you while Berth is in the background: a bell, a finished command, a notice from a program</string>
+    <string name="notification_channel_problems">Problems</string>
+    <string name="notification_channel_problems_description">A reconnect that gave up or a sign-in the server refused</string>
     <string name="notification_one_session">1 session live</string>
     <string name="notification_sessions">%1$d sessions live</string>
     <string name="notification_one_tunnel">1 tunnel</string>
@@ -14,4 +18,16 @@
     <string name="notification_one_waiting">1 waiting on you</string>
     <string name="notification_waiting">%1$d waiting on you</string>
     <string name="notification_detach_all">Detach all</string>
+    <string name="notification_retry">Retry</string>
+    <string name="notification_detach">Detach</string>
+    <string name="notification_state_live">live</string>
+    <string name="notification_state_connecting">connecting</string>
+    <string name="notification_state_reconnecting">reconnecting</string>
+    <string name="notification_state_detached">detached</string>
+    <string name="notification_state_failed">failed</string>
+    <string name="notification_attention_title">%1$s needs you</string>
+    <string name="notification_attention_default">Needs you</string>
+    <string name="notification_problem_gave_up_title">Couldn\'t reconnect to %1$s</string>
+    <string name="notification_problem_gave_up_text">Gave up after %1$s. Tap to retry.</string>
+    <string name="notification_problem_failed_title">Couldn\'t connect to %1$s</string>
 </resources>

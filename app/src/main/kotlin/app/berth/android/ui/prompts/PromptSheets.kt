@@ -77,9 +77,10 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
     }
 }
 
+/** The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val c = Berth.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
