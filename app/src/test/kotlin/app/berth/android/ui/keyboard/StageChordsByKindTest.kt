@@ -67,8 +67,8 @@ import java.util.concurrent.TimeUnit
 /**
  * The Stage's terminal chords are keyed off the tab's kind, not off the tab being a
  * [app.berth.android.session.TerminalSession]: a Tunnels tab (#13) is one, a login with forwards
- * and no shell, so Ctrl+F, Ctrl+Shift+E and Ctrl+Shift+V must reach the Stage and do nothing at
- * all there, while the same chords on the shell tab beside it open the search, flip the Deck and
+ * and no shell, so Ctrl+Shift+F, Ctrl+Shift+E and Ctrl+Shift+V must reach the Stage and do nothing
+ * at all there, while the same chords on the shell tab beside it open the search, flip the Deck and
  * try the paste. Through the real [StageScreen] over the in-memory graph, with the key events
  * travelling the way a hardware keyboard's do, up from the focused control through the Stage's
  * key preview.
@@ -121,11 +121,11 @@ class StageChordsByKindTest {
 
         // From a forward's row, the chords climb to the Stage's preview and find no shell to act on.
         compose.onNodeWithText(row).requestFocus()
-        chord(KEYCODE_F, META_CTRL_ON)
+        chord(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON)
         chord(KEYCODE_E, META_CTRL_ON or META_SHIFT_ON)
         chord(KEYCODE_V, META_CTRL_ON or META_SHIFT_ON)
         compose.waitForIdle()
-        assertFalse("Ctrl+F opened the search on a Tunnels tab", tools.search.open)
+        assertFalse("Ctrl+Shift+F opened the search on a Tunnels tab", tools.search.open)
         assertNull("Ctrl+Shift+V held a paste for preview on a Tunnels tab", tools.pendingPaste)
         // A paste into a detached shell says Not connected; a Tunnels tab, detached too, says nothing, since nothing was tried.
         assertNull("Ctrl+Shift+V raised a notice on a Tunnels tab", tools.notice)
@@ -136,8 +136,8 @@ class StageChordsByKindTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithTag(TerminalTag).fetchSemanticsNodes().isNotEmpty() }
         assertEquals("Hide Deck", deckRow())
         // Each chord from the terminal itself, the way a keyboard's arrive with the shell focused.
-        terminalChord(KEYCODE_F, META_CTRL_ON)
-        assertTrue("Ctrl+F did not open the search on a shell tab", tools.search.open)
+        terminalChord(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON)
+        assertTrue("Ctrl+Shift+F did not open the search on a shell tab", tools.search.open)
         tools.closeSearch()
         terminalChord(KEYCODE_V, META_CTRL_ON or META_SHIFT_ON)
         assertEquals(StageTools.NOT_CONNECTED, tools.notice)

@@ -25,8 +25,7 @@ import app.berth.android.ui.theme.JetBrainsMono
 /**
  * The hardware keyboard shortcut sheet (spec C22): what Ctrl+Shift+/ opens and Settings › Hardware
  * keyboard links to. One panel per group, a row per chord with the keys in mono over what they do,
- * and a caption naming the setting that moves Ctrl+T, Ctrl+W and Ctrl+F between the app and the
- * shell. Nothing here is a control: the sheet reads, the keys act. A [BerthSheet], so on a window
+ * and a caption naming the setting that moves Ctrl+T and Ctrl+W between the app and the shell. Nothing here is a control: the sheet reads, the keys act. A [BerthSheet], so on a window
  * that fits two panes (spec C23) it opens as a dialog like every other sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -44,7 +43,7 @@ fun ShortcutSheet(ctrlTabKeysReachTerminal: Boolean, onDismiss: () -> Unit, pane
         ) {
             SheetTitle(
                 "Keyboard shortcuts",
-                if (ctrlTabKeysReachTerminal) "Ctrl+T, Ctrl+W and Ctrl+F go to the shell; their Shift chords act here (Settings \u203A Hardware keyboard)."
+                if (ctrlTabKeysReachTerminal) "Ctrl+T and Ctrl+W go to the shell; Ctrl+Shift+T and Ctrl+Shift+W act here (Settings \u203A Hardware keyboard)."
                 else "Ctrl+Shift+/ opens this sheet; Settings \u203A Hardware keyboard hands Ctrl+T and Ctrl+W to the shell.",
             )
             for (group in shortcutGroups(ctrlTabKeysReachTerminal, panes)) {

@@ -13,7 +13,7 @@ import app.berth.android.ui.tabs.TabShortcuts
 
 /** What the Stage does for the chords beyond the tab strip's (spec C22). */
 interface StageShortcutActions {
-    /** Ctrl+F, Ctrl+Shift+F: the search bar over the scrollback (spec C17). */
+    /** Ctrl+Shift+F: the search bar over the scrollback (spec C17, C22); plain Ctrl+F is readline's forward-char and the shell's. */
     fun find()
 
     /** Ctrl+Shift+C: the selection to the Berth clipboard; nothing selected, nothing copied. */
@@ -58,12 +58,13 @@ interface StageShortcutActions {
 /**
  * The Stage's hardware chords in one dispatcher, run before the terminal sees a key: the tab strip's
  * (spec C3, [TabShortcuts]) first, then search, copy and paste through the Berth clipboard, the Deck,
- * the font size and the shortcut sheet (spec C22). Ctrl+F is readline's forward-char, so like Ctrl+T
- * and Ctrl+W it yields to the terminal when [ctrlTabKeysReachTerminal] is on and Ctrl+Shift+F still
- * searches. Every chord is Ctrl with or without Shift; a chord Alt or Meta joins, and anything not
- * named here, reaches the terminal. The one key taken without Ctrl is a plain Escape while the
- * focus is out of the tab's body, which brings it back ([StageShortcutActions.returnToBody]); from
- * the terminal itself Escape is the host's.
+ * the font size and the shortcut sheet (spec C22). Every one of the Stage's chords is Ctrl+Shift and
+ * a key: the plain Ctrl keys are the shell's (Ctrl+F is readline's forward-char, every pager's
+ * forward key), and the only plain Ctrl keys the app takes are the strip's, with Ctrl+T and Ctrl+W
+ * handed back by [ctrlTabKeysReachTerminal]. A chord Alt or Meta joins, and anything not named here,
+ * reaches the terminal. The one key taken without Ctrl is a plain Escape while the focus is out of
+ * the tab's body, which brings it back ([StageShortcutActions.returnToBody]); from the terminal
+ * itself Escape is the host's.
  */
 class HardwareShortcuts(
     private val tabs: TabShortcuts,
@@ -76,7 +77,7 @@ class HardwareShortcuts(
         if (!event.isCtrlPressed) return false
         val shift = event.isShiftPressed
         return when (event.key) {
-            Key.F -> if (shift || !ctrlTabKeysReachTerminal) { stage.find(); true } else false
+            Key.F -> if (shift) { stage.find(); true } else false
             Key.C -> if (shift) { stage.copy(); true } else false
             Key.V -> if (shift) { stage.paste(); true } else false
             Key.E -> if (shift) { stage.toggleDeck(); true } else false
@@ -103,9 +104,9 @@ data class ShortcutGroup(val title: String, val entries: List<ShortcutEntry>)
 
 /**
  * What the shortcut sheet lists (spec C22), as the dispatchers above and the terminal actually
- * behave; [ctrlTabKeysReachTerminal] moves Ctrl+T, Ctrl+W and Ctrl+F to the terminal's side, and
- * [panes] says whether the Stage on screen has panes for the pane chords to act on, since the sheet
- * lists them either way (they are taken either way) and says when they wait for a wider screen.
+ * behave; [ctrlTabKeysReachTerminal] moves Ctrl+T and Ctrl+W to the terminal's side, and [panes]
+ * says whether the Stage on screen has panes for the pane chords to act on, since the sheet lists
+ * them either way (they are taken either way) and says when they wait for a wider screen.
  */
 fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): List<ShortcutGroup> {
     val tabChords = buildList {
@@ -124,7 +125,7 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
         add(ShortcutEntry("Ctrl+Shift+U", "Jump to the tab that needs you"))
     }
     val stageChords = listOf(
-        ShortcutEntry(if (ctrlTabKeysReachTerminal) "Ctrl+Shift+F" else "Ctrl+F", "Find in scrollback"),
+        ShortcutEntry("Ctrl+Shift+F", "Find in scrollback"),
         ShortcutEntry("Ctrl+Shift+C", "Copy the selection"),
         ShortcutEntry("Ctrl+Shift+V", "Paste"),
         ShortcutEntry("Ctrl+Shift+E", "Show or hide the Deck"),
@@ -144,7 +145,7 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
         add(ShortcutEntry("Shift, Ctrl, Alt + arrows", "Modified arrows, Home, End, Page Up and Down"))
         add(ShortcutEntry("F1 \u2026 F12", "Function keys, with any modifier"))
         add(ShortcutEntry("Esc, Tab, Insert, Delete", "As on the host"))
-        if (ctrlTabKeysReachTerminal) add(ShortcutEntry("Ctrl+T, Ctrl+W, Ctrl+F", "Readline's transpose, delete word and forward"))
+        if (ctrlTabKeysReachTerminal) add(ShortcutEntry("Ctrl+T, Ctrl+W", "Readline's transpose and delete word"))
     }
     return listOf(
         ShortcutGroup("Tabs", tabChords),

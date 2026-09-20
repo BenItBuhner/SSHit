@@ -23,7 +23,7 @@ import app.berth.domain.model.AltKeyMode
 
 /**
  * Settings › Hardware keyboard (spec C22): what Alt does, the compact Deck, whether readline's
- * Ctrl+T, Ctrl+W and Ctrl+F belong to the shell, and the shortcut sheet. One panel, registered
+ * Ctrl+T and Ctrl+W belong to the shell, and the shortcut sheet. One panel, registered
  * with one line in [SettingsScreen]; the sheet it opens is the same one Ctrl+Shift+/ opens on the
  * Stage, so the two never drift.
  */
@@ -41,8 +41,8 @@ fun HardwareKeyboardPanel(vm: AppViewModel) {
         }
         PanelNote("Escape then the key is what every shell and editor reads as Meta. The eighth bit is for the few programs that want a Meta byte; keys outside ASCII still take the Escape prefix.")
         ToggleRow("Compact Deck", settings.compactDeck, { on -> vm.updateHardwareKeyboard { it.copy(compactDeck = on) } }, caption = "One row of modifiers and actions while a keyboard is attached", captionLines = 2)
-        ToggleRow("Ctrl+T, Ctrl+W and Ctrl+F go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline\u2019s transpose, delete word and forward")
-        PanelNote("Ctrl+Shift+T, Ctrl+Shift+W and Ctrl+Shift+F still open, close and search; Ctrl+Tab and Ctrl+1\u20269 always switch.")
+        ToggleRow("Ctrl+T and Ctrl+W go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline\u2019s transpose and delete word")
+        PanelNote("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.")
         ListRow(
             "Keyboard shortcuts",
             subtitle = "Ctrl+Shift+/ opens this from a session",

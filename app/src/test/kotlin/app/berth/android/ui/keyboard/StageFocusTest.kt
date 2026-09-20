@@ -223,10 +223,10 @@ class StageFocusTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty() }
         awaitFocused(hasContentDescription("Grip", substring = true), "the grip after the strip brought the Deck back")
 
-        // Ctrl+F: the search bar's field takes the focus; Escape closes the search, the way its × does, and the terminal has the focus again.
-        chord(KEYCODE_F, META_CTRL_ON)
+        // Ctrl+Shift+F: the search bar's field takes the focus; Escape closes the search, the way its × does, and the terminal has the focus again.
+        chord(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON)
         compose.waitUntil(5_000) { tools.search.open }
-        awaitFocused(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText), "the search field after Ctrl+F")
+        awaitFocused(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText), "the search field after Ctrl+Shift+F")
         chord(KEYCODE_ESCAPE, 0)
         compose.waitUntil(5_000) { !tools.search.open }
         awaitFocused(hasTestTag(TerminalTag), "the terminal after Escape closed the search")

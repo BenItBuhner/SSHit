@@ -66,13 +66,14 @@ class HardwareShortcutsTest {
     private fun key(code: Int, meta: Int, action: Int = ACTION_DOWN) = KeyEvent(android.view.KeyEvent(0L, 0L, action, code, 0, meta))
 
     @Test
-    fun `Ctrl+F searches unless the readline keys are the shell's, when only Ctrl+Shift+F does`() {
-        assertTrue(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON), ctrlTabKeysReachTerminal = false))
+    fun `only Ctrl+Shift+F searches, and plain Ctrl+F is the shell's whichever side the readline keys are on`() {
         assertTrue(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON), ctrlTabKeysReachTerminal = false))
-        // Readline's forward-char reaches the terminal with Ctrl+T and Ctrl+W; the Shift chord still searches.
-        assertFalse(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON), ctrlTabKeysReachTerminal = true))
         assertTrue(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON), ctrlTabKeysReachTerminal = true))
-        assertEquals(listOf("find", "find", "find"), calls)
+        // Readline's forward-char, less's and every pager's forward key: C22 binds the Shift chord only, so
+        // the plain key reaches the terminal on the default install and is not the readline setting's to move.
+        assertFalse(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON), ctrlTabKeysReachTerminal = false))
+        assertFalse(shortcuts.handle(key(KEYCODE_F, META_CTRL_ON), ctrlTabKeysReachTerminal = true))
+        assertEquals(listOf("find", "find"), calls)
     }
 
     @Test
@@ -160,10 +161,13 @@ class HardwareShortcutsTest {
         assertEquals(listOf("Tabs", "Stage", "Panes", "Terminal"), app.map { it.title })
         val appKeys = app.flatMap { it.entries }.map { it.keys }
         val shellKeys = shell.flatMap { it.entries }.map { it.keys }
-        assertTrue("Ctrl+T" in appKeys && "Ctrl+W" in appKeys && "Ctrl+F" in appKeys)
-        assertTrue("Ctrl+Shift+T" in shellKeys && "Ctrl+Shift+W" in shellKeys && "Ctrl+Shift+F" in shellKeys)
+        assertTrue("Ctrl+T" in appKeys && "Ctrl+W" in appKeys)
+        assertTrue("Ctrl+Shift+T" in shellKeys && "Ctrl+Shift+W" in shellKeys)
         assertFalse("Ctrl+T" in shellKeys)
-        assertTrue(shell.last().entries.any { it.keys == "Ctrl+T, Ctrl+W, Ctrl+F" })
-        assertFalse(app.last().entries.any { it.keys == "Ctrl+T, Ctrl+W, Ctrl+F" })
+        // The search is the Shift chord on both sides, and the plain Ctrl+F is never listed as the app's.
+        assertTrue("Ctrl+Shift+F" in appKeys && "Ctrl+Shift+F" in shellKeys)
+        assertFalse("Ctrl+F" in appKeys || "Ctrl+F" in shellKeys)
+        assertTrue(shell.last().entries.any { it.keys == "Ctrl+T, Ctrl+W" })
+        assertFalse(app.last().entries.any { it.keys == "Ctrl+T, Ctrl+W" })
     }
 }
