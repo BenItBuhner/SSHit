@@ -170,9 +170,11 @@ fun StageScreen(
             switcher = actions::openSwitcher,
             jumpToUnread = { vm.jumpToUnread() },
         )
-        // The chords beyond the strip's act on the terminal tab on stage (spec C22); with a Files tab or
-        // nothing there they are still taken, since none of them means anything typed anywhere else.
-        val session = tab as? TerminalSession
+        // The chords beyond the strip's act on the terminal tab on stage (spec C22), and only on one
+        // whose kind is a shell: keyed off TabKind like the overflow, so a Files tab, a tab kind with
+        // no terminal behind it, or an empty stage takes the chord and does nothing with it, since
+        // none of them means anything typed anywhere else.
+        val session = (tab as? TerminalSession)?.takeIf { it.kind == TabKind.Ssh }
         val stage = object : StageShortcutActions {
             override fun find() { if (session != null) tools.openSearch() }
             override fun copy() {
@@ -186,9 +188,10 @@ fun StageScreen(
                 tools.selection.clear()
             }
             override fun paste() { if (session != null) clipboard.getText()?.text?.let { tools.paste(session, it, haptics) } }
-            override fun toggleDeck() { deckVisible = !deckVisible }
+            override fun toggleDeck() { if (session != null) deckVisible = !deckVisible }
             override fun fontStep(step: Int) {
-                val size = session?.record?.value?.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
+                session ?: return
+                val size = session.record.value.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
                 haptics.fontStep()
                 vm.setFontSize(size + step)
             }
