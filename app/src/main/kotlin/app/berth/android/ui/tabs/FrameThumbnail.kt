@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.a11y.terminalFontScale
 import app.berth.android.ui.terminal.TerminalPaints
 import app.berth.android.ui.terminal.TerminalRenderer
 import app.berth.domain.model.TerminalFont
@@ -39,7 +40,8 @@ fun FrameThumbnail(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val paints = remember(font, density.density, density.fontScale) { TerminalPaints(context, font, density.density, density.fontScale) }
+    val scale = terminalFontScale(font)
+    val paints = remember(font, density.density, scale) { TerminalPaints(context, font, density.density, scale) }
     val version: State<Long> = if (live) session.screenVersion.collectAsState() else remember { mutableLongStateOf(0L) }
     val emulator = session.emulator
     Canvas(modifier.semantics { contentDescription = "Frame of ${session.record.value.displayTitle}" }) {

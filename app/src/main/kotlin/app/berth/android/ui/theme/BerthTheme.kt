@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.rememberReducedMotion
 import app.berth.domain.model.InterfaceContrast
@@ -275,6 +276,7 @@ fun berthShapes(): Shapes = Shapes(
 /**
  * The app's theme. [reducedMotion] is the system's reduced-motion setting by default (spec A7), so
  * every motion under the theme answers it through [LocalReducedMotion]; a test passes its own.
+ * Interface text under the theme follows the system font size up to 1.3× (spec A11).
  */
 @Composable
 fun BerthTheme(
@@ -288,11 +290,13 @@ fun BerthTheme(
         LocalRadiusScale provides theme.radiusScale.coerceIn(InterfaceTheme.MIN_RADIUS_SCALE, InterfaceTheme.MAX_RADIUS_SCALE),
         LocalReducedMotion provides reducedMotion,
     ) {
-        MaterialTheme(
-            colorScheme = colors.toMaterial(),
-            typography = berthTypography(useSystemFont = theme.useSystemFont),
-            shapes = berthShapes(),
-            content = content,
-        )
+        CappedFontScale {
+            MaterialTheme(
+                colorScheme = colors.toMaterial(),
+                typography = berthTypography(useSystemFont = theme.useSystemFont),
+                shapes = berthShapes(),
+                content = content,
+            )
+        }
     }
 }

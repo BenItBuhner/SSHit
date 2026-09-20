@@ -42,6 +42,7 @@ import app.berth.android.R
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.terminalAccessibility
+import app.berth.android.ui.a11y.terminalFontScale
 import app.berth.android.ui.theme.Berth
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
@@ -154,12 +155,16 @@ object TerminalPaintsCache {
     private const val CAPACITY = 12
 }
 
-/** The cached [TerminalPaints] for [font] at the current density. */
+/**
+ * The cached [TerminalPaints] for [font] at the current density and the terminal's own scale: 1,
+ * or the system's font scale when the font follows it (spec A11).
+ */
 @Composable
 fun rememberTerminalPaints(font: TerminalFont): TerminalPaints {
     val context = LocalContext.current
-    val density = LocalDensity.current
-    return remember(font, density.density, density.fontScale) { TerminalPaintsCache.get(context, font, density.density, density.fontScale) }
+    val density = LocalDensity.current.density
+    val scale = terminalFontScale(font)
+    return remember(font, density, scale) { TerminalPaintsCache.get(context, font, density, scale) }
 }
 
 /** How far the view is scrolled into history, in lines; 0 is the live screen. */

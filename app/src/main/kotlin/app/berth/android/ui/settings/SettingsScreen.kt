@@ -142,6 +142,7 @@ fun SettingsScreen(
                 CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
                 CyclePicker("Font", listOf("JetBrains Mono", "System monospace"), font.family, { it }) { vm.setTerminalFont(font.copy(family = it)) }
                 CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
+                ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
                 CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
                 ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
                 ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })

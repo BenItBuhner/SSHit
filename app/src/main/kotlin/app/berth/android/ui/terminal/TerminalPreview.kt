@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import app.berth.android.ui.a11y.terminalFontScale
 import app.berth.domain.model.ColorMath
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
@@ -54,7 +55,8 @@ fun TerminalPreview(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val paints = remember(font, density.density, density.fontScale) { TerminalPaints(context, font, density.density, density.fontScale) }
+    val scale = terminalFontScale(font)
+    val paints = remember(font, density.density, scale) { TerminalPaints(context, font, density.density, scale) }
     var version by remember { mutableLongStateOf(0L) }
     val emulator = remember {
         TerminalEmulator(
