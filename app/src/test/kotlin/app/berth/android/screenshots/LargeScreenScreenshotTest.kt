@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
@@ -280,21 +281,28 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * The tablet upright: medium, so no rail, but the Stage splits; a Files tab beside a terminal
-     * (the pane owns the bottom inset, so the browser pads for nothing); the New tab sheet as a dialog.
+     * The tablet upright: medium, so no rail, but the Stage splits. The reference layout first (one
+     * tab under the strip, no rail), the New tab sheet as a dialog over it, and once that is closed
+     * from its scrim a Files tab beside a terminal (the pane owns the bottom inset, so the browser
+     * pads for nothing).
      */
     @Test
     @Config(qualifiers = TABLET_PORTRAIT)
-    fun `tablet upright, a Files tab beside a terminal, and the New tab sheet as a dialog`() {
+    fun `tablet upright, the New tab sheet as a dialog over the Stage, and a Files tab beside a terminal`() {
         mountApp()
         drawerIsASheet()
-        split("f-homelab", PaneSide.RIGHT)
-        pane("s-homelab", PaneSide.LEFT).assertIsDisplayed()
-        capture("tablet-portrait-files-beside-terminal")
+        capture("tablet-portrait-stage")
 
         openNewTabSheet()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("build box")).fetchSemanticsNodes().isNotEmpty() }
         capture("tablet-portrait-new-tab-dialog")
+        // The scrim closes the dialog, as a tap beside a bottom sheet closes the sheet.
+        compose.onNode(hasContentDescription("Close") and hasAnyDescendant(hasText("build box"))).performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("build box")).fetchSemanticsNodes().isEmpty() }
+
+        split("f-homelab", PaneSide.RIGHT)
+        pane("s-homelab", PaneSide.LEFT).assertIsDisplayed()
+        capture("tablet-portrait-files-beside-terminal")
     }
 
     // ---- live, against the local sshd ------------------------------------------------------------

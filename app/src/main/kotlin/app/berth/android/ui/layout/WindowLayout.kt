@@ -34,7 +34,11 @@ data class WindowLayout(val widthDp: Int, val heightDp: Int) {
     /** Two tabs side by side fit (spec C23): any width past compact, a phone on its side included. */
     val panes: Boolean get() = width != WidthClass.COMPACT
 
-    /** The drawer stands as a permanent rail (spec C7, A12): expanded width, with the height to hold its rows. */
+    /**
+     * The drawer stands as a permanent 280 dp rail (spec A12): expanded width, with the height to
+     * hold its rows. Medium widths keep the modal drawer for now; the 72 dp column of group swatches
+     * and library glyphs that spec A12 and C7 ask for there is a component still to come.
+     */
     val rail: Boolean get() = width == WidthClass.EXPANDED && height != HeightClass.COMPACT
 
     /** A sheet would be a strip across the bottom of a large window: it opens as a dialog instead (spec C23). */

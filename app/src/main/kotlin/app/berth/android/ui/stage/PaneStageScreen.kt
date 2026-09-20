@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -73,6 +74,7 @@ import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.tabs.LocalTabCarry
+import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabCarry
 import app.berth.android.ui.theme.Berth
@@ -97,13 +99,13 @@ private val MinPaneWidth = 240.dp
 private val SnapFractions = floatArrayOf(1f / 3f, 0.5f, 2f / 3f)
 private val SnapReach = 24.dp
 
-/** Each pane's header, the strip's height (spec C3: "each pane keeps a 40 dp header"). */
-private val PaneHeaderHeight = 40.dp
+/** The divider's grip at rest: there, but not a line; 1.0 while a finger holds it. */
+private const val DividerRestAlpha = 0.4f
 
 /**
  * The Stage on a window that fits two panes (spec C23): the tab strip spans the window as it does
- * on a phone, and below it the active tab and its companion sit side by side, each under a 40 dp
- * header with its swatch and title, a draggable 12 dp gap between them. The focused pane takes the
+ * on a phone, and below it the active tab and its companion sit side by side, each under a header
+ * of the strip's height with its swatch and title, a draggable 12 dp gap between them. The focused pane takes the
  * keys and the keyboard follows it; one Deck sits under both panes, the focused terminal's, or the
  * other pane's while the focused one has none to show, so a focus change never resizes a live frame.
  * Focus follows the last touched pane, and a tab from the strip can be dropped on either pane or sent
@@ -324,10 +326,11 @@ private fun PaneLayer(
 }
 
 /**
- * One pane: the 40 dp header (the tab's swatch and title, the age of a detached frame, and × on
- * the focused pane to close the pane) over the tab's body. Any touch in the pane focuses it, seen
- * on the way down and consumed by nobody, so the body's own gestures are untouched. While a tab is
- * carried over it the pane's surface steps up to say it will take the drop.
+ * One pane: the header (the tab's swatch and title, the age of a detached frame, and × on the
+ * focused pane to close the pane) over the tab's body. A touch in the unfocused pane focuses it,
+ * seen on the way down and consumed by nobody, so the body's own gestures are untouched; the
+ * focused pane's touches are its own, since a scroll in it has nothing to say to the manager.
+ * While a tab is carried over it the pane's surface steps up to say it will take the drop.
  */
 @Composable
 private fun Pane(
@@ -350,15 +353,17 @@ private fun Pane(
     val host = record.hostSnapshot
     val fill by animateColorAsState(if (dropTarget) c.surface2 else Color.Transparent, tween(120), label = "pane drop")
     val sideName = if (side == PaneSide.LEFT) "left" else "right"
+    val touched by rememberUpdatedState(onTouched)
+    val hasFocus by rememberUpdatedState(focused)
     Column(
         modifier
             .onGloballyPositioned { onBounds(it.boundsInRoot()) }
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(fill)
-            .pointerInput(onTouched) {
+            .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    onTouched()
+                    if (!hasFocus) touched()
                 }
             }
             .semantics {
@@ -390,7 +395,9 @@ private fun Pane(
 /**
  * The pane's header (spec C23): 20 dp swatch with the state dot, the title in Body, then the age
  * of a detached frame in Caption, and on the focused pane the × that closes the pane (the tab
- * stays in the strip). Transparent: the strip above has the fill, and the header is a label.
+ * stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
+ * height is the strip's (spec C3), so on a phone on its side it shortens with the strip rather than
+ * standing taller than the window's own header and costing each pane rows.
  */
 @Composable
 private fun PaneHeader(
@@ -407,7 +414,7 @@ private fun PaneHeader(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(PaneHeaderHeight)
+            .height(LocalTabStripStyle.current.height)
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -434,8 +441,9 @@ private fun PaneHeader(
 }
 
 /**
- * The gap between the panes, draggable (spec C23): nothing is drawn until a finger holds it, then
- * a 4 × 24 pill in `text.3` centred in the gap says what is being moved. The touch area reaches
+ * The gap between the panes, draggable (spec C23): a 4 × 24 pill in `text.3` centred in the gap,
+ * resting at [DividerRestAlpha] so two same-theme terminals still show where the boundary is and
+ * that it moves (a grip, not a line), full while a finger holds it. The touch area reaches
  * [DividerReach] over each pane's edge, so a 12 dp gap answers a 44 dp target. TalkBack moves it
  * in tenths.
  */
@@ -476,7 +484,7 @@ private fun Divider(
     ) {
         Box(
             Modifier
-                .alpha(if (dragging) 1f else 0f)
+                .alpha(if (dragging) 1f else DividerRestAlpha)
                 .size(4.dp, 24.dp)
                 .clip(CircleShape)
                 .background(c.text3),

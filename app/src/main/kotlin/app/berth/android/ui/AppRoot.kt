@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
@@ -110,6 +111,9 @@ private val DrawerWidth = 304.dp
 
 /** The drawer's width standing as the rail on an expanded window (spec A12). */
 private val RailWidth = 280.dp
+
+/** The Stage's gutter on its rail side (spec A, the gap between panels): the terminal's first column is not against the rail's tonal edge. */
+private val RailGutter = 12.dp
 
 /**
  * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
@@ -345,10 +349,11 @@ private fun Shell(vm: AppViewModel) {
         LocalWindowSecure provides secure,
     ) {
         if (rail) {
-            // Expanded width (spec C7, A12): the drawer stands as a 280 dp rail beside the screens, always in view.
+            // Expanded width (spec C7, A12): the drawer stands as a 280 dp rail beside the screens, always
+            // in view, with the Stage's gutter between its tonal edge and the terminal's first column.
             Row(Modifier.fillMaxSize()) {
                 drawerContent(RailWidth)
-                Box(Modifier.weight(1f).fillMaxHeight()) { screens() }
+                Box(Modifier.weight(1f).fillMaxHeight().padding(start = RailGutter)) { screens() }
             }
         } else {
             ModalNavigationDrawer(
