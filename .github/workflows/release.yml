@@ -25,6 +25,13 @@ on:
 permissions:
   contents: write
 
+# One run per tag at a time: the same tag pushed twice (moved, or a re-run) builds and attaches in order, so the
+# later run replaces a draft's files whole instead of two uploads interleaving; different tags are different groups
+# and run side by side, as two releases should. Not cancelled: a run part-way through an upload is left to finish.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release APK and mapping
