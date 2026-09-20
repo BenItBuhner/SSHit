@@ -469,10 +469,15 @@ fun ToggleRow(
     )
 }
 
-/** A [Panel]'s explanatory paragraph under a row: Caption in text.3, indented to the row's text. */
+/**
+ * A [Panel]'s explanatory paragraph under a row: Caption in text.2, indented to the row's text. The
+ * note is prose that carries a setting's meaning, so it takes the 4.5:1 A11 promises for anything
+ * read; text.3 is for decoration (ages, ports, section labels), and a note set in it fell to 3.3:1
+ * dark and under 3:1 on the light themes.
+ */
 @Composable
 fun PanelNote(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = BerthType.caption, color = Berth.colors.text3, modifier = modifier.padding(start = 12.dp, top = 4.dp))
+    Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 12.dp, top = 4.dp))
 }
 
 // ---- Menus ------------------------------------------------------------------------------------------
