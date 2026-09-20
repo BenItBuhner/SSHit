@@ -1,7 +1,6 @@
 package app.berth.android.ui.diagnostics
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,18 +74,18 @@ fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () ->
     if (copied) LaunchedEffect(Unit) { delay(1_500); copied = false }
     PromptSheet(onDismiss = onDismiss) {
         SheetTitle(title, caption)
+        // Wrapped, the way a log reads on a phone: a stack frame or a 200-character log line runs on to the
+        // next line rather than past the box's edge, where a horizontal scroll with no cue reads as a cut.
         Text(
             text.ifEmpty { "The report could not be read." },
             style = BerthType.mono.copy(fontSize = 11.sp, lineHeight = 15.sp),
             color = c.text1,
-            softWrap = false,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 240.dp)
                 .clip(RoundedCornerShape(BerthRadius.row))
                 .background(c.surface2)
                 .verticalScroll(rememberScrollState())
-                .horizontalScroll(rememberScrollState())
                 .padding(12.dp),
         )
         Text(
