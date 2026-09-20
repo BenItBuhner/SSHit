@@ -5,14 +5,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
@@ -24,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
@@ -44,7 +50,8 @@ enum class Library { HOSTS, KEYS, TUNNELS, SNIPPETS, SETTINGS }
  * The drawer (spec C7): a secondary surface for jumping between groups and for the library. Not a
  * tab switcher; tabs are (C3). 304 dp on `surface.1`: the groups as 44 dp rows (swatch 24 with a ring
  * when a tab in the group needs attention, name in Body, tab count in Caption; the current group on
- * `surface.3`), New group, then the library rows with Settings last.
+ * `surface.3`), New group, then the library rows with Settings last. On an expanded window it
+ * stands as the rail (spec C23, A12): the same column at [width] 280 dp, in place beside the Stage.
  */
 @Composable
 fun Drawer(
@@ -54,6 +61,7 @@ fun Drawer(
     onNewGroup: () -> Unit,
     onLibrary: (Library) -> Unit,
     modifier: Modifier = Modifier,
+    width: Dp = 304.dp,
 ) {
     val c = Berth.colors
     val groups by vm.workspaces.collectAsState()
@@ -64,11 +72,13 @@ fun Drawer(
 
     Column(
         modifier
-            .width(304.dp)
+            .width(width)
             .fillMaxHeight()
             .background(c.surface1)
             .statusBarsPadding()
             .navigationBarsPadding()
+            // On a phone lying on its side the cutout sits at one end (spec C23): the drawer's rows stay clear of it.
+            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {

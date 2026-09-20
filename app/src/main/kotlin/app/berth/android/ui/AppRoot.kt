@@ -9,7 +9,9 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -29,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation3.runtime.NavEntry
@@ -45,6 +48,8 @@ import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
 import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.layout.LocalWindowLayout
+import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
@@ -55,15 +60,20 @@ import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
+import app.berth.android.ui.stage.LocalDeckFit
 import app.berth.android.ui.stage.LocalHapticLevel
+import app.berth.android.ui.stage.PaneStageScreen
 import app.berth.android.ui.stage.SessionSheet
+import app.berth.android.ui.stage.ShortDeckFit
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.tabs.ReopenBar
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabSheets
+import app.berth.android.ui.tabs.TabStripStyle
 import app.berth.android.ui.tabs.rememberTabUiState
 import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
@@ -92,6 +102,18 @@ sealed interface Screen : NavKey {
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
 }
+
+/** The drawer's width as a sheet over the Stage (spec C7). */
+private val DrawerWidth = 304.dp
+
+/** The drawer's width standing as the rail on an expanded window (spec A12). */
+private val RailWidth = 280.dp
+
+/**
+ * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
+ * of padding, so the terminal keeps the rows the row would have taken. Only the sizes change.
+ */
+private val ShortStripStyle = TabStripStyle.Default.copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 2.dp, chipHeight = 20.dp)
 
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
@@ -175,42 +197,40 @@ private fun Shell(vm: AppViewModel) {
     }
 
     val onStage = backStack.lastOrNull() == Screen.Stage
+    // What the window's size allows (spec A12, C23): decided here once, read below and by every sheet.
+    val layout = windowLayout()
+    val rail = layout.rail
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
 
-    ModalNavigationDrawer(
-        drawerState = drawer,
-        gesturesEnabled = onStage || drawer.isOpen,
-        scrimColor = Berth.colors.scrim,
-        drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = Color.Transparent, drawerShape = androidx.compose.ui.graphics.RectangleShape, drawerTonalElevation = 0.dp) {
-                Drawer(
-                    vm = vm,
-                    actions = tabActions,
-                    onGroupTap = { id ->
-                        vm.setWorkspace(id)
-                        toStage()
-                        closeDrawer()
-                    },
-                    onNewGroup = {
-                        closeDrawer()
-                        tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
-                    },
-                    onLibrary = { lib ->
-                        closeDrawer()
-                        go(
-                            when (lib) {
-                                Library.HOSTS -> Screen.Hosts()
-                                Library.KEYS -> Screen.Keys
-                                Library.TUNNELS -> Screen.Tunnels()
-                                Library.SNIPPETS -> Screen.Snippets
-                                Library.SETTINGS -> Screen.Settings
-                            },
-                        )
+    val drawerContent: @Composable (width: Dp) -> Unit = { width ->
+        Drawer(
+            vm = vm,
+            actions = tabActions,
+            width = width,
+            onGroupTap = { id ->
+                vm.setWorkspace(id)
+                toStage()
+                closeDrawer()
+            },
+            onNewGroup = {
+                closeDrawer()
+                tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
+            },
+            onLibrary = { lib ->
+                closeDrawer()
+                go(
+                    when (lib) {
+                        Library.HOSTS -> Screen.Hosts()
+                        Library.KEYS -> Screen.Keys
+                        Library.TUNNELS -> Screen.Tunnels()
+                        Library.SNIPPETS -> Screen.Snippets
+                        Library.SETTINGS -> Screen.Settings
                     },
                 )
-            }
-        },
-    ) {
+            },
+        )
+    }
+    val screens: @Composable () -> Unit = {
         NavDisplay(
             backStack = backStack,
             onBack = { back() },
@@ -221,15 +241,28 @@ private fun Shell(vm: AppViewModel) {
             entryProvider = { key ->
                 when (key) {
                     is Screen.Stage -> NavEntry(key) {
-                        StageScreen(
-                            vm = vm,
-                            tab = active,
-                            actions = tabActions,
-                            onOpenDrawer = { openDrawer() },
-                            onOpenSessionSheet = { sessionSheet = true },
-                            onEditHost = { go(Screen.HostEditor(it)) },
-                            onOpenDeckEditor = { go(Screen.DeckEditor) },
-                        )
+                        // With the drawer standing as a rail there is nothing to open; with two panes' width the pane layer hosts the Stage.
+                        val onOpenDrawer: (() -> Unit)? = if (rail) null else { { openDrawer() } }
+                        if (layout.panes) {
+                            PaneStageScreen(
+                                vm = vm,
+                                actions = tabActions,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSessionSheet = { sessionSheet = true },
+                                onEditHost = { go(Screen.HostEditor(it)) },
+                                onOpenDeckEditor = { go(Screen.DeckEditor) },
+                            )
+                        } else {
+                            StageScreen(
+                                vm = vm,
+                                tab = active,
+                                actions = tabActions,
+                                onOpenDrawer = onOpenDrawer,
+                                onOpenSessionSheet = { sessionSheet = true },
+                                onEditHost = { go(Screen.HostEditor(it)) },
+                                onOpenDeckEditor = { go(Screen.DeckEditor) },
+                            )
+                        }
                     }
                     is Screen.Hosts -> NavEntry(key) {
                         HostsScreen(
@@ -293,6 +326,31 @@ private fun Shell(vm: AppViewModel) {
                 }
             },
         )
+    }
+
+    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal.
+    val stripStyle = if (layout.shortLandscape) ShortStripStyle else LocalTabStripStyle.current
+    val deckFit = if (layout.shortLandscape) ShortDeckFit else LocalDeckFit.current
+    CompositionLocalProvider(LocalWindowLayout provides layout, LocalTabStripStyle provides stripStyle, LocalDeckFit provides deckFit) {
+        if (rail) {
+            // Expanded width (spec C7, A12): the drawer stands as a 280 dp rail beside the screens, always in view.
+            Row(Modifier.fillMaxSize()) {
+                drawerContent(RailWidth)
+                Box(Modifier.weight(1f).fillMaxHeight()) { screens() }
+            }
+        } else {
+            ModalNavigationDrawer(
+                drawerState = drawer,
+                gesturesEnabled = onStage || drawer.isOpen,
+                scrimColor = Berth.colors.scrim,
+                drawerContent = {
+                    ModalDrawerSheet(drawerContainerColor = Color.Transparent, drawerShape = androidx.compose.ui.graphics.RectangleShape, drawerTonalElevation = 0.dp) {
+                        drawerContent(DrawerWidth)
+                    }
+                },
+                content = screens,
+            )
+        }
     }
 
     val sheetTab = active
