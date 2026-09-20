@@ -211,10 +211,11 @@ class SessionManager @Inject constructor(
     @Volatile private var stageDark = false
 
     /**
-     * Holds [_foreground] and the stage together. The lifecycle flips the stage on the main thread
-     * and the lock and active-tab collectors on the manager's scope; without one monitor a
-     * collector could read the app as on screen, lose the thread to ON_STOP, and light a stage the
-     * app had just left, and the active tab's bells would go unheard until the next return.
+     * Holds [_foreground], the active id and the stage together. The lifecycle flips the stage on
+     * the main thread, the lock collector on the manager's scope and [setActive] on whichever
+     * thread stages a tab; without one monitor a collector could read the app as on screen, lose
+     * the thread to ON_STOP, and light a stage the app had just left, and the active tab's bells
+     * would go unheard until the next return.
      */
     private val stageLock = Any()
 
@@ -272,11 +273,6 @@ class SessionManager @Inject constructor(
                     if (summary.active > 0) SessionService.start(context) else SessionService.stop(context)
                 }
             }
-        }
-        scope.launch {
-            // Keep the stage flag on the tab that is showing so attention is raised correctly; with the
-            // app away nothing is showing, so the active tab's bells and finished commands count too.
-            _activeTabId.collect { id -> synchronized(stageLock) { tabsNow().forEach { it.onStage = !stageDark && it.id == id } } }
         }
         scope.launch {
             // The lock deciding or lifting while an activity is on screen (spec C20 with C21): locked,
@@ -524,7 +520,7 @@ class SessionManager @Inject constructor(
         // tabs" over a strip that has them (spec C3, Launch and Persistence): the current group's first
         // tab, else the strip's first.
         val last = persisted ?: finalRecords.firstOrNull { it.workspaceId == currentGroup }?.id ?: finalRecords.firstOrNull()?.id
-        _activeTabId.value = last
+        moveStage(last, seen = false)
         _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId } ?: currentGroup
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
@@ -795,10 +791,28 @@ class SessionManager @Inject constructor(
     fun setActive(id: String?) {
         val tab = id?.let { tabNow(it) }
         if (id != null && tab == null) return
-        _activeTabId.value = id
-        tab?.markSeen()
+        moveStage(id, seen = true)
         tab?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
         scope.launch { settings.setLastActiveSessionId(id) }
+    }
+
+    /**
+     * Makes [id] the active tab and moves the stage to it, as one step under [stageLock], before
+     * returning: the flags are right for whatever arrives next, and nothing else writes them for
+     * the id. A collector of the id did this once, a moment after [setActive] had marked the new tab
+     * seen, and a copy's question relayed by FilesCenter (or a bell) landing in that moment found
+     * the tab off stage and lit the very tab the user was looking at, with nothing to clear it.
+     * With [seen], the tab's attention is cleared here too, so an event from before the move is
+     * cleared and one from after finds the tab on stage, never the reverse. While the app is away
+     * or locked ([stageDark]) nothing is on stage, whatever the id: the return lights it.
+     */
+    private fun moveStage(id: String?, seen: Boolean) {
+        synchronized(stageLock) {
+            _activeTabId.value = id
+            val tabs = tabsNow()
+            tabs.forEach { it.onStage = !stageDark && it.id == id }
+            if (seen && id != null) tabs.firstOrNull { it.id == id }?.markSeen()
+        }
     }
 
     /** Ctrl+Tab and the swipe: the next (or previous) tab in strip order, wrapping, skipping collapsed groups. */

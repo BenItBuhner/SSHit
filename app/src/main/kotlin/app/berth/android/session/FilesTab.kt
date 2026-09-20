@@ -34,14 +34,25 @@ class FilesTab(
     override val host: Host get() = _record.value.hostSnapshot
     override val state: SessionState get() = _record.value.state
 
+    /**
+     * Holds [onStage], [waiting] and the attention flag together. FilesCenter relays a question on
+     * the manager's scope while the manager moves the stage from another thread, and the check
+     * "off stage, so ring" must not interleave with the move "on stage, and seen": a question
+     * landing between the two would light the tab the user is looking at, with nothing to clear it.
+     * Taken by the manager under its own stage monitor, never the other way round.
+     */
+    private val attentionLock = Any()
+
     /** Whether a transfer of this tab's session waits for an answer only its pane can give. */
     @Volatile private var waiting: Boolean = false
 
     /** Leaving the stage with a question still open raises it again; the manager clears it on arrival through [markSeen]. */
     @Volatile override var onStage: Boolean = false
         set(value) {
-            field = value
-            if (!value && waiting) attention()
+            synchronized(attentionLock) {
+                field = value
+                if (!value && waiting) attention()
+            }
         }
 
     /** The terminal whose login the browser uses; null while the host has no terminal tab at all. */
@@ -105,17 +116,22 @@ class FilesTab(
      * already. The answer clears it, whichever tab it came from.
      */
     fun waitingOnUser(waiting: Boolean) {
-        this.waiting = waiting
-        when {
-            waiting && !onStage -> attention()
-            !waiting -> markSeen()
+        synchronized(attentionLock) {
+            this.waiting = waiting
+            when {
+                waiting && !onStage -> attention()
+                !waiting -> markSeen()
+            }
         }
     }
 
     override fun markSeen() {
-        if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+        synchronized(attentionLock) {
+            if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+        }
     }
 
+    /** Under [attentionLock]. */
     private fun attention() {
         if (!_record.value.needsAttention) patch { copy(needsAttention = true, attentionReason = WAITING_ON_YOU) }
     }

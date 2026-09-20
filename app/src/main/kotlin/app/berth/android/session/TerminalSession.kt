@@ -142,8 +142,21 @@ class TerminalSession(
     private val _problems = MutableSharedFlow<SessionProblem>(extraBufferCapacity = 4)
     val problems: SharedFlow<SessionProblem> = _problems.asSharedFlow()
 
-    /** Whether this session is currently on stage; off-stage events raise attention. */
+    /**
+     * Holds [onStage] and the attention state together. Output raises attention on the reader's
+     * thread (the emulator's listener, under its lock) while the manager moves the stage from
+     * another, and the check "off stage, so ring" must not interleave with the move "on stage, and
+     * seen": a bell landing between the two would light the tab the user is looking at, with
+     * nothing to clear it. Taken inside the emulator's lock and the manager's stage monitor, never
+     * the other way round.
+     */
+    private val attentionLock = Any()
+
+    /** Whether this session is currently on stage; off-stage events raise attention, on-stage ones never do ([attention]). */
     @Volatile override var onStage: Boolean = false
+        set(value) {
+            synchronized(attentionLock) { field = value }
+        }
 
     /**
      * When the current attention was raised, or null while the tab needs nothing. Kept off the
@@ -173,7 +186,7 @@ class TerminalSession(
 
             override fun onBell() {
                 _bell.tryEmit(Unit)
-                if (!onStage) attention("Bell")
+                attention("Bell")
             }
 
             override fun onResponse(data: ByteArray) = send(data)
@@ -186,7 +199,7 @@ class TerminalSession(
             }
 
             override fun onNotification(title: String, body: String) {
-                if (!onStage) attention(title.ifBlank { body }.ifBlank { "Notification" })
+                attention(title.ifBlank { body }.ifBlank { "Notification" })
             }
 
             override fun onShellIntegration(mark: Char, param: String) {
@@ -197,7 +210,7 @@ class TerminalSession(
                         commandStartedAt = null
                         // Only a command that ran long enough to have been walked away from counts
                         // (vision §4.5): a quick `ls` in a background tab is not news.
-                        if (!onStage && env.now() - started >= ATTENTION_COMMAND_MS) {
+                        if (env.now() - started >= ATTENTION_COMMAND_MS) {
                             attention(if (param.isEmpty() || param == "0") "Command finished" else "Command failed ($param)")
                         }
                     }
@@ -542,7 +555,7 @@ class TerminalSession(
                 transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
                 // Losing the server is news like a bell is (vision §4.5): off stage the ring and the count tile carry it.
                 val problem = SessionProblem.GaveUp(env.now() - since)
-                if (!onStage) attention("Couldn't reconnect", problem)
+                attention("Couldn't reconnect", problem)
                 _problems.tryEmit(problem)
                 return
             }
@@ -654,7 +667,7 @@ class TerminalSession(
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
         val problem = SessionProblem.Failed(plain, authentication = e is SshError.AuthenticationFailed)
-        if (!onStage) attention(plain, problem)
+        attention(plain, problem)
         _problems.tryEmit(problem)
     }
 
@@ -741,9 +754,11 @@ class TerminalSession(
     // ---- attention and record ------------------------------------------------------------------
 
     override fun markSeen() {
-        attentionAt = null
-        attentionProblem = null
-        if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+        synchronized(attentionLock) {
+            attentionAt = null
+            attentionProblem = null
+            if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
+        }
     }
 
     /**
@@ -765,10 +780,18 @@ class TerminalSession(
     override fun place(workspaceId: String, sortOrder: Int): SessionRecord =
         _record.updateAndGet { if (it.workspaceId == workspaceId && it.sortOrder == sortOrder) it else it.copy(workspaceId = workspaceId, sortOrder = sortOrder) }
 
+    /**
+     * Raises attention for [reason], with the [problem] behind it when a lost connection rather
+     * than output is the cause, unless the tab is on stage, where the user sees it happen. The
+     * check and the raise are one step under [attentionLock], against the manager moving the stage.
+     */
     private fun attention(reason: String, problem: SessionProblem? = null) {
-        attentionAt = env.now()
-        attentionProblem = problem
-        patch { copy(needsAttention = true, attentionReason = reason) }
+        synchronized(attentionLock) {
+            if (onStage) return
+            attentionAt = env.now()
+            attentionProblem = problem
+            patch { copy(needsAttention = true, attentionReason = reason) }
+        }
     }
 
     private fun transition(state: SessionState, layer: PersistenceLayer) = patch { copy(state = state, layer = layer) }

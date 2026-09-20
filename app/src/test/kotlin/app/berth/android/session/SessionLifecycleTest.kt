@@ -474,6 +474,47 @@ class SessionLifecycleTest {
     }
 
     @Test
+    fun `staging moves the stage before it returns, so what arrives next for the new tab finds it on stage`() {
+        seed()
+        restore()
+        graph.process.start()
+        // No collector to wait for: the flags are right as setActive returns, and a bell in the
+        // instant after the switch rings on the stage's own tab. Nothing here awaits the stage.
+        graph.sessions.setActive("s-a")
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        assertFalse(graph.sessions.get("s-b")!!.onStage)
+        graph.sessions.setActive("s-b")
+        assertTrue(graph.sessions.get("s-b")!!.onStage)
+        assertFalse(graph.sessions.get("s-a")!!.onStage)
+        graph.sessions.get("s-b")!!.emulator.write("\u0007")
+        assertFalse("the bell rang on stage", graph.sessions.get("s-b")!!.record.value.needsAttention)
+
+        // The Files tab openFiles stages is on stage as openFiles returns. FilesCenter relays the
+        // copy's question to it whenever the ride is elected, before the move (lit, then cleared by
+        // the move) or after it (on stage, so quiet); either way, not lit once staged.
+        val (queue, id) = startWaitingDownload("s-a")
+        await("the copy waiting on a.txt") { queue.transfers.value.first { it.id == id }.waiting }
+        val files = runBlocking { graph.sessions.openFiles("s-a")!! }
+        assertTrue(files.onStage)
+        assertFalse(graph.sessions.get("s-b")!!.onStage)
+        assertFalse("in front of the user, so not lit", files.record.value.needsAttention)
+        await("riding the terminal whose copy waits") { files.ride.value?.id == "s-a" }
+        assertFalse("still not lit once the relay has had its ride", files.record.value.needsAttention)
+
+        // Leaving with the question open is when it lights, and the flag is down as setActive returns.
+        graph.sessions.setActive("s-a")
+        assertFalse(files.onStage)
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        await("off stage with the question open, lit") { files.record.value.needsAttention }
+        // And the return clears it as one step with the move.
+        graph.sessions.setActive(files.id)
+        assertTrue(files.onStage)
+        assertFalse("seen on arrival", files.record.value.needsAttention)
+        queue.resolveConflict(id, ConflictChoice.SKIP, applyToAll = true)
+        await("the answer settles the copy") { !queue.transfers.value.first { it.id == id }.waiting }
+    }
+
+    @Test
     fun `a tap that starts the process waits for the strip, then opens the Files tab`() {
         seed()
         graph.sessions.activateFilesFromNotification("s-a")
