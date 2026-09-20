@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -112,7 +113,9 @@ private fun HostLine(prompt: Prompt) = HostLine(prompt.host)
  * The host a sheet is about: its swatch, its saved name in text.1 and `user@address:port` in Mono
  * text.2 (`[BA] bastion · demo@127.0.0.1:2223`), so two hosts at one endpoint, a bastion and the
  * target behind it, read apart by more than a monogram. A quick-connect host is named by its
- * address, so the endpoint stands alone. The endpoint is whole first; a long name gives way.
+ * address, so the endpoint stands alone. Name and endpoint share the line while both fit it whole;
+ * when they do not, as at the interface's font cap on a phone (A11), the name takes the line and
+ * the endpoint the one under it, so the name the user knows the host by is not what gives way.
  */
 @Composable
 internal fun HostLine(host: Host) {
@@ -123,10 +126,46 @@ internal fun HostLine(host: Host) {
         Swatch(host.color, host.monogram, 24.dp)
         Spacer(Modifier.width(10.dp))
         if (named) {
-            Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text(" \u00B7 ", style = BerthType.body, color = c.text3)
+            NameAndEndpoint(
+                name = { Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                separator = { Text(" \u00B7 ", style = BerthType.body, color = c.text3) },
+                endpoint = { Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        } else {
+            Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * [name], [separator] and [endpoint] on one line when the three fit it whole, each centred on the
+ * line and the endpoint whole first, as a row would have them; when the name's own width does not
+ * fit what the endpoint leaves, two lines, the name on the first and the endpoint under it, with
+ * no separator. Either way a name wider than a whole line is the one thing cut.
+ */
+@Composable
+private fun NameAndEndpoint(name: @Composable () -> Unit, separator: @Composable () -> Unit, endpoint: @Composable () -> Unit) {
+    Layout(content = { name(); separator(); endpoint() }) { measurables, constraints ->
+        val (nameM, separatorM, endpointM) = measurables
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val separatorP = separatorM.measure(loose)
+        val endpointP = endpointM.measure(loose)
+        val room = constraints.maxWidth - separatorP.width - endpointP.width
+        if (nameM.maxIntrinsicWidth(constraints.maxHeight) <= room) {
+            val nameP = nameM.measure(loose.copy(maxWidth = room))
+            val height = maxOf(nameP.height, separatorP.height, endpointP.height)
+            layout(nameP.width + separatorP.width + endpointP.width, height) {
+                nameP.placeRelative(0, (height - nameP.height) / 2)
+                separatorP.placeRelative(nameP.width, (height - separatorP.height) / 2)
+                endpointP.placeRelative(nameP.width + separatorP.width, (height - endpointP.height) / 2)
+            }
+        } else {
+            val nameP = nameM.measure(loose)
+            layout(maxOf(nameP.width, endpointP.width), nameP.height + endpointP.height) {
+                nameP.placeRelative(0, 0)
+                endpointP.placeRelative(0, nameP.height)
+            }
+        }
     }
 }
 
