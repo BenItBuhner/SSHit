@@ -68,7 +68,12 @@ class CrashReporterTest {
         val lines = text.lines()
         assertEquals(listOf("Berth connection report", "Connection lost: prod-web", "java.io.IOException: Broken pipe", ""), lines.take(4))
         assertTrue(lines[4], lines[4].startsWith("Written   2025-09-20 04:00:00.000 +00:00 \u00B7 "))
-        assertTrue(text, text.contains("App       Berth 0.1.0 (1) \u00B7 app.berth.android \u00B7 test build\nDevice    Robolectric\nMemory    "))
+        // The file is the report and nothing else: the install block follows Written directly, and what the
+        // report holds or where it may go is said on the sheet, to the phone's owner, not to whoever receives it.
+        assertEquals("", lines[5])
+        assertTrue(lines[6], lines[6].startsWith("App       "))
+        assertFalse(text, text.contains("leaves the phone"))
+        assertTrue(text, Regex("""\nApp       Berth 0\.1\.0 \(1\) \u00B7 app\.berth\.android \u00B7 test build\nDevice    Robolectric\nMemory    \d+ / \d+ MB heap\n""").containsMatchIn(text))
         assertTrue(text, text.contains("\nHost      prod-web \u00B7 ben@10.0.0.7:22\nPhase     Connection lost\nReason    the server closed the connection\n"))
         assertTrue(text, text.contains("\nError\njava.io.IOException: Broken pipe\n\tat "))
         assertTrue(text, text.contains("\nLog \u00B7 2 lines\n09-20 03:59:55.000 I Session: [prod-web] connecting \u2192 live\n09-20 03:59:59.000 W Session: [prod-web] connection lost: the server closed the connection\n"))

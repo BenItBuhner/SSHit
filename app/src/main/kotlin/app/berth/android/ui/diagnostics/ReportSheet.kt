@@ -61,8 +61,8 @@ fun CrashReportHost(reports: CrashReporter) {
 
 /**
  * One report in full, from the sheet on launch or from the Diagnostics list: the text in Mono
- * so it reads as what it is, a plain account of what it holds, then Share, Copy and [last]
- * (Not now on launch, Delete from the list).
+ * so it reads as what it is, one paragraph saying what it holds, including what in it would
+ * name the user's own hosts, then Share, Copy and [last] (Not now on launch, Delete from the list).
  */
 @Composable
 fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () -> Unit, last: @Composable () -> Unit) {
@@ -88,10 +88,12 @@ fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () ->
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp),
         )
+        // What the report holds, said once and whole: the connection report's Host line, the log's [host]
+        // prefixes and sshj's own lines name hosts, accounts, addresses and file names, so a shared report does.
         Text(
             when (report.kind) {
-                ReportKind.CRASH -> "It holds the error, the app and device, and the last lines of Berth\u2019s own log: no passwords, keys, passphrases, clipboard text or terminal output. Share it with whoever is looking into the crash, or copy it to paste. It stays under Settings \u203A Diagnostics either way."
-                ReportKind.TRANSPORT -> "It holds what the connection reported, the app and device, and the last lines of Berth\u2019s own log: no passwords, keys, passphrases, clipboard text or terminal output."
+                ReportKind.CRASH -> "It holds the error, the app and device, and the last lines of Berth\u2019s log, which name your hosts, accounts and files but hold no passwords, keys, passphrases, clipboard text or terminal output. It stays under Settings \u203A Diagnostics."
+                ReportKind.TRANSPORT -> "It holds what the connection reported, the app and device, and the last lines of Berth\u2019s log, which name your hosts, accounts and files but hold no passwords, keys, passphrases, clipboard text or terminal output."
             },
             style = BerthType.body,
             color = c.text2,

@@ -41,7 +41,9 @@ data class Report(val file: File, val kind: ReportKind, val at: Long, val title:
  * Crash and connection reports, written to app storage and never sent anywhere (the vision bans
  * telemetry; a local log is not telemetry). A report is the error with its stack, the app and
  * device, and the tail of the in-app log ring ([BerthLog]); it leaves the phone only through the
- * report sheet's Copy or Share, both the user's own act.
+ * report sheet's Copy or Share, both the user's own act. The file is the report and nothing else:
+ * what it holds and where it may go is said on the sheet, to the phone's owner, not inside the
+ * text whoever receives it reads.
  *
  * Installed as the process's default uncaught-exception handler in front of Android's own: the
  * crash is written, the marker for the next launch's sheet set, the [addCrashHook] hooks run for
@@ -178,12 +180,9 @@ class CrashReporter(
             appendLine(summary)
             appendLine()
             appendLine("Written   ${WRITTEN_TIME.format(Instant.ofEpochMilli(at).atZone(zone()))} \u00B7 ${uptime()} after the process started \u00B7 pid ${Process.myPid()} \u00B7 thread ${thread.name}")
-            appendLine("Nothing in this report leaves the phone unless you share it. It holds the error, the app and device")
-            appendLine("below, and the last lines of Berth's own log: no passwords, keys, passphrases, clipboard text or")
-            appendLine("terminal output.")
             appendLine()
             appendLine(install)
-            appendLine("Memory    $usedMb MB in use of the $maxMb MB the heap may grow to")
+            appendLine("Memory    $usedMb / $maxMb MB heap")
             if (details.isNotEmpty()) {
                 appendLine()
                 for ((label, value) in details) appendLine(label.padEnd(10) + value)

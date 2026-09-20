@@ -141,6 +141,12 @@ class DiagnosticsScreenshotTest {
         compose.onNodeWithText("Not now").assertIsDisplayed()
         compose.onAllNodes(hasText("Berth crash report", substring = true)).assertCountEquals(1)
         compose.onAllNodes(hasText("java.lang.IllegalStateException: Frame 1 of 1 has no cells for row 24", substring = true)).assertCountEquals(1)
+        // What the report holds is said once, on the sheet and not inside the file, and says what in it names the
+        // user's own hosts; the caption alone says nothing was sent.
+        compose.onAllNodes(hasText("which name your hosts, accounts and files but hold no passwords, keys, passphrases, clipboard text or terminal output", substring = true)).assertCountEquals(1)
+        compose.onAllNodes(hasText("Nothing has been sent anywhere", substring = true)).assertCountEquals(1)
+        compose.onAllNodes(hasText("leaves the phone", substring = true)).assertCountEquals(0)
+        assertFalse(text, text.contains("leaves the phone"))
         settle(300)
         capture("crash-sheet")
 
