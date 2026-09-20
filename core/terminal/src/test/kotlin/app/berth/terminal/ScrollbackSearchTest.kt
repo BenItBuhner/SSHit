@@ -2,6 +2,7 @@ package app.berth.terminal
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ScrollbackSearchTest {
@@ -53,13 +54,28 @@ class ScrollbackSearchTest {
     }
 
     @Test
-    fun `regular expressions match when asked and an invalid one matches nothing`() {
+    fun `regular expressions match when asked and an invalid one is searched for literally`() {
         val t = term(cols = 20, text = "GET /health 200 3ms\r\nPOST /jobs 202 41ms")
         assertEquals(listOf(CellRange(CellPos(0, 12), CellPos(0, 14)), CellRange(CellPos(1, 11), CellPos(1, 13))), ScrollbackSearch.find(t.grid, "20\\d", regex = true))
         assertTrue(ScrollbackSearch.find(t.grid, "20\\d").isEmpty())
+        // A pattern that does not compile is not on this screen either way: 0 matches, not a crash.
         assertTrue(ScrollbackSearch.find(t.grid, "(", regex = true).isEmpty())
+        assertFalse(ScrollbackSearch.isValidRegex("("))
+        assertTrue(ScrollbackSearch.isValidRegex("20\\d"))
         // A pattern that can match nothing at all never loops or yields empty ranges.
         assertTrue(ScrollbackSearch.find(t.grid, "x*", regex = true).all { it.end >= it.start })
+    }
+
+    @Test
+    fun `an invalid regular expression falls back to the literal text, half-typed groups included`() {
+        val t = term(cols = 20, text = "f(x) = 2x\r\nlog(20) ok")
+        // `log(` is an unclosed group as a pattern; as text it is on the second row.
+        assertEquals(listOf(CellRange(CellPos(1, 0), CellPos(1, 3))), ScrollbackSearch.find(t.grid, "log(", regex = true))
+        // The same query as a valid pattern once the group closes matches by the pattern's rules.
+        assertEquals(listOf(CellRange(CellPos(1, 0), CellPos(1, 6))), ScrollbackSearch.find(t.grid, "log\\(2\\d\\)", regex = true))
+        // Case folding applies to the fallback as to the pattern.
+        assertEquals(1, ScrollbackSearch.find(t.grid, "LOG(", regex = true).size)
+        assertTrue(ScrollbackSearch.find(t.grid, "LOG(", caseSensitive = true, regex = true).isEmpty())
     }
 
     @Test

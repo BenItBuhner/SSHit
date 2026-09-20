@@ -51,6 +51,19 @@ class PasteClassifierTest {
     }
 
     @Test
+    fun `control characters are counted and the first two distinct ones named for the warning`() {
+        val a = PasteClassifier.analyze("cd /srv\n\u001b[Aecho done\u0003\n\u001b[Bagain\u007f")
+        assertEquals(4, a.controlChars)
+        assertEquals(listOf("^[", "^C"), a.controlNames)
+        assertEquals(0, PasteClassifier.analyze("plain\ttext\n").controlChars)
+        assertTrue(PasteClassifier.analyze("plain").controlNames.isEmpty())
+        assertEquals(listOf("^?"), PasteClassifier.analyze("a\u007fb").controlNames)
+        assertEquals(listOf("^@"), PasteClassifier.analyze("a\u0000b").controlNames)
+        // C1 controls have no caret form and are shown as their byte.
+        assertEquals(listOf("\\x85"), PasteClassifier.analyze("a\u0085b").controlNames)
+    }
+
+    @Test
     fun `paste as one line joins trimmed lines with single spaces`() {
         assertEquals("cd /tmp ls", PasteClassifier.asOneLine("cd /tmp\n  ls  \n\n"))
         assertEquals("a b c", PasteClassifier.asOneLine("a\r\nb\rc"))

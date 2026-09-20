@@ -9,9 +9,12 @@ data class PasteAnalysis(
     val lineBreaks: Int,
     /** Characters as code points. */
     val chars: Int,
-    /** Control characters other than tab and line breaks: escapes, NUL, DEL, C1. */
-    val hasControlChars: Boolean,
+    /** How many control characters other than tab and line breaks the text carries: escapes, NUL, DEL, C1. */
+    val controlChars: Int,
+    /** The caret names of the first distinct control characters, in order of appearance (`^[`, `^C`), for the warning. */
+    val controlNames: List<String>,
 ) {
+    val hasControlChars: Boolean get() = controlChars > 0
     val isMultiLine: Boolean get() = lines > 1 || lineBreaks > 0
     val isLong: Boolean get() = chars > PasteClassifier.PREVIEW_CHARS
 
@@ -29,7 +32,8 @@ object PasteClassifier {
 
     fun analyze(text: String): PasteAnalysis {
         var breaks = 0
-        var control = false
+        var control = 0
+        val names = ArrayList<String>(NAMED_CONTROLS)
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
@@ -39,18 +43,32 @@ object PasteClassifier {
                     if (i + 1 < text.length && text[i + 1] == '\n') i++
                 }
                 cp == '\n'.code -> breaks++
-                isControl(cp) -> control = true
+                isControl(cp) -> {
+                    control++
+                    val name = caretName(cp)
+                    if (names.size < NAMED_CONTROLS && name !in names) names.add(name)
+                }
             }
             i += Character.charCount(cp)
         }
         val endsWithBreak = text.endsWith("\n") || text.endsWith("\r")
         val lines = if (text.isEmpty()) 0 else breaks + if (endsWithBreak) 0 else 1
-        return PasteAnalysis(text, lines.coerceAtLeast(if (text.isEmpty()) 0 else 1), breaks, text.codePointCount(0, text.length), control)
+        return PasteAnalysis(text, lines.coerceAtLeast(if (text.isEmpty()) 0 else 1), breaks, text.codePointCount(0, text.length), control, names)
     }
 
     /** Whether [codePoint] is a control character the terminal would act on rather than print; tab and line breaks are not. */
     fun isControl(codePoint: Int): Boolean =
         (codePoint < 0x20 && codePoint != '\t'.code && codePoint != '\n'.code && codePoint != '\r'.code) || codePoint == 0x7F || codePoint in 0x80..0x9F
+
+    /** The caret name of a control character: `^[` for escape, `^C`, `^?` for DEL; C1 controls as `\x9B`, which have no caret form. */
+    fun caretName(codePoint: Int): String = when {
+        codePoint < 0x20 -> "^" + (codePoint + 0x40).toChar()
+        codePoint == 0x7F -> "^?"
+        else -> "\\x%02X".format(codePoint)
+    }
+
+    /** How many distinct control characters the warning names before it says "and more". */
+    const val NAMED_CONTROLS = 2
 
     /** The text as one line: each line trimmed and joined by single spaces, so nothing runs when it lands at a prompt. */
     fun asOneLine(text: String): String =

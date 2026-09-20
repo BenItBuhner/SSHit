@@ -11,18 +11,14 @@ import java.util.regex.PatternSyntaxException
 object ScrollbackSearch {
     /**
      * Every occurrence of [query] in [grid], case-folded unless [caseSensitive], as a regular
-     * expression when [regex] (a pattern that does not compile matches nothing). Stops after
-     * [limit] matches so a one-letter query over a long history stays bounded.
+     * expression when [regex]; a pattern that does not compile (an unclosed group while it is still
+     * being typed) is searched for as literal text instead, so the count never says 0 for a query
+     * that is on the screen. Stops after [limit] matches so a one-letter query over a long history
+     * stays bounded.
      */
     fun find(grid: TextGrid, query: String, caseSensitive: Boolean = false, regex: Boolean = false, limit: Int = MAX_MATCHES): List<CellRange> {
         if (query.isEmpty() || grid.rowCount == 0) return emptyList()
-        val pattern: Pattern? = if (regex) {
-            try {
-                Pattern.compile(query, if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
-            } catch (_: PatternSyntaxException) {
-                return emptyList()
-            }
-        } else null
+        val pattern: Pattern? = if (regex) compile(query, caseSensitive) else null
 
         val out = ArrayList<CellRange>()
         val text = StringBuilder()
@@ -80,6 +76,15 @@ object ScrollbackSearch {
             row = last + 1
         }
         return out
+    }
+
+    /** Whether [query] compiles as a regular expression; when it does not, [find] with `regex` searches for it literally. */
+    fun isValidRegex(query: String): Boolean = compile(query, caseSensitive = true) != null
+
+    private fun compile(query: String, caseSensitive: Boolean): Pattern? = try {
+        Pattern.compile(query, if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
+    } catch (_: PatternSyntaxException) {
+        null
     }
 
     private fun rangeOf(grid: TextGrid, rows: IntArray, cols: IntArray, start: Int, endExclusive: Int): CellRange {
