@@ -114,6 +114,8 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # For a pull request; a version tag's mapping goes on its GitHub release instead (release.yml), for as long
+      # as the release exists, since a report from that APK reads through nothing else.
       - name: Release APK and mapping
         if: always()
         uses: actions/upload-artifact@v4

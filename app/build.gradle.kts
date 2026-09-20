@@ -40,8 +40,10 @@ val appVersionCode: Int = run {
 //   berth.release.keyAlias       BERTH_RELEASE_KEY_ALIAS
 //   berth.release.keyPassword    BERTH_RELEASE_KEY_PASSWORD
 // With none of them set a release build is unsigned (app-release-unsigned.apk), which is what CI builds to prove
-// R8 and to measure; with some set and some not, the build stops rather than sign with a guess. The debug key
-// in app/keystore/debug.keystore is a different matter: not a secret, and pinned for every machine.
+// R8 and to measure; with some set and some not, the build stops rather than sign with a guess. A version tag's
+// build (.github/workflows/release.yml) takes the same four from the repository's secrets, the keystore itself as
+// BERTH_RELEASE_STORE_BASE64 written to a file for BERTH_RELEASE_STORE_FILE. The debug key in
+// app/keystore/debug.keystore is a different matter: not a secret, and pinned for every machine.
 fun releaseSetting(property: String, variable: String): String? =
     providers.gradleProperty(property).orElse(providers.environmentVariable(variable)).orNull?.takeIf { it.isNotBlank() }
 val releaseSigning: Map<String, String?> = mapOf(
