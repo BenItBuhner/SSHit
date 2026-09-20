@@ -37,3 +37,6 @@ tasks.withType<Test>().configureEach {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// testR8: this module's tests over R8's output with the app's release rules; see gradle/r8-check.gradle.kts.
+apply(from = rootProject.file("gradle/r8-check.gradle.kts"))
