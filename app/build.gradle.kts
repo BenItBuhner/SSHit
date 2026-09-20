@@ -1,3 +1,8 @@
+import com.android.build.api.artifact.SingleArtifact
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -100,6 +105,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
+            // R8 with the optimizing defaults, the app's rules (app/proguard-rules.pro) and the rules the libraries
+            // bundle; resources unreachable from the kept code go too. The mapping lands in
+            // build/outputs/mapping/release/ with seeds.txt and usage.txt beside it, and verifyReleaseKeepRules
+            // (below) reads them after every release build.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -188,6 +197,125 @@ dependencies {
 
 roborazzi {
     outputDir.set(layout.buildDirectory.dir("outputs/roborazzi"))
+}
+
+// verifyReleaseKeepRules: what the release APK itself says about the names the code reaches at runtime. The
+// Robolectric suite cannot run over the APK's DEX, so for the app module the proof of the rules in
+// proguard-rules.pro is the DEX's own class table (a class kept by name is defined there under it), R8's seeds
+// (the members the rules matched, so a constructor reflection calls is in the output), its mapping (what a
+// missing name became, and that line numbers survived) and the APK's resources (the service file SLF4J reads
+// names the binding). Runs after every assembleRelease; the JVM modules' testR8 covers what runs on this machine.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val mapping = variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+        val apkDir = variant.artifacts.get(SingleArtifact.APK)
+        val verify = tasks.register("verifyReleaseKeepRules") {
+            description = "Checks the release APK's DEX, R8's seeds and mapping for the classes the code reaches by name (see app/proguard-rules.pro)."
+            group = "verification"
+            inputs.file(mapping)
+            inputs.dir(apkDir)
+            doLast {
+                val mappingFile = mapping.get().asFile
+                val seedsFile = mappingFile.resolveSibling("seeds.txt")
+                val problems = mutableListOf<String>()
+                val apks = apkDir.get().asFile.listFiles { f -> f.extension == "apk" }.orEmpty()
+                if (apks.isEmpty()) throw GradleException("verifyReleaseKeepRules: no APK in ${apkDir.get().asFile}")
+
+                // The classes an APK's classes*.dex define, as dotted names: the class table is the record of what
+                // is on the phone under which name. Each class_def_item names its type, each type its descriptor
+                // string ("Lorg/bouncycastle/openssl/PEMDecryptor;"); the header holds the three tables' offsets.
+                fun dexClasses(apk: File): Set<String> {
+                    val names = HashSet<String>()
+                    ZipFile(apk).use { zip ->
+                        for (entry in zip.entries().asSequence().filter { Regex("""classes\d*\.dex""").matches(it.name) }) {
+                            val dex = ByteBuffer.wrap(zip.getInputStream(entry).use { it.readBytes() }).order(ByteOrder.LITTLE_ENDIAN)
+                            val stringIds = dex.getInt(0x3C)
+                            val typeIds = dex.getInt(0x44)
+                            val classDefs = dex.getInt(0x60) to dex.getInt(0x64)
+                            for (i in 0 until classDefs.first) {
+                                val typeIndex = dex.getInt(classDefs.second + i * 32)
+                                var at = dex.getInt(stringIds + dex.getInt(typeIds + typeIndex * 4) * 4)
+                                while (dex.get(at).toInt() and 0x80 != 0) at++ // uleb128 length in UTF-16 units
+                                at++
+                                val descriptor = StringBuilder()
+                                while (true) { // modified UTF-8, one to three bytes a character, NUL-terminated
+                                    val a = dex.get(at++).toInt() and 0xFF
+                                    if (a == 0) break
+                                    descriptor.append(
+                                        when {
+                                            a < 0x80 -> a
+                                            a and 0xE0 == 0xC0 -> ((a and 0x1F) shl 6) or (dex.get(at++).toInt() and 0x3F)
+                                            else -> ((a and 0x0F) shl 12) or ((dex.get(at++).toInt() and 0x3F) shl 6) or (dex.get(at++).toInt() and 0x3F)
+                                        }.toChar(),
+                                    )
+                                }
+                                names += descriptor.substring(1, descriptor.length - 1).replace('/', '.')
+                            }
+                        }
+                    }
+                    return names
+                }
+
+                // mapping.txt: "original -> renamed:" per class, members indented under it. It says what a missing
+                // name became; presence is the DEX's to say, since a class kept under its own name with no member
+                // left (PEMDecryptor, an interface whose one method nothing calls) has no line here.
+                val renamed: Map<String, String> = mappingFile.readLines()
+                    .filter { it.endsWith(":") && !it.startsWith(" ") && !it.startsWith("#") && " -> " in it }
+                    .associate { line -> line.removeSuffix(":").split(" -> ").let { it[0] to it[1] } }
+                val lineNumbers = mappingFile.useLines { lines -> lines.any { it.startsWith("    ") && Regex("""^\s+\d+:\d+:""").containsMatchIn(it) } }
+                if (!lineNumbers) problems += "the mapping carries no line numbers; a crash report's frames would read as line 0 (-keepattributes LineNumberTable)"
+                renamed.filter { (from, to) -> from.startsWith("org.bouncycastle.jcajce.provider.") && from != to }.keys.take(5)
+                    .forEach { problems += "$it was renamed to ${renamed[it]}; BouncyCastleProvider loads it by name" }
+
+                val byName = listOf(
+                    "app.berth.android.diagnostics.RingLoggerProvider",
+                    "org.bouncycastle.jce.provider.BouncyCastleProvider",
+                    "org.bouncycastle.openssl.PEMDecryptor",
+                    "app.berth.data.db.BerthDatabase_Impl",
+                )
+                var providerClasses = 0
+                for (apk in apks) {
+                    val defined = dexClasses(apk)
+                    for (name in byName) {
+                        if (name !in defined) {
+                            problems += renamed[name]?.let { "$name is ${it} in ${apk.name}, and the code looks it up by name" }
+                                ?: "$name is not in ${apk.name} at all (removed, or never compiled in)"
+                        }
+                    }
+                    providerClasses = defined.count { it.startsWith("org.bouncycastle.jcajce.provider.") }
+                    if (providerClasses < 100) problems += "only $providerClasses org.bouncycastle.jcajce.provider classes are in ${apk.name} under their names; the provider's registry needs the package"
+
+                    // The SLF4J service file. R8 renames the service interface and names the file after it, as
+                    // LoggerFactory loads the renamed class, so the file is found through the mapping; it must name
+                    // the binding, which the keep rule holds under its own name.
+                    val serviceType = renamed["org.slf4j.spi.SLF4JServiceProvider"] ?: "org.slf4j.spi.SLF4JServiceProvider"
+                    ZipFile(apk).use { zip ->
+                        val service = zip.getEntry("META-INF/services/$serviceType")
+                        val providers = service?.let { zip.getInputStream(it).bufferedReader().readLines() }
+                            ?.map { it.substringBefore('#').trim() }?.filter { it.isNotEmpty() }.orEmpty()
+                        if ("app.berth.android.diagnostics.RingLoggerProvider" !in providers) {
+                            problems += "${apk.name} does not name RingLoggerProvider in META-INF/services/$serviceType (found $providers); sshj's log would go to the NOP logger"
+                        }
+                    }
+                }
+
+                // seeds.txt: every class and member a keep rule matched, constructors as "Class()".
+                if (!seedsFile.isFile) {
+                    problems += "no seeds.txt beside the mapping (${seedsFile}); R8 did not run with -printseeds"
+                } else {
+                    val seeds = seedsFile.readLines().toHashSet()
+                    for (name in listOf("app.berth.android.diagnostics.RingLoggerProvider", "org.bouncycastle.jce.provider.BouncyCastleProvider", "app.berth.data.db.BerthDatabase_Impl")) {
+                        val simple = name.substringAfterLast('.')
+                        if ("$name: $simple()" !in seeds) problems += "$name's no-argument constructor is not kept; it is instantiated by name"
+                    }
+                }
+
+                if (problems.isNotEmpty()) throw GradleException("Release keep rules do not hold:\n" + problems.joinToString("\n") { "  - $it" })
+                logger.lifecycle("verifyReleaseKeepRules: ${byName.size} classes defined by name, $providerClasses BouncyCastle provider classes, constructors and the SLF4J service file present in ${apks.map { it.name }}")
+            }
+        }
+        tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }
+    }
 }
 
 tasks.withType<Test>().configureEach {

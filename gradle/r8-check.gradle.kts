@@ -153,7 +153,10 @@ val r8Classes = tasks.register<JavaExec>("r8Classes") {
 }
 
 val r8Resources = tasks.register("r8Resources") {
-    description = "META-INF/services from the program's jars, which R8 does not carry over, so ServiceLoader finds what it would in the APK."
+    // With --no-data-resources R8 never sees the service files, so they are carried across as they are. (The app
+    // build hands R8 the merged resources, and R8 writes them back named after the service interfaces' new names,
+    // which is what the renamed LoggerFactory loads; verifyReleaseKeepRules follows the mapping to that file.)
+    description = "META-INF/services from the program's jars, which R8 does not see here, so ServiceLoader finds what it would in the APK."
     val jars = programJars
     val out = r8Dir.map { it.dir("resources") }
     inputs.files(jars)
