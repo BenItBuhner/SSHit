@@ -151,8 +151,8 @@ class SessionManager @Inject constructor(
     val activeTab: StateFlow<ManagedTab?> = combine(_activeTabId, tabsById) { id, map -> id?.let { map[it] } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
-    /** The tab on stage when it is a terminal; null while a Files tab, or nothing, is showing. */
-    val activeSession: StateFlow<TerminalSession?> = activeTab.map { it as? TerminalSession }
+    /** The tab on stage when it is a terminal; null while a Files tab, a Tunnels tab, or nothing, is showing. */
+    val activeSession: StateFlow<TerminalSession?> = activeTab.map { (it as? TerminalSession)?.takeIf { s -> !s.tunnelsOnly } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -225,6 +225,7 @@ class SessionManager @Inject constructor(
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
+        override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
         override val networkAvailable: Flow<Unit> = network.available
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
@@ -232,6 +233,31 @@ class SessionManager @Inject constructor(
             snippetRepository.observeAll().first()
                 .filter { it.runOnConnect && it.hostId == host.id && (it.workspaceId == null || it.workspaceId == workspaceId) }
                 .map { it.render() }
+    }
+
+    /**
+     * The saved hosts a login to [host] goes through, first hop first, the way OpenSSH reads
+     * ProxyJump: a hop's own chain comes before the hop (so a bastion that is itself reached
+     * through another is), each host at most once and never the target itself, and an id no saved
+     * host answers to any more is left out rather than failing the connect. The chain is read
+     * from the hosts table at connect time, so editing a bastion's address or key takes effect on
+     * the next attempt of every host behind it.
+     */
+    suspend fun resolveJumpChain(host: Host): List<Host> {
+        val chain = ArrayList<Host>()
+        val seen = HashSet<String>()
+        seen += host.id
+        suspend fun walk(ids: List<String>, depth: Int) {
+            if (depth > MAX_JUMP_DEPTH) return
+            for (id in ids) {
+                if (!seen.add(id)) continue
+                val hop = hostRepository.get(id) ?: continue
+                walk(hop.jumpHostIds, depth + 1)
+                chain += hop
+            }
+        }
+        walk(host.jumpHostIds, 0)
+        return chain
     }
 
     // Declared ahead of init, which registers them: Kotlin initialises properties in order.
@@ -252,15 +278,15 @@ class SessionManager @Inject constructor(
     init {
         scope.launch { restore() }
         scope.launch {
-            // Only a terminal holds a socket; a Files tab mirrors its ride's state and never keeps the
-            // service up on its own. The notification says what every terminal tab is doing, with the
-            // tunnels up, the transfers in flight, how many of those wait on the user and whose Files
-            // tab its tap should open; the service itself only starts and stops with the count of
-            // tabs holding a socket.
+            // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its
+            // ride's state and never keeps the service up on its own. The notification says what every
+            // such tab is doing, with the tunnels up, the transfers in flight, how many of those wait
+            // on the user and whose Files tab its tap should open; the service itself only starts and
+            // stops with the count of tabs holding a socket.
             var lastActive = 0
             combine(records, tunnelStatuses, activeTransfers, waitingTransfers, waitingTransferSession) { list, statuses, transfers, waiting, waitingSession ->
                 SessionsSummary(
-                    lines = list.filter { it.kind == TabKind.Ssh && it.state != SessionState.CLOSED }.map { SessionLine(it.displayTitle, it.state) },
+                    lines = list.filter { it.kind != TabKind.Files && it.state != SessionState.CLOSED }.map { SessionLine(it.displayTitle, it.state) },
                     tunnels = statuses.count { it.value is TunnelStatus.Up },
                     transfers = transfers,
                     waiting = waiting,
@@ -436,16 +462,24 @@ class SessionManager @Inject constructor(
     }
 
     /**
-     * One session per host carries its tunnels. The current carrier keeps the role while Live;
-     * otherwise the first Live session takes it, or the first connecting one so the forwards start
-     * the moment it comes up. Sessions that lose the role release their ports first.
+     * One session per host carries its tunnels. A Live Tunnels tab always does, since carrying them
+     * is what it is for and its stage shows them; failing one, the current carrier keeps the role
+     * while Live, then the first Live session takes it, then the first connecting one (a Tunnels tab
+     * first) so the forwards start the moment it comes up. Sessions that lose the role release their
+     * ports first; ties fall to strip order.
      */
     private fun electCarriers(records: List<SessionRecord>) {
-        val byHost = records.filter { it.kind == TabKind.Ssh && it.hostId != null && it.state.isActive }.groupBy { it.hostId!! }
+        val byHost = records.filter { it.kind != TabKind.Files && it.hostId != null && it.state.isActive }.groupBy { it.hostId!! }
         val chosen = HashMap<String, String>()
         for ((hostId, candidates) in byHost) {
-            val current = carrierByHost[hostId]?.let { id -> candidates.firstOrNull { it.id == id && it.state == SessionState.LIVE } }
-            chosen[hostId] = (current ?: candidates.firstOrNull { it.state == SessionState.LIVE } ?: candidates.first()).id
+            val current = carrierByHost[hostId]
+            fun rank(r: SessionRecord): Int = when {
+                r.kind == TabKind.Tunnels && r.state == SessionState.LIVE -> if (r.id == current) 0 else 1
+                r.state == SessionState.LIVE -> if (r.id == current) 2 else 3
+                r.kind == TabKind.Tunnels -> 4
+                else -> 5
+            }
+            chosen[hostId] = candidates.minBy(::rank).id
         }
         carrierByHost.clear()
         carrierByHost.putAll(chosen)
@@ -502,7 +536,8 @@ class SessionManager @Inject constructor(
             when (record.kind) {
                 TabKind.Ssh, TabKind.Tunnels -> {
                     val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
-                    session.restoreFrame(sessionRepository.loadFrame(record.id), detachedAt = detachedAt[record.id])
+                    // A Tunnels tab has no frame: its stage is rebuilt from the forwards when it reconnects.
+                    if (!session.tunnelsOnly) session.restoreFrame(sessionRepository.loadFrame(record.id), detachedAt = detachedAt[record.id])
                     map[record.id] = session
                     track(session)
                 }
@@ -621,9 +656,17 @@ class SessionManager @Inject constructor(
     /**
      * Opens a new terminal tab for [host] and, unless [activate] is off, puts it on stage. It lands
      * directly after [afterId] (the active tab by default) in that tab's group, or at the end of
-     * [workspaceId] when there is no anchor.
+     * [workspaceId] when there is no anchor. With [kind] = [TabKind.Tunnels] the login opens no
+     * shell and carries the host's forwards instead ([openTunnels]).
      */
-    suspend fun open(host: Host, workspaceId: String? = null, afterId: String? = _activeTabId.value, customTitle: String? = null, activate: Boolean = true): TerminalSession {
+    suspend fun open(
+        host: Host,
+        workspaceId: String? = null,
+        afterId: String? = _activeTabId.value,
+        customTitle: String? = null,
+        activate: Boolean = true,
+        kind: TabKind = TabKind.Ssh,
+    ): TerminalSession {
         restore()
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
         val fresh = SessionRecord(
@@ -633,13 +676,32 @@ class SessionManager @Inject constructor(
             hostSnapshot = host,
             state = SessionState.IDLE,
             layer = PersistenceLayer.IN_APP,
-            title = host.name,
+            title = titleFor(kind, host),
             createdAt = System.currentTimeMillis(),
+            kind = if (kind == TabKind.Tunnels) TabKind.Tunnels else TabKind.Ssh,
             customTitle = customTitle,
         )
         val changes = TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group)
         return start(fresh, changes, activate)
     }
+
+    /**
+     * Opens a Tunnels tab for [host] (spec C14): one login that carries the host's port forwards
+     * and no shell, placed and staged like a terminal. A second one on the same host is allowed
+     * but pointless; the forwards run on one carrier, and it shows them.
+     */
+    suspend fun openTunnels(host: Host, workspaceId: String? = null, afterId: String? = _activeTabId.value, activate: Boolean = true): TerminalSession =
+        open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels)
+
+    /**
+     * Connect from the host list, the New tab sheet or an `ssh://` link: a terminal, or the host's
+     * forwards alone when the host is marked tunnels only ([Host.tunnelsOnly]).
+     */
+    suspend fun connect(host: Host, workspaceId: String? = null): TerminalSession =
+        if (host.tunnelsOnly) openTunnels(host, workspaceId) else open(host, workspaceId)
+
+    /** The automatic title of a fresh tab of [kind] on [host]: the host's name, or `Tunnels · name` like a Files tab's `Files · name`. */
+    private fun titleFor(kind: TabKind, host: Host): String = if (kind == TabKind.Tunnels) "Tunnels \u00B7 ${host.name}" else host.name
 
     /** Recreates a closed tab in its old slot; a terminal connects again, a Files tab reopens at its folder (spec C3, Reopen). */
     suspend fun reopen(closed: ClosedTab): ManagedTab {
@@ -659,7 +721,7 @@ class SessionManager @Inject constructor(
                     workspaceId = group,
                     state = SessionState.IDLE,
                     layer = PersistenceLayer.IN_APP,
-                    title = old.hostSnapshot.name,
+                    title = titleFor(old.kind, old.hostSnapshot),
                     cwd = null,
                     lastCommand = null,
                     needsAttention = false,
@@ -678,7 +740,7 @@ class SessionManager @Inject constructor(
         val source = tabNow(id) ?: return null
         val record = source.record.value
         return when (record.kind) {
-            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id)
+            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, kind = record.kind)
             TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd)
         }
     }
@@ -762,12 +824,17 @@ class SessionManager @Inject constructor(
 
     /**
      * Terminal from a Files tab's menu: the terminal it rides comes on stage, or, when the host has
-     * none, a new one opens directly after the Files tab and the browser rides that. Null when [id]
-     * is not a Files tab.
+     * none (a Tunnels tab's login carries the browser but has no shell), a new one opens directly
+     * after the Files tab and the browser rides that. From a Tunnels tab's menu: a terminal on its
+     * host, directly after it. Null when [id] is neither.
      */
     suspend fun openTerminalFor(id: String): TerminalSession? {
+        _sessions.value[id]?.let { tunnels ->
+            if (!tunnels.tunnelsOnly) return null
+            return open(tunnels.host, workspaceId = tunnels.record.value.workspaceId, afterId = id)
+        }
         val tab = _filesTabs.value[id] ?: return null
-        tab.ride.value?.let {
+        tab.ride.value?.takeIf { !it.tunnelsOnly }?.let {
             setActive(it.id)
             return it
         }
@@ -986,6 +1053,8 @@ class SessionManager @Inject constructor(
     private fun saveFrame(session: TerminalSession) {
         savedVersions[session.id] = session.screenVersion.value
         session.markLive()
+        // A Tunnels tab shows no screen, so there is nothing to keep; the date above is all it needs.
+        if (session.tunnelsOnly) return
         scope.launch { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
     }
 
@@ -994,6 +1063,9 @@ class SessionManager @Inject constructor(
     companion object {
         /** How often frames are re-saved while live sessions run in the background. */
         const val BACKGROUND_SAVE_MS = 30_000L
+
+        /** How many hops deep a jump chain is followed through the hops' own chains before it is cut. */
+        const val MAX_JUMP_DEPTH = 8
 
         fun openAppIntent(context: Context): Intent =
             context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()
