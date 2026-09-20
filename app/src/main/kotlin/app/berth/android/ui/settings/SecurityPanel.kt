@@ -1,24 +1,23 @@
 package app.berth.android.ui.settings
 
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import app.berth.android.security.WindowSecurity
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PanelNote
+import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.ClipboardClear
 import app.berth.domain.model.LockTimeout
 import app.berth.domain.model.RemoteClipboardPolicy
@@ -27,7 +26,8 @@ import kotlinx.coroutines.launch
 /**
  * Settings › Security (spec C20): the app lock and its timeout, screenshot blocking, clipboard
  * auto-clear, the remote clipboard switch, and the way to Known hosts. One panel, registered
- * with one line in [SettingsScreen].
+ * with one line in [SettingsScreen]. A switch's caption fits its one line; what needs a sentence
+ * goes in the [PanelNote] under the row.
  */
 @Composable
 fun SecurityPanel(vm: AppViewModel, onKnownHosts: () -> Unit) {
@@ -44,17 +44,25 @@ fun SecurityPanel(vm: AppViewModel, onKnownHosts: () -> Unit) {
             "App lock",
             s.appLock,
             { on -> scope.launch { vm.security.setAppLock(on) } },
-            caption = if (deviceSecure) "Fingerprint, face or screen lock to open Berth" else "Set a screen lock on this device first",
+            caption = if (deviceSecure) "Ask for your fingerprint, face or PIN" else "Set a screen lock on this device first",
+            enabled = deviceSecure,
         )
         if (s.appLock) {
             CyclePicker("Lock after leaving", LockTimeout.entries, s.lockTimeout, ::lockTimeoutLabel) { vm.security.setLockTimeout(it) }
-            Text("Opening Berth always asks. \u201CNever\u201D means leaving and coming back does not.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+            PanelNote("Opening Berth always asks. \u201CNever\u201D means leaving and coming back does not.")
         }
-        ToggleRow("Block screenshots", s.blockScreenshots, { vm.security.setBlockScreenshots(it) }, caption = "No screenshots or screen recording, and no preview in Recents")
+        val lockForcesSecure = WindowSecurity.lockForcesSecure && s.appLock && !s.blockScreenshots
+        ToggleRow(
+            "Block screenshots",
+            s.blockScreenshots,
+            { vm.security.setBlockScreenshots(it) },
+            caption = if (lockForcesSecure) "On while the app lock is on" else "No screenshots or screen recording",
+        )
+        PanelNote("The preview in Recents is hidden too; the app lock hides it on its own.")
         CyclePicker("Clear clipboard", ClipboardClear.entries, s.clipboardClear, ::clipboardClearLabel) { vm.security.setClipboardClear(it) }
-        Text("Only what Berth copied is cleared; anything another app put there since is left alone.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
-        ToggleRow("Remote clipboard", s.remoteClipboard, { vm.security.setRemoteClipboard(it) }, caption = "Programs on a server may write this phone's clipboard (OSC 52)")
-        Text("Each host can allow or refuse this on its own, under Advanced in the host's settings. The first blocked write from a host shows a notice once.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+        PanelNote("Only what Berth copied is cleared; anything another app put there since is left alone.")
+        ToggleRow("Remote clipboard", s.remoteClipboard, { vm.security.setRemoteClipboard(it) }, caption = "Servers may write this phone\u2019s clipboard")
+        PanelNote("Programs on a server write it with OSC 52. Each host can allow or refuse this on its own, under Advanced in the host\u2019s settings; the first blocked write from a host shows a notice once.")
         ListRow(
             "Known hosts",
             subtitle = if (known.isEmpty()) "Saved server keys" else "${known.size} saved server ${if (known.size == 1) "key" else "keys"}" + known.count { it.pinned }.let { if (it > 0) " \u00B7 $it pinned" else "" },
@@ -66,15 +74,24 @@ fun SecurityPanel(vm: AppViewModel, onKnownHosts: () -> Unit) {
     }
 }
 
-/** The host editor's row: this host's answer to remote clipboard writes, over the app-wide switch. */
+/**
+ * The host editor's row: this host's answer to remote clipboard writes, over the app-wide switch.
+ * Editor state like its siblings: the editor holds [value], Save commits it. With no [hostId] yet
+ * (a host not saved) the row is disabled and says so; the override keys on the host's id.
+ */
 @Composable
-fun HostRemoteClipboardPicker(vm: AppViewModel, hostId: String) {
+fun HostRemoteClipboardPicker(vm: AppViewModel, hostId: String?, value: RemoteClipboardPolicy, onSelect: (RemoteClipboardPolicy) -> Unit) {
     val settings by vm.security.settings.collectAsState()
     val s = settings ?: return
-    CyclePicker("Remote clipboard", RemoteClipboardPolicy.entries, s.remoteClipboardPolicy(hostId), { remoteClipboardLabel(it, s.remoteClipboard) }) {
-        vm.security.setHostRemoteClipboard(hostId, it)
+    if (hostId == null) {
+        PickerRow("Remote clipboard", "Save the host first", onClick = {}, caption = HOST_REMOTE_CLIPBOARD_CAPTION, captionLines = 2, enabled = false)
+        return
     }
+    CyclePicker("Remote clipboard", RemoteClipboardPolicy.entries, value, { remoteClipboardLabel(it, s.remoteClipboard) }, caption = HOST_REMOTE_CLIPBOARD_CAPTION, captionLines = 2, onSelect = onSelect)
 }
+
+/** Two lines beside the row's value; the Settings row carries the rest of the explanation. */
+private const val HOST_REMOTE_CLIPBOARD_CAPTION = "Clipboard writes from this server (OSC 52)"
 
 fun lockTimeoutLabel(timeout: LockTimeout): String = when (timeout) {
     LockTimeout.IMMEDIATELY -> "Immediately"

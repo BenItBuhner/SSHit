@@ -301,6 +301,7 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch {
             secrets.delete(AuthResolver.passwordSecretId(id))
             hostRepository.delete(id)
+            security.forgetHost(id)
         }
     }
 

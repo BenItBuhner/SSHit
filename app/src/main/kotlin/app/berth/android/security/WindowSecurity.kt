@@ -12,8 +12,15 @@ import app.berth.domain.model.SecuritySettings
  * dedicated switch on Android 13 and later and through `FLAG_SECURE` before that.
  */
 object WindowSecurity {
+    /**
+     * Before Android 13 there is no switch for the Recents preview alone, so the app lock keeps its
+     * content out of Recents with `FLAG_SECURE`, and screenshots go with it; the Block screenshots
+     * row says so on those devices.
+     */
+    val lockForcesSecure: Boolean get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+
     fun apply(activity: Activity, settings: SecuritySettings) {
-        val recentsSwitch = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val recentsSwitch = !lockForcesSecure
         val secure = settings.blockScreenshots || (settings.appLock && !recentsSwitch)
         if (secure) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)

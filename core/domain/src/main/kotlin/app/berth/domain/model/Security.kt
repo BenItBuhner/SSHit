@@ -32,7 +32,11 @@ enum class RemoteClipboardPolicy { INHERIT, ALLOW, DENY }
 @Serializable
 data class SecuritySettings(
     val appLock: Boolean = false,
-    val lockTimeout: LockTimeout = LockTimeout.IMMEDIATELY,
+    /**
+     * A minute by default: a terminal invites leaving for a password manager or a 2FA app and coming
+     * straight back, and a lock on every return would ask each time. Immediately stays on the menu.
+     */
+    val lockTimeout: LockTimeout = LockTimeout.ONE_MINUTE,
     /** FLAG_SECURE: no screenshots, no recents preview, for every window the app opens. */
     val blockScreenshots: Boolean = false,
     val clipboardClear: ClipboardClear = ClipboardClear.OFF,
@@ -53,5 +57,11 @@ data class SecuritySettings(
 
     fun withHostRemoteClipboard(hostId: String, policy: RemoteClipboardPolicy): SecuritySettings = copy(
         remoteClipboardByHost = if (policy == RemoteClipboardPolicy.INHERIT) remoteClipboardByHost - hostId else remoteClipboardByHost + (hostId to policy),
+    )
+
+    /** The document without [hostId]'s override and notice, for a host that was deleted. */
+    fun withoutHost(hostId: String): SecuritySettings = copy(
+        remoteClipboardByHost = remoteClipboardByHost - hostId,
+        remoteClipboardNoticed = remoteClipboardNoticed - hostId,
     )
 }

@@ -92,4 +92,7 @@ class SecurityCenter(
     fun setRemoteClipboard(enabled: Boolean) = update { it.copy(remoteClipboard = enabled) }
 
     fun setHostRemoteClipboard(hostId: String, policy: RemoteClipboardPolicy) = update { it.withHostRemoteClipboard(hostId, policy) }
+
+    /** A deleted host leaves nothing behind in the document: neither its override nor its notice. */
+    fun forgetHost(hostId: String) = update { it.withoutHost(hostId) }
 }
