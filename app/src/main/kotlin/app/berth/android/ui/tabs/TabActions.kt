@@ -1,5 +1,7 @@
 package app.berth.android.ui.tabs
 
+import app.berth.android.session.PaneSide
+
 /**
  * Everything the strip, the switcher and the drawer can ask of the tab model (UX spec C3). The
  * Stage implements it over the view model; every member has a no-op default so a screenshot test
@@ -29,6 +31,15 @@ interface TabActions {
 
     /** Drag and drop: the tab ends up at [toIndex] in strip order, joining [groupId] when given. */
     fun move(id: String, toIndex: Int, groupId: String?) {}
+
+    /** A tab dropped on a pane, or its menu › Open beside (spec C23): it takes [side], or the pane opposite the active tab when null, and the keys. */
+    fun openInPane(id: String, side: PaneSide?) {}
+
+    /** The Session sheet's Split and the Deck's Split action: a second tab on the active host opens beside it. */
+    fun splitActive() {}
+
+    /** A pane's close glyph: the pane goes, its tab stays in the strip. */
+    fun closePane(side: PaneSide) {}
 
     /** The plus tab and Ctrl+T: opens the New tab sheet. */
     fun newTab() {}

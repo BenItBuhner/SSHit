@@ -155,6 +155,29 @@ class SessionManager @Inject constructor(
     val activeSession: StateFlow<TerminalSession?> = activeTab.map { (it as? TerminalSession)?.takeIf { s -> !s.tunnelsOnly } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
+    private val _split = MutableStateFlow<Split?>(null)
+
+    /** The Stage split in two (spec C23): who shares it with the active tab and on which side; null while one tab has it. Written under [stageLock]. */
+    val split: StateFlow<Split?> = _split.asStateFlow()
+
+    /**
+     * The two tabs side by side, or null while the Stage shows one: the active tab on the split's
+     * side, the companion on the other. It is up to the Stage to lay them out only on a width that
+     * fits them; on a compact width the active tab alone shows and the split waits (see [setPanesShown]).
+     */
+    val panes: StateFlow<Panes?> = combine(_activeTabId, _split, tabsById) { active, split, map ->
+        val focused = active?.let { map[it] }
+        val companion = split?.let { map[it.companionId] }
+        when {
+            split == null || focused == null || companion == null -> null
+            split.activeSide == PaneSide.LEFT -> Panes(left = focused, right = companion, focused = PaneSide.LEFT)
+            else -> Panes(left = companion, right = focused, focused = PaneSide.RIGHT)
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** Whether the Stage is laying both panes out, so the companion is in view; under [stageLock]. */
+    private var panesShown = false
+
     /**
      * File transfers in flight, set by the transfer queue. They ride a live session, so they never
      * hold the service up on their own; the count only shapes the notification.
@@ -369,7 +392,19 @@ class SessionManager @Inject constructor(
      */
     private fun lightStage() {
         stageDark = false
-        _activeTabId.value?.let { id -> tabNow(id)?.let { it.onStage = true; it.markSeen() } }
+        refreshStage()
+        tabsNow().forEach { if (it.onStage) it.markSeen() }
+    }
+
+    /**
+     * Under [stageLock]: the active tab is on stage, and so is the companion while the panes show
+     * (spec C23: two tabs in view, neither raises attention); every other tab is off it, and none
+     * is while the stage is dark.
+     */
+    private fun refreshStage() {
+        val active = _activeTabId.value
+        val companion = if (panesShown) _split.value?.companionId else null
+        tabsNow().forEach { it.onStage = !stageDark && (it.id == active || it.id == companion) }
     }
 
     /** Nothing is in front of the user (the app away, or the lock screen up): no tab is on stage, so every tab's bells and long commands count as attention. */
@@ -736,13 +771,13 @@ class SessionManager @Inject constructor(
         }
     }
 
-    /** Opens a second tab of the same kind on the same host directly after [id], in its group (spec C3, Duplicate). */
-    suspend fun duplicate(id: String): ManagedTab? {
+    /** Opens a second tab of the same kind on the same host directly after [id], in its group, and puts it on stage unless [activate] is off (spec C3, Duplicate). */
+    suspend fun duplicate(id: String, activate: Boolean = true): ManagedTab? {
         val source = tabNow(id) ?: return null
         val record = source.record.value
         return when (record.kind) {
-            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, kind = record.kind)
-            TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd)
+            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, activate = activate, kind = record.kind)
+            TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd, activate = activate)
         }
     }
 
@@ -802,13 +837,13 @@ class SessionManager @Inject constructor(
         return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder)
     }
 
-    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?): FilesTab {
+    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true): FilesTab {
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
         val fresh = FilesTab.newRecord(UUID.randomUUID().toString(), host, group, System.currentTimeMillis(), folder)
-        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred)
+        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred, activate)
     }
 
-    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?): FilesTab {
+    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?, activate: Boolean = true): FilesTab {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
         val tab = FilesTab(placed, scope) { sessionRepository.upsert(it) }
         tab.prefer(preferred)
@@ -816,7 +851,7 @@ class SessionManager @Inject constructor(
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
         sessionRepository.upsertAll(shifted + placed)
         refollow()
-        setActive(placed.id)
+        if (activate) setActive(placed.id)
         return tab
     }
 
@@ -865,8 +900,13 @@ class SessionManager @Inject constructor(
         val tab = id?.let { tabNow(it) }
         if (id != null && tab == null) return
         moveStage(id, seen = true)
+        follow(tab)
+    }
+
+    /** The current group and the persisted active id follow the tab that just took the stage. */
+    private fun follow(tab: ManagedTab?) {
         tab?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
-        scope.launch { settings.setLastActiveSessionId(id) }
+        scope.launch { settings.setLastActiveSessionId(tab?.id) }
     }
 
     /**
@@ -881,10 +921,91 @@ class SessionManager @Inject constructor(
      */
     private fun moveStage(id: String?, seen: Boolean) {
         synchronized(stageLock) {
+            val split = _split.value
+            if (split != null) {
+                // Staging the companion (its tab in the strip, Ctrl+Tab reaching it) hands it the keys:
+                // the two trade roles and keep their panes. Staging nothing leaves nothing to share with.
+                if (id == null) _split.value = null
+                else if (id == split.companionId) _split.value = _activeTabId.value?.let { Split(it, split.companionSide) }
+            }
             _activeTabId.value = id
-            val tabs = tabsNow()
-            tabs.forEach { it.onStage = !stageDark && it.id == id }
-            if (seen && id != null) tabs.firstOrNull { it.id == id }?.markSeen()
+            refreshStage()
+            if (seen && id != null) tabNow(id)?.markSeen()
+        }
+    }
+
+    // ---- panes (spec C23) --------------------------------------------------------------------------
+
+    /**
+     * Puts [id] in the pane on [side] and hands it the keys (a tab dragged from the strip onto a
+     * pane, or the menu's Open beside). Whatever that pane showed leaves it; the other pane keeps
+     * its tab, which becomes the companion when it was the active one. On a single Stage the
+     * active tab becomes the companion, so this is what splits it. The active tab dropped on the
+     * other pane trades places with the companion and keeps the keys; dropped on its own, nothing
+     * moves. An id no tab answers to is ignored, like [setActive].
+     */
+    fun placeInPane(id: String, side: PaneSide) {
+        val tab = tabNow(id) ?: return
+        synchronized(stageLock) {
+            val active = _activeTabId.value
+            val split = _split.value
+            if (id == active) {
+                if (split != null && split.activeSide != side) _split.value = Split(split.companionId, side)
+                return
+            }
+            val companion = if (split != null && side == split.activeSide && id != split.companionId) split.companionId else active
+            _split.value = companion?.let { Split(it, side) }
+            _activeTabId.value = id
+            refreshStage()
+            tab.markSeen()
+        }
+        follow(tab)
+    }
+
+    /** Long-press menu › Open beside: [id] takes the pane opposite the active tab, and the keys. */
+    fun openBeside(id: String) = placeInPane(id, _split.value?.companionSide ?: PaneSide.RIGHT)
+
+    /**
+     * The Session sheet's Split (spec C6): a second tab on the active tab's host opens in the pane
+     * opposite it and takes the keys; the active tab keeps its pane. Null with nothing on stage.
+     */
+    suspend fun splitActive(): ManagedTab? {
+        val source = _activeTabId.value ?: return null
+        val side = _split.value?.companionSide ?: PaneSide.RIGHT
+        val fresh = duplicate(source, activate = false) ?: return null
+        placeInPane(fresh.id, side)
+        return fresh
+    }
+
+    /**
+     * Closes the pane on [side]; its tab stays open in the strip, so the pane can be reopened
+     * without losing anything. Closing the focused pane hands the keys to the other pane's tab.
+     */
+    fun closePane(side: PaneSide) {
+        val split = _split.value ?: return
+        synchronized(stageLock) {
+            _split.value = null
+            refreshStage()
+        }
+        if (side == split.activeSide) setActive(split.companionId)
+    }
+
+    /** One tab on the Stage again: the companion leaves its pane and stays in the strip. */
+    fun unsplit() = _split.value?.let { closePane(it.companionSide) } ?: Unit
+
+    /**
+     * Whether the Stage is laying both panes out. On a width that fits them (spec C23) the
+     * companion is in view: it is on stage, its bells never raise attention and its news counts as
+     * seen. Folded or rotated to a compact width the active tab alone shows, and the companion is
+     * off stage like any other tab until the panes come back; the split itself stays, so unfolding
+     * brings both tabs back where they were.
+     */
+    fun setPanesShown(shown: Boolean) {
+        synchronized(stageLock) {
+            if (panesShown == shown) return
+            panesShown = shown
+            refreshStage()
+            if (shown && !stageDark) _split.value?.companionId?.let { tabNow(it)?.markSeen() }
         }
     }
 
@@ -1012,21 +1133,27 @@ class SessionManager @Inject constructor(
     }
 
     /**
-     * Closes a tab. The tab to its right becomes active, else the one to its left (Chrome order).
-     * Returns what is needed to reopen it, or null when there was no such tab.
+     * Closes a tab. The tab to its right becomes active, else the one to its left (Chrome order);
+     * a tab that held a pane closes its pane instead, and the other pane's tab has the Stage to
+     * itself (spec C23). Returns what is needed to reopen it, or null when there was no such tab.
      */
     fun close(id: String): ClosedTab? {
         val tab = tabNow(id) ?: return null
         val strip = stripNow()
         val closed = ClosedTab(tab.record.value)
         val next = TabOrder.nextActiveAfterClose(strip, id)
+        val split = _split.value
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
         trackers.remove(id)?.cancel()
         savedVersions.remove(id)
         notifier.cancelFor(id)
-        if (_activeTabId.value == id) setActive(next)
+        val wasActive = _activeTabId.value == id
+        if (split != null && (wasActive || split.companionId == id)) {
+            synchronized(stageLock) { _split.value = null }
+            if (wasActive) setActive(split.companionId)
+        } else if (wasActive) setActive(next)
         scope.launch { sessionRepository.delete(id) }
         return closed
     }

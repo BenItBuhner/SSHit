@@ -9,6 +9,8 @@ import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
+import app.berth.android.session.PaneSide
+import app.berth.android.session.Panes
 import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
@@ -135,6 +137,9 @@ class AppViewModel @Inject constructor(
 
     /** The tab on stage when it is a terminal; null while a Files tab, or nothing, is showing. */
     val activeSession: StateFlow<TerminalSession?> = sessions.activeSession
+
+    /** Two tabs side by side (spec C23), or null while one tab has the Stage; only a width that fits them lays them out. */
+    val panes: StateFlow<Panes?> = sessions.panes
 
     /** Every tab in strip order, terminals and Files tabs alike. */
     val tabs: StateFlow<List<ManagedTab>> = sessions.tabs
@@ -328,6 +333,22 @@ class AppViewModel @Inject constructor(
     fun duplicate(id: String) {
         viewModelScope.launch { sessions.duplicate(id) }
     }
+
+    // ---- panes (spec C23) --------------------------------------------------------------------------
+
+    /** A tab dropped on a pane, or the menu's Open beside: [id] takes [side], or the pane opposite the active tab when null, and the keys. */
+    fun openInPane(id: String, side: PaneSide?) = if (side == null) sessions.openBeside(id) else sessions.placeInPane(id, side)
+
+    /** The Session sheet's Split: a second tab on the active host opens beside it and takes the keys. */
+    fun splitActive() {
+        viewModelScope.launch { sessions.splitActive() }
+    }
+
+    /** A pane's close glyph: the pane goes, its tab stays in the strip. */
+    fun closePane(side: PaneSide) = sessions.closePane(side)
+
+    /** Told by the Stage whether it is laying both panes out, so the companion counts as in view only when it is. */
+    fun setPanesShown(shown: Boolean) = sessions.setPanesShown(shown)
 
     // ---- files tabs ------------------------------------------------------------------------------
 

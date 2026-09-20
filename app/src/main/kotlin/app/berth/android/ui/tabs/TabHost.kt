@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.ClosedTab
+import app.berth.android.session.PaneSide
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
@@ -139,6 +140,15 @@ class ShellTabActions(
         onActivated()
     }
     override fun move(id: String, toIndex: Int, groupId: String?) = vm.moveTab(id, toIndex, groupId)
+    override fun openInPane(id: String, side: PaneSide?) {
+        vm.openInPane(id, side)
+        onActivated()
+    }
+    override fun splitActive() {
+        vm.splitActive()
+        onActivated()
+    }
+    override fun closePane(side: PaneSide) = vm.closePane(side)
     override fun newTab() { ui.newTab = NewTabRequest(groupId = null) }
     override fun duplicateActive() { vm.activeTabId.value?.let(vm::duplicate) }
     override fun openSwitcher() { ui.switcher = true }
