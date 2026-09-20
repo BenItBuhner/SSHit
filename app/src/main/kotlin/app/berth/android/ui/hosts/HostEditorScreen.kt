@@ -397,7 +397,7 @@ private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> 
  * the row's trailing edge on a surface that reads against the panel ([BerthMenu]).
  */
 @Composable
-fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, caption: String? = null, captionLines: Int = 1, onSelect: (T) -> Unit) {
+fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, caption: String? = null, captionLines: Int = 2, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         PickerRow(title, label(value), onClick = { open = true }, caption = caption, captionLines = captionLines)

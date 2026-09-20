@@ -121,6 +121,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 // ---- Swatch, dots, rings ------------------------------------------------------------------------
@@ -280,14 +281,28 @@ fun Panel(
 const val DisabledAlpha = 0.5f
 
 /**
+ * The lines a text may take at the interface's font scale, from the [lines] the design gives it at
+ * 1× (spec A11): a row is as wide at the 1.3× cap as at 1×, so the words that fill two lines at 1×
+ * need a third there, and a title that fills its one line needs a second. The count is rounded up
+ * ([lines] × the scale), so at 1× it is the design's own; a text that fits fewer lines still takes
+ * fewer. A count with no limit stays unlimited.
+ */
+@Composable
+fun linesAtFontScale(lines: Int): Int =
+    if (lines == Int.MAX_VALUE) lines else ceil(lines * LocalDensity.current.fontScale).toInt().coerceAtLeast(lines)
+
+/**
  * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
  * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
  * The title is one line unless [titleMaxLines] gives it more, for a title whose end matters as
  * much as its start (a forward's `bind → destination` breaks at the arrow rather than losing the
  * destination to the ellipsis). The subtitle takes a plain String or an [AnnotatedString] (mixed
- * Mono and Caption, accent spans), on one line unless [subtitleMaxLines] gives it more, for a
- * caption that is a sentence; [subtitleMinLines] holds lines open before they have text, so a row
- * whose second line arrives later (a forward's traffic once it is up) does not grow when it does.
+ * Mono and Caption, accent spans) and may run to two lines, since a caption is often a sentence;
+ * a caption that fits one line still takes one, and [subtitleMaxLines] narrows or widens that.
+ * Both counts are the design's at 1× and grow with the interface's font scale ([linesAtFontScale]),
+ * so what fits its lines at 1× is not cut at the cap (A11, 1.3×). [subtitleMinLines] holds lines
+ * open before they have text, so a row whose second line arrives later (a forward's traffic once it
+ * is up) does not grow when it does.
  * A row that is not [enabled] takes no tap, does not press, and draws its text at [DisabledAlpha].
  * [role] names what the tap does to a screen reader when the row is more than a row (a picker, a
  * switch); [interactionSource] lets a wrapper that owns the gesture (a toggleable) drive the
@@ -310,7 +325,7 @@ fun ListRow(
     titleStyle: TextStyle = BerthType.bodyMedium,
     titleMaxLines: Int = 1,
     subtitleStyle: TextStyle = BerthType.caption,
-    subtitleMaxLines: Int = 1,
+    subtitleMaxLines: Int = 2,
     subtitleMinLines: Int = 1,
     enabled: Boolean = true,
     role: Role? = null,
@@ -332,6 +347,8 @@ fun ListRow(
     )
     val textAlpha = if (enabled) 1f else DisabledAlpha
     val shownTitleColor = if (focused) c.accent else titleColor
+    val titleLines = linesAtFontScale(titleMaxLines)
+    val subtitleLines = linesAtFontScale(subtitleMaxLines)
     Row(
         modifier
             .fillMaxWidth()
@@ -360,12 +377,12 @@ fun ListRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = titleStyle, color = shownTitleColor.copy(alpha = shownTitleColor.alpha * textAlpha), maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
+            Text(title, style = titleStyle, color = shownTitleColor.copy(alpha = shownTitleColor.alpha * textAlpha), maxLines = titleLines, overflow = TextOverflow.Ellipsis)
             val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
             when (subtitle) {
                 null -> Unit
-                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
-                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
             }
         }
         if (trailing != null) {
@@ -377,8 +394,8 @@ fun ListRow(
 
 /**
  * Row that opens a picker; the value sits at the trailing edge followed by a chevron. The [caption]
- * has one line unless [captionLines] gives it more. Not [enabled], the row says its [value] (the
- * reason nothing can be picked) and opens nothing.
+ * has up to two lines ([ListRow]), or what [captionLines] says. Not [enabled], the row says its
+ * [value] (the reason nothing can be picked) and opens nothing.
  */
 @Composable
 fun PickerRow(
@@ -387,7 +404,7 @@ fun PickerRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     caption: String? = null,
-    captionLines: Int = 1,
+    captionLines: Int = 2,
     enabled: Boolean = true,
 ) {
     val c = Berth.colors
@@ -410,7 +427,7 @@ fun PickerRow(
 }
 
 /**
- * A switch row; the [caption] under the title has one line unless [captionLines] gives it more.
+ * A switch row; the [caption] under the title has up to two lines ([ListRow]), or what [captionLines] says.
  * Not [enabled], the switch is drawn disabled and neither it nor the row takes a tap; the caption
  * is where the row says why. To a screen reader the row is the switch: one node carrying the
  * title, the caption and the on/off state, toggled by a tap anywhere on it; the switch itself is
@@ -423,7 +440,7 @@ fun ToggleRow(
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     caption: String? = null,
-    captionLines: Int = 1,
+    captionLines: Int = 2,
     enabled: Boolean = true,
 ) {
     val c = Berth.colors

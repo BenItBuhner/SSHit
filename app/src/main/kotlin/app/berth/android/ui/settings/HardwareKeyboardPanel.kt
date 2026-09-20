@@ -41,7 +41,8 @@ fun HardwareKeyboardPanel(vm: AppViewModel) {
         }
         PanelNote("Escape then the key is what every shell and editor reads as Meta. The eighth bit is for the few programs that want a Meta byte; keys outside ASCII still take the Escape prefix.")
         ToggleRow("Compact Deck", settings.compactDeck, { on -> vm.updateHardwareKeyboard { it.copy(compactDeck = on) } }, caption = "One row of modifiers and actions while a keyboard is attached", captionLines = 2)
-        ToggleRow("Ctrl+T and Ctrl+W go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline\u2019s transpose and delete word")
+        // A title short enough to read whole beside its switch; the caption names the keys.
+        ToggleRow("Readline keys go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Ctrl+T and Ctrl+W: transpose and delete word")
         PanelNote("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.")
         ListRow(
             "Keyboard shortcuts",

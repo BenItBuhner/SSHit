@@ -9,6 +9,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -16,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
@@ -31,6 +36,7 @@ import app.berth.domain.model.TerminalFont
 import app.berth.ssh.SshSecurity
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -44,7 +50,8 @@ import java.io.File
 /**
  * Font scaling (spec A11): with the system's font size at its largest, 2×, interface text is set
  * at 1.3× and the terminal at 1×, and follows the system only when the font asks to. The Stage,
- * the settings and the hosts are captured at that size, with the audit's checks on each.
+ * the settings and the hosts are captured at that size, with the audit's checks on each, and no
+ * text on the Settings screen is cut at the cap (a title ellipsized, a caption stopped short).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -118,6 +125,27 @@ class FontScaleScreenshotTest {
         compose.onNodeWithText("Follow system text size").performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.followSystemScale }
         capture("settings-font-scale-2x")
+        val cut = overflowingTexts()
+        assertTrue("text cut at the interface's font cap: $cut", cut.isEmpty())
+    }
+
+    /**
+     * Every text on screen whose layout cut it: more lines than it may show, a box too short for
+     * its lines, or its last line ellipsized. The width overflow flag is left out on purpose: the
+     * layout a text hands back through semantics is rebuilt against the width it was offered, so
+     * that flag is up for every text narrower than its room.
+     */
+    private fun overflowingTexts(): List<String> = compose
+        .onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
+        .fetchSemanticsNodes()
+        .mapNotNull { node -> node.textLayout()?.takeIf { it.isCut() }?.layoutInput?.text?.text }
+
+    private fun TextLayoutResult.isCut(): Boolean = didOverflowHeight || (lineCount > 0 && isLineEllipsized(lineCount - 1))
+
+    private fun SemanticsNode.textLayout(): TextLayoutResult? {
+        val results = ArrayList<TextLayoutResult>()
+        val action = config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action ?: return null
+        return if (action(results)) results.firstOrNull() else null
     }
 
     @Test
