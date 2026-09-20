@@ -44,6 +44,12 @@ val appVersionCode: Int = run {
 // build (.github/workflows/release.yml) takes the same four from the repository's secrets, the keystore itself as
 // BERTH_RELEASE_STORE_BASE64 written to a file for BERTH_RELEASE_STORE_FILE. The debug key in
 // app/keystore/debug.keystore is a different matter: not a secret, and pinned for every machine.
+// One thing to know: AGP's SigningConfig takes strings, so the four values are read at configuration time, and
+// with org.gradle.configuration-cache=true (gradle.properties) they are part of the cached configuration in
+// .gradle/configuration-cache/ under the project (gitignored). On the ephemeral runner that is nothing; on a
+// workstation that signs releases, the store and key passwords sit in that plain file for as long as the entry
+// lives (./gradlew --no-configuration-cache assembleRelease, or a clean of .gradle/, if that matters there).
+// The sshd password the test tasks forward (SSH_TEST_PASSWORD, below) is read the same way and lands there too.
 fun releaseSetting(property: String, variable: String): String? =
     providers.gradleProperty(property).orElse(providers.environmentVariable(variable)).orNull?.takeIf { it.isNotBlank() }
 val releaseSigning: Map<String, String?> = mapOf(
