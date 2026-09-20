@@ -276,7 +276,7 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
     val links = LinkInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports)
     }
 
     private companion object {

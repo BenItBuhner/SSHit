@@ -47,6 +47,8 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
+import app.berth.android.ui.diagnostics.CrashReportHost
+import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
@@ -104,6 +106,7 @@ sealed interface Screen : NavKey {
     @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
+    @Serializable data object Diagnostics : Screen
 }
 
 /** The drawer's width as a sheet over the Stage (spec C7). */
@@ -308,8 +311,10 @@ private fun Shell(vm: AppViewModel) {
                             onThemes = { go(Screen.Themes) },
                             onAppearance = { go(Screen.Appearance) },
                             onDeckEditor = { go(Screen.DeckEditor) },
+                            onDiagnostics = { go(Screen.Diagnostics) },
                         )
                     }
+                    is Screen.Diagnostics -> NavEntry(key) { DiagnosticsScreen(vm.reports, onBack = { back() }) }
                     is Screen.KnownHosts -> NavEntry(key) { KnownHostsScreen(vm, onBack = { back() }) }
                     is Screen.Tunnels -> NavEntry(key) { TunnelsScreen(vm, hostId = key.hostId, onBack = { back() }) }
                     is Screen.Snippets -> NavEntry(key) { SnippetsScreen(vm, onBack = { back() }) }
@@ -421,4 +426,5 @@ private fun Shell(vm: AppViewModel) {
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)
     RemoteClipboardNoticeSheet(vm.security.remoteClipboard)
+    CrashReportHost(vm.reports)
 }

@@ -2,6 +2,7 @@ package app.berth.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
 import app.berth.android.links.LinkInbox
 import app.berth.android.security.SecurityCenter
@@ -93,6 +94,8 @@ class AppViewModel @Inject constructor(
     val security: SecurityCenter,
     /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
     private val links: LinkInbox,
+    /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
+    val reports: CrashReporter,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
