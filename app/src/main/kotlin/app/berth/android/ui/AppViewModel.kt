@@ -14,7 +14,9 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
+import android.os.Build
 import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
@@ -313,6 +315,23 @@ class AppViewModel @Inject constructor(
     }
 
     val strongBoxAvailable: Boolean get() = hardwareKeys.strongBoxAvailable
+
+    /**
+     * The model a new biometric key on this device gets: per use from Android 11, the timed window
+     * on 10 (see [HardwareKeys]); the generate sheet says which before the key is made.
+     */
+    val newBiometricKeyModel: KeyAuthModel
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) KeyAuthModel.PER_USE else KeyAuthModel.TIMED_WINDOW
+
+    /**
+     * How the Keystore key behind [identity] lets itself sign, or null for a software key or a
+     * Keystore entry that cannot be read (gone, or a fixture); the Keys screen names it on the row.
+     */
+    fun keyAuthModel(identity: Identity): KeyAuthModel? {
+        if (identity.storage != KeyStorage.ANDROID_KEYSTORE) return null
+        val alias = identity.keystoreAlias ?: HardwareKeys.aliasFor(identity.id)
+        return runCatching { hardwareKeys.authModel(alias) }.getOrNull()
+    }
 
     suspend fun generateIdentity(name: String, algorithm: KeyAlgorithm, hardware: Boolean, protection: KeyProtection, comment: String, passphrase: CharArray?): KeyGenResult =
         withContext(Dispatchers.Default) {

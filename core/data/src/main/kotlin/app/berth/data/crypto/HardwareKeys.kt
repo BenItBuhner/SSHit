@@ -162,7 +162,8 @@ class HardwareKeys(private val context: Context) : KeystoreSigning {
 
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        private const val AUTH_WINDOW_SECONDS = 60
+        /** How long a [KeyAuthModel.TIMED_WINDOW] key stays usable after an unlock; the Keys screen quotes it. */
+        const val AUTH_WINDOW_SECONDS = 60
 
         fun aliasFor(identityId: String): String = "berth.identity.$identityId"
     }
