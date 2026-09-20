@@ -29,7 +29,11 @@ data class SshLink(
     val port: Int,
     /** The `sftp://` folder to open, absolute, without a trailing slash; null for the home folder or on `ssh://`. */
     val path: String?,
-    /** The `;fingerprint=` connection parameter as written, kept for a check against the host key. */
+    /**
+     * The `;fingerprint=` connection parameter as written. Parsed and carried, read by nothing yet:
+     * comparing it against the host key in the trust flow (a match as a line on the sheet, a
+     * mismatch leading it in danger) is the release-hardening work on the link surface.
+     */
     val fingerprint: String?,
     val forwards: List<SshConfigForward>,
     /** False when the link says `N` or asks only for forwards: a login with no shell. */
