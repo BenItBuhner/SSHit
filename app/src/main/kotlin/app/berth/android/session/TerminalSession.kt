@@ -367,6 +367,12 @@ class TerminalSession(
     }
 
     private var connection: SshConnection? = null
+
+    /** The names of the saved hosts the last attempt's chain went through, by hop; the pill and a hop's failure name the hop by them. */
+    private var chainNames: List<String> = emptyList()
+
+    /** The saved name of hop [index], or the [address] the transport knows it by when the chain has moved under the attempt. */
+    private fun hopName(index: Int, address: String): String = chainNames.getOrNull(index) ?: address
     private var shell: ShellChannel? = null
     private var connectJob: Job? = null
 
@@ -598,13 +604,15 @@ class TerminalSession(
     private suspend fun runOnce(isReconnect: Boolean): Outcome {
         val h = host
         // Hops first, in the order they are made, so their prompts come in that order too.
-        val hops = env.jumpHostsFor(h).map { hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop)) }
+        val chain = env.jumpHostsFor(h)
+        chainNames = chain.map { it.name }
+        val hops = chain.map { hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop)) }
         val endpoint = endpointFor(h, env.authFor(h))
         val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h), hops)
         connection = conn
         val progress = scope.launch {
             conn.state.collect { s ->
-                _via.value = (s as? SshConnectionState.ConnectingVia)?.let { "via ${it.host}" + if (it.hopCount > 1) " (${it.hop + 1} of ${it.hopCount})" else "" }
+                _via.value = (s as? SshConnectionState.ConnectingVia)?.let { "via ${hopName(it.hop, it.host)}" + if (it.hopCount > 1) " (${it.hop + 1} of ${it.hopCount})" else "" }
             }
         }
         try {
@@ -726,7 +734,7 @@ class TerminalSession(
      */
     private fun plainFailure(e: Throwable): String = when (e) {
         is SshError.JumpHopFailed -> {
-            val hop = "Jump host ${e.host}${if (e.port == 22) "" else ":${e.port}"}" + if (e.hopCount > 1) " (hop ${e.hop + 1} of ${e.hopCount})" else ""
+            val hop = "Jump host ${hopName(e.hop, e.host)}" + if (e.hopCount > 1) " (hop ${e.hop + 1} of ${e.hopCount})" else ""
             when (val reason = e.reason) {
                 is SshError.AuthenticationFailed -> "$hop did not accept the credentials for ${e.user}."
                 is SshError.HostKeyRejected -> "$hop presented a host key that was not trusted, so the connection stopped there."
