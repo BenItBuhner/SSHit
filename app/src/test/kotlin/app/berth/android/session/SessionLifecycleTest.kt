@@ -36,6 +36,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -349,7 +350,8 @@ class SessionLifecycleTest {
         // The manager restores itself on its own scope; asking before that has landed parks the request.
         graph.sessions.activateFromNotification("s-b")
         await("s-b on stage after restore") { graph.sessions.restored.value && graph.sessions.activeTabId.value == "s-b" }
-        assertEquals("s-b", runBlocking { graph.settings.lastActiveSessionId.first() })
+        // The remembered tab is written on the manager's scope after the stage moves, so it is awaited, not read.
+        await("s-b remembered for the next launch") { runBlocking { graph.settings.lastActiveSessionId.first() } == "s-b" }
     }
 
     // ---- the app lock (spec C20 with C21) --------------------------------------------------------
@@ -460,17 +462,63 @@ class SessionLifecycleTest {
         await("the shell asked for the Stage") { staged == listOf(files.id) }
         assertFalse("in front of the user, so not lit", files.record.value.needsAttention)
 
-        // Tapped again with the tab open: the same tab, not a second one.
+        // Tapped again with the tab open: the same tab, not a second one. The stage request names
+        // the tab openFiles returned, and the host's first Files tab in strip order is still this one
+        // (a second would land directly after the terminal, ahead of it); the strip's flow, which
+        // follows the maps asynchronously, is awaited rather than read.
         graph.sessions.setActive("s-a")
         graph.sessions.activateFilesFromNotification("s-a")
         await("staged again") { staged == listOf(files.id, files.id) }
-        assertEquals(1, graph.sessions.records.value.count { it.kind == TabKind.Files })
+        assertSame(files, graph.sessions.filesTabFor("homelab"))
+        assertEquals(files.id, graph.sessions.activeTabId.value)
+        await("one Files tab on the strip") { graph.sessions.records.value.count { it.kind == TabKind.Files } == 1 }
 
         // The answer settles the count and takes the link with it; the tap is the plain one again.
         queue.resolveConflict(id, ConflictChoice.SKIP, applyToAll = true)
         await("settled") { graph.notifier.summary.value.let { it.waiting == 0 && it.waitingSession == null } }
         assertNotEquals(SessionNotifier.ACTION_OPEN_FILES, shadowOf(graph.notifier.sessionsNotification(graph.notifier.summary.value).contentIntent).savedIntent.action)
         collector.cancel()
+    }
+
+    @Test
+    fun `staging moves the stage before it returns, so what arrives next for the new tab finds it on stage`() {
+        seed()
+        restore()
+        graph.process.start()
+        // No collector to wait for: the flags are right as setActive returns, and a bell in the
+        // instant after the switch rings on the stage's own tab. Nothing here awaits the stage.
+        graph.sessions.setActive("s-a")
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        assertFalse(graph.sessions.get("s-b")!!.onStage)
+        graph.sessions.setActive("s-b")
+        assertTrue(graph.sessions.get("s-b")!!.onStage)
+        assertFalse(graph.sessions.get("s-a")!!.onStage)
+        graph.sessions.get("s-b")!!.emulator.write("\u0007")
+        assertFalse("the bell rang on stage", graph.sessions.get("s-b")!!.record.value.needsAttention)
+
+        // The Files tab openFiles stages is on stage as openFiles returns. FilesCenter relays the
+        // copy's question to it whenever the ride is elected, before the move (lit, then cleared by
+        // the move) or after it (on stage, so quiet); either way, not lit once staged.
+        val (queue, id) = startWaitingDownload("s-a")
+        await("the copy waiting on a.txt") { queue.transfers.value.first { it.id == id }.waiting }
+        val files = runBlocking { graph.sessions.openFiles("s-a")!! }
+        assertTrue(files.onStage)
+        assertFalse(graph.sessions.get("s-b")!!.onStage)
+        assertFalse("in front of the user, so not lit", files.record.value.needsAttention)
+        await("riding the terminal whose copy waits") { files.ride.value?.id == "s-a" }
+        assertFalse("still not lit once the relay has had its ride", files.record.value.needsAttention)
+
+        // Leaving with the question open is when it lights, and the flag is down as setActive returns.
+        graph.sessions.setActive("s-a")
+        assertFalse(files.onStage)
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        await("off stage with the question open, lit") { files.record.value.needsAttention }
+        // And the return clears it as one step with the move.
+        graph.sessions.setActive(files.id)
+        assertTrue(files.onStage)
+        assertFalse("seen on arrival", files.record.value.needsAttention)
+        queue.resolveConflict(id, ConflictChoice.SKIP, applyToAll = true)
+        await("the answer settles the copy") { !queue.transfers.value.first { it.id == id }.waiting }
     }
 
     @Test
