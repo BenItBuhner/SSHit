@@ -336,9 +336,10 @@ class StageBodies internal constructor(
 }
 
 /**
- * Where a terminal body in a pane puts its bottom chrome (spec C23): the pane hosting the body
- * sets [content] to the pill and the Deck the body would have laid out, and lays it out itself
- * under both panes. Null content means the body has nothing below the terminal right now.
+ * Where a terminal body in a pane puts its bottom chrome (spec C23): the body sets [content] to
+ * the Deck (or its strip) it would have laid out, and the pane layer lays it out under both panes.
+ * Null content means the body has nothing to put there right now (a detached or failed frame, a
+ * body that has left), and the layer may show another terminal's chrome in its place.
  */
 @Stable
 class StageChromeHost {
@@ -649,8 +650,12 @@ private fun StageBody(
         if (chrome == null) {
             bottomChrome()
         } else {
-            // In a pane the chrome is the pane's to place: handed over after every composition, withdrawn when the body leaves.
-            SideEffect { chrome.content = bottomChrome }
+            // In a pane the chrome is the pane's to place: handed over after every composition while
+            // there is something in it (the Deck, or its strip), withheld while there is not (a detached
+            // or failed frame has neither), and withdrawn when the body leaves. What this body has nothing
+            // to put there, the pane may fill with another terminal's Deck (spec C23) rather than with nothing.
+            val handed = if (deckStateOk) bottomChrome else null
+            SideEffect { chrome.content = handed }
             DisposableEffect(chrome) { onDispose { chrome.content = null } }
         }
     }

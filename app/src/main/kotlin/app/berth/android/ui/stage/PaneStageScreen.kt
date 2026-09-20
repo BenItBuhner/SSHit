@@ -104,9 +104,11 @@ private val PaneHeaderHeight = 40.dp
  * The Stage on a window that fits two panes (spec C23): the tab strip spans the window as it does
  * on a phone, and below it the active tab and its companion sit side by side, each under a 40 dp
  * header with its swatch and title, a draggable 12 dp gap between them. The focused pane takes the
- * keys; the Deck and the keyboard follow it, one Deck under both panes. Focus follows the last
- * touched pane, and a tab from the strip can be dropped on either pane or sent there from its menu.
- * With no companion the active tab fills the width, as it always has, and Overflow offers Split.
+ * keys and the keyboard follows it; one Deck sits under both panes, the focused terminal's, or the
+ * other pane's while the focused one has none to show, so a focus change never resizes a live frame.
+ * Focus follows the last touched pane, and a tab from the strip can be dropped on either pane or sent
+ * there from its menu. With no companion the active tab fills the width, as it always has, and
+ * Overflow offers Split.
  *
  * A layer over [StageScreen], not a second Stage: the strip, the overflow, the shortcuts and each
  * tab's body are the Stage's own, composed through [StageBodies.TabBody]; this only decides where
@@ -200,10 +202,11 @@ fun PaneStageScreen(
 }
 
 /**
- * The two panes under the strip: headers, bodies, the gap between them and the focused pane's
- * chrome across the bottom. Bodies are composed through [bodies] so a tab's kind picks its body in
- * one place; each terminal hands its Deck to a [StageChromeHost] and the layer lays the focused
- * one out under both panes, paying the bottom insets once for everything above it.
+ * The two panes under the strip: headers, bodies, the gap between them and one Deck across the
+ * bottom. Bodies are composed through [bodies] so a tab's kind picks its body in one place; each
+ * terminal hands its Deck to a [StageChromeHost] and the layer lays out the focused pane's, or the
+ * other pane's when the focused one has none, under both panes, paying the bottom insets once for
+ * everything above it.
  */
 @Composable
 private fun PaneLayer(
@@ -309,9 +312,13 @@ private fun PaneLayer(
                 )
             }
         }
-        // The focused pane's chrome (the Deck over the bottom insets) spans both panes; a pane with none
-        // (a Files tab) still leaves the insets clear, since the bodies above were told not to.
-        val chromeContent = chromeFor(panes.focusedTab.id).content
+        // The chrome across the bottom belongs to the terminal that has one: the focused pane's when it
+        // has a Deck to show, else the other pane's. So a tap that moves the focus onto a detached frame
+        // or a Files tab never takes the Deck from under a live terminal (its frame would grow, the remote
+        // would get a window change, and again on the way back). With two live terminals the Deck follows
+        // the focus; the Deck's layout and its visibility are the Stage's, so that swap is height-neutral.
+        // Two panes with none still leave the insets clear, since the bodies above were told not to.
+        val chromeContent = chromeFor(panes.focusedTab.id).content ?: chromeFor(panes.otherTab.id).content
         if (chromeContent != null) chromeContent() else Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(bottomInsets))
     }
 }

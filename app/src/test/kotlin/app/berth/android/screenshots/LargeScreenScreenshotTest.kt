@@ -317,12 +317,14 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * A live session in a pane beside a detached one: one Deck under both panes, the focused pane's
-     * (spec C23). A touch on the other pane moves the focus, and the Deck goes with it.
+     * A live session in a pane beside a detached one: one Deck under both panes, the live terminal's
+     * (spec C23). A touch on the detached pane moves the focus and the keys, and nothing else: the
+     * detached frame has no Deck to show, so the live one's stays where it is and the live frame
+     * keeps its rows (a focus change must never send the remote a window change).
      */
     @Test
     @Config(qualifiers = TABLET_LANDSCAPE)
-    fun `live session beside a detached one, one Deck under both panes, following the focus`() {
+    fun `live session beside a detached one, one Deck under both panes, staying with the terminal that has one`() {
         assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
         seedTestBox()
         mountApp()
@@ -338,15 +340,34 @@ class LargeScreenScreenshotTest {
         compose.waitUntil(5_000) { graph.sessions.panes.value?.let { it.right.id == session.id && it.focused == PaneSide.RIGHT } == true }
         waitForPane(session.id, PaneSide.RIGHT)
         settle(600)
-        compose.onNode(hasContentDescription("Ctrl", substring = true)).assertIsDisplayed()
+        val deck = compose.onNode(hasContentDescription("Ctrl", substring = true))
+        deck.assertIsDisplayed()
+        val deckBounds = deck.fetchSemanticsNode().boundsInRoot
+        val liveBounds = paneBounds(session.id, PaneSide.RIGHT)
+        val rows = session.emulator.rows
+        val cols = session.emulator.cols
         capture("tablet-landscape-live-split-deck")
 
-        // A touch in the left pane focuses it: homelab is detached, so nothing sits under the panes now.
+        // A touch in the left pane focuses it. homelab is detached and has no Deck to put under the panes,
+        // so the live terminal's stays, and the live frame is exactly the size it was: no resize reaches the remote.
         pane("s-homelab", PaneSide.LEFT).performTouchInput { click(center) }
         compose.waitUntil(5_000) { graph.sessions.activeTabId.value == "s-homelab" && graph.sessions.panes.value?.focused == PaneSide.LEFT }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Ctrl", substring = true)).fetchSemanticsNodes().isEmpty() }
-        settle(300)
+        settle(600)
+        deck.assertIsDisplayed()
+        assertEquals(deckBounds, deck.fetchSemanticsNode().boundsInRoot)
+        assertEquals(liveBounds, paneBounds(session.id, PaneSide.RIGHT))
+        assertEquals(rows, session.emulator.rows)
+        assertEquals(cols, session.emulator.cols)
+        compose.onNodeWithContentDescription("Close pane").assertIsDisplayed()
         capture("tablet-landscape-live-split-focus-left")
+
+        // And back: the same Deck, the same frame.
+        pane(session.id, PaneSide.RIGHT).performTouchInput { click(center) }
+        compose.waitUntil(5_000) { graph.sessions.activeTabId.value == session.id && graph.sessions.panes.value?.focused == PaneSide.RIGHT }
+        settle(600)
+        assertEquals(deckBounds, deck.fetchSemanticsNode().boundsInRoot)
+        assertEquals(rows, session.emulator.rows)
+        assertEquals(cols, session.emulator.cols)
     }
 
     // ---- the shell and its panes -----------------------------------------------------------------
