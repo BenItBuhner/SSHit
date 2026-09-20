@@ -54,6 +54,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -472,16 +473,17 @@ private fun QuietAction(text: String, onClick: () -> Unit, enabled: Boolean = tr
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = enabled && interaction.showsFocus()
     Box(
         Modifier
             .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
             .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (pressed && enabled) c.surface2 else Color.Transparent)
+            .background(if ((pressed && enabled) || focused) c.surface2 else Color.Transparent)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = BerthType.label, color = c.text2.copy(alpha = if (enabled) 1f else 0.5f), maxLines = 1)
+        Text(text, style = BerthType.label, color = if (focused) c.accent else c.text2.copy(alpha = if (enabled) 1f else 0.5f), maxLines = 1)
     }
 }
 
@@ -552,7 +554,8 @@ private fun PresetsSheet(previewInput: StageInput, snippets: List<Snippet>, onPi
             for (preset in DeckPresets.all) {
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
-                val lift by animateColorAsState(if (pressed) c.surface2 else c.surface1, tween(120), label = "preset")
+                val focused = interaction.showsFocus()
+                val lift by animateColorAsState(if (pressed || focused) c.surface2 else c.surface1, tween(120), label = "preset")
                 Column(
                     Modifier
                         .fillMaxWidth()

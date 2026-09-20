@@ -44,6 +44,7 @@ import app.berth.android.session.ClosedTab
 import app.berth.android.session.PaneSide
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
@@ -427,13 +428,14 @@ private fun BarAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
             .drawBehind {
-                if (pressed) {
+                if (pressed || focused) {
                     val h = 24.dp.toPx()
                     drawRoundRect(color = c.surface4, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
                 }

@@ -93,6 +93,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -802,6 +803,7 @@ private fun Crumb(label: String, last: Boolean, onClick: () -> Unit, onLongClick
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
@@ -811,11 +813,11 @@ private fun Crumb(label: String, last: Boolean, onClick: () -> Unit, onLongClick
         Text(
             label,
             style = if (last) BerthType.bodyMedium else BerthType.body,
-            color = if (last) c.text1 else c.text2,
+            color = if (focused) c.accent else if (last) c.text1 else c.text2,
             maxLines = 1,
             modifier = Modifier
                 .clip(RoundedCornerShape(BerthRadius.swatch))
-                .background(if (pressed) c.surface3 else Color.Transparent)
+                .background(if (pressed || focused) c.surface3 else Color.Transparent)
                 .padding(horizontal = 6.dp, vertical = 8.dp),
         )
     }

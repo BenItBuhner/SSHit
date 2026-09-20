@@ -110,6 +110,7 @@ import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.spoken
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.theme.Berth
@@ -318,16 +319,19 @@ fun ListRow(
     val c = Berth.colors
     val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    // The keyboard's focus (spec, Components): the row one tonal step up and its title in accent, while keys drive.
+    val focused = enabled && interaction.showsFocus()
     val bg by animateColorAsState(
         when {
             pressed && enabled -> c.surface4
-            selected -> c.surface3
+            selected || focused -> c.surface3
             else -> surface
         },
         tween(120),
         label = "row",
     )
     val textAlpha = if (enabled) 1f else DisabledAlpha
+    val shownTitleColor = if (focused) c.accent else titleColor
     Row(
         modifier
             .fillMaxWidth()
@@ -356,7 +360,7 @@ fun ListRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = titleStyle, color = titleColor.copy(alpha = titleColor.alpha * textAlpha), maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
+            Text(title, style = titleStyle, color = shownTitleColor.copy(alpha = shownTitleColor.alpha * textAlpha), maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
             val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
             when (subtitle) {
                 null -> Unit
@@ -754,14 +758,18 @@ fun BerthButton(
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    // The keyboard's focus takes the pressed tone; the label goes accent where the fill can carry it
+    // (a primary button's fill is the accent, a destructive one's label says danger first).
+    val focused = enabled && interaction.showsFocus()
+    val raised = pressed || focused
     val fill = when (kind) {
-        ButtonKind.PRIMARY -> if (pressed) c.accent.copy(alpha = 0.85f) else c.accent
-        ButtonKind.SECONDARY, ButtonKind.DESTRUCTIVE -> if (pressed) c.surface4 else c.surface3
-        ButtonKind.TEXT -> if (pressed) c.surface2 else Color.Transparent
+        ButtonKind.PRIMARY -> if (raised) c.accent.copy(alpha = 0.85f) else c.accent
+        ButtonKind.SECONDARY, ButtonKind.DESTRUCTIVE -> if (raised) c.surface4 else c.surface3
+        ButtonKind.TEXT -> if (raised) c.surface2 else Color.Transparent
     }
     val label = when (kind) {
         ButtonKind.PRIMARY -> c.onAccent
-        ButtonKind.SECONDARY -> c.text1
+        ButtonKind.SECONDARY -> if (focused) c.accent else c.text1
         ButtonKind.TEXT -> c.accent
         ButtonKind.DESTRUCTIVE -> c.danger
     }
@@ -814,10 +822,11 @@ fun SegmentedControl(
                 val selected = index == selectedIndex
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
+                val focused = interaction.showsFocus()
                 val fill by animateColorAsState(
                     when {
                         selected -> c.surface4
-                        pressed -> c.surface3
+                        pressed || focused -> c.surface3
                         else -> Color.Transparent
                     },
                     tween(120),
@@ -832,7 +841,7 @@ fun SegmentedControl(
                         .selectable(selected = selected, interactionSource = interaction, indication = null, role = Role.RadioButton) { onSelect(index) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(option, style = BerthType.label, color = if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(option, style = BerthType.label, color = if (focused) c.accent else if (selected) c.text1 else c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1082,6 +1091,7 @@ fun IconAction(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = enabled && interaction.showsFocus()
     Box(
         modifier
             .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
@@ -1099,7 +1109,7 @@ fun IconAction(
             Modifier
                 .requiredSize(44.dp)
                 .clip(CircleShape)
-                .background(if (pressed) Berth.colors.surface3 else Color.Transparent),
+                .background(if (pressed || focused) Berth.colors.surface3 else Color.Transparent),
             contentAlignment = Alignment.Center,
             content = content,
         )
