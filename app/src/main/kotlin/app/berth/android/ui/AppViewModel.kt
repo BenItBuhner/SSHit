@@ -210,9 +210,14 @@ class AppViewModel @Inject constructor(
      * link's address, port and user opens straight away, as the link asks ([openFromLink]), unless
      * the link carries forwards that host does not have: nothing a link asks for is saved or
      * started unseen, so those open the host's editor with the forwards as pending rows, and Save
-     * there adds them and connects ([LinkOutcome.ConfirmForwards]). No such host sends the shell to
-     * the editor prefilled from the link, where the same rows show, and saving there connects. A
-     * link that cannot be read ends in a notice naming what was wrong, never in a crash.
+     * there adds them and connects ([LinkOutcome.ConfirmForwards]). No such host, and a plain link
+     * (`ssh://[user@]host[:port]`, nothing a saved host would have to hold) lands on Quick connect
+     * with the address in its field, to connect as an unsaved host the way the spec's deep-links
+     * line has it ([LinkOutcome.QuickConnect]); one that asks for forwards, `N`, an `sftp://` folder
+     * or a name sends the shell to the editor prefilled from the link, the one surface that can hold
+     * those, where the forwards show as the same pending rows and saving connects
+     * ([LinkOutcome.NewHost]). A link that cannot be read ends in a notice naming what was wrong,
+     * never in a crash.
      */
     suspend fun openLink(raw: String) {
         _linkOutcome.value = when (val result = SshLink.parse(raw)) {
@@ -221,6 +226,7 @@ class AppViewModel @Inject constructor(
                 val link = result.link
                 val host = hostFor(link)
                 when {
+                    host == null && link.plain -> LinkOutcome.QuickConnect(link.target)
                     host == null -> LinkOutcome.NewHost(raw)
                     pendingForwards(link, tunnelsOf(host.id)).isNotEmpty() -> LinkOutcome.ConfirmForwards(host.id, raw)
                     else -> {
@@ -271,10 +277,20 @@ class AppViewModel @Inject constructor(
     /** The saved tunnels of the host [hostId], read once. */
     suspend fun tunnelsOf(hostId: String): List<Tunnel> = tunnelRepository.observeAll().first().filter { it.hostId == hostId }
 
-    /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
-    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): Boolean {
-        val parsed = parseQuickConnect(spec) ?: return false
-        val (user, address, port) = parsed
+    /**
+     * Quick connect (spec C11): `user@host`, `host:port`, `ssh://user@host:port` or a bare address,
+     * IPv6 in brackets, connected as an unsaved host, as `root` when no user is given. The spec is
+     * read by the link parser ([parseQuickConnect]), so the field and an `ssh://` link agree on
+     * every form. Null once the login is opening; otherwise one sentence on what stopped it, for
+     * the field's helper line: the parser's reason, or that the spec asks for more than a shell.
+     */
+    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): String? {
+        val link = when (val result = SshLink.parse(spec)) {
+            is SshLink.Result.Malformed -> return result.reason
+            is SshLink.Result.Parsed -> result.link
+        }
+        if (!link.plain) return QUICK_CONNECT_IS_A_SHELL
+        val (user, address, port) = link.quickTarget()
         val name = address
         val host = Host(
             id = "quick-" + UUID.randomUUID().toString(),
@@ -288,7 +304,7 @@ class AppViewModel @Inject constructor(
             createdAt = System.currentTimeMillis(),
         )
         viewModelScope.launch { sessions.open(host, workspaceId) }
-        return true
+        return null
     }
 
     fun setActive(id: String?) = sessions.setActive(id)
@@ -748,17 +764,22 @@ class AppViewModel @Inject constructor(
             enabled = true,
         )
 
-        private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/@]+)(?::(\d{1,5}))?/?$""")
+        /** The user a Quick connect spec that names none logs in as. */
+        const val QUICK_CONNECT_USER = "root"
 
-        /** Returns (user, address, port) or null when [spec] is not an address. */
-        fun parseQuickConnect(spec: String): Triple<String, String, Int>? {
-            val m = QUICK.matchEntire(spec.trim()) ?: return null
-            val user = m.groupValues[1].ifEmpty { "root" }
-            val address = m.groupValues[2].removePrefix("[").removeSuffix("]")
-            val port = m.groupValues[3].toIntOrNull() ?: 22
-            if (address.isBlank() || port !in 1..65535) return null
-            return Triple(user, address, port)
-        }
+        /** The helper line when the spec parses but asks for what only a saved host can hold. */
+        const val QUICK_CONNECT_IS_A_SHELL = "Quick connect takes user@host:port alone; save a host to carry forwards, a folder or a name."
+
+        /**
+         * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
+         * not a plain address. [SshLink.parse] reads it, the same parser an `ssh://` link goes
+         * through, so the field and a link agree on every form; a user left out is
+         * [QUICK_CONNECT_USER], since an unsaved host has no user of its own to fall back on.
+         */
+        fun parseQuickConnect(spec: String): Triple<String, String, Int>? =
+            (SshLink.parse(spec) as? SshLink.Result.Parsed)?.link?.takeIf { it.plain }?.quickTarget()
+
+        private fun SshLink.quickTarget(): Triple<String, String, Int> = Triple(user ?: QUICK_CONNECT_USER, host, port)
     }
 }
 
@@ -769,7 +790,16 @@ sealed interface LinkOutcome {
     /** A tab was opened or brought on stage; the shell pops back to the Stage. */
     data object Staged : LinkOutcome
 
-    /** No saved host matched: the editor opens prefilled from [raw], and saving there connects. */
+    /**
+     * No saved host matched a plain `ssh://[user@]host[:port]`: Quick connect opens with [spec]
+     * (`user@host:port` as the link gave it) in its field, to connect as an unsaved host.
+     */
+    data class QuickConnect(val spec: String) : LinkOutcome
+
+    /**
+     * No saved host matched, and [raw] asks for what only a saved host can hold (forwards, `N`, an
+     * `sftp://` folder or a name): the editor opens prefilled from it, and saving there connects.
+     */
     data class NewHost(val raw: String) : LinkOutcome
 
     /**

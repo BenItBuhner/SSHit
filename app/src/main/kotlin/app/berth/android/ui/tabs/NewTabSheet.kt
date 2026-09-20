@@ -90,7 +90,8 @@ fun NewTabSheet(
     }
     fun connectSpec() {
         if (spec.isBlank()) return
-        if (vm.quickConnect(spec, null, groupId)) onDismiss() else error = "Use user@host, host:port or ssh://user@host:port"
+        val problem = vm.quickConnect(spec, null, groupId)
+        if (problem == null) onDismiss() else error = problem
     }
 
     val recent = remember(hosts) { hosts.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(4) }

@@ -43,6 +43,7 @@ import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
+import app.berth.android.ui.hosts.QuickConnectSheet
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
@@ -145,11 +146,13 @@ private fun Shell(vm: AppViewModel) {
         }
     }
 
-    // An ssh:// or sftp:// link (AppViewModel.openLink): a tab opened, so the Stage; no host, so the
-    // editor prefilled from the link; a host but forwards it does not have, so that host's editor
-    // with them pending; unreadable, so a notice saying what was wrong.
+    // An ssh:// or sftp:// link (AppViewModel.openLink): a tab opened, so the Stage; no host and a
+    // plain link, so Quick connect prefilled; no host and more than a shell asked for, so the editor
+    // prefilled from the link; a host but forwards it does not have, so that host's editor with them
+    // pending; unreadable, so a notice saying what was wrong.
     val linkOutcome by vm.linkOutcome.collectAsState()
     var linkNotice by remember { mutableStateOf<String?>(null) }
+    var quickConnectSpec by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(linkOutcome) {
         when (val outcome = linkOutcome) {
             null -> return@LaunchedEffect
@@ -158,6 +161,7 @@ private fun Shell(vm: AppViewModel) {
                 toStage()
                 if (drawer.isOpen) drawer.close()
             }
+            is LinkOutcome.QuickConnect -> quickConnectSpec = outcome.spec
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
             is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
@@ -306,6 +310,20 @@ private fun Shell(vm: AppViewModel) {
         )
     }
     TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
+    // A plain link's landing (spec, Deep links): Quick connect over whatever is up, the link's address in its field.
+    quickConnectSpec?.let { spec ->
+        QuickConnectSheet(
+            vm = vm,
+            initialSpec = spec,
+            onDismiss = { quickConnectSpec = null },
+            onConnected = {
+                quickConnectSpec = null
+                sessionSheet = false
+                toStage()
+                if (drawer.isOpen) closeDrawer()
+            },
+        )
+    }
     Box(Modifier.fillMaxSize()) {
         ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
         // The link notice is kept through the bar's exit, so the text does not blank as it slides away.

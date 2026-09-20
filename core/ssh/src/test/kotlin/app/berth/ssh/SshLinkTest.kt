@@ -116,12 +116,25 @@ class SshLinkTest {
     }
 
     @Test
+    fun `a plain link is one Quick connect can open as an unsaved host`() {
+        assertTrue(parsed("ssh://ben@bastion:2200").plain)
+        assertTrue(parsed("bastion").plain)
+        assertTrue(parsed("ssh://ben;fingerprint=SHA256:abc@bastion/").plain, "the fingerprint is read by nothing yet, so it is no reason to save a host")
+        assertTrue(parsed("ssh://h?theme=dark").plain, "unknown query keys ask for nothing")
+        assertFalse(parsed("ssh://ben@bastion?L=8080:localhost:80").plain, "forwards need a saved host")
+        assertFalse(parsed("ssh://ben@bastion?N").plain, "no shell is a Tunnels tab, which needs a saved host")
+        assertFalse(parsed("sftp://ben@bastion").plain, "Files need a saved host")
+        assertFalse(parsed("ssh://ben@bastion#Relay").plain, "a name is a saved host's")
+    }
+
+    @Test
     fun `what is wrong is named and nothing throws`() {
         assertEquals("The link is empty.", malformed("   "))
         assertEquals("Only ssh:// and sftp:// links open here, not http://.", malformed("http://example.com"))
-        assertEquals("The link names no host.", malformed("ssh://"))
-        assertEquals("The link names no host.", malformed("ssh://ben@"))
-        assertEquals("The link names no host.", malformed("ssh://ben@:22"))
+        // The reasons name the part, not the link: Quick connect's field shows the same ones for what is typed there.
+        assertEquals("No host is named.", malformed("ssh://"))
+        assertEquals("No host is named.", malformed("ssh://ben@"))
+        assertEquals("No host is named.", malformed("ssh://ben@:22"))
         assertEquals("The user before @ is empty.", malformed("ssh://@host"))
         assertEquals("The port after : is empty.", malformed("host:"))
         assertEquals("\u201C99999\u201D isn't a port from 1 to 65535.", malformed("host:99999"))
@@ -130,8 +143,8 @@ class SshLinkTest {
         assertEquals("The IPv6 address is missing its closing bracket.", malformed("ssh://[fe80::1"))
         assertEquals("What is in the brackets isn't an IPv6 address.", malformed("ssh://[nope]"))
         assertEquals("Only a :port can follow the IPv6 address.", malformed("ssh://[::1]x"))
-        assertEquals("The link has a space in the host part.", malformed("a b"))
-        assertEquals("The link names no host.", malformed("ssh://ben@user@"), "the last @ splits user from host")
+        assertEquals("The host part has a space in it.", malformed("a b"))
+        assertEquals("No host is named.", malformed("ssh://ben@user@"), "the last @ splits user from host")
         assertEquals("a@b", parsed("ssh://a@b@host").user, "so an @ in the user survives")
         assertEquals("\u201Cbad_host!\u201D isn't a host name or address.", malformed("bad_host!"))
         assertEquals("The forward \u201Cabc\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=abc"))

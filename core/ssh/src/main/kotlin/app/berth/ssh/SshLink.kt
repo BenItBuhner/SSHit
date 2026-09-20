@@ -42,6 +42,12 @@ data class SshLink(
     /** The ask is the host's forwards with no shell: `ssh://` with `N`, or with forwards and nothing else. */
     val tunnelsOnly: Boolean get() = scheme == Scheme.SSH && !shell
 
+    /**
+     * A plain `ssh://[user@]host[:port]`: a shell and nothing a saved host would have to hold (no
+     * forwards, no `N`, no `sftp://` folder, no name), so Quick connect can open it as an unsaved host.
+     */
+    val plain: Boolean get() = scheme == Scheme.SSH && shell && forwards.isEmpty() && name == null
+
     /** `user@host:port` as a row would show it: the user when given, the port when it is not 22. */
     val target: String
         get() = buildString {
@@ -82,8 +88,8 @@ data class SshLink(
             rest = rest.substringBefore('?')
             val path = rest.substringAfter('/', "").takeIf { '/' in rest }?.let { "/$it" }
             val authority = rest.substringBefore('/')
-            if (authority.isEmpty()) return Result.Malformed("The link names no host.")
-            if (authority.any { it.isWhitespace() }) return Result.Malformed("The link has a space in the host part.")
+            if (authority.isEmpty()) return Result.Malformed("No host is named.")
+            if (authority.any { it.isWhitespace() }) return Result.Malformed("The host part has a space in it.")
 
             val at = authority.lastIndexOf('@')
             val userInfo = if (at >= 0) authority.substring(0, at) else null
@@ -118,7 +124,7 @@ data class SshLink(
                 if (colons > 1) return Result.Malformed("An IPv6 address needs brackets: [address]:port.")
                 host = hostPort.substringBefore(':')
                 portText = if (colons == 1) hostPort.substringAfter(':') else null
-                if (host.isEmpty()) return Result.Malformed("The link names no host.")
+                if (host.isEmpty()) return Result.Malformed("No host is named.")
                 if (!HOST_NAME.matches(host)) return Result.Malformed("\u201C$host\u201D isn't a host name or address.")
             }
             val port = when {

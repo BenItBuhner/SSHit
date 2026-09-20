@@ -272,6 +272,27 @@ class ConnectionsScreenshotTest {
 
     // ---- links ---------------------------------------------------------------------------------
 
+    /**
+     * A plain `ssh://` link no saved host answers to (spec, Deep links): Quick connect comes up over
+     * the shell with the link's `user@host:port` in its field and a line saying no saved host
+     * matched; nothing is saved or opened until Connect.
+     */
+    @Test
+    fun `a plain link to no saved host lands on Quick connect prefilled`() {
+        seed()
+        compose.setContent { AppRoot(graph.viewModel) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("No tabs")).fetchSemanticsNodes().isNotEmpty() }
+        runBlocking { graph.viewModel.openLink("ssh://ops@edge.example.net:2200") }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Quick connect")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("No saved host matches the link.").assertExists()
+        compose.onNode(hasText("ops@edge.example.net:2200") and hasSetTextAction()).assertExists()
+        compose.onNodeWithText("Ask on connect").assertExists()
+        assertTrue("nothing opened", graph.sessions.tabs.value.isEmpty())
+        assertEquals("nothing saved", 4, graph.hosts.items.value.size)
+        settle(400)
+        capture("quick-connect-from-link")
+    }
+
     /** A link that cannot be read: the shell's notice bar names what was wrong, with OK to put it away; nothing else moves. */
     @Test
     fun `a malformed link's notice`() {

@@ -171,17 +171,26 @@ private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onFiles: (() -> Un
     }
 }
 
+/**
+ * Quick connect (spec C11): a `user@host:port` field in Mono, the identity to log in with, Connect;
+ * the login opens as an unsaved host. What stops a spec is said under the field in the parser's
+ * words, the same ones a link's notice uses. With [initialSpec] the sheet is where a plain `ssh://`
+ * link no saved host answers to lands (spec, Deep links): the field holds the link's address and
+ * the title says why the sheet is up.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -> Unit) {
+fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -> Unit, initialSpec: String? = null) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
-    var spec by remember { mutableStateOf("") }
+    var spec by remember { mutableStateOf(initialSpec ?: "") }
     var identityId by remember { mutableStateOf<String?>(null) }
     var pickIdentity by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     fun connect() {
-        if (vm.quickConnect(spec, identityId)) onConnected() else error = "Use user@host, host:port or ssh://user@host:port"
+        if (spec.isBlank()) return
+        val problem = vm.quickConnect(spec, identityId)
+        if (problem == null) onConnected() else error = problem
     }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -196,7 +205,7 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetTitle("Quick connect")
+            SheetTitle("Quick connect", if (initialSpec != null) "No saved host matches the link." else null)
             BerthField(
                 value = spec,
                 onValueChange = { spec = it; error = null },
