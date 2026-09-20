@@ -2,6 +2,7 @@ package app.berth.android.security
 
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +40,12 @@ class RemoteClipboardGate(
     /** The notice to show, if any; the next one waits its turn. */
     val notice: StateFlow<RemoteClipboardNotice?> = _notices.map { it.firstOrNull() }.stateIn(scope, SharingStarted.Eagerly, null)
 
-    /** Hosts already told about a blocked write in this process; the persisted set covers earlier ones. */
+    /**
+     * Hosts told about a blocked write in this process, whether or not they were answered. The
+     * persisted set ([app.berth.domain.model.SecuritySettings.remoteClipboardNoticed]) holds only
+     * the answered ones: a notice swiped away is not a decision, so the next process raises it once
+     * more, and this set keeps the same host from raising it again and again meanwhile.
+     */
     private val told = HashSet<String>()
 
     /** The terminal's hook: writes the clipboard when [host] may, otherwise drops the text and perhaps raises the notice. */
@@ -57,24 +63,30 @@ class RemoteClipboardGate(
         // A host the user has set to Block gets no notice: that write was refused on purpose. The
         // notice is for the app-wide switch standing in the way of a host nobody has decided about.
         if (current.remoteClipboardPolicy(host.id) == RemoteClipboardPolicy.DENY) return false
-        val firstTime = synchronized(told) { told.add(host.id) } && host.id !in current.remoteClipboardNoticed
-        if (firstTime) {
-            settings.updateSecuritySettings { it.copy(remoteClipboardNoticed = it.remoteClipboardNoticed + host.id) }
-            _notices.update { it + RemoteClipboardNotice(host, text) }
-        }
+        if (host.id in current.remoteClipboardNoticed) return false
+        if (synchronized(told) { told.add(host.id) }) _notices.update { it + RemoteClipboardNotice(host, text) }
         return false
     }
 
     /** The notice's Allow: the host may write from now on, and the text it just tried lands. */
     fun allow(notice: RemoteClipboardNotice) {
         scope.launch {
-            settings.updateSecuritySettings { it.withHostRemoteClipboard(notice.host.id, RemoteClipboardPolicy.ALLOW) }
+            settings.updateSecuritySettings { it.withHostRemoteClipboard(notice.host.id, RemoteClipboardPolicy.ALLOW).noticed(notice.host.id) }
             clipboard.copy(notice.text, label = "terminal")
         }
         dismiss(notice)
     }
 
+    /** The notice's Keep blocked: nothing changes for the host, and it is not asked about again. */
+    fun keepBlocked(notice: RemoteClipboardNotice) {
+        scope.launch { settings.updateSecuritySettings { it.noticed(notice.host.id) } }
+        dismiss(notice)
+    }
+
+    /** Takes the notice down without an answer; only this process remembers it was shown. */
     fun dismiss(notice: RemoteClipboardNotice) {
         _notices.update { list -> list.filter { it !== notice } }
     }
+
+    private fun SecuritySettings.noticed(hostId: String) = copy(remoteClipboardNoticed = remoteClipboardNoticed + hostId)
 }

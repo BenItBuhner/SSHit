@@ -62,19 +62,36 @@ class RemoteClipboardGateTest {
     private fun decide(host: Host, text: String) = runBlocking { gate.decide(host, text) }
 
     @Test
-    fun `off by default, the write is dropped and the host gets its notice once`() {
+    fun `off by default, the write is dropped and the host gets its notice, answered once for good`() {
         assertFalse(decide(pihole, "ssh-ed25519 AAAA... exfil@remote"))
         assertNull("nothing reached the clipboard", clipText)
         val notice = gate.notice.value!!
         assertEquals(pihole, notice.host)
         assertEquals("ssh-ed25519 AAAA... exfil@remote", notice.text)
-        assertTrue("the host is remembered as told", pihole.id in settings.security.value.remoteClipboardNoticed)
+        assertFalse("raising the notice is not an answer; nothing is written yet", pihole.id in settings.security.value.remoteClipboardNoticed)
 
-        gate.dismiss(notice)
+        gate.keepBlocked(notice)
         assertNull(gate.notice.value)
+        assertTrue("Keep blocked is the answer that is kept", pihole.id in settings.security.value.remoteClipboardNoticed)
         assertFalse(decide(pihole, "second try"))
         assertNull("no second notice for the same host", gate.notice.value)
         assertNull(clipText)
+    }
+
+    @Test
+    fun `a notice swiped away is not an answer, so only this process stays quiet`() {
+        assertFalse(decide(pihole, "held"))
+        gate.dismiss(gate.notice.value!!)
+        assertNull(gate.notice.value)
+        assertFalse("nothing persisted: the next process asks once more", pihole.id in settings.security.value.remoteClipboardNoticed)
+        assertEquals(RemoteClipboardPolicy.INHERIT, settings.security.value.remoteClipboardPolicy(pihole.id))
+
+        assertFalse(decide(pihole, "held again"))
+        assertNull("but this process does not nag", gate.notice.value)
+
+        val next = RemoteClipboardGate(settings, clipboard, scope)
+        assertFalse(runBlocking { next.decide(pihole, "a new process") })
+        assertEquals("the fresh process raises it once more", pihole, next.notice.value?.host)
     }
 
     @Test
@@ -140,19 +157,90 @@ class RemoteClipboardGateTest {
         assertNull(gate.notice.value)
         assertEquals("the text it tried", clipText)
         assertEquals(RemoteClipboardPolicy.ALLOW, settings.security.value.remoteClipboardPolicy(pihole.id))
+        assertTrue("an answer either way", pihole.id in settings.security.value.remoteClipboardNoticed)
         assertFalse("the switch itself stays off", settings.security.value.remoteClipboard)
         assertTrue(decide(pihole, "and the next"))
         assertEquals("and the next", clipText)
     }
 
     @Test
-    fun `Keep blocked on the notice changes nothing`() {
+    fun `Keep blocked on the notice changes nothing for the host and is remembered`() {
         assertFalse(decide(pihole, "held"))
-        gate.dismiss(gate.notice.value!!)
+        gate.keepBlocked(gate.notice.value!!)
         assertNull(clipText)
         assertEquals(RemoteClipboardPolicy.INHERIT, settings.security.value.remoteClipboardPolicy(pihole.id))
         assertFalse(decide(pihole, "held again"))
         assertNull(gate.notice.value)
+
+        val next = RemoteClipboardGate(settings, clipboard, scope)
+        assertFalse(runBlocking { next.decide(pihole, "a new process") })
+        assertNull("answered: no process asks again", next.notice.value)
+    }
+
+    @Test
+    fun `deleting a host prunes its override and its notice from the document`() {
+        settings.security.value = SecuritySettings(remoteClipboardNoticed = setOf(pihole.id, build.id)).withHostRemoteClipboard(pihole.id, RemoteClipboardPolicy.ALLOW)
+        val pruned = settings.security.value.withoutHost(pihole.id)
+        assertEquals(emptyMap<String, RemoteClipboardPolicy>(), pruned.remoteClipboardByHost)
+        assertEquals(setOf(build.id), pruned.remoteClipboardNoticed)
+    }
+
+    // ---- the preview -----------------------------------------------------------------------------
+
+    @Test
+    fun `the preview escapes what could hide or reorder the text`() {
+        assertEquals("echo ok^Mrm -rf ~", ClipboardPreview.escape("echo ok\rrm -rf ~"))
+        assertEquals("^[[2J^[[H", ClipboardPreview.escape("\u001b[2J\u001b[H"))
+        assertEquals("a^@b^?c", ClipboardPreview.escape("a\u0000b\u007fc"))
+        assertEquals("\\u0085next", ClipboardPreview.escape("\u0085next"))
+        assertEquals("safe\\u202Eevil\\u202C", ClipboardPreview.escape("safe\u202Eevil\u202C"))
+        assertEquals("\\u200E\\u200F\\u2066\\u2069\\u200D\\uFEFF", ClipboardPreview.escape("\u200E\u200F\u2066\u2069\u200D\uFEFF"))
+        assertEquals("tabs\tand\nlines stay", ClipboardPreview.escape("tabs\tand\nlines stay"))
+        assertEquals("caf\u00E9 \u65E5\u672C \uD83D\uDE00", ClipboardPreview.escape("caf\u00E9 \u65E5\u672C \uD83D\uDE00"))
+    }
+
+    @Test
+    fun `the preview shows six lines and counts the rest`() {
+        val text = (1..9).joinToString("\n") { "line $it" }
+        val p = ClipboardPreview.of(text)
+        assertEquals((1..6).joinToString("\n") { "line $it" }, p.shown)
+        assertEquals(3, p.hiddenLines)
+        assertEquals(0, p.hiddenChars)
+        assertTrue(p.truncated)
+        assertEquals("+ 3 more lines \u00B7 62 B", p.countLine { "$it B" })
+
+        val six = ClipboardPreview.of((1..6).joinToString("\n") { "line $it" })
+        assertFalse(six.truncated)
+        assertNull(six.countLine { "$it B" })
+
+        val seven = ClipboardPreview.of((1..7).joinToString("\n") { "line $it" })
+        assertEquals("+ 1 more line \u00B7 48 B", seven.countLine { "$it B" })
+    }
+
+    @Test
+    fun `the preview cuts a long line at 400 characters and counts characters`() {
+        val text = "x".repeat(1000)
+        val p = ClipboardPreview.of(text)
+        assertEquals(400, p.shown.length)
+        assertEquals(0, p.hiddenLines)
+        assertEquals(600, p.hiddenChars)
+        assertEquals("+ 600 more characters \u00B7 1000 B", p.countLine { "$it B" })
+        assertEquals(1000, p.totalBytes)
+    }
+
+    @Test
+    fun `the preview never splits a surrogate pair at the cut`() {
+        val p = ClipboardPreview.of("x".repeat(399) + "\uD83D\uDE00" + "tail")
+        assertEquals(399, p.shown.length)
+        assertFalse(p.shown.last().isHighSurrogate())
+        assertEquals(6, p.hiddenChars)
+    }
+
+    @Test
+    fun `an empty write reads as empty and counts its bytes in UTF-8`() {
+        assertEquals("(empty)", ClipboardPreview.of("").shown)
+        assertFalse(ClipboardPreview.of("").truncated)
+        assertEquals(6, ClipboardPreview.of("caf\u00E9\u65E5").totalBytes)
     }
 
     @Test
