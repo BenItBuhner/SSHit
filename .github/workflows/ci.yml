@@ -40,12 +40,14 @@ jobs:
           key: robolectric-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
           restore-keys: robolectric-${{ runner.os }}-
 
-      # The live cases (sshj against a server, the SFTP client, the tunnels, the app's live screenshot flows) run
-      # against an sshd started in the job. The script exports SSH_TEST_* into this step's shell only, so the
-      # account's password is in the sshd's shadow entry and the test JVM's environment and nowhere else; every
-      # module's test task forwards those variables (see app/build.gradle.kts). Both variants' unit tests run:
-      # testDebugUnitTest and testReleaseUnitTest for the Android modules, test for the JVM ones.
-      - name: Run the suite against a live sshd
+      # The live cases (sshj against a server, the SFTP client, the tunnels, the jump chain, the app's live screenshot
+      # flows) run against two sshds started in the job: the target on 2222 and the jump host on 2223 that the
+      # ProxyJump chain and the Tunnels cases go through (SSH_TEST_JUMP_PORT). The script exports SSH_TEST_* into
+      # this step's shell only, so the account's password is in the sshds' shadow entry and the test JVM's
+      # environment and nowhere else; every module's test task forwards those variables (see app/build.gradle.kts).
+      # Both variants' unit tests run: testDebugUnitTest and testReleaseUnitTest for the Android modules, test for
+      # the JVM ones.
+      - name: Run the suite against the live sshds
         run: |
           source .github/scripts/test-sshd.sh
           ./gradlew test --continue --console=plain
