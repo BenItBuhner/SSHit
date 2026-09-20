@@ -28,7 +28,9 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -41,6 +43,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyPress
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
@@ -100,8 +103,8 @@ import java.util.concurrent.TimeUnit
  * The screens a hardware keyboard brings (spec C22, C4 "Hardware keyboard attached", A11), written
  * to `build/outputs/roborazzi` with the accessibility audit on each: the Stage with a keyboard
  * attached and the Deck down to its one row of modifiers and actions, the same Stage with that
- * setting off, the focus a keyboard shows on a tab of the strip and on a Deck key, the shortcut
- * sheet Ctrl+Shift+/ opens, Settings › Hardware keyboard with its Alt key menu, a host's own Alt
+ * setting off, the focus a keyboard shows on a tab of the strip, on a Deck key and on a Settings
+ * row, the shortcut sheet Ctrl+Shift+/ opens, Settings › Hardware keyboard with its Alt key menu, a host's own Alt
  * key in its editor; and on a tablet, two panes under one compact Deck with the sheet as a dialog
  * naming the pane chords. The phone's Stage rides a live session with nowhere to send (the way
  * `TerminalToolsScreenshotTest` does), so those frames need no sshd; the tablet's two panes are two
@@ -200,6 +203,20 @@ class HardwareKeyboardScreenshotTest {
         compose.onNodeWithText("Alt key").performClick()
         waitForText("Eighth bit")
         capture("settings-hardware-keyboard-alt-menu")
+    }
+
+    @Test
+    fun `Settings, a row holding the keyboard's focus`() {
+        // Out of touch mode, the row the focus is on shows it: one tonal step up, its label in accent.
+        StageFixture.seed(graph)
+        mount(keyboardMode = true) { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
+        compose.waitForIdle()
+        val row = compose.onNode(hasText("Alt key") and hasClickAction())
+        row.requestFocus()
+        compose.waitForIdle()
+        row.assertIsFocused()
+        capture("settings-hardware-keyboard-focus-row")
     }
 
     @Test
