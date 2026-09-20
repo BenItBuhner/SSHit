@@ -766,7 +766,10 @@ enum class ButtonKind { PRIMARY, SECONDARY, TEXT, DESTRUCTIVE }
 /**
  * The spec's button (A9): a 44 dp fill at the row radius with a Label, in a 48 dp target. A row
  * that wants a shorter fill beside its text (a tunnel row's Open and Retry at 36) says so through
- * [fillHeight] rather than a height modifier, which would shrink the target with the fill.
+ * [fillHeight] rather than a height modifier, which would shrink the target with the fill. A width
+ * the caller sets (`fillMaxWidth`, a `weight`) is the fill's as well as the target's: the target
+ * box hands its minimum on to the fill, so a sheet's stacked answers run edge to edge as one Box
+ * with those modifiers would, while a button left to itself wraps its label.
  */
 @Composable
 fun BerthButton(
@@ -801,6 +804,7 @@ fun BerthButton(
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
             .touchTarget(),
         contentAlignment = Alignment.Center,
+        propagateMinConstraints = true,
     ) {
         Box(
             Modifier
