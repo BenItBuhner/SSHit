@@ -42,6 +42,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -150,28 +151,43 @@ class SessionManager @Inject constructor(
     /** The current group: the active tab's group, or the group last chosen in the drawer when no tab is active. */
     val currentWorkspaceId: StateFlow<String?> = _currentWorkspaceId.asStateFlow()
 
-    private val _activeTabId = MutableStateFlow<String?>(null)
-    val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
+    /**
+     * Where the Stage is: the active tab, and while the Stage is split (spec C23), who shares it
+     * and on which side. One value, since the two move together: a tab dropped on a pane becomes
+     * the active tab as the tab that was active becomes its companion, and staging the companion
+     * trades the roles. As two flows they were read as two, and [panes], derived on the manager's
+     * scope, could take the new split with the old active id between the writes: the same tab as
+     * active and as companion, one tab in both panes. The Stage keeps each tab's saveable state
+     * under its id, once, and composing that pair threw ("Key … was used multiple times"), in one
+     * of every few runs of the pane tests and on any device whose main thread read the flow in
+     * that moment. Written under [stageLock], once per move.
+     */
+    private data class Stage(val activeId: String?, val split: Split?)
+
+    private val _stage = MutableStateFlow(Stage(activeId = null, split = null))
+
+    /** The active tab's id, or null with nothing on stage. The value is [_stage]'s as it is read, so a caller reads its own write back. */
+    val activeTabId: StateFlow<String?> = _stage.view { it.activeId }
+
+    /** The Stage split in two (spec C23): who shares it with the active tab and on which side; null while one tab has it. */
+    val split: StateFlow<Split?> = _stage.view { it.split }
 
     /** The tab on stage, whatever it runs. */
-    val activeTab: StateFlow<ManagedTab?> = combine(_activeTabId, tabsById) { id, map -> id?.let { map[it] } }
+    val activeTab: StateFlow<ManagedTab?> = combine(_stage, tabsById) { stage, map -> stage.activeId?.let { map[it] } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     /** The tab on stage when it is a terminal; null while a Files tab, a Tunnels tab, or nothing, is showing. */
     val activeSession: StateFlow<TerminalSession?> = activeTab.map { (it as? TerminalSession)?.takeIf { s -> !s.tunnelsOnly } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
-    private val _split = MutableStateFlow<Split?>(null)
-
-    /** The Stage split in two (spec C23): who shares it with the active tab and on which side; null while one tab has it. Written under [stageLock]. */
-    val split: StateFlow<Split?> = _split.asStateFlow()
-
     /**
      * The two tabs side by side, or null while the Stage shows one: the active tab on the split's
      * side, the companion on the other. It is up to the Stage to lay them out only on a width that
      * fits them; on a compact width the active tab alone shows and the split waits (see [setPanesShown]).
+     * Derived from [_stage] alone, so no pair it emits names one tab twice (the split never names
+     * the active tab as companion, and the two are one value).
      */
-    val panes: StateFlow<Panes?> = combine(_activeTabId, _split, tabsById) { active, split, map ->
+    val panes: StateFlow<Panes?> = combine(_stage, tabsById) { (active, split), map ->
         val focused = active?.let { map[it] }
         val companion = split?.let { map[it.companionId] }
         when {
@@ -422,8 +438,8 @@ class SessionManager @Inject constructor(
      * is while the stage is dark.
      */
     private fun refreshStage() {
-        val active = _activeTabId.value
-        val companion = if (panesShown) _split.value?.companionId else null
+        val (active, split) = _stage.value
+        val companion = if (panesShown) split?.companionId else null
         tabsNow().forEach { it.onStage = !stageDark && (it.id == active || it.id == companion) }
     }
 
@@ -723,7 +739,7 @@ class SessionManager @Inject constructor(
     suspend fun open(
         host: Host,
         workspaceId: String? = null,
-        afterId: String? = _activeTabId.value,
+        afterId: String? = activeTabId.value,
         customTitle: String? = null,
         activate: Boolean = true,
         kind: TabKind = TabKind.Ssh,
@@ -755,7 +771,7 @@ class SessionManager @Inject constructor(
     suspend fun openTunnels(
         host: Host,
         workspaceId: String? = null,
-        afterId: String? = _activeTabId.value,
+        afterId: String? = activeTabId.value,
         activate: Boolean = true,
         linkFingerprint: String? = null,
     ): TerminalSession = open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels, linkFingerprint = linkFingerprint)
@@ -877,7 +893,7 @@ class SessionManager @Inject constructor(
             setActive(it.id)
             return it
         }
-        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder, linkFingerprint = linkFingerprint)
+        return startFiles(host, workspaceId = workspaceId, afterId = activeTabId.value, preferred = null, folder = folder, linkFingerprint = linkFingerprint)
     }
 
     private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true, linkFingerprint: String? = null): FilesTab {
@@ -965,14 +981,15 @@ class SessionManager @Inject constructor(
      */
     private fun moveStage(id: String?, seen: Boolean) {
         synchronized(stageLock) {
-            val split = _split.value
-            if (split != null) {
-                // Staging the companion (its tab in the strip, Ctrl+Tab reaching it) hands it the keys:
-                // the two trade roles and keep their panes. Staging nothing leaves nothing to share with.
-                if (id == null) _split.value = null
-                else if (id == split.companionId) _split.value = _activeTabId.value?.let { Split(it, split.companionSide) }
+            val (active, split) = _stage.value
+            // Staging the companion (its tab in the strip, Ctrl+Tab reaching it) hands it the keys:
+            // the two trade roles and keep their panes. Staging nothing leaves nothing to share with.
+            val next = when {
+                split == null || id == null -> null
+                id == split.companionId -> active?.let { Split(it, split.companionSide) }
+                else -> split
             }
-            _activeTabId.value = id
+            _stage.value = Stage(id, next)
             refreshStage()
             if (seen && id != null) tabNow(id)?.markSeen()
         }
@@ -991,15 +1008,13 @@ class SessionManager @Inject constructor(
     fun placeInPane(id: String, side: PaneSide) {
         val tab = tabNow(id) ?: return
         synchronized(stageLock) {
-            val active = _activeTabId.value
-            val split = _split.value
+            val (active, split) = _stage.value
             if (id == active) {
-                if (split != null && split.activeSide != side) _split.value = Split(split.companionId, side)
+                if (split != null && split.activeSide != side) _stage.value = Stage(active, Split(split.companionId, side))
                 return
             }
             val companion = if (split != null && side == split.activeSide && id != split.companionId) split.companionId else active
-            _split.value = companion?.let { Split(it, side) }
-            _activeTabId.value = id
+            _stage.value = Stage(id, companion?.let { Split(it, side) })
             refreshStage()
             tab.markSeen()
         }
@@ -1007,7 +1022,7 @@ class SessionManager @Inject constructor(
     }
 
     /** Long-press menu › Open beside: [id] takes the pane opposite the active tab, and the keys. */
-    fun openBeside(id: String) = placeInPane(id, _split.value?.companionSide ?: PaneSide.RIGHT)
+    fun openBeside(id: String) = placeInPane(id, split.value?.companionSide ?: PaneSide.RIGHT)
 
     /**
      * The Session sheet's Split (spec C6): a second tab on the active tab's host opens in the pane
@@ -1017,8 +1032,9 @@ class SessionManager @Inject constructor(
      * that has them. Null with nothing on stage.
      */
     suspend fun splitActive(): ManagedTab? {
-        val source = _activeTabId.value ?: return null
-        val side = _split.value?.companionSide ?: PaneSide.RIGHT
+        val (active, split) = _stage.value
+        val source = active ?: return null
+        val side = split?.companionSide ?: PaneSide.RIGHT
         val fresh = duplicate(source, activate = false) ?: return null
         placeInPane(fresh.id, side)
         return fresh
@@ -1029,16 +1045,16 @@ class SessionManager @Inject constructor(
      * without losing anything. Closing the focused pane hands the keys to the other pane's tab.
      */
     fun closePane(side: PaneSide) {
-        val split = _split.value ?: return
+        val split = this.split.value ?: return
         synchronized(stageLock) {
-            _split.value = null
+            _stage.update { it.copy(split = null) }
             refreshStage()
         }
         if (side == split.activeSide) setActive(split.companionId)
     }
 
     /** One tab on the Stage again: the companion leaves its pane and stays in the strip. */
-    fun unsplit() = _split.value?.let { closePane(it.companionSide) } ?: Unit
+    fun unsplit() = split.value?.let { closePane(it.companionSide) } ?: Unit
 
     /**
      * Whether the Stage is laying both panes out. On a width that fits them (spec C23) the
@@ -1052,7 +1068,7 @@ class SessionManager @Inject constructor(
             if (panesShown == shown) return
             panesShown = shown
             refreshStage()
-            if (shown && !stageDark) _split.value?.companionId?.let { tabNow(it)?.markSeen() }
+            if (shown && !stageDark) _stage.value.split?.companionId?.let { tabNow(it)?.markSeen() }
         }
     }
 
@@ -1061,7 +1077,7 @@ class SessionManager @Inject constructor(
         val strip = stripNow()
         if (strip.isEmpty()) return
         val collapsed = workspaces.value.filter { it.collapsed }.map { it.id }.toSet()
-        val active = _activeTabId.value
+        val active = activeTabId.value
         val visible = strip.filter { it.workspaceId !in collapsed || it.id == active }.ifEmpty { strip }
         val current = visible.indexOfFirst { it.id == active }
         val next = if (current < 0) (if (delta >= 0) 0 else visible.lastIndex) else Math.floorMod(current + delta, visible.size)
@@ -1080,7 +1096,7 @@ class SessionManager @Inject constructor(
      * which clears it; ties (nothing timed) fall to strip order. False when no other tab needs the user.
      */
     fun jumpToUnread(): Boolean {
-        val active = _activeTabId.value
+        val active = activeTabId.value
         val target = stripNow()
             .filter { it.needsAttention && it.id != active }
             .maxByOrNull { _sessions.value[it.id]?.attentionAt ?: 0L } ?: return false
@@ -1096,7 +1112,7 @@ class SessionManager @Inject constructor(
         _currentWorkspaceId.value = id
         scope.launch { settings.setCurrentWorkspaceId(id) }
         if (!activate) return
-        val activeGroup = _activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
+        val activeGroup = activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
         if (activeGroup == id) return
         stripNow().firstOrNull { it.workspaceId == id }?.let { setActive(it.id) }
     }
@@ -1109,7 +1125,7 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Move to group: re-homes the tab at the end of [groupId]. */
     fun moveToGroup(id: String, groupId: String) {
         applyPlacements(TabOrder.moveToGroup(stripNow(), id, groupId))
-        if (_activeTabId.value == id) setCurrentWorkspace(groupId, activate = false)
+        if (activeTabId.value == id) setCurrentWorkspace(groupId, activate = false)
     }
 
     fun rename(id: String, title: String?) = tabNow(id)?.rename(title)
@@ -1190,7 +1206,7 @@ class SessionManager @Inject constructor(
         val strip = stripNow()
         val closed = ClosedTab(tab.record.value)
         val next = TabOrder.nextActiveAfterClose(strip, id)
-        val split = _split.value
+        val (active, split) = _stage.value
         BerthLog.i(LOG_TAG, "[${tab.host.name}] ${if (tab.kind == TabKind.Ssh) "terminal" else "Files"} tab closed")
         tab.close()
         _sessions.update { it - id }
@@ -1198,9 +1214,9 @@ class SessionManager @Inject constructor(
         trackers.remove(id)?.cancel()
         savedVersions.remove(id)
         notifier.cancelFor(id)
-        val wasActive = _activeTabId.value == id
+        val wasActive = active == id
         if (split != null && (wasActive || split.companionId == id)) {
-            synchronized(stageLock) { _split.value = null }
+            synchronized(stageLock) { _stage.update { it.copy(split = null) } }
             if (wasActive) setActive(split.companionId)
         } else if (wasActive) setActive(next)
         scope.launch { sessionRepository.delete(id) }
@@ -1210,7 +1226,7 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Close others: every tab in the strip except [id]. */
     fun closeOthers(id: String) {
         stripNow().filter { it.id != id }.forEach { close(it.id) }
-        if (_activeTabId.value != id) setActive(id)
+        if (activeTabId.value != id) setActive(id)
     }
 
     /**
@@ -1274,3 +1290,30 @@ class SessionManager @Inject constructor(
             context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()
     }
 }
+
+/**
+ * A read-only [StateFlow] of [transform] over this flow: its value is the source's, transformed,
+ * at the moment it is read, so a caller that has just written the source reads its own write back
+ * as it would from the source itself; collectors get the current result and then each distinct
+ * one as the source moves. `map` + `stateIn` would give a value a step behind the write, on the
+ * scope's dispatcher, and the strip, the panes and the tests all read the active id right after
+ * staging a tab.
+ */
+private fun <T, R> StateFlow<T>.view(transform: (T) -> R): StateFlow<R> = object : StateFlow<R> {
+    override val value: R get() = transform(this@view.value)
+    override val replayCache: List<R> get() = listOf(value)
+
+    override suspend fun collect(collector: FlowCollector<R>): Nothing {
+        var last: Any? = Unread
+        this@view.collect { source ->
+            val next = transform(source)
+            if (last === Unread || next != last) {
+                last = next
+                collector.emit(next)
+            }
+        }
+    }
+}
+
+/** What a [view]'s collector has emitted before its first value: distinct from any value, null included. */
+private object Unread

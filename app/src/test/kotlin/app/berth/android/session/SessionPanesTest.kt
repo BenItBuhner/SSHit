@@ -10,7 +10,10 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The split Stage (spec C23): two tabs side by side, the active one taking the keys, the companion
@@ -263,6 +267,49 @@ class SessionPanesTest {
         assertEquals("s-homelab", graph.sessions.activeTabId.value)
     }
 
+    /**
+     * The Stage composes each pane's tab under the tab's id, and an id can be in the composition
+     * once: a pair naming one tab on both sides throws as it is composed ("Key … was used multiple
+     * times"). A drop that splits the Stage and a trade of the roles each move the active id and
+     * the split together, and the pair must never be read between the two, as the new split with
+     * the old active tab (the active tab and the companion one tab). The collector here is
+     * unconfined, so it runs on the thread that sets each value as it is set and sees every value
+     * the flow ever held, not the latest; a collector that dispatched would be conflated past the
+     * pair and prove nothing. Each step waits for the flow to show it before the next, so every
+     * step is read and not a sample of them: exactly one pair per step, and none with one tab in it.
+     * (As two flows, 12 of the 31 pairs one unwaited run of 200 rounds sampled were such a pair.)
+     */
+    @Test
+    fun `the panes never name one tab on both sides, whichever way the split and the keys move`() {
+        val seen = CopyOnWriteArrayList<Panes>()
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch { graph.sessions.panes.collect { it?.let(seen::add) } }
+        val rounds = 100
+        try {
+            repeat(rounds) {
+                // homelab alone: the drop splits the Stage, homelab the companion.
+                graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+                awaitPanes(left = "s-homelab", right = "s-pihole", focused = PaneSide.RIGHT)
+                // The companion staged: the roles trade, the panes stay.
+                graph.sessions.setActive("s-homelab")
+                awaitPanes(left = "s-homelab", right = "s-pihole", focused = PaneSide.LEFT)
+                // A third tab on the focused pane.
+                graph.sessions.placeInPane("s-build", PaneSide.LEFT)
+                awaitPanes(left = "s-build", right = "s-pihole", focused = PaneSide.LEFT)
+                graph.sessions.unsplit()
+                graph.sessions.setActive("s-homelab")
+                awaitPanes(null)
+            }
+        } finally {
+            collector.cancel()
+        }
+        val twins = seen.filter { it.left.id == it.right.id }
+        assertTrue(
+            "${twins.size} of ${seen.size} pairs named one tab on both sides, first ${twins.firstOrNull()?.let { "${it.left.id} | ${it.right.id}" }}",
+            twins.isEmpty(),
+        )
+        assertEquals("one pair per step, each read as it was made", 3 * rounds, seen.size)
+    }
+
     // ---- fixture ----------------------------------------------------------------------------------
 
     /** Home: homelab (active), pi-hole. Work: a Files tab for build box, then its terminal. */
@@ -317,7 +364,7 @@ class SessionPanesTest {
         val deadline = System.currentTimeMillis() + 5_000
         while (System.currentTimeMillis() < deadline) {
             if (condition()) return@runBlocking
-            delay(20)
+            delay(2)
         }
         assertTrue("timed out waiting for $what", condition())
     }
