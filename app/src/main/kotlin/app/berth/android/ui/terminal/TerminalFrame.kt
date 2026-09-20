@@ -83,6 +83,32 @@ class TerminalFrame {
     }
 
     /**
+     * Takes a copy of [other], rows and all, in the same short pass of array copies a capture makes;
+     * for a second reader of the frame on screen (the accessibility layer) that must keep reading it
+     * after the buffers swap and the worker starts writing the next capture over it.
+     */
+    fun copyFrom(other: TerminalFrame) {
+        if (lines.size != other.rows) {
+            val old = lines
+            lines = Array(other.rows) { i -> if (i < old.size) old[i] else TerminalLine(other.cols) }
+        }
+        for (y in 0 until other.rows) lines[y].copyFrom(other.line(y))
+        other.palette.copyInto(palette)
+        cols = other.cols
+        rows = other.rows
+        offset = other.offset
+        cursorX = other.cursorX
+        cursorY = other.cursorY
+        cursorVisible = other.cursorVisible
+        cursorStyle = other.cursorStyle
+        reverseVideo = other.reverseVideo
+        scrollbackSize = other.scrollbackSize
+        alternateScreen = other.alternateScreen
+        linesDropped = other.linesDropped
+        version = other.version
+    }
+
+    /**
      * A range made under [anchor] in this frame's view rows (0 is the top row drawn), or null when
      * the anchor no longer fits the buffer or nothing of the range is in view.
      */

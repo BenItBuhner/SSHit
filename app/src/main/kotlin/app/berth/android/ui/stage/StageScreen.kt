@@ -80,6 +80,8 @@ import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.TerminalAccessibility
+import app.berth.android.ui.a11y.TerminalAnnouncer
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -531,6 +533,8 @@ private fun StageBody(
     val input = remember(session.id) {
         StageInput(
             session = { session },
+    // The screen reader's terminal: the canvas' text and the live region beside it share it.
+    val accessibility = remember(session.id) { TerminalAccessibility() }
             latch = latch,
             // A Deck key bound to a snippet lands here: run it, or ask for its placeholders first.
             onSnippet = { id ->
@@ -612,7 +616,9 @@ private fun StageBody(
                 EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
             ScrolledPill(viewport, Modifier.align(Alignment.TopEnd))
+                accessibility = accessibility,
             NoticePill(tools, Modifier.align(Alignment.TopCenter))
+            TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
                     plain = failure?.plain ?: "Couldn't connect.",

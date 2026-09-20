@@ -35,13 +35,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import app.berth.android.R
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.a11y.TerminalAccessibility
+import app.berth.android.ui.a11y.terminalAccessibility
 import app.berth.android.ui.theme.Berth
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
@@ -215,6 +215,8 @@ fun TerminalCanvas(
     selection: TerminalSelection? = null,
     search: TerminalSearch? = null,
     onSelectionStarted: () -> Unit = {},
+    /** The screen reader's view of the screen; the Stage shares it with the live region beside the canvas. */
+    accessibility: TerminalAccessibility = remember(session.id) { TerminalAccessibility() },
 ) {
     val density = LocalDensity.current
     val paints = rememberTerminalPaints(font)
@@ -265,6 +267,7 @@ fun TerminalCanvas(
             .collect { (version, wanted) ->
                 val used = withContext(Dispatchers.Default) { frames.back.capture(emulator, wanted, version) }
                 frames.swap()
+                accessibility.onFrame(frames.front)
                 if (used != wanted) viewport.scrollOffset = used
                 currentSelection?.dropIfStale(emulator)
                 frameTick++
@@ -298,7 +301,7 @@ fun TerminalCanvas(
     Canvas(
         modifier
             .fillMaxSize()
-            .semantics { contentDescription = "Terminal" }
+            .terminalAccessibility(accessibility)
             .onSizeChanged { canvasSize = it }
             .terminalInput(sink)
             .focusRequester(focusRequester)
