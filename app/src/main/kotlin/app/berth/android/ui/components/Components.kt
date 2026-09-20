@@ -730,6 +730,11 @@ fun SwatchColor.spokenName(): String = name.lowercase().replaceFirstChar { it.up
 
 enum class ButtonKind { PRIMARY, SECONDARY, TEXT, DESTRUCTIVE }
 
+/**
+ * The spec's button (A9): a 44 dp fill at the row radius with a Label, in a 48 dp target. A row
+ * that wants a shorter fill beside its text (a tunnel row's Open and Retry at 36) says so through
+ * [fillHeight] rather than a height modifier, which would shrink the target with the fill.
+ */
 @Composable
 fun BerthButton(
     text: String,
@@ -737,6 +742,7 @@ fun BerthButton(
     modifier: Modifier = Modifier,
     kind: ButtonKind = ButtonKind.SECONDARY,
     enabled: Boolean = true,
+    fillHeight: Dp = 44.dp,
 ) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
@@ -752,8 +758,7 @@ fun BerthButton(
         ButtonKind.TEXT -> c.accent
         ButtonKind.DESTRUCTIVE -> c.danger
     }
-    // The fill is the spec's 44 dp; the box that takes the tap is 48 unless the caller sizes the
-    // button shorter, in which case Compose grows the hit area into the row around it.
+    // The fill is the spec's 44 dp (or the caller's shorter one); the box that takes the tap is 48.
     Box(
         modifier
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
@@ -762,7 +767,7 @@ fun BerthButton(
     ) {
         Box(
             Modifier
-                .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
+                .defaultMinSize(minHeight = fillHeight, minWidth = 44.dp)
                 .clip(RoundedCornerShape(BerthRadius.row))
                 .background(if (enabled) fill else fill.copy(alpha = fill.alpha * 0.5f))
                 .padding(horizontal = 18.dp),

@@ -209,7 +209,7 @@ fun TerminalThemeEditorScreen(
                 if (target != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Tap the preview to sample a colour for ${target.title.lowercase()}", style = BerthType.caption, color = c.accent, modifier = Modifier.weight(1f))
-                        BerthButton("Cancel", onClick = { sampling = null }, kind = ButtonKind.TEXT, modifier = Modifier.height(32.dp))
+                        BerthButton("Cancel", onClick = { sampling = null }, kind = ButtonKind.TEXT, fillHeight = 32.dp)
                     }
                 }
                 Box(

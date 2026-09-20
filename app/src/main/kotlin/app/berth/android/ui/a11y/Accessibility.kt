@@ -1,12 +1,21 @@
 package app.berth.android.ui.a11y
 
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.IntrinsicMeasurable
+import androidx.compose.ui.layout.IntrinsicMeasureScope
+import androidx.compose.ui.layout.LayoutModifier
+import androidx.compose.ui.layout.Measurable
+import androidx.compose.ui.layout.MeasureResult
+import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.berth.domain.model.SessionState
@@ -41,6 +50,49 @@ fun Modifier.touchTarget(minWidth: Dp = TouchTargetSize, minHeight: Dp = TouchTa
     val height = maxOf(placeable.height, minHeight.roundToPx()).coerceIn(constraints.minHeight, constraints.maxHeight)
     layout(width, height) {
         placeable.placeRelative((width - placeable.width) / 2, (height - placeable.height) / 2)
+    }
+}
+
+/**
+ * A text link's full target without its footprint: for a label that is a control in a column of
+ * text (a panel's `Details`, a field's `Clear`), where the 48 dp box [touchTarget] makes would
+ * push the lines around it apart. The label is hit, focused and measured by accessibility at
+ * least [minHeight] tall, centred on its own line, while the layout around it still sees the
+ * line's height alone; the extra target lies over the gaps above and below, which is where a
+ * finger aiming at a one-line label lands anyway. The tap is this modifier's ([onClick], with
+ * [role] and [onClickLabel] for a reader), since the grown box has to sit inside the tap and the
+ * kept footprint outside it. No indication: a pressed tone over the gaps would show the box.
+ */
+fun Modifier.reachingClickable(
+    onClick: () -> Unit,
+    role: Role = Role.Button,
+    onClickLabel: String? = null,
+    enabled: Boolean = true,
+    minHeight: Dp = TouchTargetSize,
+): Modifier = this
+    .then(KeepFootprint)
+    .clickable(enabled = enabled, interactionSource = null, indication = null, role = role, onClickLabel = onClickLabel, onClick = onClick)
+    .then(GrowTarget(minHeight))
+
+/** Inside the tap: measured at least [minHeight] tall with the content centred; tells intrinsics the content's own height, for [KeepFootprint]. */
+private data class GrowTarget(val minHeight: Dp) : LayoutModifier {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        val placeable = measurable.measure(constraints)
+        val height = maxOf(placeable.height, minHeight.roundToPx()).coerceIn(constraints.minHeight, constraints.maxHeight)
+        return layout(placeable.width, height) { placeable.placeRelative(0, (height - placeable.height) / 2) }
+    }
+
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(measurable: IntrinsicMeasurable, width: Int): Int = measurable.minIntrinsicHeight(width)
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurable: IntrinsicMeasurable, width: Int): Int = measurable.maxIntrinsicHeight(width)
+}
+
+/** Outside the tap: reports the content's own height, read through the intrinsics, and centres the grown box on it. */
+private data object KeepFootprint : LayoutModifier {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        val own = measurable.minIntrinsicHeight(constraints.maxWidth)
+        val placeable = measurable.measure(constraints)
+        val height = minOf(own, placeable.height).coerceIn(constraints.minHeight, constraints.maxHeight)
+        return layout(placeable.width, height) { placeable.placeRelative(0, (height - placeable.height) / 2) }
     }
 }
 
