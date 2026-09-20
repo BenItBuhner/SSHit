@@ -211,7 +211,8 @@ class RoomRepositoriesTest {
         assertEquals(1, workspaces.observeAll().first().size)
 
         val sessions = RoomSessionRepository(db)
-        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", port = 2222, user = "demo", createdAt = 1)
+        // The snapshot is stored as JSON, so the chain rides the record as a list, not a column.
+        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", port = 2222, user = "demo", jumpHostIds = listOf("bastion", "edge"), createdAt = 1)
         val record = SessionRecord(
             id = "s1", workspaceId = first.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED,
             layer = PersistenceLayer.LOCAL_FRAME, title = "demo@box: ~", cwd = "/home/demo", createdAt = 2, lastLiveAt = 3,
