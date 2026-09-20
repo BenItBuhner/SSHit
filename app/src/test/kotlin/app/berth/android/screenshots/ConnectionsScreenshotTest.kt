@@ -171,7 +171,9 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("127.0.0.1:5433 \u2192 localhost:5432").assertExists()
         capture("host-editor-tunnels-only")
 
-        compose.onNodeWithText("Add jump host").performScrollTo()
+        // Back up to the chain, its first hop at the top edge, so the menu opens under Add jump host with the hops above it.
+        compose.onNodeWithText("bastion").performScrollTo()
+        compose.waitForIdle()
         compose.onNodeWithText("Add jump host").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("homelab")).fetchSemanticsNodes().isNotEmpty() }
         // The title (the Name field aside): a host cannot jump through itself, so the menu leaves it out.
