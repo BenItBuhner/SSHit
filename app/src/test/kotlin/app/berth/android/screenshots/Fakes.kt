@@ -258,7 +258,7 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val process = FakeLifecycleOwner()
     val notifier = SessionNotifier(context)
     private val manager = lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, notifier, process.lifecycle)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle)
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }

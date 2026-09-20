@@ -10,9 +10,13 @@ import androidx.test.core.app.ApplicationProvider
 import app.berth.android.files.TransferManager
 import app.berth.android.screenshots.FakeSftpFileSystem
 import app.berth.android.screenshots.TestGraph
+import app.berth.android.security.FakeAuthenticator
+import app.berth.android.security.LockState
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
+import app.berth.domain.model.LockTimeout
 import app.berth.domain.model.PersistenceLayer
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
@@ -30,6 +34,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -345,6 +350,76 @@ class SessionLifecycleTest {
         graph.sessions.activateFromNotification("s-b")
         await("s-b on stage after restore") { graph.sessions.restored.value && graph.sessions.activeTabId.value == "s-b" }
         assertEquals("s-b", runBlocking { graph.settings.lastActiveSessionId.first() })
+    }
+
+    // ---- the app lock (spec C20 with C21) --------------------------------------------------------
+
+    @Test
+    fun `a return under the app lock leaves the active tab's news for the unlock, and the shade speaks meanwhile`() {
+        grantNotifications()
+        seed()
+        restore()
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        await("s-a on stage") { graph.sessions.get("s-a")!!.onStage }
+        graph.process.stop()
+        bell("s-a")
+        await("the active tab's bell reaches the shade") { notifications.getNotification(SessionNotifier.attentionTag("s-a"), 2) != null }
+
+        // The user comes back to find the lock screen, not the tab: the return is not a seeing.
+        lockTheReturn()
+        graph.process.start()
+        assertEquals(LockState.LOCKED, graph.appLock.state.value)
+        assertFalse("nothing is on stage behind the lock screen", graph.sessions.get("s-a")!!.onStage)
+        assertTrue("unseen still", graph.sessions.get("s-a")!!.record.value.needsAttention)
+        Thread.sleep(100)
+        assertNotNull("its notification stays", notifications.getNotification(SessionNotifier.attentionTag("s-a"), 2))
+        // Another tab's bell under the lock goes to the shade as it would with the app away.
+        bell("s-b")
+        await("s-b's bell reaches the shade under the lock") { notifications.getNotification(SessionNotifier.attentionTag("s-b"), 2) != null }
+
+        // The unlock is the moment the active tab is in front of the user.
+        unlock()
+        await("seen at the unlock") { !graph.sessions.get("s-a")!!.record.value.needsAttention }
+        assertTrue(graph.sessions.get("s-a")!!.onStage)
+        await("its notification goes with it") { notifications.getNotification(SessionNotifier.attentionTag("s-a"), 2) == null }
+        assertTrue("the other tab is still lit for the strip", graph.sessions.get("s-b")!!.record.value.needsAttention)
+    }
+
+    @Test
+    fun `a notification's tap under the lock waits for the unlock, the latest tap standing`() {
+        seed(third = true)
+        restore()
+        graph.sessions.setActive("s-a")
+        lockTheReturn()
+        graph.process.start()
+        val staged = ArrayList<String>()
+        val collector = CoroutineScope(Dispatchers.Default)
+        collector.launch { graph.sessions.stageRequests.collect { staged += it } }
+        Thread.sleep(50)
+
+        graph.sessions.activateFromNotification("s-b")
+        graph.sessions.activateFromNotification("s-c")
+        Thread.sleep(100)
+        assertEquals("nothing is staged behind the lock screen", "s-a", graph.sessions.activeTabId.value)
+        assertEquals("and the shell is not asked for the Stage", emptyList<String>(), staged)
+
+        unlock()
+        await("the latest tap is honoured at the unlock") { graph.sessions.activeTabId.value == "s-c" }
+        await("and the shell asked for the Stage once") { staged == listOf("s-c") }
+        collector.cancel()
+    }
+
+    /** The app lock on with Immediately, the controller's first foreground being the cold start that locks. */
+    private fun lockTheReturn() {
+        graph.settings.security.value = SecuritySettings(appLock = true, lockTimeout = LockTimeout.IMMEDIATELY)
+        graph.appLock.onForeground()
+        assertEquals(LockState.LOCKED, graph.appLock.state.value)
+    }
+
+    private fun unlock() {
+        graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
+        assertTrue(runBlocking { graph.appLock.unlock() })
     }
 
     // ---- a copy waiting on the user (the transfers notification, spec C21) -----------------------

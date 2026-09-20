@@ -29,6 +29,9 @@ class MainActivity : ComponentActivity() {
     /** The settings the window flags were last set from; the splash waits a frame for the relayout after a change. */
     private var windowSettings: SecuritySettings? = null
 
+    /** An intent not yet read for a notification's tab: the launch's, or one onNewIntent brought; read in onResume. */
+    private var intentPending = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Hands the launch theme (graphite plus the monogram) over to Theme.App once content is up.
         val splash = installSplashScreen()
@@ -58,19 +61,23 @@ class MainActivity : ComponentActivity() {
             AppRoot()
         }
         // A recreation (rotation, a restore after a kill) keeps the launch intent; only a fresh launch acts on it.
-        if (savedInstanceState == null) openTabFrom(intent)
+        if (savedInstanceState == null) intentPending = true
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        openTabFrom(intent)
+        intentPending = true
     }
 
     /**
      * A notification's tab (spec C21): the manager puts it on stage now, or the moment the strip is
      * restored. The transfers notification names a terminal whose copy waits on the user and asks
-     * for its Files tab, the host's or a new one riding it.
+     * for its Files tab, the host's or a new one riding it. Read in onResume rather than where the
+     * intent arrives: onNewIntent comes before onStart, where the lock decides on this return, and the
+     * manager holds a tap under the lock (or before its decision) until the unlock, so the tab's news
+     * is not marked seen behind the lock screen; read earlier, it would be judged against the state
+     * left over from before the app went away.
      */
     private fun openTabFrom(intent: Intent?) {
         val id = intent?.getStringExtra(SessionNotifier.EXTRA_TAB_ID) ?: return
@@ -94,6 +101,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         security.onActivityResumed()
+        if (intentPending) {
+            intentPending = false
+            openTabFrom(intent)
+        }
     }
 
     override fun onPause() {

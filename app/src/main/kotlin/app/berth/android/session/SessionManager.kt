@@ -9,6 +9,8 @@ import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.berth.android.di.ProcessLifecycle
+import app.berth.android.security.AppLockController
+import app.berth.android.security.LockState
 import app.berth.android.security.RemoteClipboardGate
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
@@ -92,6 +94,7 @@ class SessionManager @Inject constructor(
     private val tunnelRepository: TunnelRepository,
     private val snippetRepository: SnippetRepository,
     private val remoteClipboard: RemoteClipboardGate,
+    private val lock: AppLockController,
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
 ) : SessionCommands {
@@ -177,7 +180,11 @@ class SessionManager @Inject constructor(
 
     private val _foreground = MutableStateFlow(false)
 
-    /** Whether an activity is on screen ([Lifecycle.Event.ON_START] to [Lifecycle.Event.ON_STOP]); off screen, attention goes to the shade. */
+    /**
+     * Whether an activity is on screen ([Lifecycle.Event.ON_START] to [Lifecycle.Event.ON_STOP]);
+     * the lock window counts, so the tabs are in view only when this holds and the app lock is
+     * lifted ([onScreen]). Off screen, attention goes to the shade.
+     */
     val foreground: StateFlow<Boolean> = _foreground.asStateFlow()
 
     private val _stageRequests = MutableSharedFlow<String>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -187,6 +194,9 @@ class SessionManager @Inject constructor(
 
     /** A notification's tap that arrived before the strip was restored; honoured the moment it is. */
     private var pendingActivation: Activation? = null
+
+    /** A notification's tap that arrived under the app lock (or before it was decided); the latest stands for the earlier, honoured the moment the lock lifts. */
+    private var lockedActivation: Activation? = null
     private val pendingLock = Any()
 
     /** Problems collectors, one per terminal tab, cancelled when the tab closes. */
@@ -197,8 +207,16 @@ class SessionManager @Inject constructor(
     private var backgroundSaver: Job? = null
     private var firstLiveSeen = false
 
-    /** True from ON_STOP to ON_START: the app is away and no tab is on stage. */
+    /** True from ON_STOP to ON_START and while the lock screen is up: nothing is in front of the user, so no tab is on stage. */
     @Volatile private var stageDark = false
+
+    /**
+     * Holds [_foreground] and the stage together. The lifecycle flips the stage on the main thread
+     * and the lock and active-tab collectors on the manager's scope; without one monitor a
+     * collector could read the app as on screen, lose the thread to ON_STOP, and light a stage the
+     * app had just left, and the active tab's bells would go unheard until the next return.
+     */
+    private val stageLock = Any()
 
     private val environment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
@@ -255,7 +273,22 @@ class SessionManager @Inject constructor(
         scope.launch {
             // Keep the stage flag on the tab that is showing so attention is raised correctly; with the
             // app away nothing is showing, so the active tab's bells and finished commands count too.
-            _activeTabId.collect { id -> tabsNow().forEach { it.onStage = !stageDark && it.id == id } }
+            _activeTabId.collect { id -> synchronized(stageLock) { tabsNow().forEach { it.onStage = !stageDark && it.id == id } } }
+        }
+        scope.launch {
+            // The lock deciding or lifting while an activity is on screen (spec C20 with C21): locked,
+            // the stage goes dark as it does when the app leaves, since the user faces the lock screen
+            // and not a tab; unlocked, the active tab comes into view and its news counts as seen.
+            lock.state.collect { state ->
+                synchronized(stageLock) {
+                    if (!_foreground.value) return@synchronized
+                    when (state) {
+                        LockState.UNLOCKED -> lightStage()
+                        LockState.LOCKED -> darkenStage()
+                        LockState.UNKNOWN -> Unit
+                    }
+                }
+            }
         }
         scope.launch {
             records.collect {
@@ -288,16 +321,39 @@ class SessionManager @Inject constructor(
     }
 
     private fun onForeground() {
-        _foreground.value = true
-        stageDark = false
-        // The active tab is in front of the user again: it is on stage, and whatever it raised while
-        // the app was away has been seen (its notification goes with it, through the record).
-        _activeTabId.value?.let { id -> tabNow(id)?.let { it.onStage = true; it.markSeen() } }
+        synchronized(stageLock) {
+            _foreground.value = true
+            // MainActivity's onStart has the lock decide before this ON_START reaches the process owner
+            // (from API 29, minSdk, it hears of a start through onActivityPostStarted, once onStart has
+            // returned), so the state read here is this return's. With the lock up the user faces the
+            // lock screen, not a tab: the stage stays dark and the active tab's news unseen until the
+            // lock lifts (the collector in init). With no lock, the tab is in front of the user again now.
+            if (lock.state.value == LockState.UNLOCKED) lightStage() else darkenStage()
+        }
         backgroundSaver?.cancel()
         backgroundSaver = null
         // The user may have flipped notifications in system settings while away.
         notifier.refresh()
     }
+
+    /**
+     * The active tab is in front of the user: it is on stage, and whatever it raised while the app
+     * was away or locked has been seen (its notification goes with it, through the record). Under
+     * [stageLock], like [darkenStage].
+     */
+    private fun lightStage() {
+        stageDark = false
+        _activeTabId.value?.let { id -> tabNow(id)?.let { it.onStage = true; it.markSeen() } }
+    }
+
+    /** Nothing is in front of the user (the app away, or the lock screen up): no tab is on stage, so every tab's bells and long commands count as attention. */
+    private fun darkenStage() {
+        stageDark = true
+        tabsNow().forEach { it.onStage = false }
+    }
+
+    /** Whether the user can see the tabs: an activity on screen and the app lock, if any, lifted. Otherwise attention and problems go to the shade. */
+    private fun onScreen() = _foreground.value && lock.state.value == LockState.UNLOCKED
 
     /**
      * The app left the screen: nothing is on stage any more, so the active tab's bells and long
@@ -306,9 +362,10 @@ class SessionManager @Inject constructor(
      * still connected, so however the process ends the relaunch shows what each tab last showed.
      */
     private fun onBackground() {
-        _foreground.value = false
-        stageDark = true
-        tabsNow().forEach { it.onStage = false }
+        synchronized(stageLock) {
+            _foreground.value = false
+            darkenStage()
+        }
         saveAllFrames()
         backgroundSaver?.cancel()
         backgroundSaver = scope.launch {
@@ -353,11 +410,11 @@ class SessionManager @Inject constructor(
         }
         val hadAttention = previous?.needsAttention == true
         if (record.needsAttention && !hadAttention) {
-            // On screen the ring says it; away, the shade does (spec C21, Attention), for a Files tab
-            // whose copy stopped on a question as much as for a terminal's bell. A terminal that lost
-            // its connection is lit too, but the Problems notification carries that one, with Retry
-            // and Detach.
-            if (!_foreground.value && session?.attentionProblem == null) {
+            // On screen the ring says it; away or under the lock, the shade does (spec C21, Attention),
+            // for a Files tab whose copy stopped on a question as much as for a terminal's bell. A
+            // terminal that lost its connection is lit too, but the Problems notification carries that
+            // one, with Retry and Detach.
+            if (!onScreen() && session?.attentionProblem == null) {
                 notifier.postAttention(record, session?.attentionAt ?: System.currentTimeMillis())
             }
         } else if (!record.needsAttention && hadAttention) {
@@ -367,14 +424,14 @@ class SessionManager @Inject constructor(
 
     /**
      * Problems from one tab, for as long as it is open. Like attention, they reach the shade only
-     * while the app is away; on screen the tab is lit (the session raised attention with the
-     * problem) and the ring or the count tile says it, with no heads-up over Berth's own header.
+     * while the app is away or locked; on screen the tab is lit (the session raised attention with
+     * the problem) and the ring or the count tile says it, with no heads-up over Berth's own header.
      */
     private fun track(session: TerminalSession) {
         trackers.remove(session.id)?.cancel()
         trackers[session.id] = scope.launch {
             session.problems.collect { problem ->
-                if (!_foreground.value) notifier.postProblem(session.record.value, problem)
+                if (!onScreen()) notifier.postProblem(session.record.value, problem)
             }
         }
     }
@@ -500,7 +557,26 @@ class SessionManager @Inject constructor(
         if (now) perform(target)
     }
 
+    /**
+     * Staging marks the tab seen and cancels its notification, and a Files tap opens a tab: not under
+     * the app lock, where the user faces the lock screen and may yet leave with the news unseen (spec
+     * C20 with C21). Locked, or before the lock has decided, the tap waits for the unlock the way the
+     * key prompts do, the latest tap standing for the earlier ones; unlocked, it acts now.
+     */
     private fun perform(target: Activation) {
+        if (lock.state.value == LockState.UNLOCKED) {
+            performNow(target)
+            return
+        }
+        val waiting = synchronized(pendingLock) { lockedActivation.also { lockedActivation = target } != null }
+        if (waiting) return
+        scope.launch {
+            lock.awaitUnlocked()
+            synchronized(pendingLock) { lockedActivation.also { lockedActivation = null } }?.let { performNow(it) }
+        }
+    }
+
+    private fun performNow(target: Activation) {
         when (target) {
             is Activation.Tab -> stage(target.id)
             is Activation.Files -> scope.launch { openFiles(target.sessionId)?.let { stage(it.id) } }
