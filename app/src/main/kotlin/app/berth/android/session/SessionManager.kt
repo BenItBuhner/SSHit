@@ -967,12 +967,17 @@ class SessionManager @Inject constructor(
 
     /**
      * The Session sheet's Split (spec C6): a second tab on the active tab's host opens in the pane
-     * opposite it and takes the keys; the active tab keeps its pane. Null with nothing on stage.
+     * opposite it and takes the keys; the active tab keeps its pane. Beside a Tunnels tab it is a
+     * shell on that host, not a second carrier: a twin would bind the same ports and fail by
+     * construction, and the forwards are one row away in the pane that has them. Null with nothing
+     * on stage.
      */
     suspend fun splitActive(): ManagedTab? {
         val source = _activeTabId.value ?: return null
         val side = _split.value?.companionSide ?: PaneSide.RIGHT
-        val fresh = duplicate(source, activate = false) ?: return null
+        val record = tabNow(source)?.record?.value ?: return null
+        val fresh = if (record.kind == TabKind.Tunnels) open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = source, activate = false)
+        else duplicate(source, activate = false) ?: return null
         placeInPane(fresh.id, side)
         return fresh
     }

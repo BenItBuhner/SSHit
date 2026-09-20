@@ -235,6 +235,26 @@ class SessionPanesTest {
     }
 
     @Test
+    fun `split beside a Tunnels tab opens a shell on its host, never a second carrier`() {
+        val tunnels = runBlocking { graph.sessions.openTunnels(host("pi-hole", "pi-hole", SwatchColor.MOSS)) }
+        assertTrue(tunnels.tunnelsOnly)
+        assertEquals(tunnels.id, graph.sessions.activeTabId.value)
+
+        val fresh = runBlocking { graph.sessions.splitActive()!! }
+        assertEquals("pi-hole", fresh.host.id)
+        assertEquals("a shell on the host; a twin carrier would bind the same ports twice", TabKind.Ssh, fresh.kind)
+        assertEquals("pi-hole", fresh.record.value.title)
+        assertEquals(fresh.id, graph.sessions.activeTabId.value)
+        assertEquals(Split(tunnels.id, PaneSide.RIGHT), graph.sessions.split.value)
+        awaitPanes(left = tunnels.id, right = fresh.id, focused = PaneSide.RIGHT)
+        await("directly after the Tunnels tab in the strip") {
+            val ids = graph.sessions.tabs.value.map { it.id }
+            ids.indexOf(fresh.id) == ids.indexOf(tunnels.id) + 1
+        }
+        assertEquals("the carrier is the one Tunnels tab on the host", 1, graph.sessions.tabs.value.count { it.kind == TabKind.Tunnels })
+    }
+
+    @Test
     fun `an id no tab answers to is ignored`() {
         graph.sessions.placeInPane("s-closed-a-frame-ago", PaneSide.RIGHT)
         assertEquals("s-homelab", graph.sessions.activeTabId.value)
