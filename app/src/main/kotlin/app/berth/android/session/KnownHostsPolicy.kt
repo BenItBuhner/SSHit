@@ -19,6 +19,10 @@ import java.util.UUID
  *
  * The policy made for a jump host knows it is one ([via]), and every prompt it raises carries
  * that, so the sheet names the hop's role and the target rather than reading as the target's.
+ *
+ * [linkFingerprint] is the fingerprint the link that opened this login carried (`;fingerprint=`),
+ * when one did: the first-connection and changed-key sheets show how it compares with the key the
+ * server presents ([LinkFingerprint]). It changes what the sheets say, never what the policy does.
  */
 class KnownHostsPolicy(
     private val host: Host,
@@ -26,6 +30,7 @@ class KnownHostsPolicy(
     private val prompts: PromptCenter,
     private val now: () -> Long = System::currentTimeMillis,
     private val via: HopRole? = null,
+    private val linkFingerprint: String? = null,
 ) : HostKeyPolicy {
     override fun trustedKeys(host: String, port: Int): List<TrustedHostKey> = runBlocking {
         knownHosts.find(host, port).map { TrustedHostKey(it.keyType, it.publicKeyBase64, it.fingerprintSha256) }
@@ -37,7 +42,7 @@ class KnownHostsPolicy(
             prompts.pinnedKeyRefused(host, request, pinned, via)
             return@runBlocking false
         }
-        val accepted = prompts.trustHostKey(host, request, others, via)
+        val accepted = prompts.trustHostKey(host, request, others, via, LinkFingerprint.of(linkFingerprint, request.publicKey))
         if (accepted) save(request)
         accepted
     }
@@ -50,7 +55,7 @@ class KnownHostsPolicy(
             prompts.pinnedKeyRefused(host, request, pinned, via)
             return@runBlocking false
         }
-        when (prompts.hostKeyChanged(host, request, saved, via)) {
+        when (prompts.hostKeyChanged(host, request, saved, via, LinkFingerprint.of(linkFingerprint, request.publicKey))) {
             HostKeyChangedDecision.DISCONNECT -> false
             HostKeyChangedDecision.TRUST_ONCE -> true
             HostKeyChangedDecision.REPLACE_SAVED -> {

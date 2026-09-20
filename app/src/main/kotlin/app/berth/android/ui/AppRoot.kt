@@ -185,7 +185,7 @@ private fun Shell(vm: AppViewModel) {
     // pending; unreadable, so a notice saying what was wrong.
     val linkOutcome by vm.linkOutcome.collectAsState()
     var linkNotice by remember { mutableStateOf<String?>(null) }
-    var quickConnectSpec by remember { mutableStateOf<String?>(null) }
+    var quickConnectLink by remember { mutableStateOf<LinkOutcome.QuickConnect?>(null) }
     LaunchedEffect(linkOutcome) {
         when (val outcome = linkOutcome) {
             null -> return@LaunchedEffect
@@ -194,7 +194,7 @@ private fun Shell(vm: AppViewModel) {
                 toStage()
                 if (drawer.isOpen) drawer.close()
             }
-            is LinkOutcome.QuickConnect -> quickConnectSpec = outcome.spec
+            is LinkOutcome.QuickConnect -> quickConnectLink = outcome
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
             is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
@@ -395,13 +395,13 @@ private fun Shell(vm: AppViewModel) {
     }
     TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
     // A plain link's landing (spec, Deep links): Quick connect over whatever is up, the link's address in its field.
-    quickConnectSpec?.let { spec ->
+    quickConnectLink?.let { link ->
         QuickConnectSheet(
             vm = vm,
-            initialSpec = spec,
-            onDismiss = { quickConnectSpec = null },
+            fromLink = link,
+            onDismiss = { quickConnectLink = null },
             onConnected = {
-                quickConnectSpec = null
+                quickConnectLink = null
                 sessionSheet = false
                 toStage()
                 if (drawer.isOpen) closeDrawer()

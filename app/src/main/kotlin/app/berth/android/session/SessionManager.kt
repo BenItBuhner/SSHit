@@ -256,6 +256,8 @@ class SessionManager @Inject constructor(
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
         override fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts, via = via)
         override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
+        override fun hostKeyPolicyFor(host: Host, linkFingerprint: String?): HostKeyPolicy =
+            KnownHostsPolicy(host, knownHosts, prompts, linkFingerprint = linkFingerprint)
         override val networkAvailable: Flow<Unit> = network.available
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
@@ -715,7 +717,9 @@ class SessionManager @Inject constructor(
      * Opens a new terminal tab for [host] and, unless [activate] is off, puts it on stage. It lands
      * directly after [afterId] (the active tab by default) in that tab's group, or at the end of
      * [workspaceId] when there is no anchor. With [kind] = [TabKind.Tunnels] the login opens no
-     * shell and carries the host's forwards instead ([openTunnels]).
+     * shell and carries the host's forwards instead ([openTunnels]). [linkFingerprint] is set when
+     * an `ssh://` link opened the tab and carried a fingerprint for the server's key: the trust
+     * sheets compare by it.
      */
     suspend fun open(
         host: Host,
@@ -724,6 +728,7 @@ class SessionManager @Inject constructor(
         customTitle: String? = null,
         activate: Boolean = true,
         kind: TabKind = TabKind.Ssh,
+        linkFingerprint: String? = null,
     ): TerminalSession {
         restore()
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
@@ -740,7 +745,7 @@ class SessionManager @Inject constructor(
             customTitle = customTitle,
         )
         val changes = TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group)
-        return start(fresh, changes, activate)
+        return start(fresh, changes, activate, linkFingerprint)
     }
 
     /**
@@ -748,15 +753,21 @@ class SessionManager @Inject constructor(
      * and no shell, placed and staged like a terminal. A second one on the same host is allowed
      * but pointless; the forwards run on one carrier, and it shows them.
      */
-    suspend fun openTunnels(host: Host, workspaceId: String? = null, afterId: String? = _activeTabId.value, activate: Boolean = true): TerminalSession =
-        open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels)
+    suspend fun openTunnels(
+        host: Host,
+        workspaceId: String? = null,
+        afterId: String? = _activeTabId.value,
+        activate: Boolean = true,
+        linkFingerprint: String? = null,
+    ): TerminalSession = open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels, linkFingerprint = linkFingerprint)
 
     /**
      * Connect from the host list, the New tab sheet or an `ssh://` link: a terminal, or the host's
-     * forwards alone when the host is marked tunnels only ([Host.tunnelsOnly]).
+     * forwards alone when the host is marked tunnels only ([Host.tunnelsOnly]). [linkFingerprint]
+     * is the fingerprint the link carried for the server's key, when a link with one opened this.
      */
-    suspend fun connect(host: Host, workspaceId: String? = null): TerminalSession =
-        if (host.tunnelsOnly) openTunnels(host, workspaceId) else open(host, workspaceId)
+    suspend fun connect(host: Host, workspaceId: String? = null, linkFingerprint: String? = null): TerminalSession =
+        if (host.tunnelsOnly) openTunnels(host, workspaceId, linkFingerprint = linkFingerprint) else open(host, workspaceId, linkFingerprint = linkFingerprint)
 
     /** The automatic title of a fresh tab of [kind] on [host]: the host's name, or `Tunnels · name` like a Files tab's `Files · name`. */
     private fun titleFor(kind: TabKind, host: Host): String = if (kind == TabKind.Tunnels) "Tunnels \u00B7 ${host.name}" else host.name
@@ -803,9 +814,9 @@ class SessionManager @Inject constructor(
         }
     }
 
-    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>, activate: Boolean): TerminalSession {
+    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>, activate: Boolean, linkFingerprint: String? = null): TerminalSession {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
-        val session = TerminalSession(placed, scope, environment) { sessionRepository.upsert(it) }
+        val session = TerminalSession(placed, scope, environment, linkFingerprint) { sessionRepository.upsert(it) }
         _sessions.update { it + (placed.id to session) }
         track(session)
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
@@ -846,28 +857,31 @@ class SessionManager @Inject constructor(
     /**
      * Files from the host list or the New tab sheet: the host's Files tab, or a new one after the
      * active tab (at the end of [workspaceId] when given). The browser rides whichever terminal to
-     * the host is up, or offers to connect one.
+     * the host is up, or offers to connect one; a login it asks for takes [linkFingerprint] along
+     * when an `sftp://` link with a fingerprint opened the tab ([FilesTab.linkFingerprint]).
      */
-    suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null): FilesTab {
+    suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null, linkFingerprint: String? = null): FilesTab {
         restore()
         // The host's Files tab comes on stage; an `sftp://` link naming a folder takes the tab showing it, or opens one of its own there.
         val showing = filesTabsFor(host.id)
         (if (folder == null) showing.firstOrNull() else showing.firstOrNull { it.folder == folder })?.let {
+            if (linkFingerprint != null) it.linkFingerprint = linkFingerprint
             setActive(it.id)
             return it
         }
-        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder)
+        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder, linkFingerprint = linkFingerprint)
     }
 
-    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true): FilesTab {
+    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true, linkFingerprint: String? = null): FilesTab {
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
         val fresh = FilesTab.newRecord(UUID.randomUUID().toString(), host, group, System.currentTimeMillis(), folder)
-        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred, activate)
+        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred, activate, linkFingerprint)
     }
 
-    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?, activate: Boolean = true): FilesTab {
+    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?, activate: Boolean = true, linkFingerprint: String? = null): FilesTab {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
         val tab = FilesTab(placed, scope) { sessionRepository.upsert(it) }
+        tab.linkFingerprint = linkFingerprint
         tab.prefer(preferred)
         _filesTabs.update { it + (placed.id to tab) }
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
@@ -882,7 +896,7 @@ class SessionManager @Inject constructor(
      * login to ride; the tab picks it up as it connects. The pane's Connect button.
      */
     fun connectFor(tab: FilesTab) {
-        scope.launch { open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, activate = false) }
+        scope.launch { open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, activate = false, linkFingerprint = tab.linkFingerprint) }
     }
 
     /**
@@ -901,7 +915,7 @@ class SessionManager @Inject constructor(
             setActive(it.id)
             return it
         }
-        val session = open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id)
+        val session = open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, linkFingerprint = tab.linkFingerprint)
         tab.prefer(session.id)
         refollow()
         return session

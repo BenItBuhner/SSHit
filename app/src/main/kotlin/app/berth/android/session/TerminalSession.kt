@@ -76,6 +76,13 @@ interface SessionEnvironment {
      * says which hop it is and where the chain is going. The plain policy unless overridden.
      */
     fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = hostKeyPolicyFor(host)
+
+    /**
+     * The policy for a login a link opened, given the fingerprint the link carried for the
+     * server's key (`;fingerprint=`), so the trust sheets can say how it compares; the plain
+     * policy when the link carried none. Stand-ins that accept every key need not override it.
+     */
+    fun hostKeyPolicyFor(host: Host, linkFingerprint: String?): HostKeyPolicy = hostKeyPolicyFor(host)
     val networkAvailable: Flow<Unit>
 
     /**
@@ -149,6 +156,12 @@ class TerminalSession(
     initial: SessionRecord,
     private val scope: CoroutineScope,
     private val env: SessionEnvironment,
+    /**
+     * The fingerprint the link that opened this tab carried for the server's key, if a link did;
+     * every connection of the tab compares the key it is offered with it ([LinkFingerprint]). Not
+     * persisted: by the time the tab is restored the key is saved or the tab never connected.
+     */
+    val linkFingerprint: String? = null,
     private val onRecordChanged: suspend (SessionRecord) -> Unit,
 ) : ManagedTab {
     override val id: String = initial.id
@@ -645,7 +658,7 @@ class TerminalSession(
         chainHosts = chain
         val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h))) }
         val endpoint = endpointFor(h, env.authFor(h))
-        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h), hops)
+        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h, linkFingerprint), hops)
         connection = conn
         val progress = scope.launch {
             conn.state.collect { s ->

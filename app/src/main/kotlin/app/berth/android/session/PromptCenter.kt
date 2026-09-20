@@ -3,6 +3,8 @@ package app.berth.android.session
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
+import app.berth.ssh.FingerprintCheck
+import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.security.PublicKey
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,11 +26,55 @@ data class HopRole(val index: Int, val count: Int, val target: Host) {
     val sentence: String get() = "It is hop ${index + 1} of $count on the way to ${target.name}."
 }
 
+/**
+ * What the link that opened a login said the server's key would be, against the key the server
+ * presented. An `ssh://` or `sftp://` link may carry a fingerprint as its `;fingerprint=`
+ * parameter; it is one more thing to compare by, never a decision: the link came from wherever
+ * the link came from, and a link and a server that agree can both be someone else's. So the trust
+ * sheets show the comparison beside the fingerprint and leave the choice where it was, and a
+ * fingerprint in no form Berth reads ([FingerprintCheck.UNREADABLE]) is said to be that, not a mismatch.
+ */
+data class LinkFingerprint(
+    /** As the link wrote it, trimmed. */
+    val expected: String,
+    val check: FingerprintCheck,
+) {
+    /** [expected] in the form the sheets show fingerprints, when it is readable. */
+    val shown: String get() = HostKeyFingerprints.normalize(expected) ?: expected
+
+    /**
+     * [expected] as a sheet may quote it when it is unreadable, which is the one time the link's
+     * own text reaches the screen: control characters, format characters (bidirectional overrides
+     * and zero-width marks, which would reorder or hide the sentence around it) and line and
+     * paragraph separators are dropped, and it is cut to [QUOTED_MAX] characters with an ellipsis.
+     */
+    val quoted: String
+        get() {
+            val clean = expected.filterNot {
+                it.isISOControl() || it.category == CharCategory.FORMAT || it.category == CharCategory.LINE_SEPARATOR ||
+                    it.category == CharCategory.PARAGRAPH_SEPARATOR || it.category == CharCategory.SURROGATE ||
+                    it.category == CharCategory.UNASSIGNED || it.category == CharCategory.PRIVATE_USE
+            }
+            return if (clean.length > QUOTED_MAX) clean.take(QUOTED_MAX) + "\u2026" else clean
+        }
+
+    companion object {
+        const val QUOTED_MAX = 40
+
+        /** The comparison for [expected] against [key]; null when the login was not opened by a link with a fingerprint. */
+        fun of(expected: String?, key: PublicKey): LinkFingerprint? =
+            expected?.trim()?.takeIf { it.isNotEmpty() }?.let { LinkFingerprint(it, HostKeyFingerprints.check(it, key)) }
+    }
+}
+
 /** Something the transport needs a human for. The UI shows exactly one at a time. */
 sealed interface Prompt {
     val host: Host
 
-    /** First contact: trust on first use. [via] is set when [host] is a jump host of the login being made. */
+    /**
+     * First contact: trust on first use. [via] is set when [host] is a jump host of the login being made;
+     * [link] is what the link that opened this login said the key would be, if one did.
+     */
     class TrustHostKey(
         override val host: Host,
         val request: HostKeyRequest,
@@ -35,18 +82,23 @@ sealed interface Prompt {
         val otherKnown: List<KnownHostKey>,
         internal val answer: CompletableDeferred<Boolean>,
         val via: HopRole? = null,
+        val link: LinkFingerprint? = null,
     ) : Prompt {
         fun trust() = answer.complete(true)
         fun cancel() = answer.complete(false)
     }
 
-    /** A saved key of the same type no longer matches. [via] is set when [host] is a jump host of the login being made. */
+    /**
+     * A saved key of the same type no longer matches. [via] is set when [host] is a jump host of the login
+     * being made; [link] compares the offered key with what the opening link said, if one did.
+     */
     class HostKeyChanged(
         override val host: Host,
         val request: HostKeyRequest,
         val saved: KnownHostKey,
         internal val answer: CompletableDeferred<HostKeyChangedDecision>,
         val via: HopRole? = null,
+        val link: LinkFingerprint? = null,
     ) : Prompt {
         fun decide(decision: HostKeyChangedDecision) = answer.complete(decision)
     }
@@ -136,11 +188,11 @@ class PromptCenter @Inject constructor() {
         }
     }
 
-    suspend fun trustHostKey(host: Host, request: HostKeyRequest, otherKnown: List<KnownHostKey>, via: HopRole? = null): Boolean =
-        ask { Prompt.TrustHostKey(host, request, otherKnown, it, via) }
+    suspend fun trustHostKey(host: Host, request: HostKeyRequest, otherKnown: List<KnownHostKey>, via: HopRole? = null, link: LinkFingerprint? = null): Boolean =
+        ask { Prompt.TrustHostKey(host, request, otherKnown, it, via, link) }
 
-    suspend fun hostKeyChanged(host: Host, request: HostKeyRequest, saved: KnownHostKey, via: HopRole? = null): HostKeyChangedDecision =
-        ask { Prompt.HostKeyChanged(host, request, saved, it, via) }
+    suspend fun hostKeyChanged(host: Host, request: HostKeyRequest, saved: KnownHostKey, via: HopRole? = null, link: LinkFingerprint? = null): HostKeyChangedDecision =
+        ask { Prompt.HostKeyChanged(host, request, saved, it, via, link) }
 
     suspend fun pinnedKeyRefused(host: Host, request: HostKeyRequest, pinned: KnownHostKey, via: HopRole? = null) {
         ask { Prompt.PinnedKeyRefused(host, request, pinned, it, via) }

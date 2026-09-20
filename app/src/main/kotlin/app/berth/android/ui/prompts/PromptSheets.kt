@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.security.KeyUnlocker
 import app.berth.android.session.HostKeyChangedDecision
+import app.berth.android.session.LinkFingerprint
 import app.berth.android.session.Prompt
 import app.berth.android.session.PromptCenter
 import app.berth.android.ui.components.BerthButton
@@ -48,6 +49,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.Host
+import app.berth.ssh.FingerprintCheck
 import app.berth.ssh.SshKeys
 
 /**
@@ -164,17 +166,39 @@ private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
     }
 }
 
-/** First contact: fingerprint in mono groups, one primary action, cancel. A hop's sheet says so, and where the chain is going. */
+/**
+ * First contact: fingerprint in mono groups, one primary action, cancel. A hop's sheet says so,
+ * and where the chain is going. When the login was opened by a link that carried a fingerprint
+ * ([Prompt.TrustHostKey.link]), the sheet says how the two compare: a match is one line under the
+ * fingerprint, and a mismatch leads the sheet in danger, with the link's fingerprint as a second
+ * row and no primary action, the way the changed-key sheet has none.
+ */
 @Composable
 private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
     val c = Berth.colors
+    val mismatch = p.link?.check == FingerprintCheck.MISMATCH
     PromptSheet(onDismiss = p::cancel) {
-        SheetTitle(
-            "First connection",
-            p.via?.let { "Berth has not seen this jump host before. ${it.sentence}" } ?: "Berth has not seen this server before.",
-        )
+        if (mismatch) {
+            SheetTitle(
+                "Key does not match the link",
+                "The link that opened this connection carried a different fingerprint for this ${if (p.via != null) "jump host" else "server"}.",
+                color = c.danger,
+            )
+        } else {
+            SheetTitle(
+                "First connection",
+                p.via?.let { "Berth has not seen this jump host before. ${it.sentence}" } ?: "Berth has not seen this server before.",
+            )
+        }
         HostLine(p)
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, boxed = true)
+        p.link?.let {
+            LinkFingerprintLine(
+                it,
+                same = "The link that opened this connection carried the same fingerprint.",
+                different = "The link that opened this connection carried a different fingerprint from this key's.",
+            )
+        }
         if (p.otherKnown.isNotEmpty()) {
             Text(
                 "A ${p.otherKnown.joinToString(", ") { it.keyType }} key is already saved for this server. Offering a different key type is normal when a server adds algorithms.",
@@ -182,11 +206,50 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
                 color = c.text2,
             )
         }
-        Text("Compare it with the fingerprint the server's administrator gave you. Trusting saves the key on this device.", style = BerthType.body, color = c.text2)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BerthButton("Trust and connect", onClick = p::trust, kind = ButtonKind.PRIMARY)
-            BerthButton("Cancel", onClick = p::cancel, kind = ButtonKind.TEXT)
+        if (mismatch) {
+            Text("Either the link or the server is not what it says it is. Do not trust this key on the link's word; check the fingerprint with the server's administrator.", style = BerthType.body, color = c.text2)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                BerthButton("Cancel", onClick = p::cancel, kind = ButtonKind.SECONDARY, modifier = Modifier.fillMaxWidth())
+                BerthButton("Trust and connect anyway", onClick = p::trust, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            }
+        } else {
+            Text("Compare it with the fingerprint the server's administrator gave you. Trusting saves the key on this device.", style = BerthType.body, color = c.text2)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BerthButton("Trust and connect", onClick = p::trust, kind = ButtonKind.PRIMARY)
+                BerthButton("Cancel", onClick = p::cancel, kind = ButtonKind.TEXT)
+            }
         }
+    }
+}
+
+/**
+ * What the link that opened the connection said the key would be, against the key offered: one
+ * line for a match; for a mismatch the link's fingerprint as a labelled row like the saved and
+ * offered ones, then the sentence in danger; for a value Berth cannot read as a fingerprint, that,
+ * with the value itself quoted as [LinkFingerprint.quoted] (short, no control or format
+ * characters), since it came in from outside and this is the one place the link's text is shown.
+ */
+@Composable
+private fun LinkFingerprintLine(link: LinkFingerprint, same: String, different: String) {
+    val c = Berth.colors
+    when (link.check) {
+        FingerprintCheck.MATCH -> Text(same, style = BerthType.body, color = c.text2)
+        FingerprintCheck.MISMATCH -> {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("LINK", style = BerthType.caption, color = c.text3)
+                Text(
+                    link.shown.let { if (it.startsWith("SHA256:")) "SHA256 " + SshKeys.groupedFingerprint(it) else it },
+                    style = BerthType.mono.copy(fontSize = 14.sp, lineHeight = 20.sp),
+                    color = c.text1,
+                )
+            }
+            Text(different, style = BerthType.body, color = c.danger)
+        }
+        FingerprintCheck.UNREADABLE -> Text(
+            "The link that opened this connection carried a fingerprint Berth cannot read (\u201C${link.quoted}\u201D), so there is nothing to compare here.",
+            style = BerthType.caption,
+            color = c.text2,
+        )
     }
 }
 
@@ -205,6 +268,13 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
         // Two fingerprints as labelled text rows (C13), never two boxes.
         Fingerprint(p.saved.keyType, p.saved.fingerprintSha256, label = "Saved")
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")
+        p.link?.let {
+            LinkFingerprintLine(
+                it,
+                same = "The link that opened this connection carried the offered key's fingerprint.",
+                different = "The link that opened this connection carried a fingerprint that is neither key's.",
+            )
+        }
         Text(
             "This happens when a server is reinstalled or its keys rotate. It also happens when something is between you and the server. Do not continue unless you know which.",
             style = BerthType.body,

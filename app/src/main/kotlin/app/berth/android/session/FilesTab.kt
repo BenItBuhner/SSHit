@@ -72,6 +72,16 @@ class FilesTab(
     }
 
     /**
+     * The fingerprint the `sftp://` link that opened this tab carried for the server's key, if a
+     * link did. The browser makes no login of its own; the terminal the manager opens for it to
+     * ride (the pane's Connect, or Terminal from its menu) takes this along, so the trust sheet
+     * that login raises compares by it. Set once by the manager, before the tab is shown.
+     */
+    @Volatile
+    var linkFingerprint: String? = null
+        internal set
+
+    /**
      * Re-elects the ride from [candidates], the host's terminal tabs in strip order, and mirrors
      * its state onto the record so the tab's dot says whether the browser can list. Called by the
      * manager whenever any record changes; cheap and idempotent.

@@ -6,6 +6,8 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SwatchColor
+import app.berth.ssh.FingerprintCheck
+import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
 import app.berth.ssh.SshKeys
 import app.berth.ssh.TrustedHostKey
@@ -136,6 +138,121 @@ class KnownHostsPolicyTest {
         val stored = runBlocking { repo.find(host.address, host.port) }.single()
         assertEquals(1_000L, stored.lastSeenAt)
         assertTrue(stored.pinned)
+    }
+
+    @Test
+    fun `a link's fingerprint reaches the first-connection sheet as a comparison with the offered key`() {
+        val req = request()
+        val matching = KnownHostsPolicy(host, repo, prompts, linkFingerprint = req.fingerprintSha256)
+        val first = onTransport { matching.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertEquals(FingerprintCheck.MATCH, prompt.link?.check)
+            assertEquals(req.fingerprintSha256, prompt.link?.expected)
+            prompt.cancel()
+        }
+        assertFalse(first.get())
+
+        // The forms differ, the key is the same: the link wrote the MD5 hex, upper case, as some tools print it.
+        val md5 = HostKeyFingerprints.md5(req.publicKey).removePrefix("MD5:").uppercase()
+        val matchingMd5 = KnownHostsPolicy(host, repo, prompts, linkFingerprint = md5)
+        val second = onTransport { matchingMd5.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertEquals(FingerprintCheck.MATCH, prompt.link?.check)
+            assertEquals("MD5:${md5.lowercase()}", prompt.link?.shown)
+            prompt.cancel()
+        }
+        assertFalse(second.get())
+
+        val other = request()
+        val mismatching = KnownHostsPolicy(host, repo, prompts, linkFingerprint = other.fingerprintSha256)
+        val third = onTransport { mismatching.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertEquals(FingerprintCheck.MISMATCH, prompt.link?.check)
+            assertEquals(other.fingerprintSha256, prompt.link?.expected)
+            assertEquals(req.fingerprintSha256, prompt.request.fingerprintSha256)
+            // The comparison is a line on the sheet, not a decision: trusting still saves the offered key.
+            prompt.trust()
+        }
+        assertTrue(third.get())
+        assertEquals(req.fingerprintSha256, runBlocking { repo.find(host.address, host.port) }.single().fingerprintSha256)
+    }
+
+    @Test
+    fun `a fingerprint in no form Berth reads is said to be unreadable, and a blank one is no link at all`() {
+        val req = request()
+        val garbage = KnownHostsPolicy(host, repo, prompts, linkFingerprint = "SHA256:not-really")
+        val first = onTransport { garbage.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertEquals(FingerprintCheck.UNREADABLE, prompt.link?.check)
+            assertEquals("SHA256:not-really", prompt.link?.expected)
+            assertEquals("SHA256:not-really", prompt.link?.shown)
+            assertEquals("SHA256:not-really", prompt.link?.quoted)
+            prompt.cancel()
+        }
+        assertFalse(first.get())
+
+        // The unreadable notice is the one place the link's own text is shown, so what a link can
+        // carry through percent-encoding (a bidi override, an escape sequence, a newline, a
+        // zero-width joiner, an unpaired surrogate) is dropped from the quote and the rest is cut short.
+        val hostile = LinkFingerprint.of("\u202Eeman\u001B[2J\u001B[Htsoh\n\u200D\uD800" + "x".repeat(60), req.publicKey)!!
+        assertEquals(FingerprintCheck.UNREADABLE, hostile.check)
+        val visible = "eman[2J[Htsoh" // the escapes' own bytes go; the letters after them are only letters
+        assertEquals(visible + "x".repeat(LinkFingerprint.QUOTED_MAX - visible.length) + "\u2026", hostile.quoted)
+        assertEquals(LinkFingerprint.QUOTED_MAX + 1, hostile.quoted.length)
+
+        val blank = KnownHostsPolicy(host, repo, prompts, linkFingerprint = "  ")
+        val second = onTransport { blank.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertNull(prompt.link)
+            prompt.cancel()
+        }
+        assertFalse(second.get())
+
+        val plain = onTransport { policy.onUnknownHost(req) }
+        awaitPrompt<Prompt.TrustHostKey>().let { prompt ->
+            assertNull(prompt.link)
+            prompt.cancel()
+        }
+        assertFalse(plain.get())
+    }
+
+    @Test
+    fun `the changed-key sheet compares the link with the key offered, not the one saved`() {
+        val old = request()
+        runBlocking { repo.upsert(saved(old, pinned = false)) }
+        val changed = request()
+        val known = listOf(TrustedHostKey(old.keyType, old.publicKeyBase64, old.fingerprintSha256))
+
+        // The administrator rotated the key and sent a link with the new fingerprint: the link agrees with the server.
+        val agreesWithServer = KnownHostsPolicy(host, repo, prompts, linkFingerprint = changed.fingerprintSha256)
+        val first = onTransport { agreesWithServer.onChangedHostKey(changed, known) }
+        awaitPrompt<Prompt.HostKeyChanged>().let { prompt ->
+            assertEquals(FingerprintCheck.MATCH, prompt.link?.check)
+            prompt.decide(HostKeyChangedDecision.DISCONNECT)
+        }
+        assertFalse(first.get())
+
+        // The link carries the fingerprint Berth saved: the server is the one that changed.
+        val agreesWithSaved = KnownHostsPolicy(host, repo, prompts, linkFingerprint = old.fingerprintSha256)
+        val second = onTransport { agreesWithSaved.onChangedHostKey(changed, known) }
+        awaitPrompt<Prompt.HostKeyChanged>().let { prompt ->
+            assertEquals(FingerprintCheck.MISMATCH, prompt.link?.check)
+            assertEquals(old.fingerprintSha256, prompt.link?.expected)
+            prompt.decide(HostKeyChangedDecision.DISCONNECT)
+        }
+        assertFalse(second.get())
+        assertEquals(old.fingerprintSha256, runBlocking { repo.find(host.address, host.port) }.single().fingerprintSha256)
+    }
+
+    @Test
+    fun `a pinned key refuses without a sheet whatever the link says`() {
+        val pinned = request()
+        runBlocking { repo.upsert(saved(pinned, pinned = true)) }
+        val changed = request()
+        val linkAgrees = KnownHostsPolicy(host, repo, prompts, linkFingerprint = changed.fingerprintSha256)
+        val answer = onTransport { linkAgrees.onChangedHostKey(changed, listOf(TrustedHostKey(pinned.keyType, pinned.publicKeyBase64, pinned.fingerprintSha256))) }
+        awaitPrompt<Prompt.PinnedKeyRefused>().acknowledge()
+        assertFalse(answer.get())
     }
 
     @Test

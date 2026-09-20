@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.LinkOutcome
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
@@ -207,22 +208,23 @@ private fun HostRow(
 /**
  * Quick connect (spec C11): a `user@host:port` field in Mono, the identity to log in with, Connect;
  * the login opens as an unsaved host. What stops a spec is said under the field in the parser's
- * words, the same ones a link's notice uses. With [initialSpec] the sheet is where a plain `ssh://`
- * link no saved host answers to lands (spec, Deep links): the field holds the link's address and
- * the title says why the sheet is up.
+ * words, the same ones a link's notice uses. With [fromLink] the sheet is where a plain `ssh://`
+ * link no saved host answers to lands (spec, Deep links): the field holds the link's address, the
+ * title says why the sheet is up, and a fingerprint the link carried goes to the trust sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -> Unit, initialSpec: String? = null) {
+fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -> Unit, fromLink: LinkOutcome.QuickConnect? = null) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
+    val initialSpec = fromLink?.spec
     var spec by remember { mutableStateOf(initialSpec ?: "") }
     var identityId by remember { mutableStateOf<String?>(null) }
     var pickIdentity by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     fun connect() {
         if (spec.isBlank()) return
-        val problem = vm.quickConnect(spec, identityId)
+        val problem = vm.quickConnect(spec, identityId, fromLink = fromLink)
         if (problem == null) onConnected() else error = problem
     }
     BerthSheet(onDismiss = onDismiss) {

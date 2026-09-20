@@ -20,7 +20,7 @@ class QuickConnectTest {
         assertEquals(Triple("ben", "fe80::1", 22), AppViewModel.parseQuickConnect("ben@[fe80::1]"))
         assertEquals(Triple("root", "fe80::1", 2200), AppViewModel.parseQuickConnect("[fe80::1]:2200"))
         assertEquals(Triple("ben", "bastion", 22), AppViewModel.parseQuickConnect("  ben@bastion  "))
-        assertEquals("a fingerprint is read by nothing yet, so it is no reason to refuse the address", Triple("ben", "bastion", 22), AppViewModel.parseQuickConnect("ssh://ben;fingerprint=SHA256:abc@bastion"))
+        assertEquals("a fingerprint is no reason to refuse the address", Triple("ben", "bastion", 22), AppViewModel.parseQuickConnect("ssh://ben;fingerprint=SHA256:abc@bastion"))
     }
 
     @Test
