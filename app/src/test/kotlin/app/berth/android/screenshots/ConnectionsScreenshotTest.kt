@@ -25,6 +25,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
@@ -89,7 +90,11 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class ConnectionsScreenshotTest {
-    @get:Rule
+    /** The release variant's manifest declares no test activity; the host rule registers the one Compose uses. */
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
