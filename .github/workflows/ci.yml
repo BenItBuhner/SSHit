@@ -105,7 +105,7 @@ jobs:
             for apk in app/build/outputs/apk/release/*.apk app/build/outputs/apk/debug/*.apk; do
               [ -f "$apk" ] || continue
               if [ -x "$analyzer" ]; then
-                echo "| \`$(basename "$apk")\` | $("$analyzer" apk file-size --human-readable "$apk") | $("$analyzer" apk download-size --human-readable "$apk") |"
+                echo "| \`$(basename "$apk")\` | $("$analyzer" --human-readable apk file-size "$apk") | $("$analyzer" --human-readable apk download-size "$apk") |"
               else
                 echo "| \`$(basename "$apk")\` | $(stat -c %s "$apk") bytes | (apkanalyzer not on this runner) |"
               fi
