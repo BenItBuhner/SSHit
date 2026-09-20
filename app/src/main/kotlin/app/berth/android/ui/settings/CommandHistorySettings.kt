@@ -16,11 +16,12 @@ import app.berth.android.ui.components.ToggleRow
 fun CommandHistorySettings(vm: AppViewModel) {
     val enabled by vm.commandHistoryEnabled.collectAsState()
     Panel(label = "History") {
+        // Two lines beside the switch at 1× (A11); the note under it carries the rest.
         ToggleRow(
             "Keep command history",
             enabled,
             { vm.setCommandHistoryEnabled(it) },
-            caption = "Each session's commands, from the shell's prompt marks or from what was typed and echoed",
+            caption = "Each session's commands, from prompt marks or typed and echoed input",
         )
         PanelNote("Kept on this device with the session, up to 2,000 per session. Never captured while echo is off, so passwords stay out. Turning it off keeps what was already recorded.")
     }

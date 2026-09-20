@@ -9,11 +9,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -22,11 +20,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
+import app.berth.android.screenshots.assertNoTextCut
 import app.berth.android.screenshots.captureAudited
+import app.berth.android.screenshots.textLayout
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
@@ -132,8 +131,7 @@ class FontScaleScreenshotTest {
         compose.onNodeWithText("Follow system text size").performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.followSystemScale }
         capture("settings-font-scale-2x")
-        val cut = overflowingTexts()
-        assertTrue("text cut at the interface's font cap: $cut", cut.isEmpty())
+        compose.assertNoTextCut("the Settings screen at the interface's font cap")
     }
 
     /**
@@ -163,25 +161,6 @@ class FontScaleScreenshotTest {
             checked++
         }
         assertTrue("keys with a hint over a label were on the Deck", checked > 0)
-    }
-
-    /**
-     * Every text on screen whose layout cut it: more lines than it may show, a box too short for
-     * its lines, or its last line ellipsized. The width overflow flag is left out on purpose: the
-     * layout a text hands back through semantics is rebuilt against the width it was offered, so
-     * that flag is up for every text narrower than its room.
-     */
-    private fun overflowingTexts(): List<String> = compose
-        .onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
-        .fetchSemanticsNodes()
-        .mapNotNull { node -> node.textLayout()?.takeIf { it.isCut() }?.layoutInput?.text?.text }
-
-    private fun TextLayoutResult.isCut(): Boolean = didOverflowHeight || (lineCount > 0 && isLineEllipsized(lineCount - 1))
-
-    private fun SemanticsNode.textLayout(): TextLayoutResult? {
-        val results = ArrayList<TextLayoutResult>()
-        val action = config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action ?: return null
-        return if (action(results)) results.firstOrNull() else null
     }
 
     private fun SemanticsNode.textDescendants(): List<SemanticsNode> = buildList {

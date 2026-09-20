@@ -50,6 +50,7 @@ import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
+import app.berth.android.screenshots.assertNoTextCut
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PaneSide
@@ -244,6 +245,8 @@ class HardwareKeyboardScreenshotTest {
         compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
         compose.waitForIdle()
         capture("settings-hardware-keyboard")
+        // No caption cut at 1× (A11, design review item 7): the whole Settings column is composed, so this reads every row of it.
+        compose.assertNoTextCut("the Settings screen at 1×")
         compose.onNodeWithText("Alt key").performClick()
         waitForText("Eighth bit")
         capture("settings-hardware-keyboard-alt-menu")
