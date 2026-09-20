@@ -184,6 +184,16 @@ class SshConnection(
     private var client: SSHClient? = null
     private val hops = ArrayList<SSHClient>()
 
+    /**
+     * The client whose connect or login is in flight: a hop before it joins [hops], the target
+     * before it becomes [client]. A [close] in that moment drops it too, so a hop that hangs at its
+     * greeting (or a slow target) does not keep its socket past the tab that wanted it.
+     */
+    @Volatile private var connecting: SSHClient? = null
+
+    /** Set by [close]; a connect still running ends at its next stage rather than open a login nobody holds. */
+    @Volatile private var closed = false
+
     /** Invoked from sshj's transport thread when the connection drops for any reason. */
     var onDisconnected: ((SshError.Disconnected) -> Unit)? = null
 
@@ -207,7 +217,7 @@ class SshConnection(
             jumpHosts.forEachIndexed { index, hop ->
                 val ep = hop.endpoint
                 _state.value = SshConnectionState.ConnectingVia(index, jumpHosts.size, ep.host)
-                val hopClient = newClient(ep, hop.hostKeyPolicy, isTarget = false)
+                val hopClient = begin(newClient(ep, hop.hostKeyPolicy, isTarget = false))
                 try {
                     connectClient(hopClient, ep, previous)
                     authenticate(hopClient, ep)
@@ -216,10 +226,11 @@ class SshConnection(
                     throw SshError.JumpHopFailed(index, jumpHosts.size, ep.host, ep.port, ep.user, e.toSshError(ep))
                 }
                 hops += hopClient
+                connecting = null
                 previous = hopClient
             }
             _state.value = SshConnectionState.Connecting
-            val target = newClient(endpoint, hostKeyPolicy, isTarget = true)
+            val target = begin(newClient(endpoint, hostKeyPolicy, isTarget = true))
             connectClient(target, endpoint, previous)
             _state.value = SshConnectionState.Authenticating
             authenticate(target, endpoint)
@@ -230,6 +241,9 @@ class SshConnection(
                 onDisconnected?.invoke(error)
             }
             client = target
+            connecting = null
+            // Closed while the login was finishing: the catch drops what was made instead of leaving it up.
+            if (closed) throw SshError.Disconnected("closed")
             _state.value = SshConnectionState.Connected
         } catch (e: Throwable) {
             closeQuietly()
@@ -237,6 +251,13 @@ class SshConnection(
             _state.value = SshConnectionState.Disconnected(error.message ?: "disconnected", error)
             throw error
         }
+    }
+
+    /** Registers [c] as the client in flight; after a [close] the attempt ends here, before the client opens anything. */
+    private fun begin(c: SSHClient): SSHClient {
+        connecting = c
+        if (closed) throw SshError.Disconnected("closed")
+        return c
     }
 
     private fun Throwable.toSshError(ep: SshEndpoint): SshError = when (this) {
@@ -429,6 +450,7 @@ class SshConnection(
     }
 
     override fun close() {
+        closed = true
         closeQuietly()
         if (_state.value !is SshConnectionState.Disconnected) {
             _state.value = SshConnectionState.Disconnected("closed", null)
@@ -441,6 +463,9 @@ class SshConnection(
             runCatching { c.disconnect() }
         }
         client = null
+        // Closing the in-flight client's streams ends the blocked greeting or login on the connecting thread.
+        connecting?.let { c -> runCatching { c.disconnect() } }
+        connecting = null
         hops.asReversed().forEach { runCatching { it.disconnect() } }
         hops.clear()
     }

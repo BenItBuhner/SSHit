@@ -4,10 +4,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -128,6 +131,38 @@ class SshIntegrationTest {
         assertEquals(1, error.port)
         assertTrue(error.reason is SshError.ConnectFailed, "reason was ${error.reason}")
         assertTrue(error.isTransientSshFailure())
+    }
+
+    /**
+     * A hop that accepts the socket and never speaks holds the login at its greeting; the state
+     * names the hop the whole while, and closing the connection then drops that socket and ends
+     * the attempt, rather than leaving it blocked on a hop no tab wants any more.
+     */
+    @Test
+    fun `closing while a hop hangs at its greeting drops its socket and ends the connect`() = runBlocking {
+        val silent = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        try {
+            val hop = SshEndpoint(host = "127.0.0.1", port = silent.localPort, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }))
+            val connection = SshConnection(passwordEndpoint(), AcceptAllHostKeys, jumpHosts = listOf(SshHop(hop, AcceptAllHostKeys)))
+            val attempt = async(Dispatchers.IO) { runCatching { connection.connect() } }
+            val accepted = withTimeout(5_000) { withContext(Dispatchers.IO) { silent.accept() } }
+            withTimeout(5_000) { connection.state.first { it is SshConnectionState.ConnectingVia } }
+            delay(300)
+            assertTrue(attempt.isActive, "the greeting never comes, so the connect is still waiting for it")
+            assertEquals(SshConnectionState.ConnectingVia(0, 1, "127.0.0.1"), connection.state.value)
+
+            connection.close()
+            val outcome = withTimeout(5_000) { attempt.await() }
+            assertTrue(outcome.isFailure, "the attempt ends with the close")
+            assertTrue(connection.state.value is SshConnectionState.Disconnected, "state was ${connection.state.value}")
+            // The client greets first and then waits; what the hop hears is that greeting, then the socket closing under it.
+            accepted.soTimeout = 5_000
+            val heard = String(accepted.getInputStream().readBytes(), Charsets.ISO_8859_1)
+            assertTrue(heard.startsWith("SSH-2.0"), "the hop heard the greeting and then the close: $heard")
+            accepted.close()
+        } finally {
+            silent.close()
+        }
     }
 
     @Test
