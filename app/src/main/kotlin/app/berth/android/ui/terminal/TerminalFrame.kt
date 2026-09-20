@@ -1,5 +1,6 @@
 package app.berth.android.ui.terminal
 
+import app.berth.terminal.CellRange
 import app.berth.terminal.CursorStyle
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalLine
@@ -33,6 +34,10 @@ class TerminalFrame {
     var scrollbackSize: Int = 0
         private set
     var alternateScreen: Boolean = false
+        private set
+
+    /** Lines gone from the top of history at the capture; places a [BufferAnchor]ed range on this frame's rows. */
+    var linesDropped: Long = 0L
         private set
 
     /** The palette as 0xRRGGBB at the time of the capture; OSC 4 can change it between frames. */
@@ -71,9 +76,21 @@ class TerminalFrame {
             reverseVideo = emulator.reverseVideo
             scrollbackSize = emulator.scrollbackSize
             alternateScreen = emulator.isAlternateScreen
+            linesDropped = emulator.linesDropped
             this.version = version
             return used
         }
+    }
+
+    /**
+     * A range made under [anchor] in this frame's view rows (0 is the top row drawn), or null when
+     * the anchor no longer fits the buffer or nothing of the range is in view.
+     */
+    fun viewRange(range: CellRange, anchor: BufferAnchor): CellRange? {
+        val now = anchor.translate(range, linesDropped, alternateScreen, cols, rows) ?: return null
+        val top = scrollbackSize - offset
+        val shifted = now.shiftRows(-top)
+        return if (shifted.end.row < 0 || shifted.start.row >= rows) null else shifted
     }
 
     /**

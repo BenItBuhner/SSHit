@@ -145,4 +145,8 @@ interface SettingsRepository {
 
     /** Read-modify-write under one lock, so a host's override and a toggle flipped at the same moment both land. */
     suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings)
+
+    /** Whether sessions keep the commands they run for the History sheet (spec C16); on by default. */
+    val commandHistoryEnabled: Flow<Boolean>
+    suspend fun setCommandHistoryEnabled(enabled: Boolean)
 }

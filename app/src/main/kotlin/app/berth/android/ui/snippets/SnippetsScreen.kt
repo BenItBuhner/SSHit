@@ -279,15 +279,17 @@ private fun PinnedDot() {
 /**
  * Add or edit a snippet: name, Mono body, scope (global or one host), workspace, default action,
  * run on connect for host-scoped snippets, Deck pin and tags. Placeholders are listed as typed.
+ * A new snippet may start from [initialBody] (Save as snippet in the History sheet, spec C16),
+ * named after its first words until the name is edited.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SnippetEditorSheet(vm: AppViewModel, existing: Snippet?, onDismiss: () -> Unit, defaultHostId: String? = null) {
+fun SnippetEditorSheet(vm: AppViewModel, existing: Snippet?, onDismiss: () -> Unit, defaultHostId: String? = null, initialBody: String? = null) {
     val c = Berth.colors
     val hosts by vm.hosts.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
-    var name by remember { mutableStateOf(existing?.name ?: "") }
-    var body by remember { mutableStateOf(existing?.body ?: "") }
+    var name by remember { mutableStateOf(existing?.name ?: initialBody?.lineSequence()?.firstOrNull()?.trim()?.take(40) ?: "") }
+    var body by remember { mutableStateOf(existing?.body ?: initialBody ?: "") }
     var hostId by remember { mutableStateOf(existing?.hostId ?: defaultHostId) }
     var workspaceId by remember { mutableStateOf(existing?.workspaceId) }
     var action by remember { mutableStateOf(existing?.defaultAction ?: SnippetAction.RUN) }

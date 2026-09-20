@@ -124,6 +124,8 @@ fun StageScreen(
     onEditHost: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
+    /** The terminal tab's selection, search and paste state (spec C16 to C18); a test hands in its own to drive them. */
+    tools: StageTools = rememberStageTools((tab as? TerminalSession)?.id),
 ) {
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
@@ -185,31 +187,35 @@ fun StageScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
     ) {
-        TabHeader(
-            slots = slots,
-            groups = groups,
-            activeId = activeId,
-            actions = actions,
-            state = strip,
-            trailing = {
-                if (slots.isNotEmpty()) {
-                    // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
-                    val lit by vm.attentionTabIds.collectAsState()
-                    val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
-                    CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
-                }
-                StageOverflow(
-                    tab = tab,
-                    deckVisible = deckVisible,
-                    onToggleDeck = { deckVisible = !deckVisible },
-                    onOpenSessionSheet = onOpenSessionSheet,
-                    onEditHost = onEditHost,
-                    onOpenDrawer = onOpenDrawer,
-                    actions = actions,
-                    extra = if (tab is FilesTab) lentRows else null,
-                )
-            },
-        )
+        StageToolbar(tools, tab as? TerminalSession) {
+            TabHeader(
+                slots = slots,
+                groups = groups,
+                activeId = activeId,
+                actions = actions,
+                state = strip,
+                trailing = {
+                    if (slots.isNotEmpty()) {
+                        // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
+                        val lit by vm.attentionTabIds.collectAsState()
+                        val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
+                        CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
+                    }
+                    StageOverflow(
+                        tab = tab,
+                        deckVisible = deckVisible,
+                        onToggleDeck = { deckVisible = !deckVisible },
+                        onOpenSessionSheet = onOpenSessionSheet,
+                        onEditHost = onEditHost,
+                        onOpenDrawer = onOpenDrawer,
+                        actions = actions,
+                        extra = if (tab is FilesTab) lentRows else null,
+                        onFind = { tools.openSearch() },
+                        onHistory = { tools.historyOpen = true },
+                    )
+                },
+            )
+        }
         val body = Modifier.weight(1f).fillMaxWidth()
         when {
             tab != null -> holder.SaveableStateProvider(tab.id) {
@@ -217,6 +223,7 @@ fun StageScreen(
                     is TerminalSession -> StageBody(
                         vm = vm,
                         session = tab,
+                        tools = tools,
                         deckVisible = deckVisible,
                         onDeckVisibleChange = { deckVisible = it },
                         layerIndex = layerIndex,
@@ -288,6 +295,8 @@ private fun StageOverflow(
     onOpenDrawer: () -> Unit,
     actions: TabActions,
     extra: OverflowRows? = null,
+    onFind: () -> Unit = {},
+    onHistory: () -> Unit = {},
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
@@ -320,6 +329,8 @@ private fun StageOverflow(
                     if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(tab.id) }
                     if (record.state.isActive) item("Detach") { actions.detach(tab.id) }
                     item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
+                    item("Find", action = onFind)
+                    item("History", action = onHistory)
                 }
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
@@ -340,6 +351,7 @@ private fun StageOverflow(
 private fun StageBody(
     vm: AppViewModel,
     session: TerminalSession,
+    tools: StageTools,
     deckVisible: Boolean,
     onDeckVisibleChange: (Boolean) -> Unit,
     layerIndex: Int,
@@ -372,8 +384,10 @@ private fun StageBody(
     var pendingSnippet by remember { mutableStateOf<PendingSnippet?>(null) }
     val patterns = rememberDeckHaptics()
     val latch = remember(session.id) { ModifierLatch() }
-    val viewport = remember(session.id) { TerminalViewport() }
+    val viewport = tools.viewport
     val focusRequester = remember { FocusRequester() }
+    // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
+    val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
     val input = remember(session.id) {
         StageInput(
             session = { session },
@@ -384,13 +398,11 @@ private fun StageBody(
                     if (s.hasPlaceholders) pendingSnippet = PendingSnippet(s, s.defaultAction) else vm.runSnippet(session, s)
                 }
             },
+            pasteHook = paste,
             onAppAction = { action ->
                 when (action) {
                     DeckAppAction.HIDE_KEYBOARD -> keyboard?.hide()
-                    DeckAppAction.PASTE -> clipboard.getText()?.text?.let {
-                        session.paste(it)
-                        patterns.paste()
-                    }
+                    DeckAppAction.PASTE -> clipboard.getText()?.text?.let(paste)
                     DeckAppAction.NEXT_SESSION -> vm.stepTab(1)
                     DeckAppAction.PREVIOUS_SESSION -> vm.stepTab(-1)
                     DeckAppAction.DETACH -> vm.detach(session.id)
@@ -451,11 +463,16 @@ private fun StageBody(
                     vm.setFontSize(font.sizeSp + step)
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
+                onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },
+                selection = tools.selection,
+                search = tools.search,
+                onSelectionStarted = { patterns.selectionStarted() },
             )
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
                 EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
             ScrolledPill(viewport, Modifier.align(Alignment.TopEnd))
+            NoticePill(tools, Modifier.align(Alignment.TopCenter))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
                     plain = failure?.first ?: "Couldn't connect.",
@@ -514,6 +531,8 @@ private fun StageBody(
     }
 
     pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
+    tools.pendingPaste?.let { p -> PastePreviewSheet(p, session, patterns, onDismiss = { tools.pendingPaste = null }) }
+    if (tools.historyOpen) CommandHistorySheet(vm, session, onDismiss = { tools.historyOpen = false }, onNotice = { tools.notice = it })
 }
 
 /**

@@ -76,6 +76,8 @@ class StageInput(
     val latch: ModifierLatch,
     private val onAppAction: (DeckAppAction) -> Unit,
     private val onSnippet: (String) -> Unit = {},
+    /** Where a paste from the keyboard's own menu goes; the Stage routes it through the preview (spec C18). */
+    private val pasteHook: ((String) -> Unit)? = null,
 ) : ModifierAwareSink {
     override fun onText(text: String) {
         val s = session() ?: return
@@ -104,7 +106,8 @@ class StageInput(
     }
 
     override fun onPaste(text: String) {
-        session()?.paste(text)
+        val hook = pasteHook
+        if (hook != null) hook(text) else session()?.paste(text)
     }
 
     fun dispatch(action: DeckAction, layer: DeckLayer?) {

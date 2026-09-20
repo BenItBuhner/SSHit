@@ -218,7 +218,10 @@ class SessionManager @Inject constructor(
      */
     private val stageLock = Any()
 
+    private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
+
     private val environment = object : SessionEnvironment {
+        override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
         override val networkAvailable: Flow<Unit> = network.available

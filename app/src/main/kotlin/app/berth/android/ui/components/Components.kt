@@ -859,10 +859,10 @@ fun SheetHandle(modifier: Modifier = Modifier) {
 
 /** Header for a sheet: Headline text with an optional Caption beneath. */
 @Composable
-fun SheetTitle(title: String, caption: String? = null, color: Color = Berth.colors.text1) {
+fun SheetTitle(title: String, caption: String? = null, color: Color = Berth.colors.text1, captionColor: Color = Berth.colors.text2) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(title, style = BerthType.headline, color = color)
-        if (caption != null) Text(caption, style = BerthType.caption, color = Berth.colors.text2)
+        if (caption != null) Text(caption, style = BerthType.caption, color = captionColor)
     }
 }
 

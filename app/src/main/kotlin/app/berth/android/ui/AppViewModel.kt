@@ -152,6 +152,7 @@ class AppViewModel @Inject constructor(
 
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val commandHistoryEnabled: StateFlow<Boolean> = settings.commandHistoryEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
         resolveTerminalTheme(terminalThemes.value, defaultTerminalTheme.value, host, workspaces.value.byId(workspaceId))
@@ -274,6 +275,10 @@ class AppViewModel @Inject constructor(
 
     fun setCtrlTabKeysReachTerminal(enabled: Boolean) {
         viewModelScope.launch { settings.setCtrlTabKeysReachTerminal(enabled) }
+    }
+
+    fun setCommandHistoryEnabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setCommandHistoryEnabled(enabled) }
     }
 
     // ---- hosts --------------------------------------------------------------------------------------

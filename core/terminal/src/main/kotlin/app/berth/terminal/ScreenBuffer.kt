@@ -15,7 +15,22 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
 
     val scrollbackSize: Int get() = scrollback.size
 
+    /**
+     * Lines that have left the top of history since this buffer was made: evicted past
+     * [maxScrollback] or cleared by ED 3. A row remembered as its buffer index plus this count
+     * names the same text after any amount of output, which is what lets a selection or a search
+     * match survive scrollback churn.
+     */
+    var dropped: Long = 0L
+        private set
+
+    /** History plus screen as one run of rows. */
+    val bufferRows: Int get() = scrollback.size + lines.size
+
     fun line(y: Int): TerminalLine = lines[y]
+
+    /** Row [row] of [bufferRows]: the oldest history line is 0, the screen's top row is [scrollbackSize]. */
+    fun bufferLine(row: Int): TerminalLine = if (row < scrollback.size) scrollback[row] else lines[row - scrollback.size]
 
     /**
      * Line at a viewport position when the view is scrolled back by [offset] lines. Row 0 with
@@ -28,7 +43,15 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
 
     fun scrollbackLine(index: Int): TerminalLine = scrollback[index]
 
-    fun clearScrollback() = scrollback.clear()
+    fun clearScrollback() {
+        dropped += scrollback.size
+        scrollback.clear()
+    }
+
+    private fun evictOldest() {
+        scrollback.removeFirst()
+        dropped++
+    }
 
     /** Scrolls [top, bottom] up by [n] lines; the vacated rows at the bottom are blank in [fillBg]. */
     fun scrollUp(top: Int, bottom: Int, n: Int, fillBg: Int, keepInScrollback: Boolean) {
@@ -38,7 +61,7 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
             val removed = lines.removeAt(top)
             if (keepInScrollback && top == 0 && maxScrollback > 0) {
                 scrollback.addLast(removed)
-                if (scrollback.size > maxScrollback) scrollback.removeFirst()
+                if (scrollback.size > maxScrollback) evictOldest()
                 lines.add(bottom, TerminalLine(cols).also { it.clear(fillBg) })
             } else {
                 removed.clear(fillBg)
@@ -86,7 +109,7 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
                 val removed = lines.removeAt(0)
                 if (keepInScrollback && maxScrollback > 0) {
                     scrollback.addLast(removed)
-                    if (scrollback.size > maxScrollback) scrollback.removeFirst()
+                    if (scrollback.size > maxScrollback) evictOldest()
                 }
                 shift++
                 toRemove--
@@ -242,7 +265,7 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
         for (k in 0 until first) {
             scrollback.addLast(output[k])
         }
-        while (scrollback.size > maxScrollback) scrollback.removeFirst()
+        while (scrollback.size > maxScrollback) evictOldest()
         lines.clear()
         for (k in first until minOf(total, first + newRows)) lines.add(output[k])
         while (lines.size < newRows) lines.add(TerminalLine(newCols).also { it.clear(fillBg) })

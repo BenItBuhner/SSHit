@@ -21,10 +21,15 @@ import app.berth.ssh.SshConnection
 import app.berth.ssh.SshEndpoint
 import app.berth.ssh.SshError
 import app.berth.ssh.isTransientSshFailure
+import app.berth.terminal.CellPos
+import app.berth.terminal.CommandEntry
+import app.berth.terminal.CommandHistory
 import app.berth.terminal.Mod
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalKey
 import app.berth.terminal.TerminalListener
+import app.berth.terminal.TerminalText
+import app.berth.terminal.TypedLine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +77,9 @@ interface SessionEnvironment {
 
     /** Rendered snippet bodies to type into a fresh shell on [host] in [workspaceId]. */
     suspend fun connectCommands(host: Host, workspaceId: String): List<String> = emptyList()
+
+    /** Whether sessions keep the commands they run (spec C16, the Settings toggle). */
+    fun commandHistoryEnabled(): Boolean = true
 }
 
 /** A failure worth telling the user about away from the Stage (spec C21, Problems channel). */
@@ -182,6 +190,7 @@ class TerminalSession(
             }
 
             override fun onShellIntegration(mark: Char, param: String) {
+                shellHasMarks = true
                 when (mark) {
                     'C' -> commandStartedAt = env.now()
                     'D' -> commandStartedAt?.let { started ->
@@ -194,8 +203,130 @@ class TerminalSession(
                     }
                 }
             }
+
+            override fun onCommandEntered(command: String) = recordCommand(command)
         },
     )
+
+    // ---- command history (spec C16) ------------------------------------------------------------
+
+    private val history = CommandHistory()
+    private val _commands = MutableStateFlow<List<CommandEntry>>(emptyList())
+
+    /**
+     * The commands this session ran, oldest first: read off the shell's OSC 133 marks, or for a
+     * shell without them from what was typed and then seen echoed on the line it was typed on, so
+     * a password never lands here and nothing typed into a full-screen program does. Kept with
+     * the session's frame.
+     */
+    val commands: StateFlow<List<CommandEntry>> = _commands.asStateFlow()
+
+    /** Once the shell has sent an OSC 133 mark it reports its commands itself and the typed-line fallback stands down. */
+    @Volatile private var shellHasMarks = false
+    private val typedLine = TypedLine()
+
+    fun removeCommand(entry: CommandEntry) {
+        val changed = synchronized(history) { history.remove(entry) }
+        if (changed) publishCommands()
+    }
+
+    fun clearCommands() {
+        synchronized(history) { history.clear() }
+        publishCommands()
+    }
+
+    private fun recordCommand(text: String) {
+        val command = text.trim()
+        if (command.isEmpty() || !env.commandHistoryEnabled()) return
+        val added = synchronized(history) { history.record(command, env.now()) }
+        if (added) publishCommands()
+        if (_record.value.lastCommand != command) patch { copy(lastCommand = command) }
+    }
+
+    private fun publishCommands() {
+        _commands.value = synchronized(history) { history.snapshot() }
+    }
+
+    private fun trackTyped(text: String, modifiers: Int) {
+        if (shellHasMarks || !env.commandHistoryEnabled()) return
+        synchronized(typedLine) {
+            if (modifiers != 0) {
+                // Ctrl+C and Ctrl+U abandon the line; any other chord edits it in a way this cannot follow.
+                val c = text.firstOrNull()?.lowercaseChar()
+                if (modifiers and Mod.CTRL != 0 && (c == 'c' || c == 'u')) typedLine.reset() else typedLine.unreliable()
+                return
+            }
+            var start = 0
+            while (true) {
+                val nl = text.indexOfAny(LINE_BREAKS, start)
+                if (nl < 0) {
+                    typedLine.typed(text.substring(start))
+                    return
+                }
+                typedLine.typed(text.substring(start, nl))
+                commitTyped()
+                start = nl + 1
+                if (text[nl] == '\r' && start < text.length && text[start] == '\n') start++
+            }
+        }
+    }
+
+    private fun trackKey(key: TerminalKey, modifiers: Int) {
+        if (shellHasMarks || !env.commandHistoryEnabled()) return
+        synchronized(typedLine) {
+            when {
+                modifiers != 0 -> typedLine.unreliable()
+                key == TerminalKey.ENTER -> commitTyped()
+                key == TerminalKey.BACKSPACE -> typedLine.backspace()
+                key == TerminalKey.TAB -> typedLine.completed()
+                else -> typedLine.unreliable()
+            }
+        }
+    }
+
+    private fun trackPaste(text: String) {
+        if (shellHasMarks || !env.commandHistoryEnabled()) return
+        synchronized(typedLine) {
+            val trimmed = text.trimEnd(' ', '\t')
+            when {
+                // One line lands on the prompt like typing.
+                text.indexOfAny(LINE_BREAKS) < 0 -> typedLine.typed(text)
+                // Every pasted line ran (or, bracketed, sits as one block Enter will run whole): the prompt is clean after.
+                trimmed.endsWith('\n') || trimmed.endsWith('\r') -> typedLine.reset()
+                else -> typedLine.unreliable()
+            }
+        }
+    }
+
+    /**
+     * Enter without shell marks: the typed line is checked against the row the cursor is on. Typed
+     * key by key, the echo is already there and the command is recorded at once, before it can
+     * clear the screen; sent in one write with its Enter (a snippet, a test), the echo has not
+     * landed yet, so the check runs again after a moment. The row is kept as a buffer row plus the
+     * lines dropped, which output does not move; a resize re-wraps history, and then the line is
+     * simply not found.
+     */
+    private fun commitTyped() {
+        val pending = typedLine.commit() ?: return
+        val (stable, now) = synchronized(emulator.lock) {
+            if (emulator.isAlternateScreen) return
+            val row = emulator.scrollbackSize + emulator.cursorY
+            (row + emulator.linesDropped) to TerminalText.extract(emulator.grid, TerminalText.snapToLine(emulator.grid, CellPos(row, 0)))
+        }
+        pending.resolve(now)?.let {
+            recordCommand(it)
+            return
+        }
+        scope.launch {
+            delay(ECHO_GRACE_MS)
+            val line = synchronized(emulator.lock) {
+                val row = (stable - emulator.linesDropped).toInt()
+                if (emulator.isAlternateScreen || row < 0 || row >= emulator.bufferRows) return@launch
+                TerminalText.extract(emulator.grid, TerminalText.snapToLine(emulator.grid, CellPos(row, 0)))
+            }
+            pending.resolve(line)?.let { recordCommand(it) }
+        }
+    }
 
     private var connection: SshConnection? = null
     private var shell: ShellChannel? = null
@@ -554,12 +685,20 @@ class TerminalSession(
 
     // ---- input ---------------------------------------------------------------------------------
 
+    /**
+     * Writes to the shell one at a time, in the order they were sent: two sends in a row (a
+     * command and its Enter, two keys typed fast) must land in that order, which two launches on
+     * the IO pool did not promise.
+     */
+    private val writer = Dispatchers.IO.limitedParallelism(1)
+
     fun send(bytes: ByteArray) {
         val sh = shell ?: return
-        scope.launch(Dispatchers.IO) { runCatching { sh.write(bytes) } }
+        scope.launch(writer) { runCatching { sh.write(bytes) } }
     }
 
     fun sendText(text: String, modifiers: Int = 0) {
+        trackTyped(text, modifiers)
         if (modifiers == 0) {
             send(text.toByteArray(Charsets.UTF_8))
             return
@@ -574,11 +713,20 @@ class TerminalSession(
         send(out.toByteArray())
     }
 
-    fun sendKey(key: TerminalKey, modifiers: Int = 0) = send(emulator.encodeKey(key, modifiers))
+    fun sendKey(key: TerminalKey, modifiers: Int = 0) {
+        trackKey(key, modifiers)
+        send(emulator.encodeKey(key, modifiers))
+    }
 
-    fun paste(text: String) = send(emulator.encodePaste(text))
+    fun paste(text: String) {
+        trackPaste(text)
+        send(emulator.encodePaste(text))
+    }
 
-    fun sendControl(char: Char) = send(emulator.encodeText(char.code, Mod.CTRL))
+    fun sendControl(char: Char) {
+        trackTyped(char.toString(), Mod.CTRL)
+        send(emulator.encodeText(char.code, Mod.CTRL))
+    }
 
     fun resize(newCols: Int, newRows: Int) {
         if (newCols < 2 || newRows < 2) return
@@ -647,7 +795,10 @@ class TerminalSession(
 
     // ---- frames --------------------------------------------------------------------------------
 
-    /** Scrollback plus screen as text, enough to bring a detached session's frame back after a restart. */
+    /**
+     * Scrollback plus screen as text, enough to bring a detached session's frame back after a
+     * restart, followed since version 2 by the session's command history (spec C16).
+     */
     fun snapshotFrame(): ByteArray {
         val lines = ArrayList<String>()
         synchronized(emulator.lock) {
@@ -656,33 +807,48 @@ class TerminalSession(
             lines += emulator.screenText()
         }
         while (lines.isNotEmpty() && lines.last().isBlank()) lines.removeAt(lines.lastIndex)
+        val commands = synchronized(history) { history.snapshot() }
         val out = ByteArrayOutputStream()
         DataOutputStream(out).use { d ->
             d.writeInt(FRAME_VERSION)
             d.writeInt(lines.size)
             for (l in lines) d.writeUTF(l.take(MAX_FRAME_LINE))
+            d.writeInt(commands.size)
+            for (e in commands) {
+                d.writeUTF(e.text.take(MAX_FRAME_LINE))
+                d.writeLong(e.at)
+            }
         }
         return out.toByteArray()
     }
 
     /**
-     * Replays a saved frame into the emulator, dimmed. [detachedAt] is set for a tab that was
-     * connected when the process died: the frame then ends in a `detached 14:07` marker stamped
-     * with the last moment it was known to be live, the same word as the pill above it, Detach all
-     * and tmux, so the relaunch reads as a session that was cut rather than one that vanished
-     * (vision §4.3, L0). Reconnect opens a fresh shell, so the marker promises nothing more.
+     * Replays a saved frame into the emulator, dimmed: this version's, or the one before it, which
+     * had no history. [detachedAt] is set for a tab that was connected when the process died: the
+     * frame then ends in a `detached 14:07` marker stamped with the last moment it was known to be
+     * live, the same word as the pill above it, Detach all and tmux, so the relaunch reads as a
+     * session that was cut rather than one that vanished (vision §4.3, L0). Reconnect opens a fresh
+     * shell, so the marker promises nothing more.
      */
     fun restoreFrame(frame: ByteArray?, detachedAt: Long? = null) {
         if (frame != null) {
             runCatching {
                 DataInputStream(frame.inputStream()).use { d ->
-                    if (d.readInt() != FRAME_VERSION) return@runCatching
+                    val version = d.readInt()
+                    if (version != FRAME_VERSION && version != FRAME_VERSION_TEXT_ONLY) return@runCatching
                     val n = d.readInt()
                     val text = StringBuilder()
                     repeat(n) { text.append(d.readUTF()).append("\r\n") }
                     emulator.write("\u001b[2m")
                     emulator.write(text.toString())
                     emulator.write("\u001b[0m")
+                    if (version >= FRAME_VERSION) {
+                        val m = d.readInt()
+                        val saved = ArrayList<CommandEntry>(m)
+                        repeat(m) { saved += CommandEntry(d.readUTF(), d.readLong()) }
+                        synchronized(history) { history.load(saved) }
+                        publishCommands()
+                    }
                 }
             }
         }
@@ -696,7 +862,12 @@ class TerminalSession(
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
         private const val BIND_RETRIES = 2
         private const val BIND_RETRY_DELAY_MS = 250L
-        private const val FRAME_VERSION = 1
+        private const val FRAME_VERSION = 2
+        private const val FRAME_VERSION_TEXT_ONLY = 1
         private const val MAX_FRAME_LINE = 4096
+
+        /** How long a typed command's echo may take to land before it is checked against the screen. */
+        private const val ECHO_GRACE_MS = 200L
+        private val LINE_BREAKS = charArrayOf('\r', '\n')
     }
 }

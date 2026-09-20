@@ -145,6 +145,8 @@ fun SettingsScreen(
                 ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
             }
 
+            CommandHistorySettings(vm)
+
             Panel(label = "Deck") {
                 ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
