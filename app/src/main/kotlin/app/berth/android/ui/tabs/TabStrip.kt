@@ -112,6 +112,8 @@ import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.keyPressable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.stage.DeckHaptics
@@ -809,11 +811,14 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
     val liftedHere = state.lifted == entry.key
     val draggedHere = state.drag?.key == entry.key
     var pressed by remember { mutableStateOf(false) }
+    // The keyboard's focus (spec, Components): the pressed tone and the title in accent, while keys drive.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
 
     val groupTint = entry.group?.color?.rgb?.toColor()
     val fill by animateColorAsState(
         when {
-            liftedHere || pressed -> style.pressedFill
+            liftedHere || pressed || focused -> style.pressedFill
             active && s.activeMark == ActiveTabMark.FILL -> if (groupTint != null && groupCount > 1) lerp(style.activeFill, groupTint, s.groupTintOnActive) else style.activeFill
             else -> s.idleFill ?: Color.Transparent
         },
@@ -821,6 +826,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         label = "tab fill",
     )
     val titleColor = when {
+        focused -> c.accent
         active || pressed -> style.activeTitleColor
         record.state == SessionState.DETACHED || record.state == SessionState.CLOSED -> c.text3
         else -> c.text2
@@ -871,6 +877,8 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 } else 0f
             }
             .stripItemGestures(entry.key, isChip = false, controller, state, onTap = { actions.activate(id) }, onPressedChange = { pressed = it }, carryTarget = carryTarget)
+            // Focusable from a keyboard, Enter switching to the tab; ahead of the semantics below so the focus stays readable.
+            .keyPressable(enabled = true, interactionSource = interaction) { actions.activate(id) }
             .clearAndSetSemantics {
                 role = Role.Tab
                 selected = active
@@ -979,6 +987,7 @@ private fun CloseGlyph(onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .size(24.dp)
@@ -990,7 +999,7 @@ private fun CloseGlyph(onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        BerthIcon(BerthIcons.close, tint = if (pressed) c.text1 else c.text2, size = 16.dp)
+        BerthIcon(BerthIcons.close, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 16.dp)
     }
 }
 
@@ -1121,6 +1130,9 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     val draggedHere = state.drag?.key == entry.key
     val liftedHere = state.lifted == entry.key
     var pressed by remember { mutableStateOf(false) }
+    // The keyboard's focus shows as the pressed tone; the label keeps the group's colour, which is its name.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, BerthMotion.transform(tween(120)), label = "chip lift")
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
     val label = chipLabel(group, entry.tabs.size, style.style)
@@ -1144,6 +1156,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
                 } else 0f
             }
             .stripItemGestures(entry.key, isChip = true, controller, state, onTap = tap, onPressedChange = { pressed = it })
+            .keyPressable(enabled = true, interactionSource = interaction, onPress = tap)
             .clearAndSetSemantics {
                 role = Role.Button
                 contentDescription = "Group ${group.name}, ${entry.tabs.size} tabs" + (if (group.collapsed) ", collapsed" else "") + (if (attention) ", needs attention" else "")
@@ -1163,7 +1176,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
             label = label,
             tint = tint,
             attention = attention,
-            pressed = pressed || liftedHere,
+            pressed = pressed || liftedHere || focused,
             style = style,
             modifier = Modifier.graphicsLayer {
                 scaleX = scale
@@ -1238,6 +1251,7 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .fillMaxHeight()
@@ -1260,10 +1274,10 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
             Modifier
                 .size(style.style.tabHeight)
                 .clip(RoundedCornerShape(style.tabRadius))
-                .background(if (pressed) style.pressedFill else Color.Transparent),
+                .background(if (pressed || focused) style.pressedFill else Color.Transparent),
             contentAlignment = Alignment.Center,
         ) {
-            BerthIcon(BerthIcons.add, tint = if (pressed) c.text1 else c.text2, size = 20.dp)
+            BerthIcon(BerthIcons.add, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 20.dp)
         }
     }
 }
@@ -1289,6 +1303,7 @@ fun CountTile(
     val resolved = rememberResolvedTabStyle(style)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
@@ -1317,13 +1332,13 @@ fun CountTile(
                     }
                 }
                 .clip(RoundedCornerShape(resolved.countTileRadius))
-                .background(if (pressed) resolved.pressedFill else resolved.countTileFill),
+                .background(if (pressed || focused) resolved.pressedFill else resolved.countTileFill),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 if (count > 99) "99+" else count.toString(),
                 style = BerthType.label.copy(fontSize = if (count > 99) 9.sp else if (count > 9) 11.sp else 13.sp),
-                color = c.text1,
+                color = if (focused) c.accent else c.text1,
                 maxLines = 1,
             )
         }

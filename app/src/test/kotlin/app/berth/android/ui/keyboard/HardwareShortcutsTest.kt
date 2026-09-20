@@ -6,11 +6,14 @@ import android.view.KeyEvent.KEYCODE_C
 import android.view.KeyEvent.KEYCODE_D
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_EQUALS
+import android.view.KeyEvent.KEYCODE_ESCAPE
 import android.view.KeyEvent.KEYCODE_F
+import android.view.KeyEvent.KEYCODE_K
 import android.view.KeyEvent.KEYCODE_MINUS
 import android.view.KeyEvent.KEYCODE_NUMPAD_ADD
 import android.view.KeyEvent.KEYCODE_NUMPAD_SUBTRACT
 import android.view.KeyEvent.KEYCODE_O
+import android.view.KeyEvent.KEYCODE_S
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_TAB
 import android.view.KeyEvent.KEYCODE_V
@@ -32,6 +35,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class HardwareShortcutsTest {
     private val calls = ArrayList<String>()
+    /** What the Stage answers to Escape: true while the focus is out of the body and has been brought back. */
+    private var awayFromBody = true
     private val shortcuts = HardwareShortcuts(
         tabs = TabShortcuts(
             step = { calls += "step $it" },
@@ -49,6 +54,12 @@ class HardwareShortcutsTest {
             override fun shortcutSheet() { calls += "sheet" }
             override fun split() { calls += "split" }
             override fun focusOtherPane() { calls += "other pane" }
+            override fun focusStrip() { calls += "strip" }
+            override fun focusDeck() { calls += "deck focus" }
+            override fun returnToBody(): Boolean {
+                calls += "body"
+                return awayFromBody
+            }
         },
     )
 
@@ -106,6 +117,30 @@ class HardwareShortcutsTest {
         assertFalse(shortcuts.handle(key(KEYCODE_D, META_CTRL_ON), false))
         assertFalse(shortcuts.handle(key(KEYCODE_O, META_CTRL_ON), false))
         assertEquals(listOf("split", "other pane"), calls)
+    }
+
+    @Test
+    fun `the focus chords, and Escape is the Stage's only while the focus is out of the body`() {
+        assertTrue(shortcuts.handle(key(KEYCODE_S, META_CTRL_ON or META_SHIFT_ON), false))
+        assertTrue(shortcuts.handle(key(KEYCODE_K, META_CTRL_ON or META_SHIFT_ON), false))
+        // Ctrl+S is the shell's stop and Ctrl+K readline's kill-line.
+        assertFalse(shortcuts.handle(key(KEYCODE_S, META_CTRL_ON), false))
+        assertFalse(shortcuts.handle(key(KEYCODE_K, META_CTRL_ON), false))
+        // A plain Escape from the strip or the Deck is taken; from the terminal the Stage declines it and the host gets it.
+        assertTrue(shortcuts.handle(key(KEYCODE_ESCAPE, 0), false))
+        awayFromBody = false
+        assertFalse(shortcuts.handle(key(KEYCODE_ESCAPE, 0), false))
+        // Escape with a modifier, or on its way up, is never the Stage's.
+        assertFalse(shortcuts.handle(key(KEYCODE_ESCAPE, META_CTRL_ON), false))
+        assertFalse(shortcuts.handle(key(KEYCODE_ESCAPE, META_SHIFT_ON), false))
+        assertFalse(shortcuts.handle(key(KEYCODE_ESCAPE, 0, ACTION_UP), false))
+        assertEquals(listOf("strip", "deck focus", "body", "body"), calls)
+    }
+
+    @Test
+    fun `the sheet lists the focus chords beside the Stage's others`() {
+        val stage = shortcutGroups(ctrlTabKeysReachTerminal = false).first { it.title == "Stage" }.entries.map { it.keys }
+        assertTrue("Ctrl+Shift+S" in stage && "Ctrl+Shift+K" in stage && "Esc" in stage)
     }
 
     @Test

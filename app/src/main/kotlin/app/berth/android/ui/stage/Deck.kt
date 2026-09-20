@@ -73,6 +73,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import app.berth.android.ui.a11y.alwaysFocusable
+import app.berth.android.ui.a11y.keyPressable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.theme.Berth
@@ -528,11 +531,15 @@ private fun Modifier.editableSlot(
 @Composable
 private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
-    val color by animateColorAsState(if (accent) c.accent else c.text3, tween(120), label = "grip")
+    val interaction = remember { MutableInteractionSource() }
+    // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
+    val focused = interaction.showsFocus()
+    val color by animateColorAsState(if (accent || focused) c.accent else c.text3, tween(120), label = "grip")
     Box(
         Modifier
             .width(GripWidth)
             .fillMaxHeight()
+            .keyPressable(enabled = true, interactionSource = interaction, onPress = onTap)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -608,17 +615,24 @@ fun DeckKeyView(
     val modifierAction = key.tap as? DeckAction.Modifier
     val latchState = modifierAction?.let { latch.state(it.modifier) } ?: LatchState.NONE
     val latched = latchState != LatchState.NONE
+    // The keyboard's focus (spec, Components): one tonal step up and the label in accent, while keys drive.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     val bg by animateColorAsState(
         when {
             latched -> c.accent
             pressed -> c.surface4
-            selected -> c.surface3
+            selected || focused -> c.surface3
             else -> c.surface2
         },
         tween(80),
         label = "key",
     )
-    val labelColor = if (latched) c.onAccent else c.text1
+    val labelColor = when {
+        latched -> c.onAccent
+        focused -> c.accent
+        else -> c.text1
+    }
     val secondaryColor = if (latched) c.onAccent.copy(alpha = 0.7f) else c.text3
     val currentKey by rememberUpdatedState(key)
     val currentOnAction by rememberUpdatedState(onAction)
@@ -662,6 +676,8 @@ fun DeckKeyView(
                         disabled()
                     }
                 }
+                // Enter, Space or the D-pad's centre from a keyboard is the tap; the alternates stay the reader's actions.
+                .keyPressable(enabled, interaction) { currentKey.tap?.let(fire) }
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
@@ -790,12 +806,14 @@ fun Nub(
     var active by remember { mutableStateOf<TerminalKey?>(null) }
     var pressed by remember { mutableStateOf(false) }
     val currentOnArrow by rememberUpdatedState(onArrow)
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(
             Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (pressed) c.surface4 else if (selected) c.surface3 else c.surface2)
+                .background(if (pressed) c.surface4 else if (selected || focused) c.surface3 else c.surface2)
                 .testTag(DeckKeyTag)
                 // Activation is the tap (Up); each arrow is an action, since a screen reader cannot drag it.
                 .semantics {
@@ -813,6 +831,8 @@ fun Nub(
                         disabled()
                     }
                 }
+                // A keyboard's press is the tap, Up; its own arrows walk the Deck rather than drive the Nub.
+                .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnArrow(TerminalKey.UP) }
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
@@ -919,10 +939,12 @@ private fun LayerKey(
     val currentOnNext by rememberUpdatedState(onNext)
     val currentOnPrevious by rememberUpdatedState(onPrevious)
     val currentOnHold by rememberUpdatedState(onHold)
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .clip(RoundedCornerShape(BerthRadius.key))
-            .background(if (pressed) c.surface4 else c.surface2)
+            .background(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2)
             .testTag(DeckKeyTag)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Layer"
@@ -938,6 +960,7 @@ private fun LayerKey(
                     disabled()
                 }
             }
+            .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnNext() }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
@@ -973,7 +996,7 @@ private fun LayerKey(
             },
         contentAlignment = Alignment.Center,
     ) {
-        BerthIcon(BerthIcons.moreHoriz, tint = c.text2)
+        BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
     }
 }
 
@@ -991,11 +1014,15 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
     }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Row(
         modifier
             .fillMaxWidth()
             .height(20.dp)
-            .background(if (pressed) c.surface2 else c.surface1)
+            .background(if (pressed || focused) c.surface2 else c.surface1)
+            // Where Ctrl+Shift+K lands while the Deck is hidden, and where a Deck hidden under the
+            // keyboard's focus hands it: taken in touch mode too, or the chord would find nothing here.
+            .alwaysFocusable()
             // A real click, so a touch that merely starts here (or a swipe passing through) does not
             // open the Deck, and the announced button can be activated.
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
@@ -1003,7 +1030,7 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption, color = c.text3)
+        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption, color = if (focused) c.accent else c.text3)
         Spacer(Modifier.weight(1f))
     }
 }

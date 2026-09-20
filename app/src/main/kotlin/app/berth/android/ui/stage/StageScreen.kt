@@ -88,6 +88,7 @@ import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.TerminalAnnouncer
 import app.berth.android.ui.a11y.reachingClickable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -97,11 +98,16 @@ import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.keyboard.HardwareShortcuts
+import app.berth.android.ui.keyboard.KeepStageFocus
 import app.berth.android.ui.keyboard.ShortcutSheet
 import app.berth.android.ui.keyboard.LocalPaneActions
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
 import app.berth.android.ui.keyboard.StageShortcutActions
 import app.berth.android.ui.keyboard.compactForHardwareKeyboard
 import app.berth.android.ui.keyboard.rememberHardwareKeyboardAttached
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -169,7 +175,9 @@ fun StageScreen(
     val haptics = rememberDeckHaptics()
     // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
     val panes = LocalPaneActions.current
-    val shortcuts = remember(vm, actions, tab, tools, panes) {
+    // Where the keyboard's focus is, strip, bar, body or Deck, and the chords that move it (spec A11).
+    val focus = rememberStageFocus()
+    val shortcuts = remember(vm, actions, tab, tools, panes, focus) {
         val tabs = TabShortcuts(
             step = vm::stepTab,
             jump = { index ->
@@ -209,10 +217,31 @@ fun StageScreen(
             override fun shortcutSheet() { shortcutSheet = true }
             override fun split() { panes.split?.invoke() }
             override fun focusOtherPane() { panes.focusOtherPane?.invoke() }
+            override fun focusStrip() { focus.focus(StageRegion.Strip) }
+            // Only a shell tab has a Deck or its collapsed strip; elsewhere the chord finds no region and does nothing.
+            override fun focusDeck() { if (session != null) focus.focus(StageRegion.Deck) }
+            override fun returnToBody(): Boolean = when (focus.region) {
+                // From the terminal itself Escape is the host's; with nothing focused there is nothing to return from.
+                StageRegion.Body, null -> false
+                StageRegion.Bar -> {
+                    // Escape in the search closes it, the way its × does; the terminal then has the focus.
+                    if (session != null && tools.search.open) tools.closeSearch()
+                    focus.focus(StageRegion.Body)
+                    true
+                }
+                StageRegion.Strip, StageRegion.Deck -> {
+                    focus.focus(StageRegion.Body)
+                    true
+                }
+            }
         }
         HardwareShortcuts(tabs, stage)
     }
     if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, panes = panes.available, onDismiss = { shortcutSheet = false })
+    // With a keyboard attached the focus stays on the Stage across tab switches and the Deck's coming
+    // and going; not while the body is a placeholder waiting on the manager, whose control is a frame away.
+    val bodyWaiting = tab == null && (activeId != null || !restored || slots.isNotEmpty())
+    KeepStageFocus(focus, enabled = rememberHardwareKeyboardAttached() && !bodyWaiting)
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -236,12 +265,13 @@ fun StageScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
     ) {
-        StageToolbar(tools, tab as? TerminalSession) {
+        StageToolbar(tools, tab as? TerminalSession, focus) {
             TabHeader(
                 slots = slots,
                 groups = groups,
                 activeId = activeId,
                 actions = actions,
+                modifier = Modifier.stageRegion(focus, StageRegion.Strip),
                 state = strip,
                 trailing = {
                     if (slots.isNotEmpty()) {
@@ -267,10 +297,11 @@ fun StageScreen(
                 },
             )
         }
-        val body = Modifier.weight(1f).fillMaxWidth()
+        val body = Modifier.weight(1f).fillMaxWidth().stageRegion(focus, StageRegion.Body)
         val bodies = StageBodies(
             vm = vm,
             holder = holder,
+            focus = focus,
             deckVisible = deckVisible,
             onDeckVisibleChange = { deckVisible = it },
             layerIndex = layerIndex,
@@ -310,6 +341,8 @@ fun StageScreen(
 class StageBodies internal constructor(
     private val vm: AppViewModel,
     private val holder: SaveableStateHolder,
+    /** Where the keyboard's focus is on the Stage (spec A11); a layer marks the pane the body's region is on. */
+    val focus: StageFocus,
     internal val deckVisible: Boolean,
     internal val onDeckVisibleChange: (Boolean) -> Unit,
     internal val layerIndex: Int,
@@ -346,6 +379,7 @@ class StageBodies internal constructor(
                     vm = vm,
                     session = tab,
                     tools = tools,
+                    focus = focus,
                     deckVisible = deckVisible,
                     onDeckVisibleChange = onDeckVisibleChange,
                     layerIndex = layerIndex,
@@ -497,6 +531,7 @@ private fun StageBody(
     vm: AppViewModel,
     session: TerminalSession,
     tools: StageTools,
+    focus: StageFocus,
     deckVisible: Boolean,
     onDeckVisibleChange: (Boolean) -> Unit,
     layerIndex: Int,
@@ -670,6 +705,8 @@ private fun StageBody(
                         layerIndex = if (compactDeck) 0 else layerIndex,
                         onLayerIndexChange = { if (!compactDeck) onLayerIndexChange(it) },
                         input = input,
+                        // The Deck and the strip that stands in for it are the one region Ctrl+Shift+K enters.
+                        modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                         enabled = live,
                         onGripTap = onOpenSessionSheet,
                         onGripSwipeDown = {
@@ -686,6 +723,7 @@ private fun StageBody(
                         layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(if (compactDeck) 0 else layerIndex)?.name ?: "Base",
                         latch = latch,
                         onExpand = { onDeckVisibleChange(true) },
+                        modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                     )
                 }
             }
@@ -753,6 +791,7 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .padding(end = 8.dp)
@@ -763,7 +802,7 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
             }
             .padding(horizontal = 4.dp, vertical = 9.dp),
     ) {
-        Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
+        Pill("scrolled", color = if (pressed || focused) c.surface4 else c.surface3, textColor = c.accent)
     }
 }
 
@@ -838,13 +877,14 @@ private fun PillAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
             .drawBehind {
-                if (pressed) {
+                if (pressed || focused) {
                     val h = (StatePillHeight - 8.dp).toPx()
                     drawRoundRect(
                         color = c.surface4,

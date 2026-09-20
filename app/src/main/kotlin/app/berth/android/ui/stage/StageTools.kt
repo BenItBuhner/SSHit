@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
@@ -74,6 +75,10 @@ import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
@@ -147,14 +152,15 @@ fun rememberStageTools(tabId: String?): StageTools = remember(tabId) { StageTool
 /**
  * The Stage's header area: the tab [header], or the selection bar in its place while text is
  * selected (spec C18), with the search bar sliding in under either while a search is open (C17).
- * Both bars act on [session]; without a terminal tab only the header shows.
+ * Both bars act on [session]; without a terminal tab only the header shows. To the keyboard either
+ * bar is the Stage's [StageRegion.Bar], the region Escape leaves for the terminal, closing the search.
  */
 @Composable
-fun StageToolbar(tools: StageTools, session: TerminalSession?, header: @Composable () -> Unit) {
+fun StageToolbar(tools: StageTools, session: TerminalSession?, focus: StageFocus = rememberStageFocus(), header: @Composable () -> Unit) {
     val selected = session != null && tools.selection.active
-    if (session != null && selected) SelectionBar(tools, session) else header()
+    if (session != null && selected) Box(Modifier.stageRegion(focus, StageRegion.Bar)) { SelectionBar(tools, session) } else header()
     AnimatedVisibility(visible = session != null && tools.search.open, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
-        if (session != null) SearchBar(tools, session)
+        if (session != null) Box(Modifier.stageRegion(focus, StageRegion.Bar)) { SearchBar(tools, session) }
     }
     BackHandler(enabled = selected) { tools.selection.clear() }
     BackHandler(enabled = session != null && tools.search.open) { tools.closeSearch() }
@@ -263,11 +269,12 @@ private fun BarAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (pressed) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
+            .background(if (pressed || focused) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
             // A short word (Copy) still answers to a 48 dp column; the longer ones set their own width.

@@ -40,6 +40,19 @@ interface StageShortcutActions {
      * canvas that does not go through a sheet.
      */
     fun focusOtherPane()
+
+    /** Ctrl+Shift+S: the keyboard's focus to the tab strip ([StageFocus], spec A11), where Tab and the arrows walk the tabs. */
+    fun focusStrip()
+
+    /** Ctrl+Shift+K: the keyboard's focus to the Deck, entered at its grip, its keys pressed by Enter; the collapsed strip when the Deck is hidden. */
+    fun focusDeck()
+
+    /**
+     * Escape while the focus is in the strip or the Deck: back to the tab's body, the terminal on a
+     * shell tab, closing the search if it was open. False when the body already holds the focus, so
+     * that Escape reaches the host as its own.
+     */
+    fun returnToBody(): Boolean
 }
 
 /**
@@ -48,7 +61,9 @@ interface StageShortcutActions {
  * the font size and the shortcut sheet (spec C22). Ctrl+F is readline's forward-char, so like Ctrl+T
  * and Ctrl+W it yields to the terminal when [ctrlTabKeysReachTerminal] is on and Ctrl+Shift+F still
  * searches. Every chord is Ctrl with or without Shift; a chord Alt or Meta joins, and anything not
- * named here, reaches the terminal.
+ * named here, reaches the terminal. The one key taken without Ctrl is a plain Escape while the
+ * focus is out of the tab's body, which brings it back ([StageShortcutActions.returnToBody]); from
+ * the terminal itself Escape is the host's.
  */
 class HardwareShortcuts(
     private val tabs: TabShortcuts,
@@ -56,7 +71,9 @@ class HardwareShortcuts(
 ) {
     fun handle(event: KeyEvent, ctrlTabKeysReachTerminal: Boolean): Boolean {
         if (tabs.handle(event, ctrlTabKeysReachTerminal)) return true
-        if (event.type != KeyEventType.KeyDown || !event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
+        if (event.type != KeyEventType.KeyDown || event.isAltPressed || event.isMetaPressed) return false
+        if (event.key == Key.Escape) return !event.isCtrlPressed && !event.isShiftPressed && stage.returnToBody()
+        if (!event.isCtrlPressed) return false
         val shift = event.isShiftPressed
         return when (event.key) {
             Key.F -> if (shift || !ctrlTabKeysReachTerminal) { stage.find(); true } else false
@@ -71,6 +88,8 @@ class HardwareShortcuts(
             Key.Slash -> if (shift) { stage.shortcutSheet(); true } else false
             Key.D -> if (shift) { stage.split(); true } else false
             Key.O -> if (shift) { stage.focusOtherPane(); true } else false
+            Key.S -> if (shift) { stage.focusStrip(); true } else false
+            Key.K -> if (shift) { stage.focusDeck(); true } else false
             else -> false
         }
     }
@@ -110,6 +129,9 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
         ShortcutEntry("Ctrl+Shift+V", "Paste"),
         ShortcutEntry("Ctrl+Shift+E", "Show or hide the Deck"),
         ShortcutEntry("Ctrl+Shift+=  \u00B7  Ctrl+Shift+\u2212", "Font size"),
+        ShortcutEntry("Ctrl+Shift+S", "Focus the tab strip; Tab and the arrows walk it, Enter switches"),
+        ShortcutEntry("Ctrl+Shift+K", "Focus the Deck at its grip; Tab and the arrows walk the keys, Enter presses one"),
+        ShortcutEntry("Esc", "From the strip, the Deck or the search, back to the terminal"),
         ShortcutEntry("Ctrl+Shift+/", "This sheet"),
     )
     val paneChords = listOf(
