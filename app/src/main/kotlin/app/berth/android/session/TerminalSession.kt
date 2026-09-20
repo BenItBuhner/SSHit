@@ -100,6 +100,15 @@ sealed interface SessionProblem {
     data class Failed(val reason: String, val authentication: Boolean) : SessionProblem
 }
 
+/**
+ * Why a login is [SessionState.FAILED]: the reason in plain language, the raw error behind
+ * Details, and the saved jump host it failed at when a hop, not the target, is what went wrong.
+ */
+data class SessionFailure(val plain: String, val raw: String, val hop: FailedHop? = null)
+
+/** The saved jump host a login failed at, for the action that opens its editor rather than the target's. */
+data class FailedHop(val hostId: String, val name: String)
+
 /** Runtime state of one configured tunnel on the session that carries it. */
 sealed interface TunnelStatus {
     data object Starting : TunnelStatus
@@ -156,9 +165,9 @@ class TerminalSession(
     private val _retryIn = MutableStateFlow<Int?>(null)
     val retryIn: StateFlow<Int?> = _retryIn.asStateFlow()
 
-    /** Plain-language reason for [SessionState.FAILED], plus the raw error text. */
-    private val _failure = MutableStateFlow<Pair<String, String>?>(null)
-    val failure: StateFlow<Pair<String, String>?> = _failure.asStateFlow()
+    /** Why the login is [SessionState.FAILED]: the plain reason, the raw error, and the hop it failed at. */
+    private val _failure = MutableStateFlow<SessionFailure?>(null)
+    val failure: StateFlow<SessionFailure?> = _failure.asStateFlow()
 
     /**
      * Failures the user should hear about away from this tab. Off stage they also raise attention,
@@ -368,11 +377,11 @@ class TerminalSession(
 
     private var connection: SshConnection? = null
 
-    /** The names of the saved hosts the last attempt's chain went through, by hop; the pill and a hop's failure name the hop by them. */
-    private var chainNames: List<String> = emptyList()
+    /** The saved hosts the last attempt's chain went through, by hop; the pill and a hop's failure name the hop by them, and its failure opens its editor. */
+    private var chainHosts: List<Host> = emptyList()
 
     /** The saved name of hop [index], or the [address] the transport knows it by when the chain has moved under the attempt. */
-    private fun hopName(index: Int, address: String): String = chainNames.getOrNull(index) ?: address
+    private fun hopName(index: Int, address: String): String = chainHosts.getOrNull(index)?.name ?: address
     private var shell: ShellChannel? = null
     private var connectJob: Job? = null
 
@@ -605,7 +614,7 @@ class TerminalSession(
         val h = host
         // Hops first, in the order they are made, so their prompts come in that order too.
         val chain = env.jumpHostsFor(h)
-        chainNames = chain.map { it.name }
+        chainHosts = chain
         val hops = chain.map { hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop)) }
         val endpoint = endpointFor(h, env.authFor(h))
         val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h), hops)
@@ -719,7 +728,8 @@ class TerminalSession(
 
     private fun fail(e: Throwable) {
         val plain = plainFailure(e)
-        _failure.value = plain to (e.message ?: e.javaClass.simpleName)
+        val hop = (e as? SshError.JumpHopFailed)?.let { j -> chainHosts.getOrNull(j.hop)?.let { FailedHop(it.id, it.name) } }
+        _failure.value = SessionFailure(plain, e.message ?: e.javaClass.simpleName, hop)
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
         val problem = SessionProblem.Failed(plain, authentication = e.rootSshError() is SshError.AuthenticationFailed)
@@ -728,13 +738,14 @@ class TerminalSession(
     }
 
     /**
-     * The failure in plain language. A hop's failure names the hop and where in the chain it sits
-     * (`Jump host bastion (hop 1 of 2) did not accept the credentials for ops.`), so the user fixes
-     * that host rather than the target.
+     * The failure in plain language. A hop's failure leads with the hop's name and puts its role
+     * in parentheses, as the pill does (`old bastion (jump host 1 of 2) did not accept the
+     * credentials for ops.`), so a name with a space in it still reads as the name, and the user
+     * fixes that host rather than the target.
      */
     private fun plainFailure(e: Throwable): String = when (e) {
         is SshError.JumpHopFailed -> {
-            val hop = "Jump host ${hopName(e.hop, e.host)}" + if (e.hopCount > 1) " (hop ${e.hop + 1} of ${e.hopCount})" else ""
+            val hop = "${hopName(e.hop, e.host)} (jump host${if (e.hopCount > 1) " ${e.hop + 1} of ${e.hopCount}" else ""})"
             when (val reason = e.reason) {
                 is SshError.AuthenticationFailed -> "$hop did not accept the credentials for ${e.user}."
                 is SshError.HostKeyRejected -> "$hop presented a host key that was not trusted, so the connection stopped there."

@@ -170,9 +170,10 @@ class JumpChainLifecycleTest {
         graph.secrets.put(AuthResolver.passwordSecretId(bastion.id), "not-the-password".toByteArray())
         val session = graph.sessions.open(target)
         await(45_000, "session failed") { session.state == SessionState.FAILED }
-        val (plain, raw) = session.failure.value!!
-        assertEquals("Jump host bastion did not accept the credentials for $sshUser.", plain)
-        assertTrue("the raw error names the hop: $raw", raw.startsWith("Jump host $sshHost:$jumpPort (hop 1 of 1)"))
+        val failure = session.failure.value!!
+        assertEquals("bastion (jump host) did not accept the credentials for $sshUser.", failure.plain)
+        assertTrue("the raw error names the hop: ${failure.raw}", failure.raw.startsWith("Jump host $sshHost:$jumpPort (hop 1 of 1)"))
+        assertEquals("the failure carries the hop, so its action opens the hop's editor rather than the target's", FailedHop(bastion.id, bastion.name), failure.hop)
         assertEquals("only the bastion's key was ever asked about", listOf(bastion.id to jumpPort), trusted.toList())
         assertNull(session.via.value)
     }

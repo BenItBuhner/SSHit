@@ -129,8 +129,8 @@ class ConnectionsScreenshotTest {
     private fun tabActions(): TabActions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
 
     @Composable
-    private fun Stage(tab: ManagedTab?) {
-        StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+    private fun Stage(tab: ManagedTab?, onEditHost: (String) -> Unit = {}) {
+        StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = onEditHost)
     }
 
     /** Real time passes while the compose clock keeps ticking, so a pulse, a sheet's entrance or the traffic clock's tick lands. */
@@ -344,8 +344,9 @@ class ConnectionsScreenshotTest {
                 graph.tunnels.upsert(Tunnel("t-metrics", behindGateway.id, TunnelType.LOCAL, "127.0.0.1", 19090, "localhost", 9090))
                 graph.sessions.restore()
             }
+            val edited = ArrayList<String>()
             themed {
-                Stage(graph.viewModel.activeTab.collectAsState().value)
+                Stage(graph.viewModel.activeTab.collectAsState().value, onEditHost = { edited += it })
                 PromptHost(graph.prompts)
             }
 
@@ -386,10 +387,17 @@ class ConnectionsScreenshotTest {
             // The hop refuses the login: its key is trusted by now, so no sheet; the failure names the hop and where it sits, not the target.
             val failed = runBlocking { graph.sessions.open(behindLocked) }
             compose.waitUntil(45_000) { failed.state == SessionState.FAILED }
-            compose.waitUntil(5_000) { compose.onAllNodes(hasText("Jump host old bastion did not accept the credentials for $sshUser.")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(5_000) { compose.onAllNodes(hasText("old bastion (jump host) did not accept the credentials for $sshUser.")).fetchSemanticsNodes().isNotEmpty() }
             assertTrue("the Tunnels tab keeps running behind it", tunnels.state == SessionState.LIVE)
+            // The action beside Retry is the hop's, since the credentials that failed are old bastion's; the target's editor stays a text action.
+            compose.onNodeWithText("Edit old bastion").assertExists()
+            compose.onNodeWithText("Edit host").assertExists()
             settle(400)
             capture("stage-jump-hop-failed")
+            compose.onNodeWithText("Edit old bastion").performClick()
+            assertEquals(listOf("locked-bastion"), edited)
+            compose.onNodeWithText("Edit host").performClick()
+            assertEquals(listOf("locked-bastion", "behind-locked"), edited)
         } finally {
             http.stop(0)
             silent.close()

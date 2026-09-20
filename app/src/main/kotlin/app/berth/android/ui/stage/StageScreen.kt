@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -71,6 +72,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.berth.android.session.FailedHop
 import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
@@ -483,13 +485,15 @@ private fun StageBody(
             NoticePill(tools, Modifier.align(Alignment.TopCenter))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
-                    plain = failure?.first ?: "Couldn't connect.",
-                    raw = failure?.second,
+                    plain = failure?.plain ?: "Couldn't connect.",
+                    raw = failure?.raw,
                     onRetry = { vm.reconnect(session.id) },
                     onEditHost = record.hostId?.let { id -> { onEditHost(id) } },
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(20.dp),
+                    hop = failure?.hop,
+                    onEditHop = { onEditHost(it.hostId) },
                 )
             }
         }
@@ -696,9 +700,23 @@ private fun PillAction(label: String, onClick: () -> Unit) {
     }
 }
 
-/** Radius 20 panel over the terminal (or the Tunnels stage) with the plain reason and the raw error behind Details. */
+/**
+ * Radius 20 panel over the terminal (or the Tunnels stage) with the plain reason and the raw error
+ * behind Details. When the login failed at a jump host ([hop]), the credentials or key that failed
+ * are that host's, so the action beside Retry opens its editor, named for it (`Edit old bastion`,
+ * or `Edit jump host` when the name is long); the target's editor stays a text action behind it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun FailedPanel(plain: String, raw: String?, onRetry: () -> Unit, onEditHost: (() -> Unit)?, modifier: Modifier = Modifier) {
+internal fun FailedPanel(
+    plain: String,
+    raw: String?,
+    onRetry: () -> Unit,
+    onEditHost: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    hop: FailedHop? = null,
+    onEditHop: ((FailedHop) -> Unit)? = null,
+) {
     val c = Berth.colors
     var details by remember { mutableStateOf(false) }
     Column(
@@ -719,12 +737,23 @@ internal fun FailedPanel(plain: String, raw: String?, onRetry: () -> Unit, onEdi
                 modifier = Modifier.clickable { details = !details },
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // A flow, so a third action or a long hop name wraps under the first two rather than leaving the panel.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BerthButton("Retry", onClick = onRetry, kind = ButtonKind.PRIMARY)
-            if (onEditHost != null) BerthButton("Edit host", onClick = onEditHost)
+            if (hop != null && onEditHop != null) {
+                BerthButton(editHopLabel(hop.name), onClick = { onEditHop(hop) })
+                if (onEditHost != null) BerthButton("Edit host", onClick = onEditHost, kind = ButtonKind.TEXT)
+            } else if (onEditHost != null) {
+                BerthButton("Edit host", onClick = onEditHost)
+            }
         }
     }
 }
+
+/** `Edit old bastion` while the name fits a button beside Retry; `Edit jump host` for a longer one. */
+internal fun editHopLabel(name: String): String = if (name.length <= MAX_HOP_LABEL_CHARS) "Edit $name" else "Edit jump host"
+
+private const val MAX_HOP_LABEL_CHARS = 16
 
 /** "4 min ago" style ages; re-evaluated by callers each minute through [ageTicker]. */
 fun ageText(since: Long?, now: Long = System.currentTimeMillis()): String {

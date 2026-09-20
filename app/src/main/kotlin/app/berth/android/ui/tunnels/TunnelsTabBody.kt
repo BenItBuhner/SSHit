@@ -116,13 +116,15 @@ fun TunnelsTabBody(vm: AppViewModel, session: TerminalSession, onEditHost: (Stri
             }
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
-                    plain = failure?.first ?: "Couldn't connect.",
-                    raw = failure?.second,
+                    plain = failure?.plain ?: "Couldn't connect.",
+                    raw = failure?.raw,
                     onRetry = { vm.reconnect(session.id) },
                     onEditHost = record.hostId?.let { id -> { onEditHost(id) } },
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(20.dp),
+                    hop = failure?.hop,
+                    onEditHop = { onEditHost(it.hostId) },
                 )
             }
         }
