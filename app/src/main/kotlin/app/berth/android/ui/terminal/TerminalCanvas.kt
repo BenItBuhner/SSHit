@@ -315,12 +315,14 @@ fun TerminalCanvas(
                         synchronized(emulator.lock) { sel?.let { it.extendTo(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, at)) } }
                     }
 
-                    // A handle under the finger: drag that end of the selection.
-                    val handle = if (sel != null) handleAt(sel, frames.front, down.position, p, handleRadiusPx, handleReachPx) else null
-                    if (sel != null && handle != null && synchronized(emulator.lock) { sel.grab(emulator, handle) }) {
+                    // A handle under the finger: drag that end of the selection. The end follows the
+                    // finger's travel from the cell the handle marks, not the cell under the finger,
+                    // which is a row off (below a hanging handle, above a flipped one).
+                    val hit = if (sel != null) handleAt(sel, frames.front, down.position, p, handleRadiusPx, handleReachPx, size.width.toFloat(), size.height.toFloat()) else null
+                    if (sel != null && hit != null && synchronized(emulator.lock) { sel.grab(emulator, hit.handle) }) {
                         down.consume()
                         dragSelection(emulator, viewport, size.height.toFloat()) { at ->
-                            synchronized(emulator.lock) { sel.moveTo(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, at)) }
+                            synchronized(emulator.lock) { sel.moveTo(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, at + hit.offset)) }
                         }
                         sel.release()
                         return@awaitEachGesture
@@ -500,11 +502,12 @@ fun TerminalCanvas(
                 val saved = nc.save()
                 nc.translate(0f, shift * ch)
                 TerminalRenderer.draw(nc, frame, paints, theme, font.boldAsBright, size.width, frame.rows * ch, showCursor, focused, ov)
-                overlay.selection?.let { drawHandles(nc, it, frame, paints, accent, handleRadiusPx) }
+                // The canvas's edges in the translated frame's coordinates, so the handles stay inside them.
+                overlay.selection?.let { drawHandles(nc, it, frame, paints, accent, handleRadiusPx, size.width, size.height - shift * ch) }
                 nc.restoreToCount(saved)
             } else {
                 TerminalRenderer.draw(nc, frame, paints, theme, font.boldAsBright, size.width, size.height, showCursor, focused, ov)
-                overlay.selection?.let { drawHandles(nc, it, frame, paints, accent, handleRadiusPx) }
+                overlay.selection?.let { drawHandles(nc, it, frame, paints, accent, handleRadiusPx, size.width, size.height) }
             }
         }
     }
@@ -525,7 +528,8 @@ private const val AUTOSCROLL_MS = 60L
 /** The current match is the accent at this alpha over the cell, so the glyph stays legible on any theme. */
 private const val CURRENT_MATCH_ALPHA = 0x99
 
-private val HANDLE_RADIUS = 9.dp
+/** The disc of a selection handle; its square shoulder is the same size. The touch target is [HANDLE_REACH] around the centre. */
+val HANDLE_RADIUS = 9.dp
 private val HANDLE_REACH = 24.dp
 
 private enum class GestureMode { NONE, SCROLL, HORIZONTAL, PINCH, SWIPE }
@@ -568,41 +572,61 @@ private suspend fun AwaitPointerEventScope.dragSelection(
     }
 }
 
-/** Where the selection's handles hang for [frame]: the start cell's bottom-left corner and the end cell's bottom-right, or null off screen. */
-private fun handleCenters(range: CellRange, frame: TerminalFrame, paints: TerminalPaints, radius: Float): Pair<Offset?, Offset?> {
-    val cw = paints.cellWidth
-    val ch = paints.cellHeight
-    val start = if (range.start.row in 0 until frame.rows) Offset(range.start.col * cw, (range.start.row + 1) * ch + radius) else null
-    val end = if (range.end.row in 0 until frame.rows) Offset((range.end.col + 1) * cw, (range.end.row + 1) * ch + radius) else null
-    return start to end
+/** One selection handle: the centre of its disc and whether it hangs above its row (shoulder pointing down) for want of room below. */
+data class HandleSpot(val center: Offset, val above: Boolean)
+
+/**
+ * Where the selection's handles sit for a range in view rows: under the start cell's bottom-left
+ * corner and the end cell's bottom-right, the shoulder toward the text, or null for an end that is
+ * off screen. Both stay inside a canvas [width] by [height]: a handle with no room below its row
+ * (the bottom row, where the pill row and the Deck would paint over it and take the touch) flips
+ * above the row, and a handle at the first or last column is pulled in by its radius. Drawing and
+ * hit-testing both come here, so they agree.
+ */
+fun handleCenters(range: CellRange, rows: Int, cw: Float, ch: Float, radius: Float, width: Float, height: Float): Pair<HandleSpot?, HandleSpot?> {
+    fun spot(row: Int, x: Float): HandleSpot? {
+        if (row !in 0 until rows) return null
+        val below = (row + 1) * ch + radius
+        val above = below + radius > height
+        val y = if (above) row * ch - radius else below
+        return HandleSpot(Offset(x.coerceIn(radius, (width - radius).coerceAtLeast(radius)), y.coerceIn(radius, (height - radius).coerceAtLeast(radius))), above)
+    }
+    return spot(range.start.row, range.start.col * cw) to spot(range.end.row, (range.end.col + 1) * cw)
 }
 
-private fun handleAt(selection: TerminalSelection, frame: TerminalFrame, at: Offset, paints: TerminalPaints, radius: Float, reach: Float): SelectionHandle? {
+/** A handle under a finger, and what to add to the finger's position to land on the centre of the cell the handle marks. */
+private class HandleHit(val handle: SelectionHandle, val offset: Offset)
+
+private fun handleAt(selection: TerminalSelection, frame: TerminalFrame, at: Offset, paints: TerminalPaints, radius: Float, reach: Float, width: Float, height: Float): HandleHit? {
     val range = selection.range ?: return null
     val anchor = selection.anchor ?: return null
     val view = frame.viewRange(range, anchor) ?: return null
-    val (s, e) = handleCenters(view, frame, paints, radius)
-    val ds = s?.let { (at - it).getDistance() } ?: Float.MAX_VALUE
-    val de = e?.let { (at - it).getDistance() } ?: Float.MAX_VALUE
-    return when {
-        ds > reach && de > reach -> null
-        ds <= de -> SelectionHandle.START
-        else -> SelectionHandle.END
-    }
+    val cw = paints.cellWidth
+    val ch = paints.cellHeight
+    val (s, e) = handleCenters(view, frame.rows, cw, ch, radius, width, height)
+    val ds = s?.let { (at - it.center).getDistance() } ?: Float.MAX_VALUE
+    val de = e?.let { (at - it.center).getDistance() } ?: Float.MAX_VALUE
+    if (ds > reach && de > reach) return null
+    val handle = if (ds <= de) SelectionHandle.START else SelectionHandle.END
+    val cell = if (handle == SelectionHandle.START) view.start else view.end
+    return HandleHit(handle, Offset((cell.col + 0.5f) * cw, (cell.row + 0.5f) * ch) - at)
 }
 
-/** Two accent teardrops under the selection's ends: a disc with a square shoulder toward the text, the classic shape, no magnifier. */
-private fun drawHandles(nc: android.graphics.Canvas, view: CellRange, frame: TerminalFrame, paints: TerminalPaints, color: Int, radius: Float) {
-    val (s, e) = handleCenters(view, frame, paints, radius)
+/** Two accent teardrops at the selection's ends: a disc with a square shoulder toward the text, the classic shape, no magnifier. */
+private fun drawHandles(nc: android.graphics.Canvas, view: CellRange, frame: TerminalFrame, paints: TerminalPaints, color: Int, radius: Float, width: Float, height: Float) {
+    val (s, e) = handleCenters(view, frame.rows, paints.cellWidth, paints.cellHeight, radius, width, height)
     paints.fill.color = opaqueRgb(color)
-    s?.let {
-        nc.drawCircle(it.x, it.y, radius, paints.fill)
-        nc.drawRect(it.x - radius, it.y - radius, it.x, it.y, paints.fill)
+    fun teardrop(spot: HandleSpot, start: Boolean) {
+        val (x, y) = spot.center
+        nc.drawCircle(x, y, radius, paints.fill)
+        // The shoulder: the quadrant of the disc's square that faces the text, up when the handle
+        // hangs below its row, down when it sits above.
+        val left = if (start) x - radius else x
+        val top = if (spot.above) y else y - radius
+        nc.drawRect(left, top, left + radius, top + radius, paints.fill)
     }
-    e?.let {
-        nc.drawCircle(it.x, it.y, radius, paints.fill)
-        nc.drawRect(it.x, it.y - radius, it.x + radius, it.y, paints.fill)
-    }
+    s?.let { teardrop(it, start = true) }
+    e?.let { teardrop(it, start = false) }
 }
 
 /** Scrolls history when there is any; otherwise gives full-screen applications wheel or arrow events. */
