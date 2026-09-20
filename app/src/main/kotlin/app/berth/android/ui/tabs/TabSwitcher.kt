@@ -54,6 +54,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
+import app.berth.android.session.TunnelStatus
+import app.berth.domain.model.TabKind
+import app.berth.domain.model.Tunnel
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -68,6 +71,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.tunnels.tunnelsUpLine
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Workspace
@@ -209,7 +213,9 @@ private fun TabCard(
     onActivate: () -> Unit,
 ) {
     val c = Berth.colors
-    val session = slot.tab as? TerminalSession
+    // Only a terminal has a frame to thumbnail; a Tunnels tab shows its glyph like a Files tab does.
+    val session = (slot.tab as? TerminalSession)?.takeIf { !it.tunnelsOnly }
+    val tunnelsTab = (slot.tab as? TerminalSession)?.takeIf { it.tunnelsOnly }
     val record by slot.tab.record.collectAsState()
     val host = record.hostSnapshot
     val interaction = remember { MutableInteractionSource() }
@@ -223,7 +229,11 @@ private fun TabCard(
     val font = remember(host, vm) { vm.fontFor(host) }
     val detached = record.state == SessionState.DETACHED || record.state == SessionState.CLOSED
     val title = record.displayTitle
-    val subtitle = cardSubtitle(record, now)
+    val subtitle = if (tunnelsTab != null) {
+        val all by vm.tunnels.collectAsState()
+        val statuses by tunnelsTab.tunnels.collectAsState()
+        tunnelsCardSubtitle(record, now, remember(all, record.hostId) { all.filter { it.hostId == record.hostId } }, statuses)
+    } else cardSubtitle(record, now)
 
     Box {
         Column(
@@ -294,7 +304,7 @@ private fun TabCard(
                     // The same cursor rule as the Stage: only a live screen shows one, and only the active card follows changes.
                     FrameThumbnail(session, theme, font, live = active && record.state == SessionState.LIVE, modifier = Modifier.fillMaxWidth().fillMaxHeight())
                 } else {
-                    BerthIcon(BerthIcons.folder, tint = c.text3, size = 36.dp)
+                    BerthIcon(if (record.kind == TabKind.Tunnels) BerthIcons.link else BerthIcons.folder, tint = c.text3, size = 36.dp)
                 }
             }
         }
@@ -314,4 +324,18 @@ internal fun cardSubtitle(record: SessionRecord, now: Long): String = when (reco
     SessionState.DETACHED -> listOfNotNull(ageText(record.lastLiveAt, now).takeIf { it.isNotBlank() }, record.cwd).joinToString(" \u00B7 ")
     SessionState.FAILED -> "Couldn't connect"
     SessionState.CLOSED -> "Closed"
+}
+
+/**
+ * A Tunnels card's caption, the counterpart of the path a Files card shows: what the forwards are
+ * doing while live (`2 of 2 up`, the stage's own line), and what the tab carries beside its age
+ * when detached (`7 min ago · 3 tunnels`); the state otherwise, as any card.
+ */
+internal fun tunnelsCardSubtitle(record: SessionRecord, now: Long, tunnels: List<Tunnel>, statuses: Map<String, TunnelStatus>): String = when (record.state) {
+    SessionState.LIVE -> tunnelsUpLine(tunnels, statuses)
+    SessionState.DETACHED -> listOfNotNull(
+        ageText(record.lastLiveAt, now).takeIf { it.isNotBlank() },
+        if (tunnels.size == 1) "1 tunnel" else "${tunnels.size} tunnels",
+    ).joinToString(" \u00B7 ")
+    else -> cardSubtitle(record, now)
 }

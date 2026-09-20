@@ -66,6 +66,7 @@ internal fun Host.toEntity() = HostEntity(
     muteBell = muteBell,
     lastConnectedAt = lastConnectedAt,
     createdAt = createdAt,
+    tunnelsOnly = tunnelsOnly,
 )
 
 internal fun HostEntity.toDomain() = Host(
@@ -88,6 +89,7 @@ internal fun HostEntity.toDomain() = Host(
     appearance = runCatching { dataJson.decodeFromString(AppearanceOverride.serializer(), appearanceJson) }.getOrDefault(AppearanceOverride()),
     tags = runCatching { dataJson.decodeFromString(stringList, tagsJson) }.getOrDefault(emptyList()),
     muteBell = muteBell,
+    tunnelsOnly = tunnelsOnly,
     lastConnectedAt = lastConnectedAt,
     createdAt = createdAt,
 )

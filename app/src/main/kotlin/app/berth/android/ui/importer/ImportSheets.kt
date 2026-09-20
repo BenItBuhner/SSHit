@@ -118,15 +118,15 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
     var selection by remember(candidates) { mutableStateOf(candidates.filter { it.existing == null }.map { it.alias }.toSet()) }
     val picked = candidates.filter { it.alias in selection }
     val aliasesHere = candidates.map { it.alias }.toSet()
-    fun hopKnown(hop: String) = hop in aliasesHere || hosts.any { it.name.equals(hop, true) || it.address.equals(hop.substringAfter('@').substringBefore(':'), true) }
-    val jumpsMissing = picked.any { cand -> cand.entry.proxyJump.any { !hopKnown(it) } }
+    fun hopKnown(hop: String) = hop in aliasesHere || hostForHop(hop, hosts) != null
+    val jumpsNew = picked.any { cand -> cand.entry.proxyJump.any { !hopKnown(it) } }
     val keysMissing = picked.any { it.identity == null && it.entry.identityFiles.isNotEmpty() }
 
     /** Everything about one candidate in a single Caption line; the leading dot carries the tick. */
     fun captionFor(cand: ConfigCandidate): String = buildList {
         add(cand.target)
         if (cand.existing != null) add("saved")
-        if (cand.entry.proxyJump.isNotEmpty()) add("via " + cand.entry.proxyJump.joinToString(", ") { hop -> if (hopKnown(hop)) hop else "$hop (not here)" })
+        if (cand.entry.proxyJump.isNotEmpty()) add("via " + cand.entry.proxyJump.joinToString(", ") { hop -> if (hopKnown(hop)) hop else "$hop (new)" })
         val forwards = cand.entry.forwards.size
         if (forwards > 0) add(if (forwards == 1) "1 forward" else "$forwards forwards")
         when {
@@ -183,8 +183,8 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
                             leading = { TickDot(selected) },
                         )
                     }
-                    if (jumpsMissing) {
-                        Text("Jumps that are not hosts here are left off.", style = BerthType.caption, color = c.attention, modifier = Modifier.padding(horizontal = 4.dp))
+                    if (jumpsNew) {
+                        Text("Jumps that are not hosts here are saved as hosts of their own, with no key, so the chain stays whole.", style = BerthType.caption, color = c.attention, modifier = Modifier.padding(horizontal = 4.dp))
                     }
                     if (keysMissing) {
                         Text("Hosts with no matching key ask on connect.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
@@ -235,19 +235,79 @@ private fun TickDot(selected: Boolean) {
     }
 }
 
-/** Saves [picked] as hosts, linking ProxyJump hops to hosts in the same batch or already saved. */
+/**
+ * A `ProxyJump` hop that is not an alias: `[user@]host[:port]`, the host in brackets when it is an
+ * IPv6 address. A missing port means 22, as it does for `ssh -J`; a missing user is the caller's.
+ */
+internal data class HopSpec(val user: String?, val host: String, val port: Int)
+
+internal fun parseHopSpec(hop: String): HopSpec {
+    var rest = hop.trim()
+    val user = if ('@' in rest) rest.substringBeforeLast('@').takeIf { it.isNotEmpty() } else null
+    if ('@' in rest) rest = rest.substringAfterLast('@')
+    var host = rest
+    var port: Int? = null
+    if (rest.startsWith("[")) {
+        val end = rest.indexOf(']')
+        if (end > 0) {
+            host = rest.substring(1, end)
+            port = rest.substring(end + 1).removePrefix(":").toIntOrNull()
+        }
+    } else if (rest.count { it == ':' } == 1) {
+        host = rest.substringBefore(':')
+        port = rest.substringAfter(':').toIntOrNull()
+    }
+    return HopSpec(user, host, port?.takeIf { it in 1..65535 } ?: 22)
+}
+
+/**
+ * The saved host a hop names: by name when the hop is an alias, otherwise the one at the spec's
+ * address and port, and the spec's user when it gives one. Null when there is no such host.
+ */
+internal fun hostForHop(hop: String, saved: List<Host>): Host? {
+    saved.firstOrNull { it.name.equals(hop, ignoreCase = true) }?.let { return it }
+    val spec = parseHopSpec(hop)
+    return saved.firstOrNull { it.address.equals(spec.host, ignoreCase = true) && it.port == spec.port && (spec.user == null || it.user == spec.user) }
+}
+
+/**
+ * Saves [picked] as hosts with their `ProxyJump` chains intact. A hop is linked to the host in the
+ * same batch or already saved that it names; a hop no host answers to is saved as a host of its
+ * own (tagged `jump`, asking for its key on connect), once per address, port and user, so that a
+ * bastion two aliases share becomes one host. Returns how many hosts were saved, hops included.
+ */
 suspend fun importCandidates(vm: AppViewModel, picked: List<ConfigCandidate>, saved: List<Host>): Int {
     val fresh = picked.associate { cand -> cand.alias to vm.hostFromConfig(cand.entry, cand.identity?.id, emptyList()) }
-    fun resolve(hop: String): String? {
+    val hops = LinkedHashMap<String, Pair<Host, SshConfigHost>>()
+    fun resolve(hop: String, targetUser: String): String {
         fresh[hop]?.let { return it.id }
-        val address = hop.substringAfter('@').substringBefore(':')
-        return saved.firstOrNull { it.name.equals(hop, true) }?.id ?: saved.firstOrNull { it.address.equals(address, true) }?.id
+        hostForHop(hop, saved)?.let { return it.id }
+        val spec = parseHopSpec(hop)
+        val user = spec.user ?: targetUser
+        return hops.getOrPut("$user@${spec.host.lowercase()}:${spec.port}") {
+            val entry = SshConfigHost(
+                alias = spec.host,
+                hostName = spec.host,
+                user = user,
+                port = spec.port,
+                identityFiles = emptyList(),
+                proxyJump = emptyList(),
+                forwards = emptyList(),
+                compression = null,
+                serverAliveInterval = null,
+                addressFamily = null,
+                forwardAgent = null,
+                remoteCommand = null,
+            )
+            val host = vm.hostFromConfig(entry, null, emptyList())
+            host.copy(tags = host.tags + "jump") to entry
+        }.first.id
     }
     val linked = picked.map { cand ->
         val host = fresh.getValue(cand.alias)
-        host.copy(jumpHostIds = cand.entry.proxyJump.mapNotNull(::resolve)) to cand.entry
+        host.copy(jumpHostIds = cand.entry.proxyJump.map { resolve(it, host.user) }) to cand.entry
     }
-    return vm.importHosts(linked)
+    return vm.importHosts(hops.values.toList() + linked)
 }
 
 /**

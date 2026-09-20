@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
@@ -164,8 +165,21 @@ fun TunnelsScreen(vm: AppViewModel, hostId: String?, onBack: () -> Unit, modifie
 class TunnelEditorTarget(val hostId: String?, val tunnel: Tunnel?)
 
 /**
- * One tunnel as a [ListRow]: state dot leading, the spec in Mono, type and status in one Caption
- * line, then Open for local web ports, Retry after a failure, and the switch.
+ * The spec as a row's Mono title: [Tunnel.spec] with the arrow bound to the destination
+ * (`→ localhost:80` is one word), so a spec too long for its line breaks before the arrow, the bind
+ * on the first line and `→ destination` on the second, and the destination, the half that says
+ * where the forward goes, is never the half an ellipsis takes. Two lines in the row
+ * (`titleMaxLines`); a spec that fits stays on one.
+ */
+internal val Tunnel.rowSpec: String get() = spec.replaceFirst(" \u2192 ", " \u2192\u00A0")
+
+/** The Mono title style a spec row uses: Mono at Body's size and line height, so two lines of it sit like a Body line pair. */
+internal val specTitleStyle: TextStyle @Composable get() = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight)
+
+/**
+ * One tunnel as a [ListRow]: state dot leading, the spec in Mono (two lines when it must break at
+ * the arrow), type and status in one Caption line, then Open for local web ports, Retry after a
+ * failure, and the switch.
  */
 @Composable
 fun TunnelRow(
@@ -199,8 +213,9 @@ fun TunnelRow(
     val failed = status is TunnelStatus.Failed
     Box(modifier) {
         ListRow(
-            title = tunnel.spec,
-            titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+            title = tunnel.rowSpec,
+            titleStyle = specTitleStyle,
+            titleMaxLines = 2,
             titleColor = if (tunnel.enabled) c.text1 else c.text2,
             subtitle = buildAnnotatedString {
                 append(tunnel.type.label)
@@ -220,18 +235,7 @@ fun TunnelRow(
                 if (failed) {
                     BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, modifier = Modifier.height(36.dp))
                 }
-                Switch(
-                    checked = tunnel.enabled,
-                    onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = c.onAccent,
-                        checkedTrackColor = c.accent,
-                        checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = c.text2,
-                        uncheckedTrackColor = c.surface4,
-                        uncheckedBorderColor = Color.Transparent,
-                    ),
-                )
+                TunnelSwitch(checked = tunnel.enabled, onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) })
             },
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
@@ -246,6 +250,64 @@ fun TunnelRow(
             DropdownMenuItem(text = { Text("Delete", style = BerthType.body, color = c.danger) }, onClick = { menu = false; vm.deleteTunnel(tunnel.id) })
         }
     }
+}
+
+/**
+ * A forward an `ssh://` link asks for, not yet saved (spec C10): the same row as a saved tunnel,
+ * so the two read alike, with the dot grey since nothing runs yet, `from the link` where a saved
+ * row has its state (or the [problem] the tunnel editor would raise, in danger), `all interfaces`
+ * in the attention colour the tunnel editor warns in, and the switch deciding whether Save keeps
+ * it. Nothing here is saved or started until the editor's Save.
+ */
+@Composable
+fun PendingTunnelRow(
+    tunnel: Tunnel,
+    kept: Boolean,
+    onKeptChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    problem: String? = null,
+    surface: Color = Berth.colors.surface2,
+) {
+    val c = Berth.colors
+    ListRow(
+        title = tunnel.rowSpec,
+        modifier = modifier,
+        titleStyle = specTitleStyle,
+        titleMaxLines = 2,
+        titleColor = if (kept) c.text1 else c.text2,
+        subtitle = buildAnnotatedString {
+            append(tunnel.type.label)
+            append(" \u00B7 ")
+            when {
+                !kept -> append("left out")
+                problem != null -> withStyle(SpanStyle(color = c.danger)) { append(problem) }
+                else -> append("from the link")
+            }
+            if (kept && tunnel.exposed) withStyle(SpanStyle(color = c.attention)) { append(" \u00B7 all interfaces") }
+        },
+        surface = surface,
+        onClick = { onKeptChange(!kept) },
+        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.DETACHED) } },
+        trailing = { TunnelSwitch(checked = kept, onCheckedChange = onKeptChange) },
+    )
+}
+
+/** The switch at the end of a tunnel row, in the app's colours. */
+@Composable
+private fun TunnelSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val c = Berth.colors
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = c.onAccent,
+            checkedTrackColor = c.accent,
+            checkedBorderColor = Color.Transparent,
+            uncheckedThumbColor = c.text2,
+            uncheckedTrackColor = c.surface4,
+            uncheckedBorderColor = Color.Transparent,
+        ),
+    )
 }
 
 /**
@@ -336,7 +398,7 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
                 }
             }
             if (touched) {
-                Text(problem ?: draft.spec, style = if (problem != null) BerthType.caption else BerthType.mono, color = if (problem != null) c.danger else c.text2, modifier = Modifier.padding(horizontal = 4.dp))
+                Text(problem ?: draft.rowSpec, style = if (problem != null) BerthType.caption else BerthType.mono, color = if (problem != null) c.danger else c.text2, modifier = Modifier.padding(horizontal = 4.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BerthButton(
@@ -358,9 +420,12 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
     }
 }
 
-/** The host editor's Tunnels panel body (C10): the host's tunnels as rows on the panel surface, then `+ Add tunnel`. */
+/**
+ * The host editor's Tunnels panel body (C10): the host's tunnels as rows on the panel surface,
+ * then [pending] (a link's forwards awaiting Save, so they sit with their peers), then `+ Add tunnel`.
+ */
 @Composable
-fun TunnelsPanelContent(vm: AppViewModel, host: Host) {
+fun TunnelsPanelContent(vm: AppViewModel, host: Host, pending: @Composable () -> Unit = {}) {
     val c = Berth.colors
     val all by vm.tunnels.collectAsState()
     val statuses by vm.tunnelStatuses.collectAsState()
@@ -371,6 +436,7 @@ fun TunnelsPanelContent(vm: AppViewModel, host: Host) {
     for (t in mine) {
         TunnelRow(vm, t, statuses[t.id], hostActive = active, onEdit = { editor = TunnelEditorTarget(host.id, t) }, surface = Color.Transparent)
     }
+    pending()
     ListRow(
         title = "Add tunnel",
         surface = Color.Transparent,

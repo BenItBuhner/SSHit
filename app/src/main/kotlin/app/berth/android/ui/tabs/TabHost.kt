@@ -407,13 +407,14 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
                     .padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The text yields to the action: a long line (a link's reason) ends in an ellipsis rather than pushing the action off the bar.
                 Text(
                     text,
                     style = BerthType.caption,
                     color = c.text2,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp),
+                    modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
                 )
                 Text("\u00B7", style = BerthType.caption, color = c.text3)
                 BarAction(action, onAction)

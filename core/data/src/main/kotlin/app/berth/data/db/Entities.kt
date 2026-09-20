@@ -33,6 +33,8 @@ data class HostEntity(
     val muteBell: Boolean,
     val lastConnectedAt: Long?,
     val createdAt: Long,
+    /** Added in schema version 4: Connect opens the host's tunnels with no shell; every earlier host opens a terminal. */
+    @ColumnInfo(defaultValue = "0") val tunnelsOnly: Boolean = false,
 )
 
 @Entity(tableName = "identities", indices = [Index("name")])

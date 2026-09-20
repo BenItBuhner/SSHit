@@ -62,8 +62,9 @@ fun TabMenu(
         if (!groupsPage) {
             MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
             MenuRow("Rename") { onDismiss(); actions.rename(id) }
-            if (files) MenuRow("Terminal") { onDismiss(); actions.openTerminal(id) }
-            else MenuRow("Files") { onDismiss(); actions.openFiles(id) }
+            // A Files tab offers the terminal it rides; a terminal offers Files; a Tunnels tab, with no shell of its own, offers both.
+            if (files || record.kind == TabKind.Tunnels) MenuRow("Terminal") { onDismiss(); actions.openTerminal(id) }
+            if (!files) MenuRow("Files") { onDismiss(); actions.openFiles(id) }
             MenuRow("Move to group", trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }) { groupsPage = true }
             when {
                 record.state.isActive -> if (!files) MenuRow("Detach") { onDismiss(); actions.detach(id) }

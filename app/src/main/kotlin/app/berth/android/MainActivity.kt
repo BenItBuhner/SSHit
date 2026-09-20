@@ -9,6 +9,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import app.berth.android.links.LinkInbox
 import app.berth.android.security.LockState
 import app.berth.android.security.SecurityCenter
 import app.berth.android.security.WindowSecurity
@@ -25,11 +26,12 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     @Inject lateinit var sessions: SessionManager
     @Inject lateinit var security: SecurityCenter
+    @Inject lateinit var links: LinkInbox
 
     /** The settings the window flags were last set from; the splash waits a frame for the relayout after a change. */
     private var windowSettings: SecuritySettings? = null
 
-    /** An intent not yet read for a notification's tab: the launch's, or one onNewIntent brought; read in onResume. */
+    /** An intent not yet read for a notification's tab or a link: the launch's, or one onNewIntent brought; read in onResume. */
     private var intentPending = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,7 +82,14 @@ class MainActivity : ComponentActivity() {
      * left over from before the app went away.
      */
     private fun openTabFrom(intent: Intent?) {
-        val id = intent?.getStringExtra(SessionNotifier.EXTRA_TAB_ID) ?: return
+        if (intent == null) return
+        // An ssh:// or sftp:// link from another app (the VIEW filter in the manifest): the view model
+        // reads it once the lock allows, so a link never opens a login behind the lock screen.
+        if (intent.action == Intent.ACTION_VIEW) {
+            intent.dataString?.let(links::offer)
+            return
+        }
+        val id = intent.getStringExtra(SessionNotifier.EXTRA_TAB_ID) ?: return
         when (intent.action) {
             SessionNotifier.ACTION_OPEN_TAB -> sessions.activateFromNotification(id)
             SessionNotifier.ACTION_OPEN_FILES -> sessions.activateFilesFromNotification(id)

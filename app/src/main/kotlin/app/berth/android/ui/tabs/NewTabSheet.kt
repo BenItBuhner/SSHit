@@ -49,6 +49,7 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.hosts.rowSubtitle
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
@@ -60,8 +61,10 @@ import app.berth.domain.model.Host
  * The New tab sheet (spec C3, Plus tab): a quick connect field, the four most recent hosts as
  * swatches, then the Hosts list as a picker with a search field. Half height; drag up for the full
  * list. A chosen host becomes a tab in [groupId] (the active group when null), directly after the
- * active tab when that tab is in the same group. The folder glyph at the end of a host row opens
- * the host's Files tab instead (or brings it on stage when the host already has one).
+ * active tab when that tab is in the same group. The two glyphs at the end of a host row open
+ * another kind of tab on it instead: the link glyph a Tunnels tab (the host's forwards with no
+ * shell, spec C14), the folder glyph its Files tab (or brings it on stage when the host already
+ * has one).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,11 +91,17 @@ fun NewTabSheet(
         vm.openFilesForHost(host, groupId)
         onDismiss()
     }
+    fun tunnels(host: Host) {
+        vm.openTunnels(host, groupId)
+        onDismiss()
+    }
     fun connectSpec() {
         if (spec.isBlank()) return
-        if (vm.quickConnect(spec, null, groupId)) onDismiss() else error = "Use user@host, host:port or ssh://user@host:port"
+        val problem = vm.quickConnect(spec, null, groupId)
+        if (problem == null) onDismiss() else error = problem
     }
 
+    val byId = remember(hosts) { hosts.associateBy { it.id } }
     val recent = remember(hosts) { hosts.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(4) }
     val filtered = remember(hosts, query) {
         val q = query.trim().lowercase()
@@ -186,12 +195,15 @@ fun NewTabSheet(
             items(filtered, key = { it.id }) { host ->
                 ListRow(
                     title = host.name,
-                    subtitle = host.userAtHost + if (host.port != 22) ":${host.port}" else "",
+                    subtitle = host.rowSubtitle(byId),
                     onClick = { choose(host) },
                     leading = { Swatch(host.color, host.monogram, 36.dp) },
                     trailing = {
                         if (host.lastConnectedAt != null) Text(ageText(host.lastConnectedAt, now), style = BerthType.caption, color = c.text3)
-                        // Quiet until pressed (the target's own press fill marks it), so it reads as a second action, not a file attribute of the row.
+                        // Quiet until pressed (the target's own press fill marks it), so they read as second actions, not attributes of the row.
+                        IconAction(onClick = { tunnels(host) }, description = "Tunnels on ${host.name}") {
+                            BerthIcon(BerthIcons.link, tint = c.text3, size = 20.dp)
+                        }
                         IconAction(onClick = { files(host) }, description = "Files on ${host.name}") {
                             BerthIcon(BerthIcons.folder, tint = c.text3, size = 20.dp)
                         }

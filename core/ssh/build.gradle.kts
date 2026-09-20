@@ -37,6 +37,8 @@ tasks.withType<Test>().configureEach {
     environment("SSH_TEST_USER", System.getenv("SSH_TEST_USER") ?: "")
     environment("SSH_TEST_PASSWORD", System.getenv("SSH_TEST_PASSWORD") ?: "")
     environment("SSH_TEST_KEY_FILE", System.getenv("SSH_TEST_KEY_FILE") ?: "")
+    // A second sshd (same user and password, its own host keys) for the jump chain tests.
+    environment("SSH_TEST_JUMP_PORT", System.getenv("SSH_TEST_JUMP_PORT") ?: "")
     // The headless terminal demo writes PNG frames here when set; see TerminalDemoHarness.
     environment("BERTH_DEMO_OUT", System.getenv("BERTH_DEMO_OUT") ?: "")
     environment("BERTH_DEMO_FONT", System.getenv("BERTH_DEMO_FONT") ?: "")

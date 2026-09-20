@@ -16,12 +16,16 @@ import java.util.UUID
  *
  * A pinned key removes the decision: while an endpoint has a pinned key, any key that is not
  * one of its saved keys is refused without a choice, whether it is a new type or a changed one.
+ *
+ * The policy made for a jump host knows it is one ([via]), and every prompt it raises carries
+ * that, so the sheet names the hop's role and the target rather than reading as the target's.
  */
 class KnownHostsPolicy(
     private val host: Host,
     private val knownHosts: KnownHostRepository,
     private val prompts: PromptCenter,
     private val now: () -> Long = System::currentTimeMillis,
+    private val via: HopRole? = null,
 ) : HostKeyPolicy {
     override fun trustedKeys(host: String, port: Int): List<TrustedHostKey> = runBlocking {
         knownHosts.find(host, port).map { TrustedHostKey(it.keyType, it.publicKeyBase64, it.fingerprintSha256) }
@@ -30,10 +34,10 @@ class KnownHostsPolicy(
     override fun onUnknownHost(request: HostKeyRequest): Boolean = runBlocking {
         val others = knownHosts.find(request.host, request.port)
         others.firstOrNull { it.pinned }?.let { pinned ->
-            prompts.pinnedKeyRefused(host, request, pinned)
+            prompts.pinnedKeyRefused(host, request, pinned, via)
             return@runBlocking false
         }
-        val accepted = prompts.trustHostKey(host, request, others)
+        val accepted = prompts.trustHostKey(host, request, others, via)
         if (accepted) save(request)
         accepted
     }
@@ -43,10 +47,10 @@ class KnownHostsPolicy(
         val saved = all.firstOrNull { it.keyType == request.keyType }
             ?: return@runBlocking onUnknownHost(request)
         (all.firstOrNull { it.pinned && it.keyType == request.keyType } ?: all.firstOrNull { it.pinned })?.let { pinned ->
-            prompts.pinnedKeyRefused(host, request, pinned)
+            prompts.pinnedKeyRefused(host, request, pinned, via)
             return@runBlocking false
         }
-        when (prompts.hostKeyChanged(host, request, saved)) {
+        when (prompts.hostKeyChanged(host, request, saved, via)) {
             HostKeyChangedDecision.DISCONNECT -> false
             HostKeyChangedDecision.TRUST_ONCE -> true
             HostKeyChangedDecision.REPLACE_SAVED -> {

@@ -32,14 +32,27 @@ sealed interface TabKind {
         override val id: String get() = ID_FILES
     }
 
+    /**
+     * The host's port forwards with no shell (spec C14): one SSH login that only carries tunnels.
+     * It has a connection of its own, so it reconnects and holds the foreground service like an
+     * SSH tab; its stage shows each forward's state and traffic instead of a terminal.
+     */
+    @Serializable
+    @SerialName("tunnels")
+    data object Tunnels : TabKind {
+        override val id: String get() = ID_TUNNELS
+    }
+
     companion object {
         const val ID_SSH = "ssh"
         const val ID_FILES = "files"
+        const val ID_TUNNELS = "tunnels"
 
         /** The kind for a stored id; unknown ids fall back to SSH so an old build still opens a tab. */
         fun fromId(id: String?): TabKind = when (id) {
             ID_SSH, null -> Ssh
             ID_FILES -> Files
+            ID_TUNNELS -> Tunnels
             else -> Ssh
         }
     }

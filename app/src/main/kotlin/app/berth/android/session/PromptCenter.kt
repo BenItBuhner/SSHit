@@ -13,41 +13,55 @@ import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Where a host sits in a login's jump chain: hop [index] (zero-based) of [count], on the way to
+ * [target]. A key decision about a hop carries this, so its sheet says it is a jump host and
+ * where the chain is going, while the tab behind it is titled with the target.
+ */
+data class HopRole(val index: Int, val count: Int, val target: Host) {
+    /** `It is hop 1 of 2 on the way to prod-db.` */
+    val sentence: String get() = "It is hop ${index + 1} of $count on the way to ${target.name}."
+}
+
 /** Something the transport needs a human for. The UI shows exactly one at a time. */
 sealed interface Prompt {
     val host: Host
 
-    /** First contact: trust on first use. */
+    /** First contact: trust on first use. [via] is set when [host] is a jump host of the login being made. */
     class TrustHostKey(
         override val host: Host,
         val request: HostKeyRequest,
         /** Keys already saved for this endpoint but of other types (rotation), if any. */
         val otherKnown: List<KnownHostKey>,
         internal val answer: CompletableDeferred<Boolean>,
+        val via: HopRole? = null,
     ) : Prompt {
         fun trust() = answer.complete(true)
         fun cancel() = answer.complete(false)
     }
 
-    /** A saved key of the same type no longer matches. */
+    /** A saved key of the same type no longer matches. [via] is set when [host] is a jump host of the login being made. */
     class HostKeyChanged(
         override val host: Host,
         val request: HostKeyRequest,
         val saved: KnownHostKey,
         internal val answer: CompletableDeferred<HostKeyChangedDecision>,
+        val via: HopRole? = null,
     ) : Prompt {
         fun decide(decision: HostKeyChangedDecision) = answer.complete(decision)
     }
 
     /**
      * The server offered a key that a pinned entry rules out. There is nothing to decide: the
-     * connection is refused, and this explains why and where to unpin.
+     * connection is refused, and this explains why and where to unpin. [via] is set when [host]
+     * is a jump host of the login being made.
      */
     class PinnedKeyRefused(
         override val host: Host,
         val request: HostKeyRequest,
         val pinned: KnownHostKey,
         internal val answer: CompletableDeferred<Unit>,
+        val via: HopRole? = null,
     ) : Prompt {
         fun acknowledge() = answer.complete(Unit)
     }
@@ -122,14 +136,14 @@ class PromptCenter @Inject constructor() {
         }
     }
 
-    suspend fun trustHostKey(host: Host, request: HostKeyRequest, otherKnown: List<KnownHostKey>): Boolean =
-        ask { Prompt.TrustHostKey(host, request, otherKnown, it) }
+    suspend fun trustHostKey(host: Host, request: HostKeyRequest, otherKnown: List<KnownHostKey>, via: HopRole? = null): Boolean =
+        ask { Prompt.TrustHostKey(host, request, otherKnown, it, via) }
 
-    suspend fun hostKeyChanged(host: Host, request: HostKeyRequest, saved: KnownHostKey): HostKeyChangedDecision =
-        ask { Prompt.HostKeyChanged(host, request, saved, it) }
+    suspend fun hostKeyChanged(host: Host, request: HostKeyRequest, saved: KnownHostKey, via: HopRole? = null): HostKeyChangedDecision =
+        ask { Prompt.HostKeyChanged(host, request, saved, it, via) }
 
-    suspend fun pinnedKeyRefused(host: Host, request: HostKeyRequest, pinned: KnownHostKey) {
-        ask { Prompt.PinnedKeyRefused(host, request, pinned, it) }
+    suspend fun pinnedKeyRefused(host: Host, request: HostKeyRequest, pinned: KnownHostKey, via: HopRole? = null) {
+        ask { Prompt.PinnedKeyRefused(host, request, pinned, it, via) }
     }
 
     suspend fun password(host: Host, serverPrompt: String? = null, instruction: String? = null): CharArray? =

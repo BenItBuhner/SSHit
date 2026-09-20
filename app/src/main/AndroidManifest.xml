@@ -30,6 +30,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- ssh://user@host:port and sftp://user@host:port/path from browsers, mail and other
+                 apps; read in onResume and acted on by the view model (SshLink, AppViewModel.openLink). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ssh" />
+                <data android:scheme="sftp" />
+            </intent-filter>
         </activity>
 
         <!-- The lock screen's window, over MainActivity in the same task while the app is locked: a

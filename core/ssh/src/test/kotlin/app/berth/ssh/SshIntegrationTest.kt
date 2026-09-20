@@ -4,10 +4,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -26,7 +29,9 @@ import kotlin.test.assertTrue
 /**
  * Exercises the transport against a live sshd. Opt in with environment variables:
  * `SSH_TEST_HOST`, `SSH_TEST_PORT`, `SSH_TEST_USER`, `SSH_TEST_PASSWORD`, and optionally
- * `SSH_TEST_KEY_FILE` (an unencrypted private key authorised for that user).
+ * `SSH_TEST_KEY_FILE` (an unencrypted private key authorised for that user). The jump chain
+ * tests need a second sshd on `SSH_TEST_JUMP_PORT` (same user and password, its own host keys):
+ * the first instance is the hop, the second the target reached through it.
  */
 class SshIntegrationTest {
     private val host = System.getenv("SSH_TEST_HOST").orEmpty()
@@ -34,6 +39,7 @@ class SshIntegrationTest {
     private val user = System.getenv("SSH_TEST_USER").orEmpty()
     private val password = System.getenv("SSH_TEST_PASSWORD").orEmpty()
     private val keyFile = System.getenv("SSH_TEST_KEY_FILE").orEmpty()
+    private val jumpPort = System.getenv("SSH_TEST_JUMP_PORT").orEmpty().toIntOrNull()
 
     @Before
     fun requireServer() {
@@ -41,8 +47,146 @@ class SshIntegrationTest {
         SshSecurity.ensureProviders()
     }
 
-    private fun passwordEndpoint(pw: String = password) =
-        SshEndpoint(host = host, port = port, user = user, auth = listOf(SshAuth.Password { pw.toCharArray() }), keepaliveSeconds = 5)
+    private fun passwordEndpoint(pw: String = password, onPort: Int = port) =
+        SshEndpoint(host = host, port = onPort, user = user, auth = listOf(SshAuth.Password { pw.toCharArray() }), keepaliveSeconds = 5)
+
+    /** The second sshd, reached through the first: the chain's target. */
+    private fun targetBeyondJump(): SshEndpoint {
+        assumeTrue("set SSH_TEST_JUMP_PORT to a second sshd to run", jumpPort != null)
+        return passwordEndpoint(onPort = jumpPort!!)
+    }
+
+    /** A policy that records the host key requests it accepted, so a test can tell which endpoint was checked. */
+    private class RecordingPolicy : HostKeyPolicy by AcceptAllHostKeys {
+        val seen = ArrayList<HostKeyRequest>()
+        override fun onUnknownHost(request: HostKeyRequest): Boolean { seen += request; return true }
+    }
+
+    @Test
+    fun `a jump chain logs in through the first sshd into the second, each hop checked on its own host key`() = runBlocking {
+        val target = targetBeyondJump()
+        val direct = RecordingPolicy()
+        SshConnection(target, direct).use { it.connect() }
+        val targetKey = assertNotNull(direct.seen.singleOrNull()).fingerprintSha256
+
+        val hopPolicy = RecordingPolicy()
+        val targetPolicy = RecordingPolicy()
+        SshConnection(target, targetPolicy, jumpHosts = listOf(SshHop(passwordEndpoint(), hopPolicy))).use { connection ->
+            connection.connect()
+            assertTrue(connection.isConnected)
+            assertEquals(SshConnectionState.Connected, connection.state.value)
+            assertEquals(user, connection.exec("printf %s \"\$USER\""))
+            // The target is the second instance: its key, seen through the tunnel, is the one a direct login saw.
+            assertEquals(targetKey, connection.serverHostKeyFingerprint)
+        }
+        val hop = assertNotNull(hopPolicy.seen.singleOrNull(), "the hop's policy checks the hop")
+        assertEquals(port, hop.port)
+        val end = assertNotNull(targetPolicy.seen.singleOrNull(), "the target's policy checks the target")
+        assertEquals(jumpPort, end.port)
+        assertEquals(targetKey, end.fingerprintSha256)
+        assertTrue(hop.fingerprintSha256 != end.fingerprintSha256, "two instances, two host keys")
+    }
+
+    @Test
+    fun `a hop whose host key is refused fails naming that hop, and the target is never asked`() = runBlocking {
+        val target = targetBeyondJump()
+        val refusing = object : HostKeyPolicy {
+            override fun trustedKeys(host: String, port: Int) = emptyList<TrustedHostKey>()
+            override fun onUnknownHost(request: HostKeyRequest) = false
+            override fun onChangedHostKey(request: HostKeyRequest, known: List<TrustedHostKey>) = false
+        }
+        val targetPolicy = RecordingPolicy()
+        val error = assertFailsWith<SshError.JumpHopFailed> {
+            SshConnection(target, targetPolicy, jumpHosts = listOf(SshHop(passwordEndpoint(), refusing))).use { it.connect() }
+        }
+        assertEquals(0, error.hop)
+        assertEquals(1, error.hopCount)
+        assertEquals(port, error.port)
+        assertTrue(error.reason is SshError.HostKeyRejected, "reason was ${error.reason}")
+        assertTrue(!error.isTransientSshFailure(), "a refused key is not something a retry fixes")
+        assertTrue(targetPolicy.seen.isEmpty())
+    }
+
+    @Test
+    fun `a hop that rejects the login fails naming that hop`() = runBlocking {
+        val target = targetBeyondJump()
+        val error = assertFailsWith<SshError.JumpHopFailed> {
+            SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(pw = "definitely-wrong"), AcceptAllHostKeys))).use { it.connect() }
+        }
+        assertEquals(0, error.hop)
+        assertTrue(error.reason is SshError.AuthenticationFailed, "reason was ${error.reason}")
+        assertTrue(error.message!!.contains("hop 1 of 1"), error.message!!)
+        assertTrue(!error.isTransientSshFailure())
+    }
+
+    @Test
+    fun `an unreachable hop fails naming that hop and stays transient`() = runBlocking {
+        val target = targetBeyondJump()
+        val dead = SshEndpoint(host = "127.0.0.1", port = 1, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }), connectTimeoutMillis = 2_000)
+        val error = assertFailsWith<SshError.JumpHopFailed> {
+            SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(), AcceptAllHostKeys), SshHop(dead, AcceptAllHostKeys))).use { it.connect() }
+        }
+        assertEquals(1, error.hop)
+        assertEquals(2, error.hopCount)
+        assertEquals(1, error.port)
+        assertTrue(error.reason is SshError.ConnectFailed, "reason was ${error.reason}")
+        assertTrue(error.isTransientSshFailure())
+    }
+
+    /**
+     * A hop that accepts the socket and never speaks holds the login at its greeting; the state
+     * names the hop the whole while, and closing the connection then drops that socket and ends
+     * the attempt, rather than leaving it blocked on a hop no tab wants any more.
+     */
+    @Test
+    fun `closing while a hop hangs at its greeting drops its socket and ends the connect`() = runBlocking {
+        val silent = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        try {
+            val hop = SshEndpoint(host = "127.0.0.1", port = silent.localPort, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }))
+            val connection = SshConnection(passwordEndpoint(), AcceptAllHostKeys, jumpHosts = listOf(SshHop(hop, AcceptAllHostKeys)))
+            val attempt = async(Dispatchers.IO) { runCatching { connection.connect() } }
+            val accepted = withTimeout(5_000) { withContext(Dispatchers.IO) { silent.accept() } }
+            withTimeout(5_000) { connection.state.first { it is SshConnectionState.ConnectingVia } }
+            delay(300)
+            assertTrue(attempt.isActive, "the greeting never comes, so the connect is still waiting for it")
+            assertEquals(SshConnectionState.ConnectingVia(0, 1, "127.0.0.1"), connection.state.value)
+
+            connection.close()
+            val outcome = withTimeout(5_000) { attempt.await() }
+            assertTrue(outcome.isFailure, "the attempt ends with the close")
+            assertTrue(connection.state.value is SshConnectionState.Disconnected, "state was ${connection.state.value}")
+            // The client greets first and then waits; what the hop hears is that greeting, then the socket closing under it.
+            accepted.soTimeout = 5_000
+            val heard = String(accepted.getInputStream().readBytes(), Charsets.ISO_8859_1)
+            assertTrue(heard.startsWith("SSH-2.0"), "the hop heard the greeting and then the close: $heard")
+            accepted.close()
+        } finally {
+            silent.close()
+        }
+    }
+
+    @Test
+    fun `forwards through a jump chain carry traffic and count it`() = runBlocking {
+        val target = targetBeyondJump()
+        SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(), AcceptAllHostKeys))).use { connection ->
+            connection.connect()
+            val forward = connection.startLocalForward("127.0.0.1", 0, "127.0.0.1", jumpPort!!)
+            try {
+                val banner = withTimeout(10_000) {
+                    Socket("127.0.0.1", forward.localPort).use { socket ->
+                        socket.soTimeout = 8_000
+                        socket.getOutputStream().write("SSH-2.0-berth-probe\r\n".toByteArray())
+                        socket.getOutputStream().flush()
+                        socket.getInputStream().bufferedReader().readLine()
+                    }
+                }
+                assertTrue(banner.startsWith("SSH-2.0"), "got banner: $banner")
+                awaitTraffic(forward.traffic) { it.bytesDown >= banner.length && it.bytesUp >= 21 && it.connections == 1 }
+            } finally {
+                forward.close()
+            }
+        }
+    }
 
     @Test
     fun `password auth, interactive shell, resize and clean exit`() = runBlocking {
@@ -175,6 +319,9 @@ class SshIntegrationTest {
                     }
                 }
                 assertTrue(banner.startsWith("SSH-2.0"), "got banner: $banner")
+                // The banner came down the tunnel; nothing went up yet, and one connection was carried.
+                awaitTraffic(forward.traffic) { it.bytesDown >= banner.length && it.connections == 1 }
+                assertEquals(0L, forward.traffic.bytesUp)
             } finally {
                 forward.close()
             }
@@ -206,6 +353,8 @@ class SshIntegrationTest {
                     }
                 }
                 assertTrue(banner.startsWith("SSH-2.0"), "got banner: $banner")
+                // The SOCKS handshake itself is not counted, only what the proxied connection carried.
+                awaitTraffic(forward.traffic) { it.bytesDown >= banner.length && it.connections == 1 }
 
                 // A port nobody listens on comes back as "connection refused" rather than a hang.
                 withTimeout(10_000) {
@@ -255,6 +404,8 @@ class SshIntegrationTest {
                         }
                     }
                     assertEquals("echo:ping", reply)
+                    // "ping" came down from the server to the echo listener; its answer went back up.
+                    awaitTraffic(forward.traffic) { it.bytesDown >= 5 && it.bytesUp >= 10 && it.connections == 1 }
                 } finally {
                     forward.close()
                 }
@@ -272,6 +423,12 @@ class SshIntegrationTest {
             SshConnection(endpoint, AcceptAllHostKeys).use { it.connect() }
         }
         assertTrue(error.isTransientSshFailure())
+    }
+
+    /** Counters are bumped on the pump threads a moment after the bytes land, so a check waits for them. */
+    private suspend fun awaitTraffic(traffic: ForwardTraffic, timeoutMillis: Long = 5_000, ready: (ForwardTraffic) -> Boolean) = withTimeout(timeoutMillis) {
+        while (!ready(traffic)) delay(20)
+        assertTrue(ready(traffic), "traffic: up=${traffic.bytesUp} down=${traffic.bytesDown} connections=${traffic.connections}")
     }
 
     /** Single consumer of the shell's output; tests wait on it rather than racing reads. */

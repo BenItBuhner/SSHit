@@ -43,6 +43,7 @@ import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
+import app.berth.android.ui.hosts.QuickConnectSheet
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
@@ -58,6 +59,8 @@ import app.berth.android.ui.stage.LocalHapticLevel
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.tabs.ReopenBar
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabSheets
@@ -69,13 +72,15 @@ import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.android.ui.themes.TerminalThemeEditorScreen
 import app.berth.android.ui.themes.ThemeScope
 import app.berth.android.ui.themes.ThemesScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 sealed interface Screen : NavKey {
     @Serializable data object Stage : Screen
     @Serializable data class Hosts(val picker: Boolean = false) : Screen
-    @Serializable data class HostEditor(val hostId: String?) : Screen
+    /** The editor for [hostId], or for a new host; [link] is the `ssh://` or `sftp://` link a new host starts from, or one whose forwards a saved host has to confirm. */
+    @Serializable data class HostEditor(val hostId: String?, val link: String? = null) : Screen
     @Serializable data object Keys : Screen
     @Serializable data object Settings : Screen
     @Serializable data object KnownHosts : Screen
@@ -139,6 +144,34 @@ private fun Shell(vm: AppViewModel) {
             toStage()
             if (drawer.isOpen) drawer.close()
         }
+    }
+
+    // An ssh:// or sftp:// link (AppViewModel.openLink): a tab opened, so the Stage; no host and a
+    // plain link, so Quick connect prefilled; no host and more than a shell asked for, so the editor
+    // prefilled from the link; a host but forwards it does not have, so that host's editor with them
+    // pending; unreadable, so a notice saying what was wrong.
+    val linkOutcome by vm.linkOutcome.collectAsState()
+    var linkNotice by remember { mutableStateOf<String?>(null) }
+    var quickConnectSpec by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(linkOutcome) {
+        when (val outcome = linkOutcome) {
+            null -> return@LaunchedEffect
+            LinkOutcome.Staged -> {
+                sessionSheet = false
+                toStage()
+                if (drawer.isOpen) drawer.close()
+            }
+            is LinkOutcome.QuickConnect -> quickConnectSpec = outcome.spec
+            is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
+            is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
+            is LinkOutcome.Malformed -> linkNotice = outcome.reason
+        }
+        vm.clearLinkOutcome()
+    }
+    LaunchedEffect(linkNotice) {
+        if (linkNotice == null) return@LaunchedEffect
+        delay(NOTICE_BAR_MS)
+        linkNotice = null
     }
 
     val onStage = backStack.lastOrNull() == Screen.Stage
@@ -209,6 +242,10 @@ private fun Shell(vm: AppViewModel) {
                                 vm.openFilesForHost(host)
                                 toStage()
                             },
+                            onTunnels = { host ->
+                                vm.openTunnels(host)
+                                toStage()
+                            },
                             onAddHost = { go(Screen.HostEditor(null)) },
                             onEditHost = { go(Screen.HostEditor(it)) },
                             onBack = { back() },
@@ -218,7 +255,7 @@ private fun Shell(vm: AppViewModel) {
                         )
                     }
                     is Screen.HostEditor -> NavEntry(key) {
-                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() })
+                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() }, link = key.link)
                     }
                     is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
                     is Screen.Settings -> NavEntry(key) {
@@ -277,8 +314,34 @@ private fun Shell(vm: AppViewModel) {
         )
     }
     TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
+    // A plain link's landing (spec, Deep links): Quick connect over whatever is up, the link's address in its field.
+    quickConnectSpec?.let { spec ->
+        QuickConnectSheet(
+            vm = vm,
+            initialSpec = spec,
+            onDismiss = { quickConnectSpec = null },
+            onConnected = {
+                quickConnectSpec = null
+                sessionSheet = false
+                toStage()
+                if (drawer.isOpen) closeDrawer()
+            },
+        )
+    }
     Box(Modifier.fillMaxSize()) {
         ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
+        // The link notice is kept through the bar's exit, so the text does not blank as it slides away.
+        // It is the parser's reason alone (`The IPv6 address is missing its closing bracket.`): the
+        // bar has one line, and the reason says it was the link.
+        val shownNotice = remember { mutableStateOf(linkNotice) }
+        if (linkNotice != null) shownNotice.value = linkNotice
+        NoticeBar(
+            visible = linkNotice != null,
+            text = shownNotice.value ?: "",
+            action = "OK",
+            onAction = { linkNotice = null },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)

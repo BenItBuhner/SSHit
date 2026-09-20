@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -71,6 +72,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.berth.android.session.FailedHop
 import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
@@ -92,6 +94,7 @@ import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.tabs.rememberTabStripState
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
+import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -220,7 +223,8 @@ fun StageScreen(
         when {
             tab != null -> holder.SaveableStateProvider(tab.id) {
                 when (tab) {
-                    is TerminalSession -> StageBody(
+                    // A Tunnels tab is a login with no shell: its stage is the forwards, over the same pill, with no Deck.
+                    is TerminalSession -> if (tab.tunnelsOnly) TunnelsTabBody(vm = vm, session = tab, onEditHost = onEditHost, modifier = body) else StageBody(
                         vm = vm,
                         session = tab,
                         tools = tools,
@@ -328,9 +332,15 @@ private fun StageOverflow(
                 } else {
                     if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(tab.id) }
                     if (record.state.isActive) item("Detach") { actions.detach(tab.id) }
-                    item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
-                    item("Find", action = onFind)
-                    item("History", action = onHistory)
+                    if (tab.kind == TabKind.Tunnels) {
+                        // No shell behind a Tunnels tab: no Deck, nothing to find or to have run; a terminal or Files on the host is one row away.
+                        item("Terminal") { actions.openTerminal(tab.id) }
+                        item("Files") { actions.openFiles(tab.id) }
+                    } else {
+                        item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
+                        item("Find", action = onFind)
+                        item("History", action = onHistory)
+                    }
                 }
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
@@ -475,13 +485,15 @@ private fun StageBody(
             NoticePill(tools, Modifier.align(Alignment.TopCenter))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
-                    plain = failure?.first ?: "Couldn't connect.",
-                    raw = failure?.second,
+                    plain = failure?.plain ?: "Couldn't connect.",
+                    raw = failure?.raw,
                     onRetry = { vm.reconnect(session.id) },
                     onEditHost = record.hostId?.let { id -> { onEditHost(id) } },
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(20.dp),
+                    hop = failure?.hop,
+                    onEditHop = { onEditHost(it.hostId) },
                 )
             }
         }
@@ -493,6 +505,7 @@ private fun StageBody(
             onReconnect = { vm.reconnect(session.id) },
             onDetach = { vm.detach(session.id) },
             onClose = { vm.close(session.id) },
+            via = session.via,
         )
 
         // The bottom chrome takes the larger of the keyboard and navigation-bar insets, so the Deck
@@ -602,7 +615,8 @@ private val StatePillHeight = 32.dp
  * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live. The age
  * follows its own clock unless a [now] is given, and the reconnect countdown is collected here
  * from [retryIn], so the minute tick and the 1 Hz backoff tick recompose the pill alone and the
- * Stage around it never re-runs for either.
+ * Stage around it never re-runs for either. While a jump chain is being made, [via] names the hop
+ * (`Connecting via bastion (1 of 2)…`), so a slow or failing hop is seen as that hop.
  */
 @Composable
 internal fun StatePill(
@@ -613,15 +627,17 @@ internal fun StatePill(
     onDetach: () -> Unit,
     onClose: () -> Unit,
     now: Long? = null,
+    via: StateFlow<String?>? = null,
 ) {
     val c = Berth.colors
     if (state != SessionState.RECONNECTING && state != SessionState.DETACHED && state != SessionState.CONNECTING && state != SessionState.IDLE) return
     val clock = now ?: ageTicker()
     val seconds = retryIn?.collectAsState()?.value
+    val hop = via?.collectAsState()?.value?.let { " $it" } ?: ""
     val (text, actions) = when (state) {
         // Spec D4: "Connecting…" over the dimmed previous frame, no actions until the connect resolves.
-        SessionState.CONNECTING, SessionState.IDLE -> "Connecting\u2026" to emptyList()
-        SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
+        SessionState.CONNECTING, SessionState.IDLE -> "Connecting$hop\u2026" to emptyList()
+        SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting$hop\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
     Box(
@@ -684,9 +700,23 @@ private fun PillAction(label: String, onClick: () -> Unit) {
     }
 }
 
-/** Radius 20 panel over the terminal with the plain reason and the raw error behind Details. */
+/**
+ * Radius 20 panel over the terminal (or the Tunnels stage) with the plain reason and the raw error
+ * behind Details. When the login failed at a jump host ([hop]), the credentials or key that failed
+ * are that host's, so the action beside Retry opens its editor, named for it (`Edit old bastion`,
+ * or `Edit jump host` when the name is long); the target's editor stays a text action behind it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FailedPanel(plain: String, raw: String?, onRetry: () -> Unit, onEditHost: (() -> Unit)?, modifier: Modifier = Modifier) {
+internal fun FailedPanel(
+    plain: String,
+    raw: String?,
+    onRetry: () -> Unit,
+    onEditHost: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    hop: FailedHop? = null,
+    onEditHop: ((FailedHop) -> Unit)? = null,
+) {
     val c = Berth.colors
     var details by remember { mutableStateOf(false) }
     Column(
@@ -707,12 +737,23 @@ private fun FailedPanel(plain: String, raw: String?, onRetry: () -> Unit, onEdit
                 modifier = Modifier.clickable { details = !details },
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // A flow, so a third action or a long hop name wraps under the first two rather than leaving the panel.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BerthButton("Retry", onClick = onRetry, kind = ButtonKind.PRIMARY)
-            if (onEditHost != null) BerthButton("Edit host", onClick = onEditHost)
+            if (hop != null && onEditHop != null) {
+                BerthButton(editHopLabel(hop.name), onClick = { onEditHop(hop) })
+                if (onEditHost != null) BerthButton("Edit host", onClick = onEditHost, kind = ButtonKind.TEXT)
+            } else if (onEditHost != null) {
+                BerthButton("Edit host", onClick = onEditHost)
+            }
         }
     }
 }
+
+/** `Edit old bastion` while the name fits a button beside Retry; `Edit jump host` for a longer one. */
+internal fun editHopLabel(name: String): String = if (name.length <= MAX_HOP_LABEL_CHARS) "Edit $name" else "Edit jump host"
+
+private const val MAX_HOP_LABEL_CHARS = 16
 
 /** "4 min ago" style ages; re-evaluated by callers each minute through [ageTicker]. */
 fun ageText(since: Long?, now: Long = System.currentTimeMillis()): String {

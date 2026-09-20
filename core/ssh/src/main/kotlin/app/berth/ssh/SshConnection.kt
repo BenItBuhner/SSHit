@@ -13,11 +13,8 @@ import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.DisconnectReason
 import net.schmizz.sshj.connection.ConnectionException
-import net.schmizz.sshj.connection.channel.direct.LocalPortForwarder
-import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.connection.channel.forwarded.RemotePortForwarder
-import net.schmizz.sshj.connection.channel.forwarded.SocketForwardingConnectListener
 import net.schmizz.sshj.sftp.SFTPClient
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
@@ -31,7 +28,6 @@ import net.schmizz.sshj.userauth.password.PasswordFinder
 import net.schmizz.sshj.userauth.password.Resource
 import java.io.Closeable
 import java.io.IOException
-import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -66,16 +62,33 @@ data class SshEndpoint(
     val preferIpv6: Boolean? = null,
 )
 
+/**
+ * One hop of a ProxyJump chain: where to log in and whose word to take on its host key. Each hop
+ * carries its own [SshEndpoint.auth] and is checked against the known hosts for its own address,
+ * so a jump host is trusted or refused on its own record, never on the target's.
+ */
+class SshHop(val endpoint: SshEndpoint, val hostKeyPolicy: HostKeyPolicy)
+
 sealed class SshError(message: String, cause: Throwable? = null) : Exception(message, cause) {
     class HostKeyRejected(host: String) : SshError("Host key for $host was not trusted")
     class AuthenticationFailed(user: String, cause: Throwable?) : SshError("Authentication failed for $user", cause)
     class ConnectFailed(host: String, port: Int, cause: Throwable) : SshError("Couldn't reach $host:$port: ${cause.message ?: cause.javaClass.simpleName}", cause)
     class Disconnected(reason: String) : SshError(reason)
+
+    /**
+     * A jump host, not the target, failed: [reason] is what went wrong there, [hop] which hop
+     * (0-based) of [hopCount] it was. The connect flow names the hop so the user fixes the right host.
+     */
+    class JumpHopFailed(val hop: Int, val hopCount: Int, val host: String, val port: Int, val user: String, val reason: SshError) :
+        SshError("Jump host $host${if (port == 22) "" else ":$port"} (hop ${hop + 1} of $hopCount): ${reason.message}", reason)
 }
 
 sealed interface SshConnectionState {
     data object Idle : SshConnectionState
     data object Connecting : SshConnectionState
+
+    /** Logging in to jump host [host], hop [hop] (0-based) of [hopCount], on the way to the target. */
+    data class ConnectingVia(val hop: Int, val hopCount: Int, val host: String) : SshConnectionState
     data object Authenticating : SshConnectionState
     data object Connected : SshConnectionState
     data class Disconnected(val reason: String, val error: Throwable?) : SshConnectionState
@@ -148,25 +161,38 @@ class ShellChannel internal constructor(
 class ForwardHandle internal constructor(
     /** For local forwards, the port actually bound (useful when 0 was requested). */
     val localPort: Int,
+    /** Bytes and connections carried so far; live, read it again for the next tick. */
+    val traffic: ForwardTraffic,
     private val onClose: () -> Unit,
 ) : Closeable {
     override fun close() = onClose()
 }
 
 /**
- * One SSH connection to one endpoint, optionally through a chain of jump hosts. Wraps sshj with a
+ * One SSH connection to one endpoint, optionally through a chain of jump hosts ([jumpHosts],
+ * first hop first, each with its own login and host key trust). Wraps sshj with a
  * coroutine-friendly surface; every blocking call runs on [Dispatchers.IO].
  */
 class SshConnection(
     private val endpoint: SshEndpoint,
     private val hostKeyPolicy: HostKeyPolicy,
-    private val jumpHosts: List<SshEndpoint> = emptyList(),
+    private val jumpHosts: List<SshHop> = emptyList(),
 ) : Closeable {
     private val _state = MutableStateFlow<SshConnectionState>(SshConnectionState.Idle)
     val state: StateFlow<SshConnectionState> = _state.asStateFlow()
 
     private var client: SSHClient? = null
     private val hops = ArrayList<SSHClient>()
+
+    /**
+     * The client whose connect or login is in flight: a hop before it joins [hops], the target
+     * before it becomes [client]. A [close] in that moment drops it too, so a hop that hangs at its
+     * greeting (or a slow target) does not keep its socket past the tab that wanted it.
+     */
+    @Volatile private var connecting: SSHClient? = null
+
+    /** Set by [close]; a connect still running ends at its next stage rather than open a login nobody holds. */
+    @Volatile private var closed = false
 
     /** Invoked from sshj's transport thread when the connection drops for any reason. */
     var onDisconnected: ((SshError.Disconnected) -> Unit)? = null
@@ -188,14 +214,23 @@ class SshConnection(
         _state.value = SshConnectionState.Connecting
         try {
             var previous: SSHClient? = null
-            for (hop in jumpHosts) {
-                val hopClient = newClient(hop)
-                connectClient(hopClient, hop, previous)
-                authenticate(hopClient, hop)
+            jumpHosts.forEachIndexed { index, hop ->
+                val ep = hop.endpoint
+                _state.value = SshConnectionState.ConnectingVia(index, jumpHosts.size, ep.host)
+                val hopClient = begin(newClient(ep, hop.hostKeyPolicy, isTarget = false))
+                try {
+                    connectClient(hopClient, ep, previous)
+                    authenticate(hopClient, ep)
+                } catch (e: Throwable) {
+                    runCatching { hopClient.disconnect() }
+                    throw SshError.JumpHopFailed(index, jumpHosts.size, ep.host, ep.port, ep.user, e.toSshError(ep))
+                }
                 hops += hopClient
+                connecting = null
                 previous = hopClient
             }
-            val target = newClient(endpoint)
+            _state.value = SshConnectionState.Connecting
+            val target = begin(newClient(endpoint, hostKeyPolicy, isTarget = true))
             connectClient(target, endpoint, previous)
             _state.value = SshConnectionState.Authenticating
             authenticate(target, endpoint)
@@ -206,6 +241,9 @@ class SshConnection(
                 onDisconnected?.invoke(error)
             }
             client = target
+            connecting = null
+            // Closed while the login was finishing: the catch drops what was made instead of leaving it up.
+            if (closed) throw SshError.Disconnected("closed")
             _state.value = SshConnectionState.Connected
         } catch (e: Throwable) {
             closeQuietly()
@@ -213,6 +251,13 @@ class SshConnection(
             _state.value = SshConnectionState.Disconnected(error.message ?: "disconnected", error)
             throw error
         }
+    }
+
+    /** Registers [c] as the client in flight; after a [close] the attempt ends here, before the client opens anything. */
+    private fun begin(c: SSHClient): SSHClient {
+        connecting = c
+        if (closed) throw SshError.Disconnected("closed")
+        return c
     }
 
     private fun Throwable.toSshError(ep: SshEndpoint): SshError = when (this) {
@@ -224,28 +269,27 @@ class SshConnection(
         else -> SshError.ConnectFailed(ep.host, ep.port, this)
     }
 
-    private fun newClient(ep: SshEndpoint): SSHClient {
+    private fun newClient(ep: SshEndpoint, policy: HostKeyPolicy, isTarget: Boolean): SSHClient {
         val config = DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE }
         val c = SSHClient(config)
-        val isTarget = ep === endpoint
         c.addHostKeyVerifier(
             PolicyHostKeyVerifier(
                 host = ep.host,
                 port = ep.port,
-                policy = object : HostKeyPolicy by hostKeyPolicy {
+                policy = object : HostKeyPolicy by policy {
                 override fun onKnownHostSeen(request: HostKeyRequest) {
                     if (isTarget) remember(request)
-                    hostKeyPolicy.onKnownHostSeen(request)
+                    policy.onKnownHostSeen(request)
                 }
 
                 override fun onUnknownHost(request: HostKeyRequest): Boolean {
                     if (isTarget) remember(request)
-                    return hostKeyPolicy.onUnknownHost(request)
+                    return policy.onUnknownHost(request)
                 }
 
                 override fun onChangedHostKey(request: HostKeyRequest, known: List<TrustedHostKey>): Boolean {
                     if (isTarget) remember(request)
-                    return hostKeyPolicy.onChangedHostKey(request, known)
+                    return policy.onChangedHostKey(request, known)
                 }
             },
             ),
@@ -346,7 +390,11 @@ class SshConnection(
         }
     }
 
-    /** Forwards [bindAddress]:[bindPort] on this device to [destHost]:[destPort] as seen from the server. */
+    /**
+     * Forwards [bindAddress]:[bindPort] on this device to [destHost]:[destPort] as seen from the
+     * server (`ssh -L`). Each accepted connection becomes a `direct-tcpip` channel; the handle's
+     * traffic counts what they carry.
+     */
     suspend fun startLocalForward(bindAddress: String, bindPort: Int, destHost: String, destPort: Int): ForwardHandle =
         withContext(Dispatchers.IO) {
             val c = client ?: throw SshError.Disconnected("not connected")
@@ -354,28 +402,29 @@ class SshConnection(
                 reuseAddress = true
                 bind(InetSocketAddress(bindAddress, bindPort))
             }
-            val forwarder: LocalPortForwarder =
-                c.newLocalPortForwarder(Parameters(bindAddress, socket.localPort, destHost, destPort), socket)
-            val thread = Thread({ runCatching { forwarder.listen() } }, "berth-forward-${socket.localPort}").apply {
+            val traffic = ForwardTraffic()
+            val forwarder = LocalForwarder(socket, traffic) { ChannelStream(c.newDirectConnection(destHost, destPort)) }
+            val thread = Thread({ forwarder.listen() }, "berth-forward-${socket.localPort}").apply {
                 isDaemon = true
                 start()
             }
-            ForwardHandle(socket.localPort) {
-                runCatching { forwarder.close() }
-                runCatching { socket.close() }
+            ForwardHandle(socket.localPort, traffic) {
+                forwarder.close()
                 thread.interrupt()
             }
         }
 
-    /** Asks the server to listen on [remoteBind]:[remotePort] and deliver connections to [destHost]:[destPort] here. */
+    /** Asks the server to listen on [remoteBind]:[remotePort] and deliver connections to [destHost]:[destPort] here (`ssh -R`). */
     suspend fun startRemoteForward(remoteBind: String, remotePort: Int, destHost: String, destPort: Int): ForwardHandle =
         withContext(Dispatchers.IO) {
             val c = client ?: throw SshError.Disconnected("not connected")
-            val forward = c.remotePortForwarder.bind(
-                RemotePortForwarder.Forward(remoteBind, remotePort),
-                SocketForwardingConnectListener(InetSocketAddress(destHost, destPort)),
-            )
-            ForwardHandle(forward.port) { runCatching { c.remotePortForwarder.cancel(forward) } }
+            val traffic = ForwardTraffic()
+            val listener = CountingConnectListener(InetSocketAddress(destHost, destPort), traffic)
+            val forward = c.remotePortForwarder.bind(RemotePortForwarder.Forward(remoteBind, remotePort), listener)
+            ForwardHandle(forward.port, traffic) {
+                runCatching { c.remotePortForwarder.cancel(forward) }
+                listener.close()
+            }
         }
 
     /**
@@ -388,25 +437,20 @@ class SshConnection(
             reuseAddress = true
             bind(InetSocketAddress(bindAddress, bindPort))
         }
-        val proxy = SocksProxy(socket) { host, port ->
-            val channel = c.newDirectConnection(host, port)
-            object : ForwardedStream {
-                override val input: InputStream get() = channel.inputStream
-                override val output: OutputStream get() = channel.outputStream
-                override fun close() = channel.close()
-            }
-        }
+        val traffic = ForwardTraffic()
+        val proxy = SocksProxy(socket, traffic) { host, port -> ChannelStream(c.newDirectConnection(host, port)) }
         val thread = Thread({ proxy.listen() }, "berth-socks-${socket.localPort}").apply {
             isDaemon = true
             start()
         }
-        ForwardHandle(socket.localPort) {
+        ForwardHandle(socket.localPort, traffic) {
             proxy.close()
             thread.interrupt()
         }
     }
 
     override fun close() {
+        closed = true
         closeQuietly()
         if (_state.value !is SshConnectionState.Disconnected) {
             _state.value = SshConnectionState.Disconnected("closed", null)
@@ -419,6 +463,9 @@ class SshConnection(
             runCatching { c.disconnect() }
         }
         client = null
+        // Closing the in-flight client's streams ends the blocked greeting or login on the connecting thread.
+        connecting?.let { c -> runCatching { c.disconnect() } }
+        connecting = null
         hops.asReversed().forEach { runCatching { it.disconnect() } }
         hops.clear()
     }
@@ -427,6 +474,7 @@ class SshConnection(
 /** True for the failures that a reconnect loop should treat as transient. */
 fun Throwable.isTransientSshFailure(): Boolean = when (this) {
     is SshError.HostKeyRejected, is SshError.AuthenticationFailed -> false
+    is SshError.JumpHopFailed -> reason.isTransientSshFailure()
     is SshError.ConnectFailed, is SshError.Disconnected -> true
     is ConnectionException, is TransportException, is IOException -> true
     else -> false

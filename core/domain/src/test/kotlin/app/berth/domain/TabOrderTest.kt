@@ -166,6 +166,12 @@ class TabOrderTest {
         assertEquals(TabKind.Files, Json.decodeFromString(TabKind.serializer(), files))
         assertEquals(TabKind.Files, TabKind.fromId("files"))
         assertEquals("files", TabKind.Files.id)
+
+        val tunnels = Json.encodeToString(TabKind.serializer(), TabKind.Tunnels)
+        assertTrue(tunnels.contains("tunnels"))
+        assertEquals(TabKind.Tunnels, Json.decodeFromString(TabKind.serializer(), tunnels))
+        assertEquals(TabKind.Tunnels, TabKind.fromId("tunnels"))
+        assertEquals("tunnels", TabKind.Tunnels.id)
     }
 
     @Test

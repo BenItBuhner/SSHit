@@ -3,6 +3,7 @@ package app.berth.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
+import app.berth.android.links.LinkInbox
 import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
@@ -37,6 +38,7 @@ import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
@@ -46,16 +48,20 @@ import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
+import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshConfigParseResult
 import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
+import app.berth.ssh.SshLink
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -83,7 +89,20 @@ class AppViewModel @Inject constructor(
     val files: FilesCenter,
     /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
     val security: SecurityCenter,
+    /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
+    private val links: LinkInbox,
 ) : ViewModel() {
+    init {
+        viewModelScope.launch {
+            links.links.collect { raw ->
+                // Under the lock the user faces the lock screen; a link then would open a login behind
+                // it. It waits for the unlock, as a notification's tap and the key prompts do.
+                security.lock.awaitUnlocked()
+                openLink(raw)
+            }
+        }
+    }
+
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val knownHosts: StateFlow<List<KnownHostKey>> = knownHostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -165,14 +184,113 @@ class AppViewModel @Inject constructor(
 
     // ---- sessions --------------------------------------------------------------------------------
 
+    /** Connect from the host list or the New tab sheet: a terminal, or the host's forwards alone when it is marked tunnels only. */
     fun open(host: Host, workspaceId: String? = null) {
-        viewModelScope.launch { sessions.open(host, workspaceId) }
+        viewModelScope.launch { sessions.connect(host, workspaceId) }
     }
 
-    /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
-    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): Boolean {
-        val parsed = parseQuickConnect(spec) ?: return false
-        val (user, address, port) = parsed
+    /** A Tunnels tab on [host] (spec C14): its port forwards with no shell, whatever the host's toggle says. */
+    fun openTunnels(host: Host, workspaceId: String? = null) {
+        viewModelScope.launch { sessions.openTunnels(host, workspaceId) }
+    }
+
+    // ---- links -----------------------------------------------------------------------------------
+
+    private val _linkOutcome = MutableStateFlow<LinkOutcome?>(null)
+
+    /** What the last link came to, for the shell to act on and then [clearLinkOutcome]. */
+    val linkOutcome: StateFlow<LinkOutcome?> = _linkOutcome.asStateFlow()
+
+    fun clearLinkOutcome() {
+        _linkOutcome.value = null
+    }
+
+    /**
+     * An `ssh://` or `sftp://` link, or a bare `user@host:port` ([SshLink]). A saved host at the
+     * link's address, port and user opens straight away, as the link asks ([openFromLink]), unless
+     * the link carries forwards that host does not have: nothing a link asks for is saved or
+     * started unseen, so those open the host's editor with the forwards as pending rows, and Save
+     * there adds them and connects ([LinkOutcome.ConfirmForwards]). No such host, and a plain link
+     * (`ssh://[user@]host[:port]`, nothing a saved host would have to hold) lands on Quick connect
+     * with the address in its field, to connect as an unsaved host the way the spec's deep-links
+     * line has it ([LinkOutcome.QuickConnect]); one that asks for forwards, `N`, an `sftp://` folder
+     * or a name sends the shell to the editor prefilled from the link, the one surface that can hold
+     * those, where the forwards show as the same pending rows and saving connects
+     * ([LinkOutcome.NewHost]). A link that cannot be read ends in a notice naming what was wrong,
+     * never in a crash.
+     */
+    suspend fun openLink(raw: String) {
+        _linkOutcome.value = when (val result = SshLink.parse(raw)) {
+            is SshLink.Result.Malformed -> LinkOutcome.Malformed(result.reason)
+            is SshLink.Result.Parsed -> {
+                val link = result.link
+                val host = hostFor(link)
+                when {
+                    host == null && link.plain -> LinkOutcome.QuickConnect(link.target)
+                    host == null -> LinkOutcome.NewHost(raw)
+                    pendingForwards(link, tunnelsOf(host.id)).isNotEmpty() -> LinkOutcome.ConfirmForwards(host.id, raw)
+                    else -> {
+                        openFromLink(host, link)
+                        LinkOutcome.Staged
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The saved host a link names: the same address (case aside) and port, and the link's user when
+     * it gives one. Of several, the one connected most recently, then the oldest saved.
+     */
+    suspend fun hostFor(link: SshLink): Host? = hostRepository.observeAll().first()
+        .filter { it.address.equals(link.host, ignoreCase = true) && it.port == link.port && (link.user == null || it.user == link.user) }
+        .maxWithOrNull(compareBy<Host> { it.lastConnectedAt ?: Long.MIN_VALUE }.thenByDescending { it.createdAt })
+
+    /**
+     * Opens what [link] asks for on [host]: Files at the link's folder for `sftp://`, the host's
+     * forwards alone for a tunnels-only link, otherwise a terminal (or the forwards, when the host
+     * itself is marked tunnels only). Saves nothing: forwards the link carries reach the host's
+     * tunnels only through the editor's Save ([saveHostFromLink]).
+     */
+    suspend fun openFromLink(host: Host, link: SshLink) {
+        when {
+            link.scheme == SshLink.Scheme.SFTP -> sessions.openFilesForHost(host, folder = link.path)
+            link.tunnelsOnly -> sessions.openTunnels(host)
+            else -> sessions.connect(host)
+        }
+    }
+
+    /**
+     * The editor's Save for a host opened from a link, new or saved: stores the host, adds
+     * [forwards] (the link's pending rows the user kept, already seen on screen) to its tunnels,
+     * enabled so they start with the login the link asks for, then opens what the link asked for.
+     */
+    fun saveHostFromLink(host: Host, password: String?, link: SshLink, forwards: List<SshConfigForward>) {
+        viewModelScope.launch {
+            val saved = saveHostNow(host, password)
+            for (fwd in pendingForwards(forwards, tunnelsOf(saved.id))) tunnelRepository.upsert(fwd.toTunnel(saved.id))
+            openFromLink(saved, link)
+            _linkOutcome.value = LinkOutcome.Staged
+        }
+    }
+
+    /** The saved tunnels of the host [hostId], read once. */
+    suspend fun tunnelsOf(hostId: String): List<Tunnel> = tunnelRepository.observeAll().first().filter { it.hostId == hostId }
+
+    /**
+     * Quick connect (spec C11): `user@host`, `host:port`, `ssh://user@host:port` or a bare address,
+     * IPv6 in brackets, connected as an unsaved host, as `root` when no user is given. The spec is
+     * read by the link parser ([parseQuickConnect]), so the field and an `ssh://` link agree on
+     * every form. Null once the login is opening; otherwise one sentence on what stopped it, for
+     * the field's helper line: the parser's reason, or that the spec asks for more than a shell.
+     */
+    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): String? {
+        val link = when (val result = SshLink.parse(spec)) {
+            is SshLink.Result.Malformed -> return result.reason
+            is SshLink.Result.Parsed -> result.link
+        }
+        if (!link.plain) return QUICK_CONNECT_IS_A_SHELL
+        val (user, address, port) = link.quickTarget()
         val name = address
         val host = Host(
             id = "quick-" + UUID.randomUUID().toString(),
@@ -186,7 +304,7 @@ class AppViewModel @Inject constructor(
             createdAt = System.currentTimeMillis(),
         )
         viewModelScope.launch { sessions.open(host, workspaceId) }
-        return true
+        return null
     }
 
     fun setActive(id: String?) = sessions.setActive(id)
@@ -287,21 +405,25 @@ class AppViewModel @Inject constructor(
 
     /** Saves the host; a non-null [password] is stored encrypted and referenced by the auth method. */
     fun saveHost(host: Host, password: String?) {
-        viewModelScope.launch {
-            var h = host
-            if (h.auth is AuthMethod.Password) {
-                val secretId = AuthResolver.passwordSecretId(h.id)
-                if (!password.isNullOrEmpty()) {
-                    secrets.put(secretId, password.toByteArray(Charsets.UTF_8))
-                    h = h.copy(auth = AuthMethod.Password(secretId))
-                } else if ((h.auth as AuthMethod.Password).secretId == null) {
-                    h = h.copy(auth = AuthMethod.Password(null))
-                }
-            } else {
-                secrets.delete(AuthResolver.passwordSecretId(h.id))
+        viewModelScope.launch { saveHostNow(host, password) }
+    }
+
+    /** [saveHost] in the caller's coroutine; returns the host as saved, its auth pointing at the stored password. */
+    suspend fun saveHostNow(host: Host, password: String?): Host {
+        var h = host
+        if (h.auth is AuthMethod.Password) {
+            val secretId = AuthResolver.passwordSecretId(h.id)
+            if (!password.isNullOrEmpty()) {
+                secrets.put(secretId, password.toByteArray(Charsets.UTF_8))
+                h = h.copy(auth = AuthMethod.Password(secretId))
+            } else if ((h.auth as AuthMethod.Password).secretId == null) {
+                h = h.copy(auth = AuthMethod.Password(null))
             }
-            hostRepository.upsert(h)
+        } else {
+            secrets.delete(AuthResolver.passwordSecretId(h.id))
         }
+        hostRepository.upsert(h)
+        return h
     }
 
     fun deleteHost(id: String) {
@@ -616,18 +738,76 @@ class AppViewModel @Inject constructor(
 
         fun newThemeId(): String = "theme-" + UUID.randomUUID().toString().take(8)
 
-        private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/@]+)(?::(\d{1,5}))?/?$""")
+        /**
+         * The forwards of [link] that a host's [saved] tunnels do not already carry: what its editor
+         * lists as pending rows and Save adds. One the host already has is nothing to ask about, so a
+         * link opened twice adds nothing the second time.
+         */
+        fun pendingForwards(link: SshLink, saved: List<Tunnel>): List<SshConfigForward> = pendingForwards(link.forwards, saved)
 
-        /** Returns (user, address, port) or null when [spec] is not an address. */
-        fun parseQuickConnect(spec: String): Triple<String, String, Int>? {
-            val m = QUICK.matchEntire(spec.trim()) ?: return null
-            val user = m.groupValues[1].ifEmpty { "root" }
-            val address = m.groupValues[2].removePrefix("[").removeSuffix("]")
-            val port = m.groupValues[3].toIntOrNull() ?: 22
-            if (address.isBlank() || port !in 1..65535) return null
-            return Triple(user, address, port)
-        }
+        fun pendingForwards(forwards: List<SshConfigForward>, saved: List<Tunnel>): List<SshConfigForward> =
+            forwards.filterNot { fwd -> saved.any { it.carries(fwd) } }
+
+        private fun Tunnel.carries(fwd: SshConfigForward): Boolean =
+            type == fwd.type && bindAddress == fwd.bindAddress && bindPort == fwd.bindPort &&
+                (fwd.type == TunnelType.DYNAMIC || (destinationHost == fwd.destinationHost && destinationPort == fwd.destinationPort))
+
+        /** A forward from a link as a tunnel on [hostId], enabled: the login the link asks for carries it. */
+        fun SshConfigForward.toTunnel(hostId: String, id: String = UUID.randomUUID().toString()): Tunnel = Tunnel(
+            id = id,
+            hostId = hostId,
+            type = type,
+            bindAddress = bindAddress,
+            bindPort = bindPort,
+            destinationHost = destinationHost.ifEmpty { "localhost" },
+            destinationPort = destinationPort,
+            enabled = true,
+        )
+
+        /** The user a Quick connect spec that names none logs in as. */
+        const val QUICK_CONNECT_USER = "root"
+
+        /** The helper line when the spec parses but asks for what only a saved host can hold. */
+        const val QUICK_CONNECT_IS_A_SHELL = "Quick connect takes user@host:port alone; save a host to carry forwards, a folder or a name."
+
+        /**
+         * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
+         * not a plain address. [SshLink.parse] reads it, the same parser an `ssh://` link goes
+         * through, so the field and a link agree on every form; a user left out is
+         * [QUICK_CONNECT_USER], since an unsaved host has no user of its own to fall back on.
+         */
+        fun parseQuickConnect(spec: String): Triple<String, String, Int>? =
+            (SshLink.parse(spec) as? SshLink.Result.Parsed)?.link?.takeIf { it.plain }?.quickTarget()
+
+        private fun SshLink.quickTarget(): Triple<String, String, Int> = Triple(user ?: QUICK_CONNECT_USER, host, port)
     }
 }
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
+
+/** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
+sealed interface LinkOutcome {
+    /** A tab was opened or brought on stage; the shell pops back to the Stage. */
+    data object Staged : LinkOutcome
+
+    /**
+     * No saved host matched a plain `ssh://[user@]host[:port]`: Quick connect opens with [spec]
+     * (`user@host:port` as the link gave it) in its field, to connect as an unsaved host.
+     */
+    data class QuickConnect(val spec: String) : LinkOutcome
+
+    /**
+     * No saved host matched, and [raw] asks for what only a saved host can hold (forwards, `N`, an
+     * `sftp://` folder or a name): the editor opens prefilled from it, and saving there connects.
+     */
+    data class NewHost(val raw: String) : LinkOutcome
+
+    /**
+     * The saved host [hostId] matched, but [raw] carries forwards it does not have: the editor
+     * opens on the host with them as pending rows, and saving there adds them and connects.
+     */
+    data class ConfirmForwards(val hostId: String, val raw: String) : LinkOutcome
+
+    /** The link could not be read; [reason] is one sentence for the notice bar. */
+    data class Malformed(val reason: String) : LinkOutcome
+}

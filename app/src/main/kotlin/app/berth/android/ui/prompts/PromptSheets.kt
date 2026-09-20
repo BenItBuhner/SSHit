@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,12 +23,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -108,11 +111,25 @@ internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit)
 @Composable
 private fun HostLine(prompt: Prompt) = HostLine(prompt.host)
 
+/**
+ * The host a sheet is about: its swatch, its saved name in text.1 and `user@address:port` in Mono
+ * text.2 (`[BA] bastion · demo@127.0.0.1:2223`), so two hosts at one endpoint, a bastion and the
+ * target behind it, read apart by more than a monogram. A quick-connect host is named by its
+ * address, so the endpoint stands alone. The endpoint is whole first; a long name gives way.
+ */
 @Composable
 internal fun HostLine(host: Host) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    val c = Berth.colors
+    val endpoint = host.userAtHost + if (host.port != 22) ":${host.port}" else ""
+    val named = host.name.isNotBlank() && host.name != host.address
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Swatch(host.color, host.monogram, 24.dp)
-        Text(host.userAtHost + if (host.port != 22) ":${host.port}" else "", style = BerthType.body.copy(fontFamily = JetBrainsMono), color = Berth.colors.text2)
+        Spacer(Modifier.width(10.dp))
+        if (named) {
+            Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(" \u00B7 ", style = BerthType.body, color = c.text3)
+        }
+        Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -154,12 +171,15 @@ private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
     }
 }
 
-/** First contact: fingerprint in mono groups, one primary action, cancel. */
+/** First contact: fingerprint in mono groups, one primary action, cancel. A hop's sheet says so, and where the chain is going. */
 @Composable
 private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
     val c = Berth.colors
     PromptSheet(onDismiss = p::cancel) {
-        SheetTitle("First connection", "Berth has not seen this server before.")
+        SheetTitle(
+            "First connection",
+            p.via?.let { "Berth has not seen this jump host before. ${it.sentence}" } ?: "Berth has not seen this server before.",
+        )
         HostLine(p)
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, boxed = true)
         if (p.otherKnown.isNotEmpty()) {
@@ -182,7 +202,12 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
 private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
     val c = Berth.colors
     PromptSheet(onDismiss = { p.decide(HostKeyChangedDecision.DISCONNECT) }) {
-        SheetTitle("Host key changed", "This server's key does not match the one saved on ${formatDate(p.saved.firstSeenAt)}.", color = c.danger)
+        SheetTitle(
+            "Host key changed",
+            "This ${if (p.via != null) "jump host's" else "server's"} key does not match the one saved on ${formatDate(p.saved.firstSeenAt)}." +
+                (p.via?.let { " ${it.sentence}" } ?: ""),
+            color = c.danger,
+        )
         HostLine(p)
         // Two fingerprints as labelled text rows (C13), never two boxes.
         Fingerprint(p.saved.keyType, p.saved.fingerprintSha256, label = "Saved")
@@ -208,7 +233,11 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
 private fun PinnedKeyRefusedSheet(p: Prompt.PinnedKeyRefused, onOpenKnownHosts: () -> Unit) {
     val c = Berth.colors
     PromptSheet(onDismiss = p::acknowledge) {
-        SheetTitle("Connection refused", "This server has a pinned key and offered a different one.", color = c.danger)
+        SheetTitle(
+            "Connection refused",
+            "This ${if (p.via != null) "jump host" else "server"} has a pinned key and offered a different one." + (p.via?.let { " ${it.sentence}" } ?: ""),
+            color = c.danger,
+        )
         HostLine(p)
         Fingerprint(p.pinned.keyType, p.pinned.fingerprintSha256, label = "Pinned")
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")

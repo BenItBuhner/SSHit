@@ -14,12 +14,15 @@ import app.berth.sftp.SftpClient
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
 import app.berth.ssh.ForwardHandle
+import app.berth.ssh.ForwardTraffic
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.ShellChannel
 import app.berth.ssh.SshAuth
 import app.berth.ssh.SshConnection
+import app.berth.ssh.SshConnectionState
 import app.berth.ssh.SshEndpoint
 import app.berth.ssh.SshError
+import app.berth.ssh.SshHop
 import app.berth.ssh.isTransientSshFailure
 import app.berth.terminal.CellPos
 import app.berth.terminal.CommandEntry
@@ -66,7 +69,19 @@ import java.util.Locale
 interface SessionEnvironment {
     suspend fun authFor(host: Host): List<SshAuth>
     fun hostKeyPolicyFor(host: Host): HostKeyPolicy
+
+    /**
+     * The policy for [host] as a jump host of another login ([via]), so what it asks the user
+     * says which hop it is and where the chain is going. The plain policy unless overridden.
+     */
+    fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = hostKeyPolicyFor(host)
     val networkAvailable: Flow<Unit>
+
+    /**
+     * The host's ProxyJump chain as saved hosts, first hop first; an id no host answers to any
+     * more is skipped. Each hop logs in with its own [authFor] and is trusted by its own [hostKeyPolicyFor].
+     */
+    suspend fun jumpHostsFor(host: Host): List<Host> = emptyList()
 
     /** A program on [host] asked to write the phone's clipboard (OSC 52); the app decides whether it may. */
     fun onClipboardText(host: Host, text: String)
@@ -91,20 +106,35 @@ sealed interface SessionProblem {
     data class Failed(val reason: String, val authentication: Boolean) : SessionProblem
 }
 
+/**
+ * Why a login is [SessionState.FAILED]: the reason in plain language, the raw error behind
+ * Details, and the saved jump host it failed at when a hop, not the target, is what went wrong.
+ */
+data class SessionFailure(val plain: String, val raw: String, val hop: FailedHop? = null)
+
+/** The saved jump host a login failed at, for the action that opens its editor rather than the target's. */
+data class FailedHop(val hostId: String, val name: String)
+
 /** Runtime state of one configured tunnel on the session that carries it. */
 sealed interface TunnelStatus {
     data object Starting : TunnelStatus
 
-    /** [localPort] is the port actually bound; it matters when 0 was configured. */
-    data class Up(val localPort: Int) : TunnelStatus
+    /**
+     * [localPort] is the port actually bound; it matters when 0 was configured. [traffic] is the
+     * forward's live counters (bytes each way, connections), read rather than observed: they move
+     * with every packet, so the Tunnels tab samples them on a clock instead of the state changing.
+     */
+    data class Up(val localPort: Int, val traffic: ForwardTraffic? = null) : TunnelStatus
 
     data class Failed(val reason: String) : TunnelStatus
 }
 
 /**
- * One terminal and the connection behind it. Owns the [TerminalEmulator], drives the state machine
- * from the product vision (IDLE, CONNECTING, LIVE, RECONNECTING, DETACHED, FAILED, CLOSED), and
- * runs the reconnect loop with the host's persistence policy.
+ * One SSH login and the connection behind it. Owns the [TerminalEmulator], drives the state
+ * machine from the product vision (IDLE, CONNECTING, LIVE, RECONNECTING, DETACHED, FAILED, CLOSED),
+ * and runs the reconnect loop with the host's persistence policy. A [TabKind.Tunnels] record makes
+ * a session that opens no shell: the login exists to carry the host's forwards ([tunnels]) and is
+ * Live for as long as the transport holds, reconnecting like a terminal when it drops.
  */
 class TerminalSession(
     initial: SessionRecord,
@@ -113,12 +143,22 @@ class TerminalSession(
     private val onRecordChanged: suspend (SessionRecord) -> Unit,
 ) : ManagedTab {
     override val id: String = initial.id
-    override val kind: TabKind get() = TabKind.Ssh
+    override val kind: TabKind = if (initial.kind == TabKind.Tunnels) TabKind.Tunnels else TabKind.Ssh
+
+    /** True for a login that only carries the host's forwards: no shell, no terminal on stage. */
+    val tunnelsOnly: Boolean get() = kind == TabKind.Tunnels
 
     private val _record = MutableStateFlow(initial)
     override val record: StateFlow<SessionRecord> = _record.asStateFlow()
     override val host: Host get() = _record.value.hostSnapshot
     override val state: SessionState get() = _record.value.state
+
+    /**
+     * While connecting through a jump chain, the hop being made: `via bastion (1 of 2)`; null
+     * otherwise. The connect flow shows it under the state so a slow hop is seen as the hop.
+     */
+    private val _via = MutableStateFlow<String?>(null)
+    val via: StateFlow<String?> = _via.asStateFlow()
 
     /** Bumps on every visible change; the renderer reads it to know when to redraw. */
     private val _screenVersion = MutableStateFlow(0L)
@@ -131,9 +171,9 @@ class TerminalSession(
     private val _retryIn = MutableStateFlow<Int?>(null)
     val retryIn: StateFlow<Int?> = _retryIn.asStateFlow()
 
-    /** Plain-language reason for [SessionState.FAILED], plus the raw error text. */
-    private val _failure = MutableStateFlow<Pair<String, String>?>(null)
-    val failure: StateFlow<Pair<String, String>?> = _failure.asStateFlow()
+    /** Why the login is [SessionState.FAILED]: the plain reason, the raw error, and the hop it failed at. */
+    private val _failure = MutableStateFlow<SessionFailure?>(null)
+    val failure: StateFlow<SessionFailure?> = _failure.asStateFlow()
 
     /**
      * Failures the user should hear about away from this tab. Off stage they also raise attention,
@@ -342,6 +382,12 @@ class TerminalSession(
     }
 
     private var connection: SshConnection? = null
+
+    /** The saved hosts the last attempt's chain went through, by hop; the pill and a hop's failure name the hop by them, and its failure opens its editor. */
+    private var chainHosts: List<Host> = emptyList()
+
+    /** The saved name of hop [index], or the [address] the transport knows it by when the chain has moved under the attempt. */
+    private fun hopName(index: Int, address: String): String = chainHosts.getOrNull(index)?.name ?: address
     private var shell: ShellChannel? = null
     private var connectJob: Job? = null
 
@@ -447,7 +493,7 @@ class TerminalSession(
         _tunnels.value = synchronized(slots) {
             buildMap {
                 for ((id, slot) in slots) {
-                    put(id, if (slot.handle != null) TunnelStatus.Up(slot.handle.localPort) else TunnelStatus.Failed(slot.error ?: "Couldn't start the tunnel."))
+                    put(id, if (slot.handle != null) TunnelStatus.Up(slot.handle.localPort, slot.handle.traffic) else TunnelStatus.Failed(slot.error ?: "Couldn't start the tunnel."))
                 }
                 for (t in starting) if (t.id !in this) put(t.id, TunnelStatus.Starting)
             }
@@ -572,23 +618,25 @@ class TerminalSession(
 
     private suspend fun runOnce(isReconnect: Boolean): Outcome {
         val h = host
-        val auth = env.authFor(h)
-        val endpoint = SshEndpoint(
-            host = h.address,
-            port = h.port,
-            user = h.user,
-            auth = auth,
-            keepaliveSeconds = h.persistence.keepaliveSeconds,
-            compression = h.compression,
-            preferIpv6 = when (h.addressFamily) {
-                AddressFamily.AUTO -> null
-                AddressFamily.IPV4 -> false
-                AddressFamily.IPV6 -> true
-            },
-        )
-        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h))
+        // Hops first, in the order they are made, so their prompts come in that order too.
+        val chain = env.jumpHostsFor(h)
+        chainHosts = chain
+        val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h))) }
+        val endpoint = endpointFor(h, env.authFor(h))
+        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h), hops)
         connection = conn
-        withTimeout(CONNECT_TIMEOUT_MS) { conn.connect() }
+        val progress = scope.launch {
+            conn.state.collect { s ->
+                _via.value = (s as? SshConnectionState.ConnectingVia)?.let { "via ${hopName(it.hop, it.host)}" + if (it.hopCount > 1) " (${it.hop + 1} of ${it.hopCount})" else "" }
+            }
+        }
+        try {
+            withTimeout(CONNECT_TIMEOUT_MS) { conn.connect() }
+        } finally {
+            progress.cancel()
+            _via.value = null
+        }
+        if (tunnelsOnly) return carryOnly(conn, isReconnect)
 
         val command = buildString {
             when (h.persistence.tmux) {
@@ -624,6 +672,34 @@ class TerminalSession(
         return if (dropped.value != null || !conn.isConnected) Outcome.Dropped(dropped.value ?: "connection lost") else Outcome.Ended
     }
 
+    /**
+     * A tunnels-only login: Live with no channel of its own, so the forwards ([reconcileTunnels])
+     * start on the Live transition, and it ends when the transport does. The connection's own
+     * state says when that is, which no listener installed after the connect can miss.
+     */
+    private suspend fun carryOnly(conn: SshConnection, isReconnect: Boolean): Outcome {
+        everLive = true
+        if (isReconnect) marker("reconnected")
+        transition(SessionState.LIVE, PersistenceLayer.IN_APP)
+        patch { copy(lastLiveAt = env.now(), needsAttention = false, attentionReason = null) }
+        val end = conn.state.first { it is SshConnectionState.Disconnected } as SshConnectionState.Disconnected
+        return Outcome.Dropped(end.reason.ifBlank { "connection lost" })
+    }
+
+    private fun endpointFor(h: Host, auth: List<SshAuth>) = SshEndpoint(
+        host = h.address,
+        port = h.port,
+        user = h.user,
+        auth = auth,
+        keepaliveSeconds = h.persistence.keepaliveSeconds,
+        compression = h.compression,
+        preferIpv6 = when (h.addressFamily) {
+            AddressFamily.AUTO -> null
+            AddressFamily.IPV4 -> false
+            AddressFamily.IPV6 -> true
+        },
+    )
+
     private fun tmuxName(h: Host): String =
         (h.persistence.tmuxSessionName ?: "berth-${h.name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}").ifBlank { "berth" }
 
@@ -657,19 +733,39 @@ class TerminalSession(
     }
 
     private fun fail(e: Throwable) {
-        val plain = when (e) {
-            is SshError.AuthenticationFailed -> "The server did not accept the credentials for ${host.user}."
-            is SshError.HostKeyRejected -> "The host key was not trusted, so the connection was not made."
-            is IllegalStateException -> e.message ?: "Couldn't connect."
-            else -> "Couldn't connect to ${host.address}:${host.port}."
-        }
-        _failure.value = plain to (e.message ?: e.javaClass.simpleName)
+        val plain = plainFailure(e)
+        val hop = (e as? SshError.JumpHopFailed)?.let { j -> chainHosts.getOrNull(j.hop)?.let { FailedHop(it.id, it.name) } }
+        _failure.value = SessionFailure(plain, e.message ?: e.javaClass.simpleName, hop)
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
-        val problem = SessionProblem.Failed(plain, authentication = e is SshError.AuthenticationFailed)
+        val problem = SessionProblem.Failed(plain, authentication = e.rootSshError() is SshError.AuthenticationFailed)
         attention(plain, problem)
         _problems.tryEmit(problem)
     }
+
+    /**
+     * The failure in plain language. A hop's failure leads with the hop's name and puts its role
+     * in parentheses, as the pill does (`old bastion (jump host 1 of 2) did not accept the
+     * credentials for ops.`), so a name with a space in it still reads as the name, and the user
+     * fixes that host rather than the target.
+     */
+    private fun plainFailure(e: Throwable): String = when (e) {
+        is SshError.JumpHopFailed -> {
+            val hop = "${hopName(e.hop, e.host)} (jump host${if (e.hopCount > 1) " ${e.hop + 1} of ${e.hopCount}" else ""})"
+            when (val reason = e.reason) {
+                is SshError.AuthenticationFailed -> "$hop did not accept the credentials for ${e.user}."
+                is SshError.HostKeyRejected -> "$hop presented a host key that was not trusted, so the connection stopped there."
+                is SshError.ConnectFailed -> "$hop couldn't be reached."
+                else -> "$hop failed: ${reason.message ?: "couldn't connect"}."
+            }
+        }
+        is SshError.AuthenticationFailed -> "The server did not accept the credentials for ${host.user}."
+        is SshError.HostKeyRejected -> "The host key was not trusted, so the connection was not made."
+        is IllegalStateException -> e.message ?: "Couldn't connect."
+        else -> "Couldn't connect to ${host.address}:${host.port}."
+    }
+
+    private fun Throwable.rootSshError(): Throwable = if (this is SshError.JumpHopFailed) reason else this
 
     private fun teardownConnection() {
         // Forward listeners hold device ports; release them before the next attempt binds again.

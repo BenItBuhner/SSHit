@@ -60,6 +60,37 @@ class KnownHostsPolicyTest {
         assertFalse(stored[0].pinned)
     }
 
+    /** The policy made for a jump host says so on every prompt it raises, with the plain policy's prompts carrying nothing. */
+    @Test
+    fun `a hop's policy carries its role on the trust, changed-key and refused prompts`() {
+        val target = host.copy(id = "t", name = "prod-db", address = "10.0.4.12")
+        val role = HopRole(0, 2, target)
+        val hop = KnownHostsPolicy(host, repo, prompts, now = { 1_000L }, via = role)
+
+        val first = request()
+        val trust = onTransport { hop.onUnknownHost(first) }
+        val trustPrompt = awaitPrompt<Prompt.TrustHostKey>()
+        assertEquals(role, trustPrompt.via)
+        assertEquals("It is hop 1 of 2 on the way to prod-db.", trustPrompt.via!!.sentence)
+        trustPrompt.trust()
+        assertTrue(trust.get())
+
+        val changed = onTransport { hop.onChangedHostKey(request(), listOf(TrustedHostKey(first.keyType, first.publicKeyBase64, first.fingerprintSha256))) }
+        val changedPrompt = awaitPrompt<Prompt.HostKeyChanged>()
+        assertEquals(role, changedPrompt.via)
+        changedPrompt.decide(HostKeyChangedDecision.DISCONNECT)
+        assertFalse(changed.get())
+
+        runBlocking { repo.upsert(saved(first, pinned = true)) }
+        val refused = onTransport { hop.onUnknownHost(request("ecdsa-sha2-nistp256")) }
+        assertEquals(role, awaitPrompt<Prompt.PinnedKeyRefused>().also { it.acknowledge() }.via)
+        assertFalse(refused.get())
+
+        val plain = onTransport { policy.onUnknownHost(request("ecdsa-sha2-nistp256")) }
+        assertNull(awaitPrompt<Prompt.PinnedKeyRefused>().also { it.acknowledge() }.via)
+        assertFalse(plain.get())
+    }
+
     @Test
     fun `a pinned key refuses a new key type without asking`() {
         val ed = request("ssh-ed25519")
