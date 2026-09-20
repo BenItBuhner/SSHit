@@ -40,9 +40,11 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import app.berth.android.security.LockState
+import app.berth.android.security.WindowSecurity
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
+import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
@@ -200,6 +202,7 @@ private fun Shell(vm: AppViewModel) {
     // What the window's size allows (spec A12, C23): decided here once, read below and by every sheet.
     val layout = windowLayout()
     val rail = layout.rail
+    val securitySettings by vm.security.settings.collectAsState()
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
 
     val drawerContent: @Composable (width: Dp) -> Unit = { width ->
@@ -331,7 +334,14 @@ private fun Shell(vm: AppViewModel) {
     // A phone on its side (spec C23): the strip and the Deck give height back to the terminal.
     val stripStyle = if (layout.shortLandscape) ShortStripStyle else LocalTabStripStyle.current
     val deckFit = if (layout.shortLandscape) ShortDeckFit else LocalDeckFit.current
-    CompositionLocalProvider(LocalWindowLayout provides layout, LocalTabStripStyle provides stripStyle, LocalDeckFit provides deckFit) {
+    // Every window Berth opens over this one (a sheet as a dialog) blocks capture when this one does.
+    val secure = securitySettings?.let(WindowSecurity::secure) ?: false
+    CompositionLocalProvider(
+        LocalWindowLayout provides layout,
+        LocalTabStripStyle provides stripStyle,
+        LocalDeckFit provides deckFit,
+        LocalWindowSecure provides secure,
+    ) {
         if (rail) {
             // Expanded width (spec C7, A12): the drawer stands as a 280 dp rail beside the screens, always in view.
             Row(Modifier.fillMaxSize()) {

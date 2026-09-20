@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.window.SecureFlagPolicy
 import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -52,6 +53,14 @@ enum class SheetPresentation { SHEET, DIALOG }
 
 /** The presentation of the [BerthSheet] this content is in; [SheetPresentation.SHEET] outside one. */
 val LocalSheetPresentation = compositionLocalOf { SheetPresentation.SHEET }
+
+/**
+ * Whether Berth's windows block screenshots, recording and casting right now, from the same
+ * state `WindowSecurity` applies to the Activity's window. A sheet as a dialog is a window of its
+ * own, which the Activity's `FLAG_SECURE` does not reach, so it takes the flag from here; the shell
+ * provides it, and where nothing does (previews, tests) the dialog inherits its parent window's.
+ */
+val LocalWindowSecure = compositionLocalOf { false }
 
 /**
  * Whether the sheet's content should fill the sheet's height. As a bottom sheet a list that fills
@@ -104,12 +113,23 @@ fun BerthSheet(
  * clear of the keyboard, over the theme's scrim (the window's own dim is turned off, so the scrim
  * is one layer, as the bottom sheet's is). The handle's 20 dp zone stays as room above the content,
  * so a title sits where it sits in the sheet; the system insets are consumed at the panel, so
- * content that pads for a navigation bar under a sheet pads for nothing here.
+ * content that pads for a navigation bar under a sheet pads for nothing here. The dialog is a
+ * second window, so it carries `FLAG_SECURE` itself while [LocalWindowSecure] says Berth's windows
+ * are secure: a trust sheet's fingerprint or a host list must not cast from a tablet when it would
+ * not from a phone. Otherwise it inherits the window under it, as every Compose dialog does.
  */
 @Composable
 private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp, content: @Composable ColumnScope.() -> Unit) {
     val c = Berth.colors
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    val secure = LocalWindowSecure.current
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            securePolicy = if (secure) SecureFlagPolicy.SecureOn else SecureFlagPolicy.Inherit,
+        ),
+    ) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         SideEffect { window?.setDimAmount(0f) }
         val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.84f).dp
