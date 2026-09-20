@@ -36,6 +36,7 @@ import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.ToggleRow
@@ -155,12 +156,12 @@ fun SettingsScreen(
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
                 // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
                 CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
-                Text("Hold the Deck's layer key on the Stage to open the editor from a session.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                PanelNote("Hold the Deck's layer key on the Stage to open the editor from a session; on a Deck of one layer that key is the editor's.")
             }
 
             Panel(label = "Gestures") {
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
-                Text("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
             HardwareKeyboardPanel(vm)
