@@ -817,7 +817,9 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
     val liftedHere = state.lifted == entry.key
     val draggedHere = state.drag?.key == entry.key
     var pressed by remember { mutableStateOf(false) }
-    // The keyboard's focus (spec, Components): the pressed tone and the title in accent, while keys drive.
+    // The keyboard's focus (spec, Components): the pressed tone and the title in accent, while keys
+    // drive, and a 2 dp accent bar under the title (drawn below): the tone on the active tab, where
+    // the chord lands, is one step of four, so the cue is a shape as well as a colour.
     val interaction = remember { MutableInteractionSource() }
     val focused = interaction.showsFocus()
 
@@ -917,9 +919,17 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 .clip(RoundedCornerShape(style.tabRadius))
                 .background(fill)
                 .drawBehind {
-                    if (active && s.activeMark == ActiveTabMark.UNDERLINE) {
+                    // One 2 dp bar along the foot of the tab, inset to the title: the active mark's
+                    // underline in its colour, or the keyboard's focus in accent, the line A1 permits
+                    // and C4 draws under a locked modifier, so the strip and the Deck agree.
+                    val bar = when {
+                        focused -> c.accent
+                        active && s.activeMark == ActiveTabMark.UNDERLINE -> style.underlineColor
+                        else -> null
+                    }
+                    if (bar != null) {
                         val h = 2.dp.toPx()
-                        drawRoundRect(style.underlineColor, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
+                        drawRoundRect(bar, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
                     }
                 }
                 .padding(s.tabPadding),
