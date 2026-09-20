@@ -54,7 +54,7 @@ fun DiagnosticsScreen(reports: CrashReporter, onBack: () -> Unit, modifier: Modi
             .navigationBarsPadding(),
     ) {
         ScreenHeader("Diagnostics", onBack = onBack, actions = {
-            if (list.isNotEmpty()) BerthButton("Delete all", onClick = { reports.deleteAll() }, kind = ButtonKind.TEXT)
+            if (list.isNotEmpty()) BerthButton("Delete all", onClick = { reports.deleteAll() }, kind = ButtonKind.DESTRUCTIVE)
         })
         if (list.isEmpty()) {
             Spacer(Modifier.height(48.dp))
