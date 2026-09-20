@@ -52,6 +52,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 
@@ -332,7 +333,8 @@ class SessionLifecycleTest {
         seed()
         restore()
         graph.sessions.setActive("s-a")
-        val staged = ArrayList<String>()
+        // Appended on the collector's thread and compared on this one: a copy-on-write list, so the comparison walks a snapshot.
+        val staged = CopyOnWriteArrayList<String>()
         val collector = CoroutineScope(Dispatchers.Default)
         collector.launch { graph.sessions.stageRequests.collect { staged += it } }
         Thread.sleep(50)
@@ -395,7 +397,7 @@ class SessionLifecycleTest {
         graph.sessions.setActive("s-a")
         lockTheReturn()
         graph.process.start()
-        val staged = ArrayList<String>()
+        val staged = CopyOnWriteArrayList<String>()
         val collector = CoroutineScope(Dispatchers.Default)
         collector.launch { graph.sessions.stageRequests.collect { staged += it } }
         Thread.sleep(50)
@@ -435,7 +437,7 @@ class SessionLifecycleTest {
         graph.process.start()
         graph.process.stop()
         assertNull("the tab that would ask is gone", graph.sessions.filesTabFor("homelab"))
-        val staged = ArrayList<String>()
+        val staged = CopyOnWriteArrayList<String>()
         val collector = CoroutineScope(Dispatchers.Default)
         collector.launch { graph.sessions.stageRequests.collect { staged += it } }
 
