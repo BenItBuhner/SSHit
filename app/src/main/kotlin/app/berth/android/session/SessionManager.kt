@@ -75,7 +75,7 @@ data class ClosedTab(val record: SessionRecord) {
  *
  * It also watches the process: frames are saved when the app leaves the screen, when the OS asks
  * for memory and on a cadence while live sessions run in the background, so a tab the OS kills
- * comes back as a session that paused (vision §4.3, L0); and while the app is away, a tab that
+ * comes back detached on its last frame (vision §4.3, L0); and while the app is away, a tab that
  * needs the user or loses its server says so through [SessionNotifier] (spec C21).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -314,12 +314,17 @@ class SessionManager @Inject constructor(
     }
 
     /**
-     * [ComponentCallbacks2.onTrimMemory], registered on the application: the OS is about to
-     * reclaim, so frames go to disk first, whatever the level. Public for tests and for any host
-     * that wants to forward its own callback.
+     * [ComponentCallbacks2.onTrimMemory], registered on the application. From
+     * [ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN] up the app is off the screen and a kill may
+     * follow, so frames whose screen moved since their last save go to disk. The `RUNNING` levels
+     * below it (API 29-33) arrive while the app is on screen and are only advice about memory;
+     * snapshotting every tab's scrollback then would stall the very frame the user is touching,
+     * for a process that is not about to die. Public for tests and for any host that wants to
+     * forward its own callback.
      */
-    fun onTrimMemory(@Suppress("UNUSED_PARAMETER") level: Int) {
-        saveAllFrames()
+    fun onTrimMemory(level: Int) {
+        if (level < ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        saveAllFrames(onlyChanged = true)
     }
 
     private fun onRecordChanged(previous: SessionRecord?, record: SessionRecord) {
@@ -339,19 +344,24 @@ class SessionManager @Inject constructor(
         }
         val hadAttention = previous?.needsAttention == true
         if (record.needsAttention && !hadAttention) {
-            // On screen the ring says it; away, the shade does (spec C21, Attention).
-            if (!_foreground.value) notifier.postAttention(record, session.attentionAt ?: System.currentTimeMillis())
+            // On screen the ring says it; away, the shade does (spec C21, Attention). A tab that lost its
+            // connection is lit too, but the Problems notification carries that one, with Retry and Detach.
+            if (!_foreground.value && session.attentionProblem == null) notifier.postAttention(record, session.attentionAt ?: System.currentTimeMillis())
         } else if (!record.needsAttention && hadAttention) {
             notifier.cancelAttention(record.id)
         }
     }
 
-    /** Problems from one tab, for as long as it is open: the shade hears about them unless the tab is on stage in the foreground. */
+    /**
+     * Problems from one tab, for as long as it is open. Like attention, they reach the shade only
+     * while the app is away; on screen the tab is lit (the session raised attention with the
+     * problem) and the ring or the count tile says it, with no heads-up over Berth's own header.
+     */
     private fun track(session: TerminalSession) {
         trackers.remove(session.id)?.cancel()
         trackers[session.id] = scope.launch {
             session.problems.collect { problem ->
-                if (!_foreground.value || _activeTabId.value != session.id) notifier.postProblem(session.record.value, problem)
+                if (!_foreground.value) notifier.postProblem(session.record.value, problem)
             }
         }
     }
@@ -397,14 +407,15 @@ class SessionManager @Inject constructor(
         val files = LinkedHashMap<String, FilesTab>()
         val restoredRecords = ArrayList<SessionRecord>()
         // Tabs that held a socket when the process died, with the last moment each was known to be
-        // live: their frames end in a `paused` marker so the relaunch reads as a pause, not a loss.
-        val pausedAt = HashMap<String, Long?>()
+        // live: their frames end in a `detached` marker stamped then, the pill's word, so the
+        // relaunch reads as a session that was cut, not one that vanished.
+        val detachedAt = HashMap<String, Long?>()
         for (record in sessionRepository.getAll()) {
             if (record.state == SessionState.CLOSED) {
                 sessionRepository.delete(record.id)
                 continue
             }
-            if (record.state.isActive) pausedAt[record.id] = record.lastLiveAt
+            if (record.state.isActive) detachedAt[record.id] = record.lastLiveAt
             restoredRecords += record.copy(
                 state = SessionState.DETACHED,
                 layer = PersistenceLayer.LOCAL_FRAME,
@@ -422,7 +433,7 @@ class SessionManager @Inject constructor(
             when (record.kind) {
                 TabKind.Ssh -> {
                     val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
-                    session.restoreFrame(sessionRepository.loadFrame(record.id), pausedAt = pausedAt[record.id])
+                    session.restoreFrame(sessionRepository.loadFrame(record.id), detachedAt = detachedAt[record.id])
                     map[record.id] = session
                     track(session)
                 }
@@ -838,11 +849,15 @@ class SessionManager @Inject constructor(
         }
     }
 
+    /**
+     * The snapshot walks the whole scrollback under the emulator lock, so it runs on the manager's
+     * scope with the write, never on the thread that called (the main thread, for ON_STOP and a
+     * trim); the lock makes it consistent whenever it runs, and the write was asynchronous anyway.
+     */
     private fun saveFrame(session: TerminalSession) {
         savedVersions[session.id] = session.screenVersion.value
         session.markLive()
-        val frame = session.snapshotFrame()
-        scope.launch { sessionRepository.saveFrame(session.id, frame) }
+        scope.launch { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
     }
 
     override fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }

@@ -1,5 +1,7 @@
 package app.berth.android.screenshots
 
+import android.Manifest
+import android.app.Application
 import android.content.Context
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -36,10 +38,12 @@ import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import org.robolectric.Shadows.shadowOf
 
 /** In-memory repositories so screens render against the real view model without Room or Keystore. */
 class InMemoryHosts : HostRepository {
@@ -197,8 +201,20 @@ class FakeLifecycleOwner : LifecycleOwner {
  * [sessions] and [viewModel] are created on first use so seeded records exist before the manager
  * restores them. [process] is the process lifecycle the manager watches; it starts created, off
  * screen, so a test decides when the app is in front.
+ *
+ * Robolectric's application holds no runtime permissions, so by default the graph grants
+ * POST_NOTIFICATIONS first: the phone of a user who has already answered the ask, which is what
+ * every screen test that is not about the ask should see (otherwise the process's first Live
+ * raises the rationale sheet over whatever the test is looking at). A test of the permission
+ * flow itself passes [notificationsGranted] false.
  */
-class TestGraph(private val context: Context) {
+class TestGraph(private val context: Context, notificationsGranted: Boolean = true) {
+    init {
+        if (notificationsGranted) {
+            shadowOf(context.applicationContext as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val hosts = InMemoryHosts()
     val secrets = InMemorySecrets()
     val identities = InMemoryIdentities(hosts)
@@ -213,11 +229,23 @@ class TestGraph(private val context: Context) {
     val authResolver = AuthResolver(identities, secrets, hardwareKeys, prompts)
     val process = FakeLifecycleOwner()
     val notifier = SessionNotifier(context)
-    val sessions: SessionManager by lazy {
+    private val manager = lazy {
         SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, notifier, process.lifecycle)
     }
+    val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     val viewModel: AppViewModel by lazy {
         AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files)
+    }
+
+    /**
+     * Ends what a test left open, whether it passed or not: every tab (a live one closes its
+     * socket), then the manager's coroutines, so nothing of one test runs under the next.
+     */
+    fun close() {
+        if (!manager.isInitialized()) return
+        val sessions = manager.value
+        sessions.sessions.value.map { it.id }.forEach { sessions.close(it) }
+        sessions.scope.cancel()
     }
 }

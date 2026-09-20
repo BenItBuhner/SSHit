@@ -7,9 +7,13 @@ import app.berth.domain.model.SwatchColor
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
+import app.berth.ssh.SshError
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,10 +37,14 @@ import java.util.Locale
 class AttentionModelTest {
     private var clock = 1_700_000_000_000L
 
+    /** Thrown from the environment's auth step, so a connect fails the way the network or the server would, without either. */
+    private var authFailure: Throwable? = null
+
     private val env = object : SessionEnvironment {
-        override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
+        override suspend fun authFor(host: Host): List<SshAuth> = authFailure?.let { throw it } ?: emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
-        override val networkAvailable: Flow<Unit> = emptyFlow()
+        // Never emits and never completes, like the real monitor between outages.
+        override val networkAvailable: Flow<Unit> = MutableSharedFlow()
         override fun onClipboardText(text: String) = Unit
         override fun now(): Long = clock
     }
@@ -132,6 +141,7 @@ class AttentionModelTest {
         assertTrue(session.record.value.needsAttention)
         assertEquals("Bell", session.record.value.attentionReason)
         assertEquals(clock, session.attentionAt)
+        assertNull("output, not a lost connection: away, this one is the Attention notification's", session.attentionProblem)
     }
 
     @Test
@@ -166,31 +176,85 @@ class AttentionModelTest {
         assertEquals(first!! + 5_000, session.attentionAt)
     }
 
+    // ---- losing the server (vision §4.5: "remote exit or unexpected disconnect") -----------------
+
+    @Test
+    fun `a reconnect that gives up off stage is attention, and the problem for the shade`() = runTest {
+        authFailure = SshError.ConnectFailed(host.address, host.port, IOException("Network is unreachable"))
+        val session = TerminalSession(record(), backgroundScope, env) {}
+        val problems = ArrayList<SessionProblem>()
+        backgroundScope.launch { session.problems.collect { problems += it } }
+        session.onStage = false
+        session.connect()
+        runCurrent()
+        assertEquals("a transient failure starts the backoff", SessionState.RECONNECTING, session.state)
+        assertFalse("still trying, so nothing to say yet", session.record.value.needsAttention)
+        // The host's window closes while the loop waits out its first second: the next failure is the last.
+        clock += 16 * 60_000L
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(SessionState.DETACHED, session.state)
+        assertTrue(session.record.value.needsAttention)
+        assertEquals("Couldn't reconnect", session.record.value.attentionReason)
+        assertEquals(clock, session.attentionAt)
+        assertEquals(listOf<SessionProblem>(SessionProblem.GaveUp(16 * 60_000L)), problems)
+        assertEquals("the attention is the problem's, so the shade tells it once", problems.single(), session.attentionProblem)
+        assertTrue(session.emulator.screenText().any { it.contains("gave up reconnecting") })
+    }
+
+    @Test
+    fun `a sign-in the server refused off stage is attention in its own words`() = runTest {
+        authFailure = SshError.AuthenticationFailed(host.user, null)
+        val session = TerminalSession(record(), backgroundScope, env) {}
+        session.onStage = false
+        session.connect()
+        runCurrent()
+        assertEquals(SessionState.FAILED, session.state)
+        assertTrue(session.record.value.needsAttention)
+        assertEquals("The server did not accept the credentials for ben.", session.record.value.attentionReason)
+        assertEquals(clock, session.attentionAt)
+        assertEquals(SessionProblem.Failed("The server did not accept the credentials for ben.", authentication = true), session.attentionProblem)
+    }
+
+    @Test
+    fun `on stage a lost connection is seen as it happens, not attention`() = runTest {
+        authFailure = SshError.AuthenticationFailed(host.user, null)
+        val session = TerminalSession(record(), backgroundScope, env) {}
+        session.onStage = true
+        session.connect()
+        runCurrent()
+        assertEquals(SessionState.FAILED, session.state)
+        assertFalse(session.record.value.needsAttention)
+        assertNull(session.attentionAt)
+    }
+
     // ---- frames on relaunch ----------------------------------------------------------------------
 
     @Test
-    fun `a frame restored for a tab that was live when killed ends in a paused marker dated to its last save`() = runTest {
+    fun `a frame restored for a tab that was live when killed ends in a detached marker dated to its last save`() = runTest {
         val session = TerminalSession(record(), backgroundScope, env) {}
-        val pausedAt = clock - 4 * 60_000
-        session.restoreFrame(frame(listOf("ben@homelab:~$ docker compose ps", "caddy   Up 3 days")), pausedAt = pausedAt)
+        val detachedAt = clock - 4 * 60_000
+        session.restoreFrame(frame(listOf("ben@homelab:~$ docker compose ps", "caddy   Up 3 days")), detachedAt = detachedAt)
         val screen = session.emulator.screenText()
         assertTrue(screen.any { it.contains("docker compose ps") })
-        val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(pausedAt))
-        assertTrue("paused marker with $stamp in ${screen.filter { it.isNotBlank() }}", screen.any { it.contains("paused $stamp") })
+        val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(detachedAt))
+        // The pill above it says Detached; the marker says the same word, the one Detach all and tmux use.
+        assertTrue("detached marker with $stamp in ${screen.filter { it.isNotBlank() }}", screen.any { it.contains("detached $stamp") })
+        assertFalse("no second word for the one state", screen.any { it.contains("paused") })
     }
 
     @Test
-    fun `a frame restored for a tab that was already detached carries no paused marker`() = runTest {
+    fun `a frame restored for a tab that was already detached carries no new marker`() = runTest {
         val session = TerminalSession(record(), backgroundScope, env) {}
-        session.restoreFrame(frame(listOf("ben@homelab:~$ ")), pausedAt = null)
-        assertFalse(session.emulator.screenText().any { it.contains("paused") })
+        session.restoreFrame(frame(listOf("ben@homelab:~$ ")), detachedAt = null)
+        assertFalse(session.emulator.screenText().any { it.contains("detached") })
     }
 
     @Test
-    fun `a tab without a saved frame still says it paused`() = runTest {
+    fun `a tab without a saved frame still says it was detached`() = runTest {
         val session = TerminalSession(record(), backgroundScope, env) {}
-        session.restoreFrame(null, pausedAt = clock)
-        assertTrue(session.emulator.screenText().any { it.contains("paused") })
+        session.restoreFrame(null, detachedAt = clock)
+        assertTrue(session.emulator.screenText().any { it.contains("detached") })
     }
 
     @Test

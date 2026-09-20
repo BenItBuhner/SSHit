@@ -24,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -42,7 +43,7 @@ import java.util.concurrent.TimeUnit
 /**
  * The manager against the process (vision §4.3 L0, spec C3 Persistence, C21): frames go to disk
  * when the app leaves the screen and when the OS trims memory, a tab that held a socket when the
- * process died comes back as a paused frame, attention reaches the shade only while the app is
+ * process died comes back detached on its frame, attention reaches the shade only while the app is
  * away, a notification's tab is staged whenever it is asked for, and jump-to-unread goes to the
  * tab that needed the user most recently. The process lifecycle is the fake owner in [TestGraph].
  */
@@ -55,6 +56,11 @@ class SessionLifecycleTest {
     @Before
     fun setUp() {
         graph = TestGraph(ApplicationProvider.getApplicationContext())
+    }
+
+    @After
+    fun tearDown() {
+        graph.close()
     }
 
     // ---- frames ----------------------------------------------------------------------------------
@@ -73,12 +79,33 @@ class SessionLifecycleTest {
     }
 
     @Test
-    fun `a memory trim saves frames whatever the level`() {
+    fun `a trim from UI_HIDDEN up saves frames`() {
         seed()
         restore()
         graph.sessionRecords.frames.clear()
         graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
         await("frames saved on trim") { graph.sessionRecords.frames.keys == setOf("s-a", "s-b") }
+        // Nothing moved since: the next trim writes nothing, whatever its level.
+        graph.sessionRecords.frames.clear()
+        graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+        Thread.sleep(150)
+        assertTrue("unchanged screens are not rewritten", graph.sessionRecords.frames.isEmpty())
+        graph.sessions.get("s-a")!!.emulator.write("ben@homelab:~/srv$ uptime\r\n")
+        graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
+        await("only the tab whose screen moved") { graph.sessionRecords.frames.keys == setOf("s-a") }
+    }
+
+    @Test
+    fun `a RUNNING trim level, with the app on screen, saves nothing`() {
+        seed()
+        restore()
+        graph.sessionRecords.frames.clear()
+        graph.process.start()
+        for (level in listOf(ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE, ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW, ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)) {
+            graph.sessions.onTrimMemory(level)
+        }
+        Thread.sleep(150)
+        assertTrue("the app is on screen and not about to die; no scrollback walk under the user's finger", graph.sessionRecords.frames.isEmpty())
     }
 
     @Test
@@ -102,7 +129,7 @@ class SessionLifecycleTest {
     }
 
     @Test
-    fun `a tab that was live when the process died comes back detached, on its frame, marked paused`() {
+    fun `a tab that was live when the process died comes back detached, on its frame, marked detached`() {
         val killedAt = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(4)
         seed(aState = SessionState.LIVE, aLayer = PersistenceLayer.IN_APP, aLastLiveAt = killedAt)
         restore()
@@ -113,17 +140,17 @@ class SessionLifecycleTest {
         val screen = session.emulator.screenText()
         assertTrue(screen.any { it.contains("docker compose ps") })
         val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(killedAt))
-        assertTrue("paused marker in ${screen.filter { it.isNotBlank() }}", screen.any { it.contains("paused $stamp") })
+        assertTrue("detached marker in ${screen.filter { it.isNotBlank() }}", screen.any { it.contains("detached $stamp") })
         // The record on disk agrees, so the next launch reads the same.
         assertEquals(SessionState.DETACHED, graph.sessionRecords.items.value.first { it.id == "s-a" }.state)
     }
 
     @Test
-    fun `a reconnecting tab at death is a paused frame too, a detached one is not`() {
+    fun `a reconnecting tab at death gets the detached marker too, a tab already detached does not`() {
         seed(aState = SessionState.RECONNECTING, aLayer = PersistenceLayer.IN_APP, aLastLiveAt = System.currentTimeMillis())
         restore()
-        assertTrue(graph.sessions.get("s-a")!!.emulator.screenText().any { it.contains("paused") })
-        assertFalse(graph.sessions.get("s-b")!!.emulator.screenText().any { it.contains("paused") })
+        assertTrue(graph.sessions.get("s-a")!!.emulator.screenText().any { it.contains("detached") })
+        assertFalse(graph.sessions.get("s-b")!!.emulator.screenText().any { it.contains("detached") })
     }
 
     @Test
@@ -236,6 +263,53 @@ class SessionLifecycleTest {
         assertNull(notifications.getNotification(SessionNotifier.attentionTag("s-b"), 2))
     }
 
+    // ---- problems (spec C21, Problems channel) ---------------------------------------------------
+
+    @Test
+    fun `a connection that fails while the app is on screen lights the tab off stage and the shade stays quiet`() {
+        grantNotifications()
+        seed()
+        seedBrokenKeyTab()
+        restore()
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        await("s-a on stage") { graph.sessions.get("s-a")!!.onStage }
+        graph.sessions.reconnect("s-c")
+        val broken = graph.sessions.get("s-c")!!
+        await("the sign-in fails") { broken.state == SessionState.FAILED }
+        await("and lights the tab") { broken.record.value.needsAttention }
+        assertEquals("The key for build box no longer exists", broken.record.value.attentionReason)
+        Thread.sleep(150)
+        assertNull("no heads-up over Berth's own header", notifications.getNotification(SessionNotifier.problemTag("s-c"), 3))
+        assertNull(notifications.getNotification(SessionNotifier.attentionTag("s-c"), 2))
+        // The ring is the signal, so jump-to-unread finds the tab, and arriving clears it.
+        assertTrue(graph.sessions.jumpToUnread())
+        assertEquals("s-c", graph.sessions.activeTabId.value)
+        await("seen") { !broken.record.value.needsAttention }
+    }
+
+    @Test
+    fun `away, the same failure reaches the shade once, as a Problem with Retry and Detach`() {
+        grantNotifications()
+        seed()
+        seedBrokenKeyTab()
+        restore()
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        graph.process.stop()
+        graph.sessions.reconnect("s-c")
+        await("problem posted") { notifications.getNotification(SessionNotifier.problemTag("s-c"), 3) != null }
+        val posted = notifications.getNotification(SessionNotifier.problemTag("s-c"), 3)
+        assertEquals(SessionNotifier.CHANNEL_PROBLEMS, posted.channelId)
+        assertEquals("Couldn't connect to build box", posted.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
+        assertEquals("The key for build box no longer exists", posted.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+        assertEquals(listOf("Retry", "Detach"), posted.actions.map { it.title.toString() })
+        assertEquals("s-c", shadowOf(posted.contentIntent).savedIntent.getStringExtra(SessionNotifier.EXTRA_TAB_ID))
+        assertTrue("lit for the return, like any tab that needed the user while the app was away", graph.sessions.get("s-c")!!.record.value.needsAttention)
+        Thread.sleep(150)
+        assertNull("one event, one notification: Problems carries it, Attention does not repeat it", notifications.getNotification(SessionNotifier.attentionTag("s-c"), 2))
+    }
+
     // ---- deep links ------------------------------------------------------------------------------
 
     @Test
@@ -287,9 +361,20 @@ class SessionLifecycleTest {
         if (third) graph.sessionRecords.saveFrame("s-c", frame(listOf("ci@build:~$ ./gradlew assembleDebug", "BUILD SUCCESSFUL in 1m 12s")))
     }
 
-    private fun host(id: String, name: String, color: SwatchColor) = Host(
-        id = id, name = name, color = color, monogram = Host.monogramFor(name), address = "$id.internal", port = 22, user = "ben", auth = AuthMethod.AskEachTime, createdAt = 0L,
+    private fun host(id: String, name: String, color: SwatchColor, auth: AuthMethod = AuthMethod.AskEachTime) = Host(
+        id = id, name = name, color = color, monogram = Host.monogramFor(name), address = "$id.internal", port = 22, user = "ben", auth = auth, createdAt = 0L,
     )
+
+    /**
+     * A third tab whose host signs in with a key that no longer exists: its connect fails before
+     * any network is touched, with a reason a retry cannot fix, the way a refused sign-in does.
+     */
+    private fun seedBrokenKeyTab() = runBlocking {
+        val build = host("build-box", "build box", SwatchColor.SLATE, auth = AuthMethod.Key("key-gone"))
+        graph.hosts.upsert(build)
+        graph.sessionRecords.upsert(record("s-c", build, 2, lastCommand = "./gradlew assembleDebug"))
+        graph.sessionRecords.saveFrame("s-c", frame(listOf("ci@build:~$ ./gradlew assembleDebug", "BUILD SUCCESSFUL in 1m 12s")))
+    }
 
     private fun record(
         id: String,

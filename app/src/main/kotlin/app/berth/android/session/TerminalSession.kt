@@ -125,7 +125,10 @@ class TerminalSession(
     private val _failure = MutableStateFlow<Pair<String, String>?>(null)
     val failure: StateFlow<Pair<String, String>?> = _failure.asStateFlow()
 
-    /** Failures the user should hear about even when this tab is not on stage; the manager turns them into Problems notifications. */
+    /**
+     * Failures the user should hear about away from this tab. Off stage they also raise attention,
+     * so on screen the ring says it; while the app is away the manager posts them as Problems.
+     */
     private val _problems = MutableSharedFlow<SessionProblem>(extraBufferCapacity = 4)
     val problems: SharedFlow<SessionProblem> = _problems.asSharedFlow()
 
@@ -138,6 +141,14 @@ class TerminalSession(
      * Attention notification's timestamp.
      */
     @Volatile var attentionAt: Long? = null
+        private set
+
+    /**
+     * The problem behind the current attention, when a lost connection rather than output raised
+     * it. Away from the app that one is the Problems notification's, with Retry and Detach, so the
+     * manager does not repeat it as Attention.
+     */
+    @Volatile var attentionProblem: SessionProblem? = null
         private set
 
     val emulator: TerminalEmulator = TerminalEmulator(
@@ -396,7 +407,10 @@ class TerminalSession(
             if (!ReconnectBackoff.shouldRetry(env.now() - since, host.persistence)) {
                 marker("gave up reconnecting")
                 transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
-                _problems.tryEmit(SessionProblem.GaveUp(env.now() - since))
+                // Losing the server is news like a bell is (vision §4.5): off stage the ring and the count tile carry it.
+                val problem = SessionProblem.GaveUp(env.now() - since)
+                if (!onStage) attention("Couldn't reconnect", problem)
+                _problems.tryEmit(problem)
                 return
             }
             transition(SessionState.RECONNECTING, PersistenceLayer.IN_APP)
@@ -506,7 +520,9 @@ class TerminalSession(
         _failure.value = plain to (e.message ?: e.javaClass.simpleName)
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
-        _problems.tryEmit(SessionProblem.Failed(plain, authentication = e is SshError.AuthenticationFailed))
+        val problem = SessionProblem.Failed(plain, authentication = e is SshError.AuthenticationFailed)
+        if (!onStage) attention(plain, problem)
+        _problems.tryEmit(problem)
     }
 
     private fun teardownConnection() {
@@ -576,6 +592,7 @@ class TerminalSession(
 
     override fun markSeen() {
         attentionAt = null
+        attentionProblem = null
         if (_record.value.needsAttention) patch { copy(needsAttention = false, attentionReason = null) }
     }
 
@@ -598,8 +615,9 @@ class TerminalSession(
     override fun place(workspaceId: String, sortOrder: Int): SessionRecord =
         _record.updateAndGet { if (it.workspaceId == workspaceId && it.sortOrder == sortOrder) it else it.copy(workspaceId = workspaceId, sortOrder = sortOrder) }
 
-    private fun attention(reason: String) {
+    private fun attention(reason: String, problem: SessionProblem? = null) {
         attentionAt = env.now()
+        attentionProblem = problem
         patch { copy(needsAttention = true, attentionReason = reason) }
     }
 
@@ -646,12 +664,13 @@ class TerminalSession(
     }
 
     /**
-     * Replays a saved frame into the emulator, dimmed. [pausedAt] is set for a tab that was
-     * connected when the process died: the frame then ends in a `paused 14:07` marker stamped with
-     * the last moment it was known to be live, so the relaunch reads as a session that paused
-     * rather than one that vanished (vision §4.3, L0).
+     * Replays a saved frame into the emulator, dimmed. [detachedAt] is set for a tab that was
+     * connected when the process died: the frame then ends in a `detached 14:07` marker stamped
+     * with the last moment it was known to be live, the same word as the pill above it, Detach all
+     * and tmux, so the relaunch reads as a session that was cut rather than one that vanished
+     * (vision §4.3, L0). Reconnect opens a fresh shell, so the marker promises nothing more.
      */
-    fun restoreFrame(frame: ByteArray?, pausedAt: Long? = null) {
+    fun restoreFrame(frame: ByteArray?, detachedAt: Long? = null) {
         if (frame != null) {
             runCatching {
                 DataInputStream(frame.inputStream()).use { d ->
@@ -665,7 +684,7 @@ class TerminalSession(
                 }
             }
         }
-        if (pausedAt != null) marker("paused", pausedAt)
+        if (detachedAt != null) marker("detached", detachedAt)
     }
 
     companion object {
