@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -88,7 +90,13 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
     }
 }
 
-/** The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows; the OSC 52 notice (not a transport prompt) borrows it too. */
+/**
+ * The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows;
+ * the OSC 52 notice (not a transport prompt) and the crash report borrow it too. The column scrolls:
+ * the sheet itself does not scroll its content, and at the interface's font cap (A11) the changed-key
+ * sheet with a link's row, or a report with its box, stands taller than a phone's window, where an
+ * unscrolled column would lay its last rows, the answers, out at no height.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
@@ -99,6 +107,7 @@ internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit)
             Modifier
                 .fillMaxWidth()
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

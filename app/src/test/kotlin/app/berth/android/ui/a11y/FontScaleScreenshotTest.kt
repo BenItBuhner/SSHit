@@ -9,12 +9,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -22,23 +27,41 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.diagnostics.BerthLog
+import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.screenshots.textLayout
+import app.berth.android.session.HostKeyChangedDecision
+import app.berth.android.session.LinkFingerprint
+import app.berth.android.session.Prompt
+import app.berth.android.ui.diagnostics.CrashReportHost
 import app.berth.android.ui.hosts.HostsScreen
+import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.KeyAlgorithm
+import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalFont
+import app.berth.ssh.HostKeyRequest
+import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -49,13 +72,16 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Font scaling (spec A11): with the system's font size at its largest, 2×, interface text is set
  * at 1.3× and the terminal at 1×, and follows the system only when the font asks to. The Stage,
- * the settings and the hosts are captured at that size, with the audit's checks on each, and two
+ * the settings and the hosts are captured at that size, with the audit's checks on each, and three
  * things that clipped at the cap are held: a Deck key's alternate hint stays clear of its label,
- * and no text on the Settings screen is cut (a title ellipsized, a caption stopped at one line).
+ * no text on the Settings screen is cut (a title ellipsized, a caption stopped at one line), and
+ * the two tallest sheets, the changed-key sheet with a link's row and the crash sheet, scroll to
+ * their buttons rather than measuring them to nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -180,5 +206,111 @@ class FontScaleScreenshotTest {
         themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("homelab")).fetchSemanticsNodes().isNotEmpty() }
         capture("hosts-font-scale-2x")
+    }
+
+    /**
+     * The tallest of the prompt sheets at the cap: the changed-key sheet with a link's fingerprint as
+     * its third row stands taller than the phone's window, so the sheet scrolls and its three answers
+     * are laid out at a height and reached by scrolling, where an unscrolled column laid them out at
+     * none. The host's name stays whole beside its endpoint, on the line under it when the two no
+     * longer share one.
+     */
+    @Test
+    fun `the changed-key sheet with a link row at 2x scrolls to its three answers, the host's name whole`() {
+        StageFixture.seed(graph)
+        val host = prodApi()
+        val key = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val other = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val third = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val request = HostKeyRequest(
+            host = host.address,
+            port = host.port,
+            keyType = "ssh-ed25519",
+            publicKey = key,
+            publicKeyBase64 = SshKeys.openSshPublic(key).split(" ")[1],
+            fingerprintSha256 = SshKeys.fingerprintSha256(key),
+        )
+        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(40), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
+        val asking = CoroutineScope(Dispatchers.IO).launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(third), key, saved)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("LINK   SHA256")).fetchSemanticsNodes().isNotEmpty() }
+        assertTextWhole("prod-api")
+        assertTextWhole("deploy@203.0.113.10")
+        // As opened: the title, the host on two lines, the three fingerprints; then scrolled to the answers.
+        capture("prompt-host-key-changed-font-scale-2x")
+        assertSheetButtonsReachable("Disconnect", "Connect once without saving", "Replace the saved key")
+        capture("prompt-host-key-changed-font-scale-2x-scrolled")
+        (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+        asking.cancel()
+    }
+
+    /** The crash sheet at the cap: the report's box, the paragraph under it and then Share, Copy and Keep for later, each at a height and the last reached by scrolling. */
+    @Test
+    fun `the crash sheet at 2x scrolls to Keep for later`() {
+        StageFixture.seed(graph)
+        crashPreviousRun()
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            CrashReportHost(graph.reports)
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth crashed last time")).fetchSemanticsNodes().isNotEmpty() }
+        // The file is read off the main thread; the box holds it once it is here.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth crash report", substring = true)).fetchSemanticsNodes().size == 1 }
+        capture("crash-sheet-font-scale-2x")
+        assertSheetButtonsReachable("Share report", "Copy report", "Keep for later")
+        capture("crash-sheet-font-scale-2x-scrolled")
+    }
+
+    /** The host the trust sheets are about in the captures: named, so its line carries name and endpoint both. */
+    private fun prodApi() = Host(
+        id = "prod-api",
+        name = "prod-api",
+        color = SwatchColor.COPPER,
+        monogram = Host.monogramFor("prod-api"),
+        address = "203.0.113.10",
+        user = "deploy",
+        auth = AuthMethod.Key("id-laptop"),
+        lastConnectedAt = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(130),
+        createdAt = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30),
+    )
+
+    /** The previous run's crash, through the handler's own path into this graph's store, re-read as the launch after would. */
+    private fun crashPreviousRun() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        BerthLog.i("App", "process started")
+        BerthLog.i("Session", "[homelab] detached \u2192 connecting")
+        val previousRun = CrashReporter(graph.reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
+        previousRun.onCrash(Thread("main"), IllegalStateException("Frame 1 of 1 has no cells for row 24", ArrayIndexOutOfBoundsException("Index 24 out of bounds for length 24")))
+        graph.reports.reload()
+    }
+
+    /**
+     * Every button on the sheet is measured to a size, the named ones among them (B8: a sheet taller
+     * than the window without a scroll measured its last rows to no height), and the last of them can
+     * be scrolled into view, so it can be pressed however tall the sheet stands. The measured size is
+     * what is read, not the bounds in the root, which a scroll clips to what it shows.
+     */
+    private fun assertSheetButtonsReachable(vararg labels: String) {
+        val buttons = compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and hasAnyAncestor(isDialog())).fetchSemanticsNodes()
+        assertTrue("the sheet's buttons, ${labels.size} named, were on it: ${buttons.size} found", buttons.size >= labels.size)
+        val flat = buttons.filter { it.size.height <= 0 || it.size.width <= 0 }
+        assertTrue("buttons measured to no size: ${flat.map { it.config.getOrNull(SemanticsProperties.Text)?.joinToString() }}", flat.isEmpty())
+        for (label in labels) {
+            val size = compose.onNodeWithText(label).fetchSemanticsNode().size
+            assertTrue("'$label' is measured to no height: $size", size.height > 0 && size.width > 0)
+        }
+        compose.onNodeWithText(labels.last()).performScrollTo().assertIsDisplayed()
+    }
+
+    /** The text named [text] is on screen whole: its one line is not ellipsized. */
+    private fun assertTextWhole(text: String) {
+        val layout = compose.onNode(hasText(text), useUnmergedTree = true).fetchSemanticsNode().textLayout()
+        assertTrue("'$text' has a layout", layout != null)
+        assertFalse("'$text' is cut at the cap", layout!!.isLineEllipsized(layout.lineCount - 1))
     }
 }
