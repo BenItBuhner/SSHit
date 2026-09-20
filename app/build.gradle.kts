@@ -28,6 +28,32 @@ val appVersionCode: Int = run {
     code
 }
 
+// The release key is never in the repository. Four values, each read from a Gradle property (in
+// ~/.gradle/gradle.properties or with -P; the property wins) or else from the environment:
+//   berth.release.storeFile      BERTH_RELEASE_STORE_FILE      path to the keystore
+//   berth.release.storePassword  BERTH_RELEASE_STORE_PASSWORD
+//   berth.release.keyAlias       BERTH_RELEASE_KEY_ALIAS
+//   berth.release.keyPassword    BERTH_RELEASE_KEY_PASSWORD
+// With none of them set a release build is unsigned (app-release-unsigned.apk), which is what CI builds to prove
+// R8 and to measure; with some set and some not, the build stops rather than sign with a guess. The debug key
+// in app/keystore/debug.keystore is a different matter: not a secret, and pinned for every machine.
+fun releaseSetting(property: String, variable: String): String? =
+    providers.gradleProperty(property).orElse(providers.environmentVariable(variable)).orNull?.takeIf { it.isNotBlank() }
+val releaseSigning: Map<String, String?> = mapOf(
+    "storeFile" to releaseSetting("berth.release.storeFile", "BERTH_RELEASE_STORE_FILE"),
+    "storePassword" to releaseSetting("berth.release.storePassword", "BERTH_RELEASE_STORE_PASSWORD"),
+    "keyAlias" to releaseSetting("berth.release.keyAlias", "BERTH_RELEASE_KEY_ALIAS"),
+    "keyPassword" to releaseSetting("berth.release.keyPassword", "BERTH_RELEASE_KEY_PASSWORD"),
+)
+val releaseSigningConfigured: Boolean = when (releaseSigning.values.count { it != null }) {
+    0 -> false
+    releaseSigning.size -> true
+    else -> error(
+        "Release signing needs all four of berth.release.storeFile, storePassword, keyAlias and keyPassword " +
+            "(or their BERTH_RELEASE_* variables); set: ${releaseSigning.filterValues { it != null }.keys}",
+    )
+}
+
 android {
     namespace = "app.berth.android"
     compileSdk = 37
@@ -53,6 +79,19 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseSigning.getValue("storeFile")!!).also {
+                    require(it.isFile) { "berth.release.storeFile / BERTH_RELEASE_STORE_FILE points at nothing: $it" }
+                }
+                storePassword = releaseSigning.getValue("storePassword")
+                keyAlias = releaseSigning.getValue("keyAlias")
+                keyPassword = releaseSigning.getValue("keyPassword")
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     buildTypes {
@@ -64,6 +103,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
