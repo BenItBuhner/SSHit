@@ -1,9 +1,11 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.view.View
 import android.view.ViewConfiguration
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
@@ -20,11 +22,15 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PaneSide
@@ -44,6 +50,8 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TmuxMode
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
@@ -89,10 +97,11 @@ private const val TABLET_PORTRAIT = "w800dp-h1280dp-port-320dpi"
  * native graphics into `build/outputs/roborazzi`. Each size gets the two-pane Stage where it fits,
  * the rail where the width is expanded, sheets as dialogs where a strip across the bottom would
  * be absurd, and the shorter strip where the height is compact. The fixtures are the phone
- * classes' three detached tabs and a Files tab, so the strip reads as it does in their frames; the
- * phone in portrait is captured through the same shell as the set's reference. The two live cases
- * drive a real sshj login against the local sshd when the `SSH_TEST_*` variables are set, so the
- * Deck in those frames is a live session's.
+ * classes' three detached tabs and a Files tab, so the strip reads as it does in their frames, and
+ * for one case a Tunnels tab (spec C14) beside a terminal; the phone in portrait is captured
+ * through the same shell as the set's reference. The two live cases drive a real sshj login against
+ * the local sshd when the `SSH_TEST_*` variables are set, so the Deck in those frames is a live
+ * session's.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -344,6 +353,40 @@ class LargeScreenScreenshotTest {
         capture("tablet-portrait-files-beside-terminal")
     }
 
+    /**
+     * A Tunnels tab (spec C14) beside a terminal: the one body dispatch gives the pane the forwards
+     * over their pill, with no Deck to hand down and no keys to take, and the pane, not the body,
+     * pays the window's bottom inset. Robolectric's window has no navigation bar, so one is given
+     * to it: alone on the Stage the body's own spacer holds the pill 48 px off the bottom; in a pane
+     * the layer has consumed that inset, the spacer is nothing, the pill sits on the pane's edge and
+     * the chrome under both panes pays the bar once, as it does for a Files tab's browser.
+     */
+    @Test
+    @Config(qualifiers = TABLET_LANDSCAPE)
+    fun `tablet on its side, a Tunnels tab beside a terminal pays no bottom inset of its own`() {
+        seedTunnelsTab()
+        mountApp(activeId = "t-proddb")
+        compose.onNodeWithText(TunnelRowText).assertIsDisplayed()
+        val bar = 48
+        navigationBar(bar)
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val alone = root.bottom - pill().bottom
+
+        split("s-homelab", PaneSide.LEFT)
+        graph.sessions.setActive("t-proddb")
+        compose.waitUntil(5_000) { graph.sessions.panes.value?.let { it.right.id == "t-proddb" && it.focused == PaneSide.RIGHT } == true }
+        compose.waitForIdle()
+        val pane = paneBounds("t-proddb", PaneSide.RIGHT)
+        assertEquals("the layer pays the bar under both panes", root.bottom - bar, pane.bottom, 1f)
+        assertEquals("the body's spacer is nothing inside a pane", alone - bar, pane.bottom - pill().bottom, 1f)
+        compose.onNodeWithText(TunnelRowText).assertIsDisplayed()
+        compose.onNodeWithText("Tunnels run while this login is up").assertIsDisplayed()
+        compose.onAllNodes(hasContentDescription("Ctrl", substring = true)).assertCountEquals(0)
+
+        navigationBar(0)
+        capture("tablet-landscape-tunnels-beside-terminal")
+    }
+
     // ---- live, against the local sshd ------------------------------------------------------------
 
     /** The phone on its side with a live session: the 32 dp strip, the terminal, and the Deck one row of 40 (spec C23). */
@@ -426,7 +469,10 @@ class LargeScreenScreenshotTest {
         seedFilesTab()
         runBlocking { graph.sessions.restore() }
         graph.sessions.setActive(activeId)
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent {
+            composeView = LocalView.current
+            AppRoot(graph.viewModel)
+        }
         compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 4 && graph.viewModel.activeTabId.value == activeId }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("homelab, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
@@ -457,6 +503,23 @@ class LargeScreenScreenshotTest {
     private fun pane(id: String, side: PaneSide) = compose.onNode(paneMatcher(id, side))
 
     private fun paneBounds(id: String, side: PaneSide): Rect = pane(id, side).fetchSemanticsNode().boundsInRoot
+
+    /** The Tunnels tab's state pill, by its text: the one frame detached seven minutes ago. */
+    private fun pill(): Rect = compose.onNodeWithText("Detached \u00B7 7 min ago").fetchSemanticsNode().boundsInRoot
+
+    /** The compose view under test, for the insets Robolectric's window never sends it. */
+    private var composeView: View? = null
+
+    /**
+     * Gives the window a navigation bar [px] tall along the bottom, dispatched to the compose view
+     * as the window would, so what pays that inset can be seen paying it; 0 takes the bar away.
+     */
+    private fun navigationBar(px: Int) {
+        val view = checkNotNull(composeView) { "mountApp first" }
+        val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, px)).build()
+        compose.runOnUiThread { ViewCompat.dispatchApplyWindowInsets(view, insets) }
+        compose.waitForIdle()
+    }
 
     /** The strip item for the detached tab titled [title]. */
     private fun tab(title: String) = compose.onNode(hasContentDescription("$title, detached", substring = true))
@@ -665,6 +728,46 @@ class LargeScreenScreenshotTest {
         )
     }
 
+    /**
+     * A tunnels-only host, prod-db, with a Postgres forward, a web forward and a SOCKS proxy switched
+     * off, and its Tunnels tab (spec C14) at the end of the default group, detached seven minutes ago.
+     * Seeded before [mountApp], which restores it with the rest.
+     */
+    private fun seedTunnelsTab() = runBlocking {
+        val prodDb = Host(
+            id = "prod-db",
+            name = "prod-db",
+            color = SwatchColor.PLUM,
+            monogram = Host.monogramFor("prod-db"),
+            address = "10.0.4.12",
+            port = 22,
+            user = "deploy",
+            auth = AuthMethod.AskEachTime,
+            tunnelsOnly = true,
+            lastConnectedAt = now - TimeUnit.MINUTES.toMillis(7),
+            createdAt = now - TimeUnit.DAYS.toMillis(30),
+        )
+        graph.hosts.upsert(prodDb)
+        graph.tunnels.upsert(Tunnel("t-pg", prodDb.id, TunnelType.LOCAL, "127.0.0.1", 5433, "localhost", 5432))
+        graph.tunnels.upsert(Tunnel("t-web", prodDb.id, TunnelType.LOCAL, "127.0.0.1", 8080, "localhost", 80))
+        graph.tunnels.upsert(Tunnel("t-socks", prodDb.id, TunnelType.DYNAMIC, "127.0.0.1", 1080, "", 0, enabled = false))
+        graph.sessionRecords.upsert(
+            SessionRecord(
+                id = "t-proddb",
+                workspaceId = Workspace.DEFAULT_ID,
+                hostId = prodDb.id,
+                hostSnapshot = prodDb,
+                state = SessionState.DETACHED,
+                layer = PersistenceLayer.LOCAL_FRAME,
+                title = "Tunnels \u00B7 ${prodDb.name}",
+                sortOrder = 3,
+                createdAt = now - TimeUnit.HOURS.toMillis(2),
+                lastLiveAt = now - TimeUnit.MINUTES.toMillis(7),
+                kind = TabKind.Tunnels,
+            ),
+        )
+    }
+
     private fun frame(lines: List<String>): ByteArray {
         val out = ByteArrayOutputStream()
         DataOutputStream(out).use { d ->
@@ -675,3 +778,6 @@ class LargeScreenScreenshotTest {
         return out.toByteArray()
     }
 }
+
+/** The Postgres forward's row on the Tunnels stage, as `Tunnel.rowSpec` sets it: the arrow holds the destination on its line. */
+private const val TunnelRowText = "127.0.0.1:5433 \u2192\u00A0localhost:5432"
