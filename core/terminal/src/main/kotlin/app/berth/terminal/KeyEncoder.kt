@@ -63,15 +63,17 @@ object KeyEncoder {
 
     /**
      * Encodes a printable code point typed with [modifiers]. Ctrl maps letters and the usual
-     * punctuation onto C0 controls; Alt prefixes ESC; Shift is assumed to be already applied to
-     * the code point by the keyboard.
+     * punctuation onto C0 controls; Alt prefixes ESC (xterm's `metaSendsEscape`), or with
+     * [altSendsMeta] sets the eighth bit of an ASCII result instead (`eightBitInput`); Shift is
+     * assumed to be already applied to the code point by the keyboard.
      */
-    fun encodeText(codePoint: Int, modifiers: Int): ByteArray {
+    fun encodeText(codePoint: Int, modifiers: Int, altSendsMeta: Boolean = false): ByteArray {
         var cp = codePoint
         if (modifiers and Mod.CTRL != 0) {
             val ctrl = controlFor(cp)
             if (ctrl >= 0) cp = ctrl
         }
+        if (altSendsMeta && modifiers and Mod.ALT != 0 && cp in 0..0x7F) return byteArrayOf((cp or 0x80).toByte())
         val utf8 = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8)
         return withAlt(utf8, modifiers)
     }

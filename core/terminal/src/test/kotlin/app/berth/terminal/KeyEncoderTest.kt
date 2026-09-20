@@ -68,6 +68,43 @@ class KeyEncoderTest {
     }
 
     @Test
+    fun `Alt as Meta sets the eighth bit of ASCII and falls back to the Escape prefix elsewhere`() {
+        // xterm's eightBitInput: Alt+x is x with bit 7 set, Alt+Ctrl+a is 0x01 with bit 7 set.
+        assertContentEquals(byteArrayOf(0xF8.toByte()), KeyEncoder.encodeText('x'.code, Mod.ALT, altSendsMeta = true))
+        assertContentEquals(byteArrayOf(0x81.toByte()), KeyEncoder.encodeText('a'.code, Mod.ALT or Mod.CTRL, altSendsMeta = true))
+        assertContentEquals(byteArrayOf(0xD8.toByte()), KeyEncoder.encodeText('X'.code, Mod.ALT or Mod.SHIFT, altSendsMeta = true))
+        // Outside ASCII there is no eighth bit to set; Escape leads as usual.
+        assertContentEquals(byteArrayOf(0x1B) + "\u00e9".toByteArray(Charsets.UTF_8), KeyEncoder.encodeText(0xE9, Mod.ALT, altSendsMeta = true))
+        // Without Alt the flag changes nothing, and the default stays the Escape prefix.
+        assertContentEquals("x".toByteArray(), KeyEncoder.encodeText('x'.code, 0, altSendsMeta = true))
+        assertContentEquals(byteArrayOf(0x1B, 'x'.code.toByte()), KeyEncoder.encodeText('x'.code, Mod.ALT, altSendsMeta = false))
+    }
+
+    @Test
+    fun `every hardware modifier reaches the CSI parameter on navigation and function keys`() {
+        // 1 + Shift(1) + Alt(2) + Ctrl(4): Home, End, PgUp, PgDn and the arrows all carry it.
+        assertEquals("\u001b[1;2H", enc(TerminalKey.HOME, Mod.SHIFT))
+        assertEquals("\u001b[1;5F", enc(TerminalKey.END, Mod.CTRL))
+        assertEquals("\u001b[1;3H", enc(TerminalKey.HOME, Mod.ALT))
+        assertEquals("\u001b[5;5~", enc(TerminalKey.PAGE_UP, Mod.CTRL))
+        assertEquals("\u001b[6;2~", enc(TerminalKey.PAGE_DOWN, Mod.SHIFT))
+        assertEquals("\u001b[1;7A", enc(TerminalKey.UP, Mod.CTRL or Mod.ALT))
+        assertEquals("\u001b[1;8B", enc(TerminalKey.DOWN, Mod.CTRL or Mod.ALT or Mod.SHIFT))
+        // Application cursor mode yields to the modifier form, as xterm does.
+        assertEquals("\u001b[1;5D", enc(TerminalKey.LEFT, Mod.CTRL, appCursor = true))
+        // F1 to F4 take the SS3 form plain and the CSI 1;m form modified; F5 upwards the tilde form.
+        assertEquals("\u001b[1;5Q", enc(TerminalKey.F2, Mod.CTRL))
+        assertEquals("\u001b[17;3~", enc(TerminalKey.F6, Mod.ALT))
+        assertEquals("\u001b[24;6~", enc(TerminalKey.F12, Mod.CTRL or Mod.SHIFT))
+        // Escape and the editing keys with Alt: Escape leads.
+        assertEquals("\u001b\u001b", enc(TerminalKey.ESCAPE, Mod.ALT))
+        assertEquals("\u001b\r", enc(TerminalKey.ENTER, Mod.ALT))
+        assertEquals("\u001b\t", enc(TerminalKey.TAB, Mod.ALT))
+        // Ctrl+Shift+letter is the same C0 control as Ctrl+letter without modifyOtherKeys.
+        assertContentEquals(byteArrayOf(0x01), KeyEncoder.encodeText('A'.code, Mod.CTRL or Mod.SHIFT))
+    }
+
+    @Test
     fun `mouse encodings`() {
         assertContentEquals("\u001b[<2;10;20M".toByteArray(), MouseEncoder.encode(MouseButton.RIGHT, 9, 19, 0, release = false, motion = false, sgr = true))
         assertContentEquals("\u001b[<32;10;20M".toByteArray(), MouseEncoder.encode(MouseButton.LEFT, 9, 19, 0, release = false, motion = true, sgr = true))

@@ -2,6 +2,7 @@ package app.berth.android.session
 
 import app.berth.android.diagnostics.BerthLog
 import app.berth.domain.model.AddressFamily
+import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.ReconnectBackoff
@@ -108,6 +109,9 @@ interface SessionEnvironment {
      * beside the marker the terminal shows; a stand-in keeps nothing.
      */
     fun onTransportFailure(host: Host, phase: String, error: Throwable?, detail: String) = Unit
+
+    /** What a hardware keyboard's Alt does to a character typed at [hostId] (spec C22, Settings › Hardware keyboard). */
+    fun altKeyFor(hostId: String?): AltKeyMode = AltKeyMode.ESC_PREFIX
 }
 
 /** A failure worth telling the user about away from the Stage (spec C21, Problems channel). */
@@ -848,11 +852,12 @@ class TerminalSession(
             send(text.toByteArray(Charsets.UTF_8))
             return
         }
+        val altSendsMeta = modifiers and Mod.ALT != 0 && env.altKeyFor(_record.value.hostId) == AltKeyMode.META
         val out = ByteArrayOutputStream()
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
-            out.write(emulator.encodeText(cp, modifiers))
+            out.write(emulator.encodeText(cp, modifiers, altSendsMeta))
             i += Character.charCount(cp)
         }
         send(out.toByteArray())

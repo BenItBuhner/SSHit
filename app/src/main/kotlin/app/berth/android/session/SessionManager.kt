@@ -15,6 +15,8 @@ import app.berth.android.di.ProcessLifecycle
 import app.berth.android.security.AppLockController
 import app.berth.android.security.LockState
 import app.berth.android.security.RemoteClipboardGate
+import app.berth.domain.model.AltKeyMode
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
@@ -265,9 +267,11 @@ class SessionManager @Inject constructor(
     private val stageLock = Any()
 
     private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
+    private val hardwareKeyboard = settings.hardwareKeyboardSettings.stateIn(scope, SharingStarted.Eagerly, HardwareKeyboardSettings())
 
     private val environment = object : SessionEnvironment {
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
+        override fun altKeyFor(hostId: String?): AltKeyMode = hardwareKeyboard.value.altKeyFor(hostId)
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
         override fun hostKeyPolicyFor(host: Host, via: HopRole?, linkFingerprint: String?): HostKeyPolicy =

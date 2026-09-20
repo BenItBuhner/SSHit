@@ -101,7 +101,8 @@ class StageInput(
     override fun onCodePoint(codePoint: Int, modifiers: Int) {
         val s = session() ?: return
         val bits = modifiers or latch.bits
-        s.send(s.emulator.encodeText(codePoint, bits and Mod.SHIFT.inv()))
+        // Through the session, not the encoder: it applies the host's Alt behaviour and tells the history tracker the line was edited by a chord.
+        s.sendText(String(Character.toChars(codePoint)), bits and Mod.SHIFT.inv())
         latch.consumeOneShots()
     }
 

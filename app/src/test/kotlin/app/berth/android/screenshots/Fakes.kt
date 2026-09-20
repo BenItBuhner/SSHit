@@ -29,6 +29,7 @@ import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -204,6 +205,10 @@ class InMemorySettings : SettingsRepository {
     private val commandHistory = MutableStateFlow(true)
     override val commandHistoryEnabled: Flow<Boolean> = commandHistory
     override suspend fun setCommandHistoryEnabled(enabled: Boolean) { commandHistory.value = enabled }
+
+    val hardwareKeyboard = MutableStateFlow(HardwareKeyboardSettings())
+    override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> = hardwareKeyboard
+    override suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) = hardwareKeyboard.update(change)
 }
 
 /**
