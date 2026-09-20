@@ -24,6 +24,7 @@ import app.berth.sftp.SftpPaths
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -34,8 +35,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -124,7 +123,15 @@ class TransferManager(
     var linkPolicy: LinkPolicy = LinkPolicy.FOLLOW_FILE_LINKS
 
     private val jobs = HashMap<String, Job>()
-    private val lanes = HashMap<String, Mutex>()
+
+    /**
+     * One lane per session: the transfer queued last on it, as the signal its successor waits on.
+     * The place in the lane is taken here, synchronously, in the order [enqueue] is called; the
+     * coroutine that runs the transfer only waits for the one before it. A per-session `Mutex`
+     * that each coroutine locked on arrival did not promise that order: two launches in a row are
+     * dispatched in either order under load, so a folder queued behind a file could take the lane first.
+     */
+    private val lanes = HashMap<String, CompletableDeferred<Unit>>()
     private val conflicts = HashMap<String, CompletableDeferred<ConflictResolution>>()
     /** Answers that arrived in the moment between a conflict showing and the copy asking for it. */
     private val answers = HashMap<String, ConflictResolution>()
@@ -391,60 +398,67 @@ class TransferManager(
         val transfer = Transfer(id, session.id, session.host.name, kind, name, remotePath, total, folder = folder)
         _transfers.update { it + transfer }
         publishCount()
-        val lane = synchronized(lanes) { lanes.getOrPut(session.id) { Mutex() } }
+        // The place in the lane is taken now, in call order; [turn] is what the next transfer on this session waits for.
+        val turn = CompletableDeferred<Unit>()
+        val previous: Deferred<Unit> = synchronized(lanes) { lanes.put(session.id, turn) ?: CompletableDeferred(Unit) }
         val job = scope.launch {
-            lane.withLock {
-                patch(id) { it.copy(state = TransferState.RUNNING, startedAt = System.currentTimeMillis()) }
-                publishCount()
-                val meter = SpeedMeter()
-                var lastPublish = 0L
-                val bytes: (Long, Long) -> Unit = { copied, size ->
-                    val now = System.nanoTime()
-                    val speed = meter.update(copied, now)
-                    if (now - lastPublish > PUBLISH_INTERVAL_NANOS || copied == size) {
-                        lastPublish = now
-                        patch(id) { it.copy(bytes = copied, total = if (size > 0) size else it.total, bytesPerSecond = speed) }
-                    }
-                }
-                var lastFolder: FolderProgress? = null
-                val folderProgress: (FolderProgress) -> Unit = { p ->
-                    val now = System.nanoTime()
-                    val speed = meter.update(p.bytesDone, now)
-                    // Chunks are throttled like bytes; a change of shape (a file done, a conflict, a failure) goes out at once.
-                    if (lastFolder?.sameShape(p) != true || now - lastPublish > PUBLISH_INTERVAL_NANOS) {
-                        lastPublish = now
-                        lastFolder = p
-                        patch(id) { it.copy(folder = p, bytes = p.bytesDone, total = p.bytesTotal, bytesPerSecond = speed) }
-                    }
-                }
-                try {
-                    run(Handle(id, bytes, folderProgress))
-                    patch(id) { t ->
-                        val f = t.folder
-                        when {
-                            f == null -> t.copy(state = TransferState.DONE, bytes = if (t.total > 0) t.total else t.bytes, finishedAt = System.currentTimeMillis())
-                            f.filesFailed > 0 -> t.copy(state = TransferState.FAILED, error = folderOutcome(f), finishedAt = System.currentTimeMillis())
-                            else -> t.copy(state = TransferState.DONE, finishedAt = System.currentTimeMillis())
-                        }
-                    }
-                } catch (e: CancellationException) {
-                    patch(id) { it.copy(state = TransferState.CANCELLED, finishedAt = System.currentTimeMillis()) }
-                    throw e
-                } catch (e: Skipped) {
-                    patch(id) { it.copy(state = TransferState.SKIPPED, note = e.note, finishedAt = System.currentTimeMillis()) }
-                } catch (e: Throwable) {
-                    val reason = when (e) {
-                        is SftpError -> e.message ?: "The transfer failed."
-                        is IOException -> e.message ?: "The transfer failed."
-                        else -> e.message ?: e.javaClass.simpleName
-                    }
-                    patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = System.currentTimeMillis()) }
-                } finally {
-                    synchronized(jobs) { jobs.remove(id) }
-                    synchronized(conflicts) { answers.remove(id) }
-                    publishCount()
+            previous.await()
+            patch(id) { it.copy(state = TransferState.RUNNING, startedAt = System.currentTimeMillis()) }
+            publishCount()
+            val meter = SpeedMeter()
+            var lastPublish = 0L
+            val bytes: (Long, Long) -> Unit = { copied, size ->
+                val now = System.nanoTime()
+                val speed = meter.update(copied, now)
+                if (now - lastPublish > PUBLISH_INTERVAL_NANOS || copied == size) {
+                    lastPublish = now
+                    patch(id) { it.copy(bytes = copied, total = if (size > 0) size else it.total, bytesPerSecond = speed) }
                 }
             }
+            var lastFolder: FolderProgress? = null
+            val folderProgress: (FolderProgress) -> Unit = { p ->
+                val now = System.nanoTime()
+                val speed = meter.update(p.bytesDone, now)
+                // Chunks are throttled like bytes; a change of shape (a file done, a conflict, a failure) goes out at once.
+                if (lastFolder?.sameShape(p) != true || now - lastPublish > PUBLISH_INTERVAL_NANOS) {
+                    lastPublish = now
+                    lastFolder = p
+                    patch(id) { it.copy(folder = p, bytes = p.bytesDone, total = p.bytesTotal, bytesPerSecond = speed) }
+                }
+            }
+            try {
+                run(Handle(id, bytes, folderProgress))
+                patch(id) { t ->
+                    val f = t.folder
+                    when {
+                        f == null -> t.copy(state = TransferState.DONE, bytes = if (t.total > 0) t.total else t.bytes, finishedAt = System.currentTimeMillis())
+                        f.filesFailed > 0 -> t.copy(state = TransferState.FAILED, error = folderOutcome(f), finishedAt = System.currentTimeMillis())
+                        else -> t.copy(state = TransferState.DONE, finishedAt = System.currentTimeMillis())
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Skipped) {
+                patch(id) { it.copy(state = TransferState.SKIPPED, note = e.note, finishedAt = System.currentTimeMillis()) }
+            } catch (e: Throwable) {
+                val reason = when (e) {
+                    is SftpError -> e.message ?: "The transfer failed."
+                    is IOException -> e.message ?: "The transfer failed."
+                    else -> e.message ?: e.javaClass.simpleName
+                }
+                patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = System.currentTimeMillis()) }
+            }
+        }
+        // Runs however the job ends, including a cancel before it was ever dispatched, so the lane is
+        // always handed on and a transfer cancelled while still queued ends as cancelled rather than queued.
+        job.invokeOnCompletion { cause ->
+            if (cause is CancellationException) {
+                patch(id) { if (it.state.isActive) it.copy(state = TransferState.CANCELLED, finishedAt = System.currentTimeMillis()) else it }
+            }
+            synchronized(jobs) { jobs.remove(id) }
+            synchronized(conflicts) { answers.remove(id) }
+            publishCount()
+            turn.complete(Unit)
         }
         synchronized(jobs) { jobs[id] = job }
         return id

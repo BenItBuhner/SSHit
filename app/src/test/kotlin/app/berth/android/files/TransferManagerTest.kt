@@ -207,6 +207,18 @@ class TransferManagerTest {
         assertEquals(0, graph.sessions.activeTransfers.value)
     }
 
+    @Test
+    fun `a burst of transfers on one lane runs in the order queued, whichever coroutine is dispatched first`() {
+        val session = session("s1")
+        val paths = (0 until 40).map { i -> "/srv/burst/f%02d.txt".format(i).also { server.file(it, "$i\n", 0) } }
+        // Queued in one go, the way a multi-selection is: the place in the lane is taken as each is queued, not as each coroutine starts.
+        val ids = manager.downloadInto(session, paths.map { server.entry(it) }, Uri.fromFile(tmp))
+        assertEquals(paths.size, ids.size)
+        ids.forEach { assertEquals(TransferState.DONE, awaitFinished(it).state) }
+        assertEquals("the files moved in the order queued", paths, moved.toList())
+        assertTrue("each started once the one before it was over", ids.zipWithNext().all { (a, b) -> transfer(b).startedAt >= transfer(a).finishedAt })
+    }
+
     // ---- a file in the way -----------------------------------------------------------------------
 
     @Test
