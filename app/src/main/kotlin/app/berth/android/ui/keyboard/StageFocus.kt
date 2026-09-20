@@ -5,8 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -47,20 +47,54 @@ class StageFocus {
     // search bar and the selection bar are both the Bar), and the reports of a focus moving between
     // them, or of a body and the Deck inside it, land in either order; a count is right in every order.
     private val holders = mutableStateMapOf<StageRegion, Int>()
+    // How many of a region's nodes are on screen at all: a body coming on stage is seen here by
+    // [KeepStageFocus], which has been waiting to put the focus in it.
+    private val attached = mutableStateMapOf<StageRegion, Int>()
 
     /** The innermost region holding the focus; null while nothing on the Stage has it. */
     val region: StageRegion?
         get() = StageRegion.entries.lastOrNull { (holders[it] ?: 0) > 0 }
 
+    /** Changes with every region node that comes on screen or leaves it; read to be told of one. */
+    val attachments: Int
+        get() = attached.values.sum()
+
     /**
-     * The region that last held the focus, for putting it back once the control it was on has gone
-     * (a Deck hidden or shown, a search closed, a tab switched). [KeepStageFocus] keeps it from the
-     * settled state between frames: a control's removal reports the loss for its own region and for
-     * the ones around it in an order that is the node tree's, and a reading in between would name a
-     * region the focus was only passing out through.
+     * How many times a region's node has left the screen with the focus in it: a tab switched or
+     * closed under its terminal, the Deck folded under a key, the search closed under its field. The
+     * focus system clears the focus then and gives it to the first control it finds, which no one
+     * asked for; [KeepStageFocus] reads a change here as the word that what holds the focus next is
+     * that placement, and puts the focus back where it was.
      */
-    var last: StageRegion? by mutableStateOf(null)
+    var removals: Int by mutableIntStateOf(0)
+        private set
+
+    /**
+     * The region the user last put the focus in, by a chord or Escape ([focus]), by Tab or the arrows
+     * into another region, or by a touch on a terminal; the body until then. [KeepStageFocus] keeps
+     * the focus there: a control removed from under it has the focus put back into this region, or
+     * the body when the region has nothing left to hold it, and a body coming on stage takes it if it
+     * stands anywhere else meanwhile.
+     */
+    var want: StageRegion = StageRegion.Body
         internal set
+
+    /** Whether the focus is in [want], or where the user moved it out of the Stage; false after a loss until it is. */
+    internal var settled: Boolean = false
+
+    // Whether what holds the focus next is the focus system's placement and not the user's move:
+    // after a control was removed from under it, while nothing holds it, and from the start, until
+    // a placement of the keeper's or the user's own settles it.
+    private var placing = true
+
+    // What [KeepStageFocus] saw last: the region, and the count of removals.
+    private var seenRegion: StageRegion? = null
+    private var seenRemovals = 0
+
+    // The region whose node last reported losing the focus, with none reporting a gain since: the
+    // clearing of the focus from a control on its way off the screen reaches the region's node
+    // before the node's own leaving does, so the node cannot tell from what it holds then, and asks.
+    private var lostLast: StageRegion? = null
 
     fun requester(region: StageRegion): FocusRequester = requesters.getValue(region)
 
@@ -76,22 +110,94 @@ class StageFocus {
     fun entry(region: StageRegion): FocusRequester = entries.getValue(region)
 
     /**
-     * The focus into [region], on its entry or else on its first control. False when the region
-     * has none to give it: a body not yet on stage, a Deck the tab's state has taken down, a tab
-     * kind with no Deck, a bar that is not open.
+     * The focus into [region] on purpose (a chord, Escape, the pane model): on its entry, or else on
+     * its first control; that is then where the focus wants to be. False, and nothing changed, when
+     * the region has no control to give it: a body not yet on stage, a Deck the tab's state has
+     * taken down, a tab kind with no Deck, a bar that is not open.
      */
-    fun focus(region: StageRegion): Boolean =
+    fun focus(region: StageRegion): Boolean {
+        if (!request(region)) return false
+        want = region
+        settled = true
+        placing = false
+        seenRegion = this.region
+        return true
+    }
+
+    private fun request(region: StageRegion): Boolean =
         runCatching { entry(region).requestFocus() }.getOrDefault(false) || runCatching { requester(region).requestFocus() }.getOrDefault(false)
 
     /**
-     * The focus back onto the Stage after the control holding it has gone: into the region it left,
-     * else the body, else the strip, whose plus tab and header controls are always there. False only
-     * when the Stage has no control at all to give it to.
+     * Reads what changed since the last look, for [KeepStageFocus]: a region node gone with the
+     * focus in it ([removals]), or a window holding nothing, unsettles the focus, and what holds it
+     * next is a placement, left to [settle]; a change of region otherwise is the user's move, into
+     * another region, which is where the focus wants to be now, or out of the Stage to a control the
+     * window still holds (the rail, a bar), where it stays. Nothing else changes anything.
      */
-    fun restore(): Boolean = listOfNotNull(last, StageRegion.Body, StageRegion.Strip).distinct().any { focus(it) }
+    internal fun observe(window: WindowFocus?) {
+        val held = window?.held ?: true
+        val now = region
+        val moved = now != seenRegion
+        seenRegion = now
+        when {
+            removals != seenRemovals -> {
+                seenRemovals = removals
+                settled = false
+                placing = true
+            }
+            !held -> {
+                settled = false
+                placing = true
+            }
+            moved && !placing -> {
+                if (now != null) want = now
+                settled = true
+            }
+        }
+    }
+
+    /**
+     * The focus back where it wants to be, for [KeepStageFocus]: left where it is when that is
+     * [want] already (the placement, or the pane model, found the right region); else into [want],
+     * else the body, which then is what it wants; failing both (no body on stage yet), onto the
+     * strip so that a key is not lost, and still unsettled, so a body coming on stage takes it.
+     */
+    internal fun settle() {
+        if (settled) return
+        if (region == want) {
+            settled = true
+            placing = false
+            return
+        }
+        for (target in listOf(want, StageRegion.Body).distinct()) {
+            if (focus(target)) return
+        }
+        if (region == null) {
+            request(StageRegion.Strip)
+            seenRegion = region
+        }
+    }
+
+    /** The keeper started (again): whatever holds the focus was not seen placed, and the next look verifies it. */
+    internal fun unsettle() {
+        settled = false
+        placing = true
+    }
 
     internal fun report(region: StageRegion, hasFocus: Boolean) {
         holders[region] = ((holders[region] ?: 0) + (if (hasFocus) 1 else -1)).coerceAtLeast(0)
+        lostLast = if (hasFocus) null else region
+    }
+
+    internal fun attach(region: StageRegion, onScreen: Boolean) {
+        attached[region] = ((attached[region] ?: 0) + (if (onScreen) 1 else -1)).coerceAtLeast(0)
+    }
+
+    /** A node of [region] leaving the screen, [holding] the focus or having just lost it to the leaving. */
+    internal fun leaving(region: StageRegion, holding: Boolean) {
+        if (!holding && lostLast != region) return
+        lostLast = null
+        removals++
     }
 }
 
@@ -127,13 +233,21 @@ private class StageRegionNode(private var focus: StageFocus, private var region:
 
     override fun onFocusEvent(focusState: FocusState) = hold(focusState.hasFocus)
 
-    override fun onDetach() = hold(false)
+    override fun onAttach() = focus.attach(region, true)
+
+    override fun onDetach() {
+        focus.leaving(region, holding)
+        hold(false)
+        focus.attach(region, false)
+    }
 
     fun bind(focus: StageFocus, region: StageRegion) {
         if (focus === this.focus && region == this.region) return
         hold(false)
+        if (isAttached) this.focus.attach(this.region, false)
         this.focus = focus
         this.region = region
+        if (isAttached) focus.attach(region, true)
     }
 
     private fun hold(has: Boolean) {
@@ -144,31 +258,45 @@ private class StageRegionNode(private var focus: StageFocus, private var region:
 }
 
 /**
- * Keeps the keyboard's focus on the Stage while a hardware keyboard is attached, so no key is lost:
- * when the control holding it goes (the tab on stage changes, the Deck hides or shows, the search
- * closes, a tab is closed), the focus returns to the region it was in, or to the body, or to the
- * strip ([StageFocus.restore]), and a shell tab coming on stage is typed into at once. A Deck
- * hidden under a focused key hands the focus to the strip that stands in for it, and that strip
- * pressed hands it back to the Deck's first key. A focus that left the Stage for another control
- * in the window, the rail on an expanded width (spec A12) by Shift+Tab out of the strip, was moved
- * and not lost, and stays there ([LocalWindowFocus]). Only with a keyboard attached: focusing a
- * shell tab's terminal raises the soft keyboard, which a finger switching tabs did not ask for; a
- * D-pad without a keyboard finds its way in through the platform's own focus search on its first press.
+ * Keeps the keyboard's focus on the Stage while a hardware keyboard is attached, so no key is lost.
+ * The focus is where the user last put it ([StageFocus.want]: the body until a chord, a key or a
+ * touch moves it), and stays there as the controls under it come and go: when the control holding
+ * it is removed (the tab on stage changes, the Deck hides or shows, the search closes, a tab is
+ * closed), the focus system clears the focus and hands it to the first control it finds, the
+ * strip's first tab or the rail's first row on a tablet, which no one asked for; the keeper is told
+ * of the removal by the region's node on its way out ([StageFocus.removals]), reads what holds the
+ * focus next as that placement, and puts the focus back into the region it was in, or into the
+ * body, or onto the strip while nothing else is there. A shell tab coming on stage is typed into at
+ * once, on a cold start as after a switch, whenever the focus stands on such a placement: a body
+ * coming on screen wakes the keeper ([StageFocus.attachments]) and it takes the focus, the frame
+ * after, once the body is laid out. A Deck hidden under a focused key hands the focus to the strip
+ * that stands in for it, and that strip pressed hands it back to the Deck's first key, both by this
+ * route. A focus that left the Stage for another control in the window, the rail on an expanded
+ * width (spec A12) by Shift+Tab out of the strip, was moved and not lost, and stays there
+ * ([WindowFocus.held]); a sheet is a window of its own, and the control that had the focus has it
+ * still when the sheet closes. Only with a keyboard attached: focusing a shell tab's terminal
+ * raises the soft keyboard, which a finger switching tabs did not ask for; a D-pad without a
+ * keyboard finds its way in through the platform's own focus search on its first press.
+ *
+ * The window is the shell's ([LocalWindowFocus]) or, for a Stage composed alone, the Stage's own
+ * root marked with [windowFocus]; with neither, a focus that left the Stage is taken as moved.
  */
 @Composable
-fun KeepStageFocus(focus: StageFocus, enabled: Boolean = rememberHardwareKeyboardAttached()) {
+fun KeepStageFocus(focus: StageFocus, enabled: Boolean = rememberHardwareKeyboardAttached(), window: WindowFocus? = LocalWindowFocus.current) {
     if (!enabled) return
-    val window = LocalWindowFocus.current
     LaunchedEffect(focus, window) {
-        snapshotFlow { focus.region }.collect { region ->
-            if (region != null) {
-                focus.last = region
-                return@collect
-            }
-            // The frame that took the control away places what replaces it; the focus goes there next.
+        // A keyboard attached, now or from the start: whatever holds the focus was not placed under the keeper's eye.
+        focus.unsettle()
+        // Woken by a change of region, a removal, the window taking or dropping the focus, or a region
+        // node coming or going; what is read is the state now, never the emission, which the next
+        // change may have overtaken.
+        snapshotFlow { listOf(focus.region?.ordinal, window?.held, focus.removals, focus.attachments) }.collect {
+            focus.observe(window)
+            if (focus.settled) return@collect
+            // The frame that removed a control places what replaces it, and lays out a body that came.
             withFrameNanos {}
-            if (window?.held == true) return@collect
-            if (focus.region == null) focus.restore()
+            focus.observe(window)
+            focus.settle()
         }
     }
 }

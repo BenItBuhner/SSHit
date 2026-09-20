@@ -100,15 +100,18 @@ import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.keyboard.FoldDeckOnHardwareKeyboard
 import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.KeepStageFocus
+import app.berth.android.ui.keyboard.LocalWindowFocus
 import app.berth.android.ui.keyboard.ShortcutSheet
 import app.berth.android.ui.keyboard.LocalPaneActions
 import app.berth.android.ui.keyboard.StageFocus
 import app.berth.android.ui.keyboard.StageRegion
 import app.berth.android.ui.keyboard.StageShortcutActions
+import app.berth.android.ui.keyboard.WindowFocus
 import app.berth.android.ui.keyboard.compactForHardwareKeyboard
 import app.berth.android.ui.keyboard.rememberHardwareKeyboardAttached
 import app.berth.android.ui.keyboard.rememberStageFocus
 import app.berth.android.ui.keyboard.stageRegion
+import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -248,9 +251,11 @@ fun StageScreen(
     val hardwareKeyboardAttached = rememberHardwareKeyboardAttached()
     FoldDeckOnHardwareKeyboard(hardwareKeyboardAttached) { deckVisible = it }
     // With a keyboard attached the focus stays on the Stage across tab switches and the Deck's coming
-    // and going; not while the body is a placeholder waiting on the manager, whose control is a frame away.
-    val bodyWaiting = tab == null && (activeId != null || !restored || slots.isNotEmpty())
-    KeepStageFocus(focus, enabled = hardwareKeyboardAttached && !bodyWaiting)
+    // and going, and a body coming on stage takes it. The keeper tells a loss from a move by the
+    // window's root; a Stage composed alone marks its own root and stands in for the window.
+    val shellWindow = LocalWindowFocus.current
+    val ownWindow = if (shellWindow == null) remember { WindowFocus() } else null
+    KeepStageFocus(focus, enabled = hardwareKeyboardAttached, window = shellWindow ?: ownWindow)
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -272,6 +277,7 @@ fun StageScreen(
             // The header absorbs the status bar and the bottom chrome the navigation bar and IME; in
             // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .then(if (ownWindow != null) Modifier.windowFocus(ownWindow) else Modifier)
             .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
     ) {
         StageToolbar(tools, tab as? TerminalSession, focus) {
