@@ -888,7 +888,10 @@ class TerminalToolsScreenshotTest {
         longPress(cellCenter(row, col + 3)) { tools.selection.active }
         canvas.performTouchInput { up() }
         waitForText("16 chars")
+        // Opened from the test rather than a tap: the write reaches the canvas' search effect once the
+        // looper has delivered it, which waitForIdle does and a bare waitUntil does not.
         compose.runOnIdle { tools.openSearch("caddy") }
+        compose.waitForIdle()
         compose.waitUntil(5_000) { tools.search.matches.isNotEmpty() }
         val total = tools.search.matches.size
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Previous match")).fetchSemanticsNodes().isNotEmpty() }

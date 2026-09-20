@@ -240,28 +240,43 @@ class TerminalSearch {
         generation++
     }
 
+    /** One pass over the buffer: what [query] found, under the anchor of the buffer it was found in. */
+    class Pass(val query: String, val matches: List<CellRange>, val anchor: BufferAnchor)
+
     /**
-     * Runs the search over the emulator's buffer, holding its lock for the pass. The current match
-     * stays on the same text when it is still among the results, else on the nearest after it. When
-     * a change of the grid has invalidated the anchor, the match keeps its index: a re-wrap moves
-     * cells, not logical lines, so match `3/12` is the same text at `3/12` after it.
+     * The pass over the emulator's buffer, holding its lock for it; the part of a run that can go
+     * to a worker. Null when there is nothing to search for, which [apply] reads as no matches.
      */
-    fun run(emulator: TerminalEmulator) {
+    fun scan(emulator: TerminalEmulator): Pass? {
         val q = query
-        if (!open || q.isEmpty()) {
+        if (!open || q.isEmpty()) return null
+        return synchronized(emulator.lock) {
+            Pass(q, ScrollbackSearch.find(emulator.grid, q, caseSensitive, regex), BufferAnchor.of(emulator))
+        }
+    }
+
+    /**
+     * Takes a [pass] as the results, on the thread that steps the match, so a step landing while
+     * the pass was running is kept rather than undone. The current match stays on the same text
+     * when it is still among the results, else on the nearest after it. When a change of the grid
+     * has invalidated the anchor, the match keeps its index: a re-wrap moves cells, not logical
+     * lines, so match `3/12` is the same text at `3/12` after it. A pass for a query that has since
+     * changed is stale and dropped; the run for the new query follows it.
+     */
+    fun apply(pass: Pass?, emulator: TerminalEmulator) {
+        if (pass == null || !open) {
             matches = emptyList()
             anchor = null
             current = -1
             return
         }
+        if (pass.query != query) return
+        val found = pass.matches
         val had = current
         val previous = currentRange(emulator)
-        val (found, at) = synchronized(emulator.lock) {
-            ScrollbackSearch.find(emulator.grid, q, caseSensitive, regex) to BufferAnchor.of(emulator)
-        }
         val before = matches.size
         matches = found
-        anchor = at
+        anchor = pass.anchor
         current = when {
             found.isEmpty() -> -1
             previous != null -> found.indexOfFirst { it.start >= previous.start }.let { if (it < 0) found.lastIndex else it }
@@ -270,6 +285,9 @@ class TerminalSearch {
             else -> found.lastIndex
         }
     }
+
+    /** [scan] and [apply] in one, for a caller on the thread that steps the match. */
+    fun run(emulator: TerminalEmulator) = apply(scan(emulator), emulator)
 
     /** Moves to the next ([delta] 1) or previous (-1) match, wrapping; returns its range in the buffer's rows now. */
     fun step(delta: Int, emulator: TerminalEmulator): CellRange? {

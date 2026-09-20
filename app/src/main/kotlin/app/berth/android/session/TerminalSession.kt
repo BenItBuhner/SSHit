@@ -685,9 +685,16 @@ class TerminalSession(
 
     // ---- input ---------------------------------------------------------------------------------
 
+    /**
+     * Writes to the shell one at a time, in the order they were sent: two sends in a row (a
+     * command and its Enter, two keys typed fast) must land in that order, which two launches on
+     * the IO pool did not promise.
+     */
+    private val writer = Dispatchers.IO.limitedParallelism(1)
+
     fun send(bytes: ByteArray) {
         val sh = shell ?: return
-        scope.launch(Dispatchers.IO) { runCatching { sh.write(bytes) } }
+        scope.launch(writer) { runCatching { sh.write(bytes) } }
     }
 
     fun sendText(text: String, modifiers: Int = 0) {

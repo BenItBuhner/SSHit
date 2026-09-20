@@ -271,13 +271,16 @@ fun TerminalCanvas(
             }
     }
     // A search follows the buffer: new output while the bar is open re-runs it, settled a little.
+    // The pass goes to a worker; its results land here, on the thread the bar steps the match on,
+    // so a step taken while the pass ran is not undone by it.
     if (search != null) {
         LaunchedEffect(session.id, search) {
             combine(session.screenVersion, snapshotFlow { search.generation }) { _, g -> g }
                 .collectLatest {
                     if (!search.open) return@collectLatest
                     delay(SEARCH_SETTLE_MS)
-                    withContext(Dispatchers.Default) { search.run(emulator) }
+                    val pass = withContext(Dispatchers.Default) { search.scan(emulator) }
+                    search.apply(pass, emulator)
                 }
         }
     }
