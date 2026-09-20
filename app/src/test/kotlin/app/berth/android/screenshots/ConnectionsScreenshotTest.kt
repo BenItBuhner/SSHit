@@ -155,9 +155,10 @@ class ConnectionsScreenshotTest {
 
     /**
      * prod-db logs in through bastion and then relay: the Jump hosts panel lists the two hops in
-     * order, numbered, each with its swatch and user@address:port, and the Tunnels panel starts with
-     * Tunnels only, on for this host, over its forwards. Add jump host offers only what can be
-     * added: homelab, not the host itself and not the hops already in the chain.
+     * order, each led by its number in the chain, then its swatch, name and user@address:port, and
+     * the Tunnels panel starts with Tunnels only, on for this host, under a one-line caption, over
+     * its forwards. Add jump host offers only what can be added: homelab, with its swatch, under
+     * the label; not the host itself and not the hops already in the chain.
      */
     @Test
     fun `host editor with a jump chain, and the add menu`() {
@@ -169,6 +170,8 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("bastion").assertExists()
         compose.onNodeWithText("ops@bastion.example.net:2200").assertExists()
         compose.onNodeWithText("relay").assertExists()
+        compose.onNodeWithText("1").assertExists()
+        compose.onNodeWithText("2").assertExists()
         compose.onNodeWithText("The login goes through each hop in order, top first, each with its own key and its own known-host check.").assertExists()
         capture("host-editor-jump-hosts")
 

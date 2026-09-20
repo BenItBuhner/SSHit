@@ -460,9 +460,13 @@ fun BerthMenu(
     )
 }
 
-/** One line of a [BerthMenu]: Body text, accent when it is the [selected] value, danger when [destructive]. */
+/**
+ * One line of a [BerthMenu]: Body text, accent when it is the [selected] value, danger when
+ * [destructive], with an optional [leading] mark (a host's [Swatch]) where the items are things
+ * that can share a name.
+ */
 @Composable
-fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false) {
+fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false, leading: (@Composable () -> Unit)? = null) {
     val c = Berth.colors
     DropdownMenuItem(
         text = {
@@ -477,6 +481,7 @@ fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, 
             )
         },
         onClick = onClick,
+        leadingIcon = leading,
     )
 }
 
@@ -488,6 +493,17 @@ fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, 
 @Composable
 fun BoxScope.TrailingMenuAnchor(content: @Composable () -> Unit) {
     Box(Modifier.matchParentSize().wrapContentWidth(Alignment.End)) { content() }
+}
+
+/**
+ * The leading counterpart of [TrailingMenuAnchor]: a zero-width anchor [inset] from the row's
+ * leading edge, so a [BerthMenu] inside it opens start-aligned under the row's title (the row's
+ * padding plus its glyph column and gap), where the label it belongs to is, rather than at the far
+ * edge over whatever sits there. Goes in the [Box] that holds the row, after it.
+ */
+@Composable
+fun BoxScope.LeadingMenuAnchor(inset: Dp, content: @Composable () -> Unit) {
+    Box(Modifier.matchParentSize().padding(start = inset).wrapContentWidth(Alignment.Start)) { content() }
 }
 
 // ---- Slider ---------------------------------------------------------------------------------------

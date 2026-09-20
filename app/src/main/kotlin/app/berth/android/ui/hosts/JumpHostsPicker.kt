@@ -1,7 +1,10 @@
 package app.berth.android.ui.hosts
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -16,6 +19,7 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthMenuItem
+import app.berth.android.ui.components.LeadingMenuAnchor
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.Swatch
@@ -26,11 +30,14 @@ import app.berth.domain.model.Host
 
 /**
  * The host editor's jump chain (OpenSSH's ProxyJump): the hops the login goes through, top first,
- * each a saved host with its own identity and its own known-host check. A hop is a row with the
+ * each a saved host with its own identity and its own known-host check. A hop is a row led by its
+ * number in the chain (the `1 of 2` the trust sheet and a failure count by) in caption, then the
  * host's swatch, name and `user@address:port`; its menu moves it up or down the chain or removes
  * it. The last row adds a saved host that is not [selfId], not already in the chain, and not one
- * whose own chain leads back here (that login would never finish). A hop whose host has since been
- * deleted stays as a row that says so, so it can be removed rather than silently dropped.
+ * whose own chain leads back here (that login would never finish); its menu opens under the label,
+ * each choice with the host's swatch so two hosts named alike can be told apart. A hop whose host
+ * has since been deleted stays as a row that says so, so it can be removed rather than silently
+ * dropped.
  */
 @Composable
 fun JumpHostsPicker(
@@ -41,6 +48,9 @@ fun JumpHostsPicker(
 ) {
     val c = Berth.colors
     val byId = remember(hosts) { hosts.associateBy { it.id } }
+    // The numeral's column, which the Add row's + shares, and the swatch's; the Add label starts where the swatches do.
+    val numeralColumn = 20.dp
+    val numeralGap = 12.dp
     val glyphColumn = 28.dp
 
     chain.forEachIndexed { index, id ->
@@ -60,14 +70,17 @@ fun JumpHostsPicker(
                 onLongClick = { menu = true },
                 titleColor = if (host != null) c.text1 else c.text2,
                 leading = {
-                    Box(Modifier.size(glyphColumn), contentAlignment = Alignment.Center) {
-                        if (host != null) Swatch(host.color, host.monogram, glyphColumn) else BerthIcon(BerthIcons.close, tint = c.danger, size = 20.dp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.width(numeralColumn), contentAlignment = Alignment.Center) {
+                            Text("${index + 1}", style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = c.text3)
+                        }
+                        Spacer(Modifier.width(numeralGap))
+                        Box(Modifier.size(glyphColumn), contentAlignment = Alignment.Center) {
+                            if (host != null) Swatch(host.color, host.monogram, glyphColumn) else BerthIcon(BerthIcons.close, tint = c.danger, size = 20.dp)
+                        }
                     }
                 },
-                trailing = {
-                    Text("${index + 1}", style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = c.text3)
-                    BerthIcon(BerthIcons.moreHoriz, tint = c.text3, size = 20.dp)
-                },
+                trailing = { BerthIcon(BerthIcons.moreHoriz, tint = c.text3, size = 20.dp) },
             )
             TrailingMenuAnchor {
                 BerthMenu(expanded = menu, onDismiss = { menu = false }) {
@@ -93,15 +106,16 @@ fun JumpHostsPicker(
             enabled = candidates.isNotEmpty(),
             titleColor = c.accent,
             leading = {
-                Box(Modifier.size(glyphColumn), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(numeralColumn), contentAlignment = Alignment.Center) {
                     BerthIcon(BerthIcons.add, tint = c.accent, size = 20.dp)
                 }
             },
         )
-        TrailingMenuAnchor {
+        // Under the label it belongs to (the row's padding, the + column and the gap in), not at the panel's far edge.
+        LeadingMenuAnchor(inset = 12.dp + numeralColumn + numeralGap) {
             BerthMenu(expanded = add, onDismiss = { add = false }) {
                 for (host in candidates) {
-                    BerthMenuItem(host.name, onClick = { onChange(chain + host.id); add = false })
+                    BerthMenuItem(host.name, leading = { Swatch(host.color, host.monogram, 24.dp) }, onClick = { onChange(chain + host.id); add = false })
                 }
             }
         }
