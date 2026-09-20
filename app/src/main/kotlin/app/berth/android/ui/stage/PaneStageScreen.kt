@@ -5,7 +5,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -99,7 +98,10 @@ import kotlin.math.roundToInt
 /** The gap between the panes (spec C23): 12 dp, draggable, no line. */
 private val PaneGap = 12.dp
 
-/** How far past the gap the divider answers a finger, each side: the 48 dp target every control has (spec A11). */
+/**
+ * How far past the gap the divider answers a finger, each side: the 48 dp target every control has
+ * (spec A11). The band lies under the panes' own controls, not over them ([paneDividerDrag]).
+ */
 private val DividerReach = 18.dp
 
 /** The least a pane can be: enough for a 40-column terminal at the default size, or a Files row. */
@@ -309,6 +311,10 @@ private fun PaneLayer(
     DisposableEffect(carry) { onDispose { carry.bounds = emptyMap() } }
 
     val bottomInsets = WindowInsets.navigationBars.union(WindowInsets.ime)
+    val usable = (rowWidthPx - gapPx).coerceAtLeast(0f)
+    val leftPx = (usable * clampFraction(fraction)).roundToInt()
+    val leftWidth = with(density) { leftPx.toDp() }
+    val bandReachPx = with(density) { (DividerReach + PaneGap / 2).toPx() }
     Column(modifier.onGloballyPositioned { layerOrigin = it.positionInRoot() }) {
         Box(
             Modifier
@@ -316,11 +322,20 @@ private fun PaneLayer(
                 .fillMaxWidth()
                 .onGloballyPositioned { rowWidthPx = it.size.width }
                 // The panes own the window's bottom insets (paid once below both), so no body pads for them.
-                .consumeWindowInsets(bottomInsets),
+                .consumeWindowInsets(bottomInsets)
+                // The divider's 48 dp band is the container's gesture, under the panes' own (see
+                // [paneDividerDrag]): a control at a pane's inner edge keeps its whole target.
+                .paneDividerDrag(
+                    centre = leftPx + gapPx / 2,
+                    reach = bandReachPx,
+                    onDragStart = { dragging = true },
+                    onDrag = { dx -> if (usable > 0f) fraction = clampFraction(fraction + dx / usable) },
+                    onDragEnd = {
+                        dragging = false
+                        fraction = snap(fraction)
+                    },
+                ),
         ) {
-            val usable = (rowWidthPx - gapPx).coerceAtLeast(0f)
-            val leftPx = (usable * clampFraction(fraction)).roundToInt()
-            val leftWidth = with(density) { leftPx.toDp() }
             Row(Modifier.fillMaxSize()) {
                 Pane(
                     side = PaneSide.LEFT,
@@ -359,18 +374,11 @@ private fun PaneLayer(
             Divider(
                 dragging = dragging,
                 fraction = clampFraction(fraction),
-                onDragStart = { dragging = true },
-                onDrag = { dx -> if (usable > 0f) fraction = clampFraction(fraction + dx / usable) },
-                onDragEnd = {
-                    dragging = false
-                    fraction = snap(fraction)
-                },
                 onStep = { dir -> fraction = clampFraction(fraction + dir * 0.1f) },
                 modifier = Modifier
-                    .offset { IntOffset(leftPx + (gapPx / 2).roundToInt() - (DividerReach + PaneGap / 2).roundToPx(), 0) }
-                    .width(PaneGap + DividerReach * 2)
-                    .fillMaxHeight()
-                    .zIndex(1f),
+                    .offset { IntOffset(leftPx, 0) }
+                    .width(PaneGap)
+                    .fillMaxHeight(),
             )
             CarryOverlay(carry, layerOrigin)
         }
@@ -389,7 +397,8 @@ private fun PaneLayer(
  * One pane: the header (the tab's swatch and title, the age of a detached frame, and × on the
  * focused pane to close the pane) over the tab's body. A touch in the unfocused pane focuses it,
  * seen on the way down and consumed by nobody, so the body's own gestures are untouched; the
- * focused pane's touches are its own, since a scroll in it has nothing to say to the manager.
+ * focused pane's touches are its own, since a scroll in it has nothing to say to the manager. The
+ * [DividerReach] along the pane's inner edge is the divider's band and says nothing on its own.
  * While a tab is carried over it the pane's surface steps up to say it will take the drop. To the
  * keyboard the pane, header and all, is the Stage's body region ([StageRegion.Body]), and the
  * focused pane's body is where a chord into the region lands (spec A11).
@@ -423,10 +432,14 @@ private fun Pane(
             .onGloballyPositioned { onBounds(it.boundsInRoot()) }
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(fill)
-            .pointerInput(Unit) {
+            .pointerInput(side) {
+                val reach = DividerReach.toPx()
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    if (!hasFocus) touched()
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    // A touch in the divider's band is a hand on the divider first ([paneDividerDrag]), not a
+                    // word on which pane has the keys; what it lands on there takes them if it takes focus.
+                    val inBand = if (side == PaneSide.LEFT) down.position.x > size.width - reach else down.position.x < reach
+                    if (!hasFocus && !inBand) touched()
                 }
             }
             .semantics {
@@ -461,7 +474,10 @@ private fun Pane(
  * of a detached frame in Caption, and on the focused pane the × that closes the pane (the tab
  * stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
  * height is the strip's (spec C3), so on a phone on its side it shortens with the strip rather than
- * standing taller than the window's own header and costing each pane rows.
+ * standing taller than the window's own header and costing each pane rows. The × is a 48 dp
+ * target on a 40 dp row, so its box reaches 4 dp over the body's top edge, as the strip's own
+ * controls reach over the body on a phone (spec A11); the header stands over the body for it, or
+ * a Tunnels or Files row flush under the header would take that band and leave the × 44 dp.
  */
 @Composable
 private fun PaneHeader(
@@ -479,6 +495,7 @@ private fun PaneHeader(
         Modifier
             .fillMaxWidth()
             .height(LocalTabStripStyle.current.height)
+            .zIndex(1f)
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -505,19 +522,17 @@ private fun PaneHeader(
 }
 
 /**
- * The gap between the panes, draggable (spec C23): a 4 × 24 pill in `text.3` centred in the gap,
- * resting at [DividerRestAlpha] so two same-theme terminals still show where the boundary is and
- * that it moves (a grip, not a line), full while a finger holds it. The touch area reaches
- * [DividerReach] over each pane's edge, so a 12 dp gap answers a 48 dp target. TalkBack moves it
- * in tenths.
+ * The gap between the panes (spec C23): a 4 × 24 pill in `text.3` centred in it, resting at
+ * [DividerRestAlpha] so two same-theme terminals still show where the boundary is and that it
+ * moves (a grip, not a line), full while a finger holds it. The finger's drag is the container's
+ * ([paneDividerDrag]), reaching [DividerReach] over each pane's edge so the 12 dp gap answers a 48 dp
+ * target without lying over either pane; this is the gap alone, what a reader lands on between the
+ * panes and moves in tenths.
  */
 @Composable
 private fun Divider(
     dragging: Boolean,
     fraction: Float,
-    onDragStart: () -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
     onStep: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -525,17 +540,6 @@ private fun Divider(
     val percent = (fraction * 100).roundToInt()
     Box(
         modifier
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { onDragStart() },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragEnd,
-                    onHorizontalDrag = { change, dx ->
-                        change.consume()
-                        onDrag(dx)
-                    },
-                )
-            }
             .semantics {
                 contentDescription = "Divider between the panes"
                 stateDescription = "Left pane $percent percent"
