@@ -803,12 +803,21 @@ class SessionManager @Inject constructor(
         }
     }
 
-    /** Opens a second tab of the same kind on the same host directly after [id], in its group, and puts it on stage unless [activate] is off (spec C3, Duplicate). */
+    /**
+     * Opens a second tab on the same host directly after [id], in its group, and puts it on stage
+     * unless [activate] is off (spec C3, Duplicate): a terminal after a terminal, a browser at the
+     * same folder after a Files tab. After a Tunnels tab the second tab is a shell, the one its
+     * menu's Terminal row opens: a second Tunnels login on one host would bind the same local ports
+     * again (and the same remote ones for a remote forward), so the twin's forwards would fail with
+     * address-in-use by construction, and the host's shell is the tab worth having beside its
+     * forwards. The menu offers no Duplicate row on a Tunnels tab, since Terminal is that row; the
+     * plus tab's long-press and Split ([splitActive]) come here.
+     */
     suspend fun duplicate(id: String, activate: Boolean = true): ManagedTab? {
         val source = tabNow(id) ?: return null
         val record = source.record.value
         return when (record.kind) {
-            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, activate = activate, kind = record.kind)
+            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, activate = activate)
             TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd, activate = activate)
         }
     }
@@ -1002,17 +1011,15 @@ class SessionManager @Inject constructor(
 
     /**
      * The Session sheet's Split (spec C6): a second tab on the active tab's host opens in the pane
-     * opposite it and takes the keys; the active tab keeps its pane. Beside a Tunnels tab it is a
-     * shell on that host, not a second carrier: a twin would bind the same ports and fail by
-     * construction, and the forwards are one row away in the pane that has them. Null with nothing
-     * on stage.
+     * opposite it and takes the keys; the active tab keeps its pane. The tab is what [duplicate]
+     * opens, so beside a Tunnels tab it is a shell on that host, not a second carrier: a twin would
+     * bind the same ports and fail by construction, and the forwards are one row away in the pane
+     * that has them. Null with nothing on stage.
      */
     suspend fun splitActive(): ManagedTab? {
         val source = _activeTabId.value ?: return null
         val side = _split.value?.companionSide ?: PaneSide.RIGHT
-        val record = tabNow(source)?.record?.value ?: return null
-        val fresh = if (record.kind == TabKind.Tunnels) open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = source, activate = false)
-        else duplicate(source, activate = false) ?: return null
+        val fresh = duplicate(source, activate = false) ?: return null
         placeInPane(fresh.id, side)
         return fresh
     }

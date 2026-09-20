@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,7 +31,7 @@ import org.robolectric.annotation.Config
  * dead, a settings write that never landed), falls back to the current group's first tab, then the
  * strip's first, and the fallback is written back so the next launch agrees. The manager is built
  * the way Hilt builds it, over in-memory storage, with detached tabs of both kinds across two groups
- * and a third group that is empty.
+ * and a third group that is empty. Duplicate's placement and the kind it opens are here as well.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -40,6 +41,12 @@ class SessionManagerTest {
     @Before
     fun setUp() {
         graph = TestGraph(ApplicationProvider.getApplicationContext())
+    }
+
+    /** The tabs Duplicate opens start connecting to hosts that do not exist; end them with the test. */
+    @After
+    fun tearDown() {
+        graph.close()
     }
 
     @Test
@@ -103,6 +110,42 @@ class SessionManagerTest {
         assertEquals("ws-work", graph.sessions.currentWorkspaceId.value)
         graph.sessions.setActive(null)
         assertNull(graph.sessions.activeTabId.value)
+    }
+
+    /**
+     * Duplicate (spec C3) opens a second tab on the host directly after the source, in its group: a
+     * terminal after a terminal. After a Tunnels tab it opens the host's shell, not a second Tunnels
+     * login, which would bind the same local ports again and fail by construction (#13 opened the
+     * twin; Split on a Tunnels tab opens the shell the same way).
+     */
+    @Test
+    fun `duplicate opens a terminal after a terminal and a shell, never a second Tunnels login, after a Tunnels tab`() {
+        seed(currentGroup = Workspace.DEFAULT_ID, lastActive = "s-pihole")
+        val gateway = host("gateway", "gateway", SwatchColor.OCHRE).copy(tunnelsOnly = true)
+        runBlocking {
+            graph.hosts.upsert(gateway)
+            graph.sessionRecords.upsert(record("t-gateway", gateway, Workspace.DEFAULT_ID, 2, kind = TabKind.Tunnels, title = "Tunnels \u00B7 gateway"))
+        }
+        restore()
+
+        val twin = runBlocking { graph.sessions.duplicate("s-pihole") }!!
+        assertEquals(TabKind.Ssh, twin.record.value.kind)
+        assertEquals("pi-hole", twin.record.value.hostSnapshot.id)
+        assertEquals(Workspace.DEFAULT_ID, twin.record.value.workspaceId)
+        assertEquals("the twin comes on stage", twin.id, graph.sessions.activeTabId.value)
+        await("the twin directly after pi-hole") { graph.sessions.tabs.value.map { it.id } == listOf("s-homelab", "s-pihole", twin.id, "t-gateway", "f-build", "s-build") }
+
+        val shell = runBlocking { graph.sessions.duplicate("t-gateway") }!!
+        assertEquals("a shell, not another Tunnels login", TabKind.Ssh, shell.record.value.kind)
+        assertTrue(shell is TerminalSession && !shell.tunnelsOnly)
+        assertEquals("gateway", shell.record.value.hostSnapshot.id)
+        assertEquals("titled as a terminal on the host", "gateway", shell.record.value.title)
+        assertEquals(Workspace.DEFAULT_ID, shell.record.value.workspaceId)
+        assertEquals("the shell comes on stage", shell.id, graph.sessions.activeTabId.value)
+        await("the shell directly after the Tunnels tab") {
+            graph.sessions.tabs.value.map { it.id } == listOf("s-homelab", "s-pihole", twin.id, "t-gateway", shell.id, "f-build", "s-build")
+        }
+        assertEquals("one Tunnels tab on the strip, its forwards bound once", 1, graph.sessions.tabs.value.count { it.record.value.kind == TabKind.Tunnels })
     }
 
     // ---- fixture ----------------------------------------------------------------------------------

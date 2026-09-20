@@ -36,10 +36,12 @@ import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 
 /**
- * The tab's long-press menu (spec C3): Duplicate, Rename, then the other kind on the same host
- * (Files from a terminal tab, Terminal from a Files tab), Move to group ▸, Detach (Reconnect when
- * detached or failed; a Files tab has no connection of its own to detach), and last the closes,
- * Close and Close others, in the destructive tint. The order follows Chrome: the menu opens under
+ * The tab's long-press menu (spec C3): Open beside when the window has two panes and the tab is
+ * in neither (spec C23), Duplicate (not on a Tunnels tab, whose second tab is the Terminal row),
+ * Rename, then the other kind on the same host (Files from a terminal tab, Terminal from a Files
+ * tab, both from a Tunnels tab), Move to group ▸, Detach (Reconnect when detached or failed; a
+ * Files tab has no connection of its own to detach), and last the closes, Close and Close others,
+ * in the destructive tint. The order follows Chrome: the menu opens under
  * the tab on release, so the rows nearest the finger are the ones that change nothing for good,
  * and the closes sit furthest from where a long-press lets go. Move to group swaps the panel for
  * the groups as rows with swatches and a New group row; Back returns. Shared by the strip and the
@@ -64,7 +66,9 @@ fun TabMenu(
     MenuPanel(expanded = expanded, onDismiss = onDismiss) {
         if (!groupsPage) {
             if (beside) MenuRow("Open beside") { onDismiss(); actions.openInPane(id, null) }
-            MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
+            // A Tunnels tab has no Duplicate: a second Tunnels login on the host would bind its ports again, and the shell
+            // beside it, the second tab worth having, is the Terminal row below (Split and the plus tab's long-press open the same).
+            if (record.kind != TabKind.Tunnels) MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
             MenuRow("Rename") { onDismiss(); actions.rename(id) }
             // A Files tab offers the terminal it rides; a terminal offers Files; a Tunnels tab, with no shell of its own, offers both.
             if (files || record.kind == TabKind.Tunnels) MenuRow("Terminal") { onDismiss(); actions.openTerminal(id) }
