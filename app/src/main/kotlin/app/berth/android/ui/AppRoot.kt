@@ -49,6 +49,9 @@ import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
+import app.berth.android.ui.keyboard.LocalWindowFocus
+import app.berth.android.ui.keyboard.WindowFocus
+import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.layout.LocalWindowLayout
 import app.berth.android.ui.layout.windowLayout
@@ -128,9 +131,12 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
     val hapticLevel by vm.hapticLevel.collectAsState()
     val lock by vm.security.lock.state.collectAsState()
+    // Whether the keyboard's focus is anywhere in this window: the Stage keeps its own while a keyboard
+    // is attached, and this tells it a focus moved to the rail from one that was lost (spec A11).
+    val windowFocus = remember { WindowFocus() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
-            Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
+        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus) {
+            Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
                 // sheet and a running Stage are where they were when the lock lifts. While locked,

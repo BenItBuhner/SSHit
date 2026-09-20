@@ -135,14 +135,17 @@ private class StageRegionNode(private var focus: StageFocus, private var region:
  * closes, a tab is closed), the focus returns to the region it was in, or to the body, or to the
  * strip ([StageFocus.restore]), and a shell tab coming on stage is typed into at once. A Deck
  * hidden under a focused key hands the focus to the strip that stands in for it, and that strip
- * pressed hands it back to the Deck's first key. Only with a keyboard attached: focusing a shell
- * tab's terminal raises the soft keyboard, which a finger switching tabs did not ask for; a D-pad
- * without a keyboard finds its way in through the platform's own focus search on its first press.
+ * pressed hands it back to the Deck's first key. A focus that left the Stage for another control
+ * in the window, the rail on an expanded width (spec A12) by Shift+Tab out of the strip, was moved
+ * and not lost, and stays there ([LocalWindowFocus]). Only with a keyboard attached: focusing a
+ * shell tab's terminal raises the soft keyboard, which a finger switching tabs did not ask for; a
+ * D-pad without a keyboard finds its way in through the platform's own focus search on its first press.
  */
 @Composable
 fun KeepStageFocus(focus: StageFocus, enabled: Boolean = rememberHardwareKeyboardAttached()) {
     if (!enabled) return
-    LaunchedEffect(focus) {
+    val window = LocalWindowFocus.current
+    LaunchedEffect(focus, window) {
         snapshotFlow { focus.region }.collect { region ->
             if (region != null) {
                 focus.last = region
@@ -150,6 +153,7 @@ fun KeepStageFocus(focus: StageFocus, enabled: Boolean = rememberHardwareKeyboar
             }
             // The frame that took the control away places what replaces it; the focus goes there next.
             withFrameNanos {}
+            if (window?.held == true) return@collect
             if (focus.region == null) focus.restore()
         }
     }
