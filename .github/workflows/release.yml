@@ -6,7 +6,8 @@ name: Release
 # month three. So a version tag builds the release APK and attaches it, with its mapping, to the GitHub release
 # for that tag: the mapping lives as long as the release does, which is as long as anyone can hold a report from
 # it. The release is created here as a draft when there is none yet, so its notes are written by a person before
-# anyone sees it, or found when the release came first; the files go on either way.
+# anyone sees it, or found when the release came first. A re-run replaces a draft's files; a published release's
+# files are not replaced (the attach step says why and what to do instead).
 #
 # The tag names the version in gradle.properties: v<app.versionName>, or v<app.versionName>-<app.versionBuild>
 # for a re-release of one name (app/build.gradle.kts has the scheme). A tag that does not is a failed job before
@@ -103,8 +104,19 @@ jobs:
             *unsigned*) cp "$apk" "$out/berth-$tag-unsigned.apk" ;;
             *) cp "$apk" "$out/berth-$tag.apk" ;;
           esac
-          if ! gh release view "$tag" >/dev/null 2>&1; then
+          # A draft's files are replaced whole by a re-run (nobody has seen them); a published release's are what
+          # people downloaded, so a file already on one stops the job here, and a changed build is the next
+          # v<name>-<build> (app/build.gradle.kts has the scheme), or the person removes the file first.
+          if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
             gh release create "$tag" --draft --title "Berth ${tag#v}" --generate-notes
+          elif [ "$draft" = false ]; then
+            gh release view "$tag" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/published-files"
+            for f in "$out"/*; do
+              if grep -qxF "$(basename "$f")" "$RUNNER_TEMP/published-files"; then
+                echo "::error::$(basename "$f") is already on the published release $tag, whose files stay as people downloaded them; a changed build is tagged v<name>-<build>, or remove the file from the release first"
+                exit 1
+              fi
+            done
           fi
           gh release upload "$tag" "$out"/* --clobber
           {
