@@ -253,14 +253,27 @@ class SecurityScreenshotTest {
         // The launch's prompt passes at once.
         graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
         shellUnderLockWindow()
-        compose.waitUntil(10_000) { graph.appLock.state.value == LockState.UNLOCKED && graph.viewModel.activeTabId.value == "s-homelab" }
-        compose.waitUntil(5_000) { strip.fetchSemanticsNodes().isNotEmpty() }
+        // The overflow builds its rows from the tab on stage, which reaches the composition through
+        // activeTab, a combine on the manager's own dispatcher that settles a beat after activeTabId
+        // does; opened on the id alone, the menu once had the tabless rows and no "Host settings".
+        // So the wait is on the tab and the strip themselves, and an idle pass takes both into the
+        // composition, the cover down with them, before anything is tapped.
+        compose.waitUntil(10_000) {
+            graph.appLock.state.value == LockState.UNLOCKED &&
+                graph.viewModel.activeTab.value?.id == "s-homelab" &&
+                graph.viewModel.stripSlots.value.size == 3
+        }
+        compose.waitForIdle()
+        hasNoText("Locked")
+        strip.assertCountEquals(1)
 
-        // Into homelab's editor through the Stage's menu, and two fields changed but not saved.
+        // Into homelab's editor through the Stage's menu, and two fields changed but not saved. The
+        // menu is a window of its own; the idle sync inside each lookup runs its attach and layout, so
+        // the row is found once the popup is up rather than polled against the wall clock.
         compose.onNodeWithContentDescription("More").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Host settings").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Host settings").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasSetTextAction() and hasText("homelab")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        compose.onNode(hasSetTextAction() and hasText("homelab")).assertExists()
         compose.onNode(hasSetTextAction() and hasText("homelab")).performTextReplacement("homelab (rack 2)")
         compose.onNode(hasSetTextAction() and hasText("192.168.1.20")).performTextReplacement("192.168.1.21")
         compose.onNode(hasSetTextAction() and hasText("homelab (rack 2)")).assertIsDisplayed()
