@@ -2,12 +2,15 @@ package app.berth.android.screenshots
 
 import android.app.Application
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -37,12 +40,18 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.security.BerthClipboard
+import app.berth.android.security.FakeAuthenticator
+import app.berth.android.security.LockState
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.security.BerthClipboardLocals
+import app.berth.android.ui.security.LockCover
+import app.berth.android.ui.security.LockWindow
 import app.berth.android.ui.stage.INVALID_PATTERN
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.StageTools
@@ -59,7 +68,9 @@ import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.LockTimeout
 import app.berth.domain.model.PersistenceLayer
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
@@ -181,15 +192,33 @@ class TerminalToolsScreenshotTest {
 
     private fun clipboardText(): String? = context.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()
 
+    /**
+     * The clipboard holds [text] as a copy Berth made (spec C20, Clipboard): one that went through
+     * [BerthClipboard], so it carries the token its clear timer looks for and is kept out of the
+     * system's preview, rather than a plain write to the platform.
+     */
+    private fun assertBerthsClip(text: String) {
+        assertEquals(text, clipboardText())
+        val extras = context.getSystemService(ClipboardManager::class.java).primaryClipDescription?.extras
+        assertNotNull("a copy of Berth's carries its token", extras)
+        assertTrue("a copy of Berth's carries its token", extras!!.containsKey(BerthClipboard.EXTRA_TOKEN))
+        assertTrue("a copy of Berth's is marked sensitive", extras.getBoolean(ClipDescription.EXTRA_IS_SENSITIVE))
+    }
+
     private fun setClipboard(text: String) = context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("test", text))
 
     @Composable
     private fun tabActions(): TabActions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
 
-    /** The Stage as the shell mounts it, with the test's own tools in place of the remembered ones. */
+    /**
+     * The Stage as the shell mounts it, inside the clipboard locals that make every Copy Berth's
+     * own, with the test's own tools in place of the remembered ones.
+     */
     @Composable
     private fun Stage(tab: ManagedTab?, tools: StageTools) {
-        StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}, tools = tools)
+        BerthClipboardLocals(graph.clipboard) {
+            StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}, tools = tools)
+        }
     }
 
     // ---- geometry ---------------------------------------------------------------------------------
@@ -282,7 +311,7 @@ class TerminalToolsScreenshotTest {
             override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
             override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
             override val networkAvailable: Flow<Unit> = emptyFlow()
-            override fun onClipboardText(text: String) = Unit
+            override fun onClipboardText(host: Host, text: String) = Unit
         }
         val session = TerminalSession(homelabRecord(SessionState.LIVE, PersistenceLayer.IN_APP), CoroutineScope(SupervisorJob() + Dispatchers.Default), env) {}
         session.restoreFrame(frame(FRAME_LINES, emptyList()))
@@ -350,11 +379,11 @@ class TerminalToolsScreenshotTest {
         settle(200)
         capture("terminal-selection-handle")
 
-        // Copy: the clipboard holds the text, the pill says so, the selection is gone.
+        // Copy: the clipboard holds the text as Berth's copy, the pill says so, the selection is gone.
         val copied = tools.selection.text(session.emulator)
         compose.onNodeWithText("Copy").performClick()
         waitForText("Copied")
-        assertEquals(copied, clipboardText())
+        assertBerthsClip(copied)
         assertFalse(tools.selection.active)
         capture("terminal-copied")
         compose.mainClock.advanceTimeBy(1_600)
@@ -792,6 +821,7 @@ class TerminalToolsScreenshotTest {
         capture("terminal-history-menu")
         compose.onNodeWithText("Copy").performClick()
         compose.waitUntil(5_000) { clipboardText() == "docker compose ps" && tools.notice == "Copied" }
+        assertBerthsClip("docker compose ps")
 
         compose.onNode(hasContentDescription("Command ls -la")).performSemanticsAction(SemanticsActions.OnLongClick)
         waitForText("Delete")
@@ -816,6 +846,90 @@ class TerminalToolsScreenshotTest {
         compose.onAllNodes(hasSetTextAction() and hasText(command)).assertCountEquals(2)
         settle(300)
         capture("terminal-history-snippet")
+    }
+
+    // ---- the app lock over the tools (spec C20) -------------------------------------------------------------
+
+    /**
+     * The tools through the app lock, the two windows stacked as AppRoot stacks them (spec C20): the
+     * shell stays composed under the in-window cover and the lock window, so a selection, a search
+     * stepped off its last match and a paste held for the preview are where they were when the lock
+     * lifts, the way an edit in progress is. While the lock is up the cover takes the canvas' touches,
+     * so a tap that would dismiss the selection does not reach it. The Copy that follows the unlock
+     * is Berth's own copy, token and all, the way the security wave routes it.
+     */
+    @Test
+    fun `a selection, a search and a pending paste stand through the lock`() {
+        seedHomelab(withHistory = false)
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        graph.settings.security.value = SecuritySettings(appLock = true, lockTimeout = LockTimeout.IMMEDIATELY)
+        // A launch with the lock on: the shell composes under the cover, its prompt passes at once.
+        graph.appLock.onForeground()
+        graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
+        val tools = StageTools()
+        compose.setContent {
+            BerthTheme(InterfaceTheme.DEFAULT) {
+                Box(Modifier.fillMaxSize()) {
+                    val lock by graph.appLock.state.collectAsState()
+                    if (lock != LockState.UNKNOWN) Stage(session, tools)
+                    if (lock == LockState.LOCKED) LockCover()
+                }
+            }
+            LockWindow(graph.security, InterfaceTheme.DEFAULT)
+        }
+        compose.waitUntil(5_000) { graph.appLock.state.value == LockState.UNLOCKED }
+        awaitGrid(session)
+        val canvas = compose.onNodeWithContentDescription("Terminal")
+
+        // A word selected, the search on `caddy` stepped back off its last match, and a paste held.
+        val (row, col) = cellOf(session, "gitea/gitea:1.22")
+        longPress(cellCenter(row, col + 3)) { tools.selection.active }
+        canvas.performTouchInput { up() }
+        waitForText("16 chars")
+        compose.runOnIdle { tools.openSearch("caddy") }
+        compose.waitUntil(5_000) { tools.search.matches.isNotEmpty() }
+        val total = tools.search.matches.size
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Previous match")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Previous match").performClick()
+        val stepped = "${total - 1}/$total"
+        compose.waitUntil(5_000) { tools.search.countLabel == stepped }
+        compose.runOnIdle { tools.pendingPaste = PasteClassifier.analyze("cd /srv\ndocker compose pull\n") }
+        waitForText("Paste 2 lines")
+        val selected = tools.selection.text(session.emulator)
+
+        // Leaving and coming back with "Immediately": the lock falls over the Stage with all three up.
+        graph.appLock.onBackground(changingConfigurations = false)
+        graph.appLock.onForeground()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { graph.authenticator.pending }
+        // The shell held its state under the cover: the reads survive, none cleared by the lock.
+        assertTrue("the selection stands through the lock", tools.selection.active)
+        assertEquals("the search keeps its match through the lock", stepped, tools.search.countLabel)
+        assertNotNull("the paste is still held through the lock", tools.pendingPaste)
+        // A tap where the canvas is is the cover's, not the terminal's, so the selection is not dismissed.
+        canvas.performTouchInput { click(cellCenter(row + 4, 2)) }
+        compose.waitForIdle()
+        assertTrue("the cover took the tap that would have dismissed the selection", tools.selection.active)
+
+        // Unlocked: the bar with its summary, the search at its match, the sheet with its lines, the
+        // handles inside the canvas; then Copy is Berth's copy, token and all.
+        graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("16 chars").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Matches $stepped").assertIsDisplayed()
+        compose.onNodeWithText("Paste 2 lines").assertIsDisplayed()
+        assertEquals(selected, tools.selection.text(session.emulator))
+        assertHandlesInside(session, tools)
+        settle(200)
+        capture("terminal-tools-survive-lock")
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(5_000) { tools.pendingPaste == null }
+        compose.onNodeWithText("Copy").performClick()
+        waitForText("Copied")
+        assertBerthsClip(selected)
+        assertFalse(tools.selection.active)
     }
 
     // ---- live flow against the local sshd ------------------------------------------------------------------
@@ -874,6 +988,7 @@ class TerminalToolsScreenshotTest {
         compose.onNodeWithText("Copy").performClick()
         waitForText("Copied")
         val copied = clipboardText()!!
+        assertBerthsClip(copied)
         assertEquals(3, copied.lines().size)
         assertTrue(copied.lines().all { it.contains("demo") })
         assertTrue(copied.lines().none { it.endsWith(" ") })

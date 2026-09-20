@@ -37,7 +37,7 @@ class CommandHistorySessionTest {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
         override val networkAvailable: Flow<Unit> = emptyFlow()
-        override fun onClipboardText(text: String) = Unit
+        override fun onClipboardText(host: Host, text: String) = Unit
         override fun commandHistoryEnabled(): Boolean = historyOn
         override fun now(): Long = 1_700_000_000_000L
     }
