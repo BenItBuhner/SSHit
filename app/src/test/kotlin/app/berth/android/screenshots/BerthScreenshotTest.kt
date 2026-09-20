@@ -622,9 +622,10 @@ class BerthScreenshotTest {
     /**
      * The trust sheets when the login was opened by a link carrying `;fingerprint=`: a match is one
      * line under the fingerprint and the sheet is otherwise the first-connection sheet; a mismatch
-     * leads the sheet in danger with the link's fingerprint as a second row and no primary action;
-     * a value Berth cannot read is said to be that, quoted clean; and the changed-key sheet says
-     * whose fingerprint the link carried. The comparison decides nothing: the actions are the same.
+     * leads the sheet in danger, said once, with the offered key and the link's fingerprint as two
+     * labelled rows of one size and no primary action; a value Berth cannot read is said to be that,
+     * quoted clean; and the changed-key sheet says whose fingerprint the link carried. The comparison
+     * decides nothing: the actions are the same.
      */
     @Test
     fun `trust sheets with the fingerprint a link carried`() {
@@ -650,19 +651,23 @@ class BerthScreenshotTest {
         bg.launch { graph.prompts.trustHostKey(host, request, emptyList(), link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key)) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         compose.onNodeWithText("First connection").assertExists()
-        compose.onNodeWithText("The link that opened this connection carried the same fingerprint.").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried the same fingerprint as this key's.").assertExists()
         compose.onNodeWithText("Trust and connect").assertExists()
         capture("prompt-trust-host-key-link-match")
         (graph.prompts.current.value as Prompt.TrustHostKey).cancel()
         compose.waitUntil(5_000) { graph.prompts.current.value == null }
 
-        // The link named another key: danger leads, the link's fingerprint is a row, and trusting is the destructive action at the bottom.
+        // The link named another key: danger leads, once, in the caption; the offered key and the link's fingerprint
+        // are two labelled rows of one size (C13), and trusting is the destructive action at the bottom.
         bg.launch { graph.prompts.trustHostKey(host, request, emptyList(), link = LinkFingerprint.of(SshKeys.fingerprintSha256(other), key)) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         compose.onNodeWithText("Key does not match the link").assertExists()
         compose.onNodeWithText("The link that opened this connection carried a different fingerprint for this server.").assertExists()
-        compose.onNodeWithText("The link that opened this connection carried a different fingerprint from this key's.").assertExists()
-        compose.onNodeWithText("LINK").assertExists()
+        compose.onAllNodes(hasText("carried a different fingerprint", substring = true)).assertCountEquals(1)
+        compose.onAllNodes(hasText("OFFERED   ssh-ed25519 \u00B7 SHA256")).assertCountEquals(1)
+        compose.onAllNodes(hasText("LINK   SHA256")).assertCountEquals(1)
+        compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(other))).assertExists()
+        compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(key))).assertExists()
         compose.onNodeWithText("Trust and connect anyway").assertExists()
         compose.onAllNodesWithText("Trust and connect").assertCountEquals(0)
         capture("prompt-trust-host-key-link-mismatch")

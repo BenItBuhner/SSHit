@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
@@ -170,13 +171,16 @@ private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
  * First contact: fingerprint in mono groups, one primary action, cancel. A hop's sheet says so,
  * and where the chain is going. When the login was opened by a link that carried a fingerprint
  * ([Prompt.TrustHostKey.link]), the sheet says how the two compare: a match is one line under the
- * fingerprint, and a mismatch leads the sheet in danger, with the link's fingerprint as a second
- * row and no primary action, the way the changed-key sheet has none.
+ * fingerprint; a mismatch leads the sheet in danger, said once in the caption, with the offered
+ * key and the link's fingerprint as two labelled rows of one size (C13's `SAVED` / `OFFERED`
+ * treatment, never a box beside a row) and no primary action, the way the changed-key sheet has none.
  */
 @Composable
 private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
     val c = Berth.colors
-    val mismatch = p.link?.check == FingerprintCheck.MISMATCH
+    val link = p.link
+    val mismatched = link?.takeIf { it.check == FingerprintCheck.MISMATCH }
+    val mismatch = mismatched != null
     PromptSheet(onDismiss = p::cancel) {
         if (mismatch) {
             SheetTitle(
@@ -191,13 +195,18 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
             )
         }
         HostLine(p)
-        Fingerprint(p.request.keyType, p.request.fingerprintSha256, boxed = true)
-        p.link?.let {
-            LinkFingerprintLine(
-                it,
-                same = "The link that opened this connection carried the same fingerprint.",
-                different = "The link that opened this connection carried a different fingerprint from this key's.",
-            )
+        if (mismatched != null) {
+            Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")
+            LinkFingerprintRow(mismatched)
+        } else {
+            Fingerprint(p.request.keyType, p.request.fingerprintSha256, boxed = true)
+            if (link != null) {
+                when (link.check) {
+                    FingerprintCheck.MATCH -> Text("The link that opened this connection carried the same fingerprint as this key's.", style = BerthType.body, color = c.text2)
+                    FingerprintCheck.UNREADABLE -> LinkUnreadableLine(link)
+                    FingerprintCheck.MISMATCH -> Unit
+                }
+            }
         }
         if (p.otherKnown.isNotEmpty()) {
             Text(
@@ -223,34 +232,36 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
 }
 
 /**
- * What the link that opened the connection said the key would be, against the key offered: one
- * line for a match; for a mismatch the link's fingerprint as a labelled row like the saved and
- * offered ones, then the sentence in danger; for a value Berth cannot read as a fingerprint, that,
- * with the value itself quoted as [LinkFingerprint.quoted] (short, no control or format
- * characters), since it came in from outside and this is the one place the link's text is shown.
+ * The fingerprint the link that opened the connection carried, as a labelled row beside the key's
+ * and of the same size ([Fingerprint]'s row: `LINK   SHA256`, or `LINK   MD5` for a link written
+ * that way, over the value in Mono grouped as the key rows are). A link names no key type, so the
+ * row claims none. Shown for a readable fingerprint that matched neither key on the sheet; the
+ * value is [LinkFingerprint.shown], the normalized form, never the link's own text.
  */
 @Composable
-private fun LinkFingerprintLine(link: LinkFingerprint, same: String, different: String) {
-    val c = Berth.colors
-    when (link.check) {
-        FingerprintCheck.MATCH -> Text(same, style = BerthType.body, color = c.text2)
-        FingerprintCheck.MISMATCH -> {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("LINK", style = BerthType.caption, color = c.text3)
-                Text(
-                    link.shown.let { if (it.startsWith("SHA256:")) "SHA256 " + SshKeys.groupedFingerprint(it) else it },
-                    style = BerthType.mono.copy(fontSize = 14.sp, lineHeight = 20.sp),
-                    color = c.text1,
-                )
-            }
-            Text(different, style = BerthType.body, color = c.danger)
-        }
-        FingerprintCheck.UNREADABLE -> Text(
-            "The link that opened this connection carried a fingerprint Berth cannot read (\u201C${link.quoted}\u201D), so there is nothing to compare here.",
-            style = BerthType.caption,
-            color = c.text2,
-        )
+private fun LinkFingerprintRow(link: LinkFingerprint) {
+    val shown = link.shown
+    val (hash, value) = when {
+        shown.startsWith("SHA256:") -> "SHA256" to SshKeys.groupedFingerprint(shown)
+        shown.startsWith("MD5:") -> "MD5" to shown.removePrefix("MD5:")
+        else -> "" to link.quoted
     }
+    FingerprintRow(fingerprintCaption(label = "Link", hash), value)
+}
+
+/**
+ * A link's fingerprint in no form Berth reads: said so, with the value itself quoted as
+ * [LinkFingerprint.quoted] (short, no control or format characters), since it came in from
+ * outside and this is the one place the link's text is shown. In body, as the match line is:
+ * the lesser event is not the smaller text, and the quoted value is not the smallest on the sheet.
+ */
+@Composable
+private fun LinkUnreadableLine(link: LinkFingerprint) {
+    Text(
+        "The link that opened this connection carried a fingerprint Berth cannot read (\u201C${link.quoted}\u201D), so there is nothing to compare here.",
+        style = BerthType.body,
+        color = Berth.colors.text2,
+    )
 }
 
 /** The one alarming sheet in the app: the saved key changed. Danger colour on the title, no primary. */
@@ -265,15 +276,18 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
             color = c.danger,
         )
         HostLine(p)
-        // Two fingerprints as labelled text rows (C13), never two boxes.
+        // Two fingerprints as labelled text rows (C13), never two boxes; the link's, when it is neither, a third.
         Fingerprint(p.saved.keyType, p.saved.fingerprintSha256, label = "Saved")
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")
-        p.link?.let {
-            LinkFingerprintLine(
-                it,
-                same = "The link that opened this connection carried the offered key's fingerprint.",
-                different = "The link that opened this connection carried a fingerprint that is neither key's.",
-            )
+        p.link?.let { link ->
+            when (link.check) {
+                FingerprintCheck.UNREADABLE -> LinkUnreadableLine(link)
+                FingerprintCheck.MATCH -> Text("The link that opened this connection carried the offered key's fingerprint.", style = BerthType.body, color = c.text2)
+                FingerprintCheck.MISMATCH -> {
+                    LinkFingerprintRow(link)
+                    Text("The link that opened this connection carried a fingerprint that is neither key's.", style = BerthType.body, color = c.danger)
+                }
+            }
         }
         Text(
             "This happens when a server is reinstalled or its keys rotate. It also happens when something is between you and the server. Do not continue unless you know which.",
@@ -321,18 +335,30 @@ private fun PinnedKeyRefusedSheet(p: Prompt.PinnedKeyRefused, onOpenKnownHosts: 
  * A host key fingerprint as text rows: a Caption naming the algorithm and the hash
  * (`ssh-ed25519 · SHA256`, with an optional leading label such as `PINNED`), then the base64 body
  * grouped in fours in Mono. [boxed] puts the one focal fingerprint of the trust sheet on surface.2;
- * stacked fingerprints stay as plain rows.
+ * stacked fingerprints stay as plain rows, every one the same size ([FingerprintRow]).
  */
 @Composable
 fun Fingerprint(keyType: String, fingerprint: String, modifier: Modifier = Modifier, label: String? = null, boxed: Boolean = false) {
+    FingerprintRow(fingerprintCaption(label, "$keyType \u00B7 SHA256"), SshKeys.groupedFingerprint(fingerprint), modifier, boxed)
+}
+
+/** `LABEL   ssh-ed25519 · SHA256`: the label in text.2 when there is one, then what the value is. */
+@Composable
+private fun fingerprintCaption(label: String?, what: String): AnnotatedString {
     val c = Berth.colors
-    val caption = buildAnnotatedString {
+    return buildAnnotatedString {
         if (label != null) {
             withStyle(SpanStyle(color = c.text2)) { append(label.uppercase()) }
             append("   ")
         }
-        append("$keyType \u00B7 SHA256")
+        append(what)
     }
+}
+
+/** The one row every fingerprint on a sheet is set in: the caption over the value in Mono at 14 sp. */
+@Composable
+private fun FingerprintRow(caption: AnnotatedString, value: String, modifier: Modifier = Modifier, boxed: Boolean = false) {
+    val c = Berth.colors
     Column(
         modifier
             .fillMaxWidth()
@@ -343,7 +369,7 @@ fun Fingerprint(keyType: String, fingerprint: String, modifier: Modifier = Modif
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(caption, style = BerthType.caption, color = c.text3)
-        Text(SshKeys.groupedFingerprint(fingerprint), style = BerthType.mono.copy(fontSize = 14.sp, lineHeight = 20.sp), color = c.text1)
+        Text(value, style = BerthType.mono.copy(fontSize = 14.sp, lineHeight = 20.sp), color = c.text1)
     }
 }
 
