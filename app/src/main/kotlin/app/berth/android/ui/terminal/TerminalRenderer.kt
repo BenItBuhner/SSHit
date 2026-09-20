@@ -13,9 +13,11 @@ import kotlin.math.roundToInt
 
 /**
  * What one draw highlights over a frame, in the frame's view rows: the selection in the theme's
- * `selection` colour, search matches in the same, the current match in the accent (spec C17, C18).
- * Colours are ARGB as given, so the current match can sit translucent over any theme. One instance
- * is reused between draws; [matches] holds only the ranges that touch the rows in view.
+ * `selection` colour, search matches in the same, the current match in the accent with its glyphs
+ * in [currentFg] (spec C17, C18). Glyphs keep their own colour over the selection and the plain
+ * matches; the current match is the one place they are recoloured, so that a green prompt or a
+ * coloured listing under the accent still reads. One instance is reused between draws; [matches]
+ * holds only the ranges that touch the rows in view.
  */
 class FrameOverlay {
     var selection: CellRange? = null
@@ -24,6 +26,9 @@ class FrameOverlay {
     var matchColor: Int = 0
     var current: CellRange? = null
     var currentColor: Int = 0
+
+    /** The glyph colour inside [current], as 0xRRGGBB: the theme's background, which the accent is chosen to read against. */
+    var currentFg: Int = 0
 
     fun clear() {
         selection = null
@@ -119,6 +124,15 @@ object TerminalRenderer {
                 overlay.current?.let { if (it.touches(y)) fillRange(nc, it, y, cols, cw, ch, top, overlay.currentColor, paints) }
             }
 
+            // The columns of the current search match on this row, if any: glyphs there take the
+            // overlay's colour, and a run breaks at the match's edges.
+            val curFrom = overlay?.current?.firstCol(y) ?: Int.MAX_VALUE
+            val curTo = overlay?.current?.lastCol(y, cols) ?: Int.MIN_VALUE
+            val curFg = (overlay?.currentFg ?: 0) and 0xFFFFFF
+            fun fgAt(col: Int, attrs: Int): Int =
+                if (col in curFrom..curTo) curFg
+                else cellFg(line.fg[col], line.bg[col], attrs, palette, screenFg, screenBg, boldAsBright, boldRgb)
+
             // Text, in runs of the same style made of plain single-width characters.
             x = 0
             while (x < lineCols) {
@@ -128,7 +142,7 @@ object TerminalRenderer {
                     x++
                     continue
                 }
-                val fg = cellFg(line.fg[x], line.bg[x], attrs, palette, screenFg, screenBg, boldAsBright, boldRgb)
+                val fg = fgAt(x, attrs)
                 val styleKey = attrs and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH)
                 val paint = paints.forAttrs(attrs)
                 paint.color = opaque(fg)
@@ -141,7 +155,7 @@ object TerminalRenderer {
                         val a2 = line.attrs[end]
                         if (a2 and Attr.WIDE_TAIL != 0 || a2 and Attr.INVISIBLE != 0) break
                         if (a2 and (Attr.BOLD or Attr.ITALIC or Attr.UNDERLINE or Attr.STRIKETHROUGH) != styleKey) break
-                        if (cellFg(line.fg[end], line.bg[end], a2, palette, screenFg, screenBg, boldAsBright, boldRgb) != fg) break
+                        if (fgAt(end, a2) != fg) break
                         if (c2 == 0) {
                             sb.append(' ')
                             end++

@@ -488,7 +488,11 @@ fun TerminalCanvas(
                     }
                 }
                 overlay.matchColor = opaqueRgb(theme.selection)
-                overlay.currentColor = (accent and 0xFFFFFF) or (CURRENT_MATCH_ALPHA shl 24)
+                // The current match is a fixed pair: the accent, opaque, with the glyphs in the theme's
+                // background, which the accent was chosen to read against; a green prompt under the
+                // accent at 60% did not.
+                overlay.currentColor = opaqueRgb(accent)
+                overlay.currentFg = theme.background
             }
             val ov = if (overlay.isEmpty) null else overlay
             // While the canvas is animating to a new height and the grid has not settled yet, the rows
@@ -524,9 +528,6 @@ private const val TAP_MS = 300L
 
 /** While a selection drag holds the finger past an edge, history scrolls one line per this. */
 private const val AUTOSCROLL_MS = 60L
-
-/** The current match is the accent at this alpha over the cell, so the glyph stays legible on any theme. */
-private const val CURRENT_MATCH_ALPHA = 0x99
 
 /** The disc of a selection handle; its square shoulder is the same size. The touch target is [HANDLE_REACH] around the centre. */
 val HANDLE_RADIUS = 9.dp
