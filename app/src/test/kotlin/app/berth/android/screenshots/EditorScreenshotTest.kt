@@ -55,7 +55,6 @@ import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.ThemeSlot
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -102,12 +101,7 @@ class EditorScreenshotTest {
         seed()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        val file = File(outDir, "$name.png")
-        file.parentFile.mkdirs()
-        captureScreenRoboImage(file.path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {

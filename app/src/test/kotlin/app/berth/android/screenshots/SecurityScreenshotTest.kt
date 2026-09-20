@@ -65,7 +65,6 @@ import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -126,10 +125,7 @@ class SecurityScreenshotTest {
         graph = TestGraph(context)
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {

@@ -86,7 +86,6 @@ import app.berth.ssh.SshSecurity
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.TerminalKey
 import app.berth.terminal.TerminalText
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -156,10 +155,7 @@ class TerminalToolsScreenshotTest {
         graph = TestGraph(context)
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
