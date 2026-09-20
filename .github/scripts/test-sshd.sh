@@ -58,8 +58,14 @@ AcceptEnv LANG LC_* COLORTERM TERM_PROGRAM
 Subsystem sftp /usr/lib/openssh/sftp-server
 PidFile $pidfile
 LogLevel VERBOSE
+MaxStartups 100
+MaxSessions 100
 EOF
 }
+# MaxStartups and MaxSessions: the suite's test JVMs open connections in bursts (the live screenshot flows, the
+# chain through the jump host, the tunnels, the transfers), and past ten unauthenticated connections at once the
+# default MaxStartups 10:30:100 drops new ones at random, a handshake that fails once and passes on the rerun. A
+# hundred of each is more than the suite ever holds open, and both sshds are reachable from this machine alone.
 
 start_instance() {
     local dir="$1" pidfile="$2"

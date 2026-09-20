@@ -222,6 +222,9 @@ androidComponents {
     beforeVariants(selector().withBuildType("release")) { variant ->
         variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
     }
+    // One 3 GB test JVM at a time (see maxHeapSize below): the release variant's suite runs after the debug one,
+    // an ordering only, so with --continue a failure in one still lets the other run.
+    tasks.matching { it.name == "testReleaseUnitTest" }.configureEach { mustRunAfter(tasks.matching { it.name == "testDebugUnitTest" }) }
     onVariants(selector().withBuildType("release")) { variant ->
         val mapping = variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
         val apkDir = variant.artifacts.get(SingleArtifact.APK)
@@ -361,6 +364,12 @@ tasks.withType<Test>().configureEach {
     for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD", "SSH_TEST_P256_KEY_FILE", "SSH_TEST_JUMP_PORT")) {
         environment(name, System.getenv(name) ?: "")
     }
+    // Sized for the 16 GB, 4-core runner CI uses (and a workstation like it), where at most four tasks run at once:
+    // this one JVM at 3 GB beside the JVM modules' test forks (Gradle's 512 MB default each, three at most), the
+    // 3 GB daemon (org.gradle.jvmargs) and the 2 GB Kotlin daemon, idle by then, is an 11 GB ceiling under the
+    // ~14 GB the job gets. The two variants' JVMs are the case that would not fit, 3 GB more, and they never run
+    // together: the ordering below says so, rather than leaving it to how Gradle happens to schedule one
+    // project's tasks (measured one after the other in CI and here, entry stored and reused, before it was written).
     maxHeapSize = "3g"
     testLogging {
         events("passed", "skipped", "failed")
