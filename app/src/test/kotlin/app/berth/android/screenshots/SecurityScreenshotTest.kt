@@ -395,8 +395,10 @@ class SecurityScreenshotTest {
         seedLibrary()
         themed { HostEditorScreen(graph.viewModel, hostId = null, onDone = {}) }
         compose.onNodeWithText("Remote clipboard").performScrollTo()
-        compose.onNodeWithText("Save the host first").assertIsDisplayed()
+        // The Alt key row (Settings > Hardware keyboard's per-host override) waits on the same rule.
+        compose.onAllNodesWithText("Save the host first").assertCountEquals(2)
         compose.onNodeWithText("Remote clipboard").assertIsNotEnabled()
+        compose.onNodeWithText("Alt key").assertIsNotEnabled()
         compose.onNodeWithText("Remote clipboard").performClick()
         compose.waitForIdle()
         hasNoText("Inherit (blocked)")
