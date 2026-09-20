@@ -73,6 +73,13 @@ jobs:
           source .github/scripts/test-sshd.sh
           ./gradlew assembleRelease testR8 --continue --console=plain
 
+      # The decoded keystore lives for the one step that signs with it. A hosted runner dies with the job and takes
+      # the file along; a self-hosted one would not, so it goes here, whatever the build did and whether it got as
+      # far as writing it.
+      - name: Remove the decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
       # The files, named for the release so two releases' downloads do not read alike, on the tag's release.
       - name: Attach the APK and the mapping to the tag's release
         env:
