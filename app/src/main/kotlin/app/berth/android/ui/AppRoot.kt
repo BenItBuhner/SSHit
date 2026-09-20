@@ -25,7 +25,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +49,7 @@ import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
 import app.berth.android.ui.security.BerthClipboardLocals
-import app.berth.android.ui.security.LockScreen
+import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
@@ -97,17 +96,13 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     BerthTheme(theme) {
         CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
-                // The lock screen stands in for the shell rather than covering it: sheets, menus and
-                // prompts are windows of their own and would float over an overlay. The shell's saved
-                // state (its back stack) is held meanwhile, so unlocking returns to the same screen.
-                val holder = rememberSaveableStateHolder()
-                when (lock) {
-                    LockState.UNKNOWN -> Unit
-                    LockState.LOCKED -> LockScreen(vm.security)
-                    LockState.UNLOCKED -> holder.SaveableStateProvider("shell") {
-                        BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
-                    }
-                }
+                // Nothing is composed until the lock is decided (the splash holds meanwhile). From
+                // then on the shell stays composed, locked or not, so an edit in progress, an open
+                // sheet and a running Stage are where they were when the lock lifts. While locked,
+                // the cover hides it in this window and the lock window (LockActivity) lies over
+                // both, since sheets, menus and prompts are windows of their own.
+                if (lock != LockState.UNKNOWN) BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
+                if (lock == LockState.LOCKED) LockCover()
             }
         }
     }

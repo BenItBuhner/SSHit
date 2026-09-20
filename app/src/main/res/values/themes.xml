@@ -17,4 +17,19 @@
         <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="postSplashScreenTheme">@style/Theme.App</item>
     </style>
+
+    <!--
+      The lock window (LockActivity): the app theme with no activity transition in either direction,
+      so no frame of the shell shows through the lock's arrival or its departure.
+    -->
+    <style name="Theme.App.Lock" parent="Theme.App">
+        <item name="android:windowAnimationStyle">@style/Animation.App.Lock</item>
+    </style>
+
+    <style name="Animation.App.Lock" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@null</item>
+        <item name="android:activityOpenExitAnimation">@null</item>
+        <item name="android:activityCloseEnterAnimation">@null</item>
+        <item name="android:activityCloseExitAnimation">@null</item>
+    </style>
 </resources>

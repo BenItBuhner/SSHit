@@ -6,7 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import app.berth.android.security.LockState
 import app.berth.android.security.SecurityCenter
 import app.berth.android.security.WindowSecurity
@@ -43,6 +45,15 @@ class MainActivity : ComponentActivity() {
             security.lock.state.value == LockState.UNKNOWN
         }
         lifecycleScope.launch { security.settings.filterNotNull().collect { applyWindowSecurity(it) } }
+        lifecycleScope.launch {
+            // Whenever this activity is on top while the app is locked, the lock window goes over
+            // it: at a cold start with the lock on, on a return past the timeout, and after anything
+            // took the lock window away (a singleTask launch clears whatever lies over this one).
+            // Under the lock window this activity is stopped, so the collector rests until it is back.
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                security.lock.state.collect { if (it == LockState.LOCKED) startActivity(Intent(this@MainActivity, LockActivity::class.java)) }
+            }
+        }
         setContent {
             AppRoot()
         }

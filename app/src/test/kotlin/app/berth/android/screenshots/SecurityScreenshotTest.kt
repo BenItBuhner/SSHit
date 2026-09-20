@@ -16,12 +16,16 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.security.AuthOutcome
 import app.berth.android.security.FakeAuthenticator
@@ -32,6 +36,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.prompts.PromptHost
+import app.berth.android.ui.security.LockWindow
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
@@ -83,12 +88,13 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
- * The security screens (spec C20) through Robolectric's native graphics: the lock screen standing
- * in for the shell, Settings › Security, the host's remote clipboard override, the one-time notice
- * for a blocked OSC 52 write, and the connect flow paused on the biometric step with its cancel,
- * invalidated-key and regenerated outcomes. The system prompt is a scripted fake and the Keystore a
- * software P-256 stand-in; `live keystore key signs in` puts that stand-in's signature in front of
- * the local sshd when the `SSH_TEST_*` variables and `SSH_TEST_P256_KEY_FILE` are set.
+ * The security screens (spec C20) through Robolectric's native graphics: the lock window over the
+ * shell (stacked in one composition the way the two windows stack on a device), Settings ›
+ * Security, the host's remote clipboard override, the one-time notice for a blocked OSC 52 write,
+ * and the connect flow paused on the biometric step with its cancel, invalidated-key and
+ * regenerated outcomes. The system prompt is a scripted fake and the Keystore a software P-256
+ * stand-in; `live keystore key signs in` puts that stand-in's signature in front of the local sshd
+ * when the `SSH_TEST_*` variables and `SSH_TEST_P256_KEY_FILE` are set.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -161,10 +167,20 @@ class SecurityScreenshotTest {
 
     private fun hasNoText(text: String) = compose.onAllNodesWithText(text).assertCountEquals(0)
 
+    /** The two windows as they stack on a device: the shell's, and the lock's over it while the app is locked. */
+    private fun shellUnderLockWindow() {
+        compose.setContent {
+            AppRoot(graph.viewModel)
+            LockWindow(graph.security, InterfaceTheme.DEFAULT)
+        }
+    }
+
+    private val strip get() = compose.onAllNodes(hasContentDescription("Tabs, 3 open"))
+
     // ---- app lock ---------------------------------------------------------------------------------
 
     @Test
-    fun `lock screen stands in for the shell until the prompt succeeds`() {
+    fun `lock window covers the shell until the prompt succeeds`() {
         seedLibrary()
         seedDetachedSessions()
         graph.settings.security.value = SecuritySettings(appLock = true, lockTimeout = LockTimeout.IMMEDIATELY)
@@ -173,14 +189,15 @@ class SecurityScreenshotTest {
         graph.appLock.onForeground()
         assertEquals(LockState.LOCKED, graph.appLock.state.value)
 
-        compose.setContent { AppRoot(graph.viewModel) }
+        shellUnderLockWindow()
         // The lock screen runs the system prompt as soon as it appears; the fake leaves it up.
         compose.waitUntil(5_000) { graph.authenticator.pending }
         compose.onNodeWithText("Locked").assertIsDisplayed()
         compose.onNodeWithText("Unlocking\u2026").assertIsNotEnabled()
-        // Nothing of the shell is composed behind it: no strip, no frozen frame, no host name.
-        compose.onAllNodes(hasContentDescription("Tabs, ", substring = true)).assertCountEquals(0)
-        hasNoText("homelab")
+        // The shell is composed beneath, covered: the tabs come back and the last one takes the
+        // stage under the lock, so the unlock has nothing to rebuild.
+        compose.waitUntil(10_000) { graph.viewModel.activeTabId.value == "s-homelab" }
+        compose.waitUntil(5_000) { strip.fetchSemanticsNodes().isNotEmpty() }
         capture("lock-screen-prompting")
 
         // Backing out of the system prompt leaves the lock screen with its own button and nothing to explain.
@@ -196,23 +213,25 @@ class SecurityScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Too many attempts. Try again later.").fetchSemanticsNodes().isNotEmpty() }
         capture("lock-screen-failed")
 
-        // Success brings the shell up, restoring the tabs and staging the last active one.
+        // Success takes the lock window and the cover away; the shell was there all along.
         compose.onNodeWithText("Unlock").performClick()
         compose.waitUntil(5_000) { graph.authenticator.pending }
         graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
-        compose.waitUntil(10_000) { graph.viewModel.activeTabId.value == "s-homelab" }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
-        hasNoText("Locked")
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isEmpty() }
+        strip.onFirst().assertIsDisplayed()
+        assertEquals("s-homelab", graph.viewModel.activeTabId.value)
         assertEquals(listOf("Unlock Berth", "Unlock Berth", "Unlock Berth"), graph.authenticator.requests.map { it.title })
 
-        // Leaving and coming back with "Immediately" locks again, over the same running shell.
+        // Leaving and coming back with "Immediately" locks again, over the same running shell; the
+        // lock window asks on its own the moment it is up.
         graph.appLock.onBackground(changingConfigurations = false)
         graph.appLock.onForeground()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodes(hasContentDescription("Tabs, ", substring = true)).assertCountEquals(0)
         compose.waitUntil(5_000) { graph.authenticator.pending }
+        strip.assertCountEquals(1)
         graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isEmpty() }
+        strip.onFirst().assertIsDisplayed()
         assertEquals("the tabs restored once survived the lock", "s-homelab", graph.viewModel.activeTabId.value)
 
         // A rotation is not leaving: the shell stays.
@@ -221,7 +240,46 @@ class SecurityScreenshotTest {
         graph.appLock.onForeground()
         compose.waitForIdle()
         hasNoText("Locked")
-        compose.onNode(hasContentDescription("Tabs, 3 open")).assertIsDisplayed()
+        strip.onFirst().assertIsDisplayed()
+    }
+
+    @Test
+    fun `an edit in progress survives the lock`() {
+        seedLibrary()
+        seedDetachedSessions()
+        graph.settings.security.value = SecuritySettings(appLock = true, lockTimeout = LockTimeout.IMMEDIATELY)
+        runBlocking { graph.settings.setLastActiveSessionId("s-homelab") }
+        graph.appLock.onForeground()
+        // The launch's prompt passes at once.
+        graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
+        shellUnderLockWindow()
+        compose.waitUntil(10_000) { graph.appLock.state.value == LockState.UNLOCKED && graph.viewModel.activeTabId.value == "s-homelab" }
+        compose.waitUntil(5_000) { strip.fetchSemanticsNodes().isNotEmpty() }
+
+        // Into homelab's editor through the Stage's menu, and two fields changed but not saved.
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Host settings").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Host settings").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasSetTextAction() and hasText("homelab")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasSetTextAction() and hasText("homelab")).performTextReplacement("homelab (rack 2)")
+        compose.onNode(hasSetTextAction() and hasText("192.168.1.20")).performTextReplacement("192.168.1.21")
+        compose.onNode(hasSetTextAction() and hasText("homelab (rack 2)")).assertIsDisplayed()
+
+        // Leaving for a password manager and coming back with "Immediately": the lock falls over the editor.
+        graph.appLock.onBackground(changingConfigurations = false)
+        graph.appLock.onForeground()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { graph.authenticator.pending }
+        compose.onNode(hasSetTextAction() and hasText("homelab (rack 2)")).assertExists()
+
+        // The unlock finds the editor as it was left: both edits in their fields, nothing saved by the lock.
+        graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Locked").fetchSemanticsNodes().isEmpty() }
+        compose.onNode(hasSetTextAction() and hasText("homelab (rack 2)")).assertIsDisplayed()
+        compose.onNode(hasSetTextAction() and hasText("192.168.1.21")).assertIsDisplayed()
+        compose.onNodeWithText("Save").assertIsDisplayed()
+        assertEquals("homelab", graph.hosts.items.value.first { it.id == "homelab" }.name)
+        capture("host-editor-survives-lock")
     }
 
     // ---- settings ---------------------------------------------------------------------------------

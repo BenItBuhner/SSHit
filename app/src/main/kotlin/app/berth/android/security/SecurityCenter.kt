@@ -2,6 +2,7 @@ package app.berth.android.security
 
 import android.app.Activity
 import app.berth.domain.model.ClipboardClear
+import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.LockTimeout
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SecuritySettings
@@ -45,11 +46,15 @@ class SecurityCenter(
     val settings: StateFlow<SecuritySettings?> = settingsRepository.securitySettings.map<SecuritySettings, SecuritySettings?> { it }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
+    /** The interface theme, for the lock window, which has no view model of its own. */
+    val interfaceTheme: StateFlow<InterfaceTheme> = settingsRepository.interfaceTheme.stateIn(scope, SharingStarted.Eagerly, InterfaceTheme.DEFAULT)
+
     /** Whether the app lock can be offered: it rides the device's own screen lock. */
     val deviceSecure: Boolean get() = authenticator.deviceSecure
 
     // ---- lifecycle ------------------------------------------------------------------------------
 
+    /** Either window started. The two overlap while the lock window comes and goes; the lock counts them as one foreground. */
     fun onActivityStarted(activity: Activity) {
         foreground.started(activity)
         lock.onForeground()
@@ -59,6 +64,13 @@ class SecurityCenter(
         lock.onBackground(changingConfigurations)
         foreground.stopped(activity)
     }
+
+    /**
+     * The lock window is about to finish: it stops being the activity prompts attach to before its
+     * window goes, so a key prompt the unlock released waits for the main window to be back on top
+     * instead of attaching to one on its way out.
+     */
+    fun onLockWindowClosing(activity: Activity) = foreground.stopped(activity)
 
     fun onActivityResumed() = clipboard.setVisible(true)
 
