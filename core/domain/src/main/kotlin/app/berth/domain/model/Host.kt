@@ -79,6 +79,11 @@ data class Host(
     val appearance: AppearanceOverride = AppearanceOverride(),
     val tags: List<String> = emptyList(),
     val muteBell: Boolean = false,
+    /**
+     * Connect opens the host's port forwards with no shell (a [TabKind.Tunnels] tab) instead of a
+     * terminal: for a bastion whose only job is to carry tunnels. Terminal and Files stay a menu away.
+     */
+    val tunnelsOnly: Boolean = false,
     val lastConnectedAt: Long? = null,
     val createdAt: Long,
 ) {

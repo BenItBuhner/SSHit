@@ -500,7 +500,7 @@ class SessionManager @Inject constructor(
         sessionRepository.upsertAll(finalRecords)
         for (record in finalRecords) {
             when (record.kind) {
-                TabKind.Ssh -> {
+                TabKind.Ssh, TabKind.Tunnels -> {
                     val session = TerminalSession(record, scope, environment) { sessionRepository.upsert(it) }
                     session.restoreFrame(sessionRepository.loadFrame(record.id), detachedAt = detachedAt[record.id])
                     map[record.id] = session
@@ -653,7 +653,7 @@ class SessionManager @Inject constructor(
                 val fresh = FilesTab.newRecord(id, old.hostSnapshot, group, now, folder = old.cwd).copy(title = old.title, customTitle = old.customTitle)
                 placeFiles(fresh, TabOrder.insertAt(stripNow(), fresh, group, old.sortOrder), preferred = null)
             }
-            TabKind.Ssh -> {
+            TabKind.Ssh, TabKind.Tunnels -> {
                 val fresh = old.copy(
                     id = id,
                     workspaceId = group,
@@ -678,7 +678,7 @@ class SessionManager @Inject constructor(
         val source = tabNow(id) ?: return null
         val record = source.record.value
         return when (record.kind) {
-            TabKind.Ssh -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id)
+            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id)
             TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd)
         }
     }

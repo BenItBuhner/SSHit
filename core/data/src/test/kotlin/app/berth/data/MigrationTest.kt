@@ -95,6 +95,9 @@ class MigrationTest {
     @Test
     fun `a version 2 database migrates to the current version keeping every row`() = migrateAndCheck(from = 2)
 
+    @Test
+    fun `a version 3 database migrates to the current version keeping every row`() = migrateAndCheck(from = 3)
+
     private fun migrateAndCheck(from: Int) {
         val file = File.createTempFile("berth-v$from", ".db").also { it.delete(); it.deleteOnExit() }
         val helper = MigrationTestHelper(
@@ -302,6 +305,12 @@ class MigrationTest {
                 "key" to "files_prefs", "value" to """{"sort":"size","ascending":false,"show_hidden":true,"recent_paths":{"h1":["/var/log","/home/deploy"]}}""", "updatedAt" to 4,
             )
         }
+
+        if (version >= 3) {
+            // Version 3's columns: a renamed tab and a collapsed group, as a phone on that build could have set them.
+            execSQL("UPDATE sessions SET customTitle = 'web box' WHERE id = 's1'")
+            execSQL("UPDATE workspaces SET collapsed = 1 WHERE id = 'w2'")
+        }
     }
 
     // ---- after the migration -----------------------------------------------------------------------
@@ -315,9 +324,15 @@ class MigrationTest {
         )
         for ((table, rows) in counts) assertEquals(rows.toLong(), long("SELECT COUNT(*) FROM $table"), "$table keeps its rows")
 
-        // Version 3: every old tab is an SSH tab showing its automatic title, every group expanded.
-        assertEquals(2L, long("SELECT COUNT(*) FROM sessions WHERE kind = 'ssh' AND customTitle IS NULL"))
-        assertEquals(2L, long("SELECT COUNT(*) FROM workspaces WHERE collapsed = 0"))
+        // Version 4: every old host opens a terminal on Connect; the tunnels-only toggle is off until set.
+        assertEquals(2L, long("SELECT COUNT(*) FROM hosts WHERE tunnelsOnly = 0"))
+
+        // Version 3: every old tab is an SSH tab; the rename and the collapsed group a version 3 phone set survive.
+        assertEquals(2L, long("SELECT COUNT(*) FROM sessions WHERE kind = 'ssh'"))
+        assertEquals(if (from >= 3) "web box" else null, text("SELECT customTitle FROM sessions WHERE id = 's1'"))
+        assertNull(text("SELECT customTitle FROM sessions WHERE id = 's2'"))
+        assertEquals(0L, long("SELECT collapsed FROM workspaces WHERE id = '${Workspace.DEFAULT_ID}'"))
+        assertEquals(if (from >= 3) 1L else 0L, long("SELECT collapsed FROM workspaces WHERE id = 'w2'"))
 
         // Version 2: defaults when coming from version 1, the values a version 2 phone set otherwise.
         assertEquals(0L, long("SELECT pinned FROM known_hosts WHERE id = 'k1'"))
@@ -348,13 +363,18 @@ class MigrationTest {
 
         val workspaces = RoomWorkspaceRepository(db)
         assertEquals(home, workspaces.ensureDefault(), "launch finds the existing default group instead of making another")
-        assertEquals(listOf(home, work.copy(terminalThemeId = if (from >= 2) "berth-light" else null)), workspaces.observeAll().first())
+        assertEquals(
+            listOf(home, work.copy(terminalThemeId = if (from >= 2) "berth-light" else null, collapsed = from >= 3)),
+            workspaces.observeAll().first(),
+        )
 
         val sessions = RoomSessionRepository(db)
         val records = sessions.getAll()
-        assertEquals(listOf(deploySession, quickSession), records)
-        assertTrue(records.all { it.kind == TabKind.Ssh && it.customTitle == null })
-        assertEquals("deploy@web: ~", records.first().displayTitle)
+        val renamed = deploySession.copy(customTitle = if (from >= 3) "web box" else null)
+        assertEquals(listOf(renamed, quickSession), records)
+        assertTrue(records.all { it.kind == TabKind.Ssh })
+        assertEquals(if (from >= 3) "web box" else "deploy@web: ~", records.first().displayTitle)
+        assertFalse(hosts.observeAll().first().any { it.tunnelsOnly }, "no host from an older build opens tunnels only")
         assertContentEquals(frame, sessions.loadFrame("s1"))
         assertNull(sessions.loadFrame("s2"))
 
@@ -406,6 +426,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 3
+        const val CURRENT_VERSION = 4
     }
 }
