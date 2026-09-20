@@ -6,22 +6,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
-import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
@@ -30,18 +26,13 @@ import app.berth.android.ui.theme.JetBrainsMono
  * The hardware keyboard shortcut sheet (spec C22): what Ctrl+Shift+/ opens and Settings › Hardware
  * keyboard links to. One panel per group, a row per chord with the keys in mono over what they do,
  * and a caption naming the setting that moves Ctrl+T, Ctrl+W and Ctrl+F between the app and the
- * shell. Nothing here is a control: the sheet reads, the keys act.
+ * shell. Nothing here is a control: the sheet reads, the keys act. A [BerthSheet], so on a window
+ * that fits two panes (spec C23) it opens as a dialog like every other sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShortcutSheet(ctrlTabKeysReachTerminal: Boolean, onDismiss: () -> Unit, panes: Boolean = false) {
-    val c = Berth.colors
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
