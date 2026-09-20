@@ -206,6 +206,12 @@ roborazzi {
 // missing name became, and that line numbers survived) and the APK's resources (the service file SLF4J reads
 // names the binding). Runs after every assembleRelease; the JVM modules' testR8 covers what runs on this machine.
 androidComponents {
+    // The Android Gradle plugin builds unit tests for the debug variant only. The Robolectric suite runs over the
+    // release variant as well (testReleaseUnitTest, part of test): the release manifest and resources, no
+    // debug-only dependencies, and the app as the phone gets it short of R8's renaming, which the JVM cannot load.
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
     onVariants(selector().withBuildType("release")) { variant ->
         val mapping = variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
         val apkDir = variant.artifacts.get(SingleArtifact.APK)

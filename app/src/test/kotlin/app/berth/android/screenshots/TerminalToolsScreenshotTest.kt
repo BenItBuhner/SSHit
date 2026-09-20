@@ -40,6 +40,7 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
 import app.berth.android.security.BerthClipboard
 import app.berth.android.security.FakeAuthenticator
 import app.berth.android.security.LockState
@@ -126,7 +127,10 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class TerminalToolsScreenshotTest {
-    @get:Rule
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")

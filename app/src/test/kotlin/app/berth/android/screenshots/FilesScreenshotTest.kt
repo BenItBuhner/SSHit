@@ -37,6 +37,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
 import app.berth.android.files.FilesBrowser
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferKind
@@ -103,7 +104,10 @@ import kotlin.io.path.createTempDirectory
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class FilesScreenshotTest {
-    @get:Rule
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
