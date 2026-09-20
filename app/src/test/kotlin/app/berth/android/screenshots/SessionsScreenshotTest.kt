@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -33,6 +34,7 @@ import app.berth.android.ui.AppRoot
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
@@ -47,11 +49,13 @@ import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -96,7 +100,14 @@ class SessionsScreenshotTest {
         }
         SshSecurity.ensureProviders()
         outDir.mkdirs()
-        graph = TestGraph(ApplicationProvider.getApplicationContext())
+        // This suite is about the ask, so the process starts the way a fresh install does: without the permission.
+        graph = TestGraph(ApplicationProvider.getApplicationContext(), notificationsGranted = false)
+    }
+
+    @After
+    fun tearDown() {
+        // The live flow holds a real socket; a failure part-way must not leave it, or the manager's coroutines, under the next test.
+        graph.close()
     }
 
     private fun capture(name: String) {
@@ -148,8 +159,15 @@ class SessionsScreenshotTest {
         assertTrue("API 35 has the runtime permission and Robolectric starts without it", graph.notifier.needsPermission)
         graph.notifier.onFirstLive()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Allow notifications")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("To hear from your sessions while you're in another app.").assertExists()
         settle(400)
         capture("notification-rationale")
+        // A tap on the scrim puts the sheet away and decides nothing: the next process asks again.
+        compose.onNodeWithContentDescription("Close sheet").performClick()
+        compose.waitUntil(5_000) { graph.notifier.prompt.value == null }
+        assertFalse("a dismissal is not a decline", graph.notifier.asked)
+        graph.notifier.onFirstLive()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Allow notifications")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Not now").performClick()
         compose.waitUntil(5_000) { graph.notifier.prompt.value == null }
         assertTrue("Not now counts as asked; there is no second ask", graph.notifier.asked)
@@ -157,7 +175,11 @@ class SessionsScreenshotTest {
         assertNull(graph.notifier.prompt.value)
     }
 
-    /** The system dialog was refused: the one-time notice with the way to the system page. */
+    /**
+     * The system dialog was refused: `Notifications are off · Settings` at the bottom for six
+     * seconds, once. (The capture of it is the live flow's, over the tab that just came up Live,
+     * which is where the moment happens.)
+     */
     @Test
     fun `notification denied notice`() {
         seed()
@@ -172,14 +194,31 @@ class SessionsScreenshotTest {
         graph.notifier.onFirstLive()
         graph.notifier.onPermissionResult(granted = false)
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Notifications are off")).fetchSemanticsNodes().isNotEmpty() }
-        settle(400)
-        capture("notification-denied")
-        compose.onNodeWithText("Dismiss").performClick()
+        compose.onNodeWithText("Settings").assertExists()
+        compose.onAllNodesWithText("Open settings").assertCountEquals(0)
+        assertTrue("a refusal is an answer, like Not now", graph.notifier.asked)
+        // Six seconds and it is gone on its own; nothing to dismiss.
+        compose.mainClock.advanceTimeBy(NOTICE_BAR_MS + 100)
         compose.waitUntil(5_000) { graph.notifier.prompt.value == null }
         // The notice is one-time: a refusal in a later process says nothing more.
         val later = SessionNotifier(ApplicationProvider.getApplicationContext())
         later.onPermissionResult(granted = false)
         assertNull(later.prompt.value)
+    }
+
+    /** The notice's one action is the system page for Berth's notifications. */
+    @Test
+    fun `the denied notice's Settings action opens the system page`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        themed { NotificationPermissionHost(graph.notifier) }
+        graph.notifier.onFirstLive()
+        graph.notifier.onPermissionResult(granted = false)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Settings")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Settings").performClick()
+        compose.waitUntil(5_000) { graph.notifier.prompt.value == null }
+        val started = shadowOf(app).nextStartedActivity
+        assertEquals(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS, started.action)
+        assertEquals(app.packageName, started.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
     }
 
     /** Settings › Notifications: the row to the system page, off while the permission is missing. */
@@ -202,7 +241,8 @@ class SessionsScreenshotTest {
      * ring is on the tab; build box lives in the Work group past the strip's edge, so the count tile
      * carries its ring (spec C3: "ring on the count tile if it is scrolled out of view"). Then the
      * tile is held: the most recent bell, build box, comes on stage and its ring clears, and
-     * pi-hole stays lit wherever the scroll left it.
+     * pi-hole stays lit wherever the scroll left it; if that is cut by the strip's edge, the tile
+     * lights too, since a tab is in view only when wholly inside the strip.
      */
     @Test
     fun `attention on the strip and jump to unread`() {
@@ -217,9 +257,12 @@ class SessionsScreenshotTest {
         val litTile = hasContentDescription("a tab needs attention", substring = true)
         compose.onAllNodes(litTile).assertCountEquals(0)
         // On this phone the Work group starts past the strip's edge, so build box's tab is not laid out; a wider
-        // strip would show it, and then its ring would be on the tab instead of the tile.
-        val buildOnStrip = compose.onAllNodes(hasContentDescription("build box, detached", substring = true)).fetchSemanticsNodes().isNotEmpty()
-        val (tabsLit, tileLit) = if (buildOnStrip) 2 to 0 else 1 to 1
+        // strip would show it, and then its ring would be on the tab, with the tile lit only if the edge cut it.
+        val piholeInView = tabInView("pi-hole, detached")
+        val buildInView = tabInView("build box, detached")
+        assertEquals("pi-hole sits whole beside the active tab", true, piholeInView)
+        val tabsLit = listOfNotNull(piholeInView, buildInView).size
+        val tileLit = if (piholeInView == true && buildInView == true) 0 else 1
 
         graph.sessions.get("s-pihole")!!.emulator.write("\u0007")
         Thread.sleep(20)
@@ -239,30 +282,54 @@ class SessionsScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("build box, detached", substring = true) and !hasContentDescription("needs attention", substring = true)).fetchSemanticsNodes().size == 1 }
         assertFalse(graph.sessions.get("s-build")!!.record.value.needsAttention)
         assertTrue(graph.sessions.get("s-pihole")!!.record.value.needsAttention)
-        // pi-hole's ring is on its tab if the scroll kept it in view, on the tile if not: one voice, never two.
+        // pi-hole's ring is on its tab wherever the scroll left it laid out; the tile carries it too unless the
+        // tab lies wholly inside the strip. A cut tab speaks twice rather than not at all.
         settle(600)
-        assertEquals(1, compose.onAllNodes(litTabs).fetchSemanticsNodes().size + compose.onAllNodes(litTile).fetchSemanticsNodes().size)
+        val piholeAfter = tabInView("pi-hole, detached")
+        assertEquals(if (piholeAfter != null) 1 else 0, compose.onAllNodes(litTabs).fetchSemanticsNodes().size)
+        assertEquals(if (piholeAfter == true) 0 else 1, compose.onAllNodes(litTile).fetchSemanticsNodes().size)
         capture("stage-attention-jumped")
+    }
+
+    /**
+     * Whether the tab described is laid out in the strip, and if so whether it lies wholly inside
+     * the strip's bounds, which is what the count tile's ring takes as "in view" (spec C3). Null
+     * when the tab is not laid out at all.
+     */
+    private fun tabInView(description: String): Boolean? {
+        val strip = compose.onNode(hasContentDescription("Tabs, ", substring = true) and hasContentDescription(" open", substring = true)).fetchSemanticsNode()
+        val tab = compose.onAllNodes(hasContentDescription(description, substring = true)).fetchSemanticsNodes().firstOrNull() ?: return null
+        val left = strip.positionInRoot.x
+        val right = left + strip.size.width
+        return tab.positionInRoot.x >= left - 0.5f && tab.positionInRoot.x + tab.size.width <= right + 0.5f
     }
 
     // ---- cold start after a kill (vision §4.3 L0, spec C3 Persistence) ---------------------------
 
     /**
      * The OS killed Berth while homelab was Live. The relaunch opens on that tab: its last frame,
-     * dimmed, ending in `paused HH:MM` stamped with the last save, and the pill counting from then.
+     * dimmed, ending in `detached HH:MM` stamped with the last save, the pill's own word, and the
+     * pill counting from then. (The capture keeps its original filename.)
      */
     @Test
     fun `cold start after the OS killed a live tab`() {
         val killedAt = now - TimeUnit.MINUTES.toMillis(4)
         seed(homelabState = SessionState.LIVE, homelabLayer = PersistenceLayer.IN_APP, homelabLastLiveAt = killedAt)
         runBlocking { graph.settings.setLastActiveSessionId("s-homelab") }
+        // The strip is read back before the Stage composes, as in the rest of this suite: the test is
+        // about what the relaunch shows for the tab, so the first composition holds it. (Composing
+        // first and letting the manager's worker-thread restore race the Stage's first frame proved
+        // flaky under the test rule, whose effects resume on the emitting thread rather than the main
+        // thread's dispatcher a device uses.)
+        restore()
+        runBlocking { graph.sessions.activeTab.first { it?.id == "s-homelab" } }
         compose.setContent { AppRoot(graph.viewModel) }
-        compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 && graph.viewModel.activeTabId.value == "s-homelab" }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detached \u00B7 4 min ago")).fetchSemanticsNodes().isNotEmpty() }
         val session = graph.sessions.get("s-homelab")!!
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detached \u00B7 4 min ago")).fetchSemanticsNodes().isNotEmpty() }
         assertEquals(SessionState.DETACHED, session.state)
-        assertTrue(session.emulator.screenText().any { it.contains("paused") })
+        assertTrue(session.emulator.screenText().any { it.contains("detached") })
+        assertFalse(session.emulator.screenText().any { it.contains("paused") })
         compose.onNodeWithText("Reconnect").assertExists()
         compose.onAllNodesWithText("No tabs").assertCountEquals(0)
         settle(400)
@@ -273,8 +340,9 @@ class SessionsScreenshotTest {
 
     /**
      * One real session through the whole model, when the `SSH_TEST_*` variables are set. The first
-     * Live of the process raises the rationale over the Stage and the system dialog's answer comes
-     * back through the notifier. Off stage, bash's own OSC 133 marks decide: a quick command is
+     * Live of the process raises the rationale over the Stage; the system dialog is refused, which
+     * earns the six-second notice on the live Stage, and Settings is the way back, the switch read
+     * again on ON_START. Off stage, bash's own OSC 133 marks decide: a quick command is
      * not news, an 11 s one lights the tab. Held, the count tile stages it. With the app away the
      * frame is on disk at once and a bell in the tab that was on stage reaches the shade with a
      * deep link back into it; on return the tab is seen and the notification goes. Detach all from
@@ -317,10 +385,23 @@ class SessionsScreenshotTest {
         settle(800)
         capture("notification-rationale-live")
         // Continue hands over to the system dialog, which is not Compose; its answer arrives the way the launcher's does.
+        // Refused: the six-second notice at the bottom of the live Stage, on the Deck, and nothing argues.
         compose.onNodeWithText("Continue").performClick()
+        graph.notifier.onPermissionResult(granted = false)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Notifications are off")).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue("a refusal is an answer: no second ask", graph.notifier.asked)
+        settle(300)
+        capture("notification-denied")
+        // Settings is the way back: the system page for Berth's notifications, and the notice goes with the tap.
+        // (The drawer keeps its own Settings row composed off the start edge, so the bar's action is named by its line.)
+        compose.onNode(hasText("Settings") and hasAnySibling(hasText("Notifications are off"))).performClick()
+        compose.waitUntil(5_000) { graph.notifier.prompt.value == null }
+        assertEquals(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS, shadowOf(app).nextStartedActivity.action)
+        // Turned on there and back on the Stage: ON_START re-reads the switch, and the shade is on.
         shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        graph.notifier.onPermissionResult(granted = true)
-        compose.waitUntil(5_000) { graph.notifier.prompt.value == null && graph.notifier.enabled.value }
+        graph.process.stop()
+        graph.process.start()
+        compose.waitUntil(5_000) { graph.notifier.enabled.value }
         // The Sessions notification counts the socket and carries Detach all; the service that shows it was asked for.
         compose.waitUntil(5_000) { graph.notifier.summary.value.active == 1 }
         val sessionsNotification = graph.notifier.sessionsNotification(graph.notifier.summary.value)
@@ -344,7 +425,12 @@ class SessionsScreenshotTest {
         assertEquals("Command finished", live.record.value.attentionReason)
         val litTabs = hasContentDescription("needs attention", substring = true) and hasContentDescription(", tab ", substring = true)
         val litTile = hasContentDescription("a tab needs attention", substring = true)
-        compose.waitUntil(5_000) { compose.onAllNodes(litTabs).fetchSemanticsNodes().size + compose.onAllNodes(litTile).fetchSemanticsNodes().size == 1 }
+        compose.waitUntil(5_000) { compose.onAllNodes(litTabs).fetchSemanticsNodes().size + compose.onAllNodes(litTile).fetchSemanticsNodes().size >= 1 }
+        // Its own ring where the tab is laid out; the tile's too unless the tab lies wholly inside the strip.
+        // (The tab reads under bash's own title, `demo@box: ~`, not the host's name.)
+        val liveInView = tabInView("${live.record.value.displayTitle}, live")
+        assertEquals(if (liveInView != null) 1 else 0, compose.onAllNodes(litTabs).fetchSemanticsNodes().size)
+        assertEquals(if (liveInView == true) 0 else 1, compose.onAllNodes(litTile).fetchSemanticsNodes().size)
         assertNull("on screen, the ring says it; the shade stays quiet", notifications.getNotification(SessionNotifier.attentionTag(live.id), 2))
         settle(1_200)
         capture("stage-attention-live")
@@ -381,7 +467,6 @@ class SessionsScreenshotTest {
         compose.waitUntil(5_000) { graph.notifier.summary.value.active == 0 }
         settle(600)
         capture("stage-live-detached-all")
-        graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
     }
 
     private fun frameLines(frame: ByteArray): List<String> = DataInputStream(frame.inputStream()).use { d ->
