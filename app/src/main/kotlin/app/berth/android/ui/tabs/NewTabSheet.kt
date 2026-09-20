@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -42,13 +41,14 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.sheetFillsHeight
 import app.berth.android.ui.hosts.rowSubtitle
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
@@ -111,16 +111,13 @@ fun NewTabSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
+        // As a sheet the list fills the height, room for the keyboard under the field; as a dialog
+        // the panel is as tall as its rows (spec C23), so six hosts are not a panel that is mostly empty.
         LazyColumn(
             Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(),
+                .then(if (sheetFillsHeight()) Modifier.fillMaxHeight() else Modifier),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {

@@ -27,7 +27,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -61,10 +60,11 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.sheetFillsHeight
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
@@ -75,6 +75,9 @@ import app.berth.android.ui.tunnels.tunnelsUpLine
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Workspace
+
+/** The switcher as a dialog (spec C23) asks for four columns of cards: 840 dp of grid inside its 20 dp padding. */
+private val SwitcherDialogMaxWidth = 880.dp
 
 /**
  * The switcher (spec C3): every tab as a card with its frozen frame, in a grid grouped in strip
@@ -102,14 +105,11 @@ fun TabSwitcher(
     // The last tab closing from here leaves nothing to switch between.
     LaunchedEffect(slots.isEmpty()) { if (slots.isEmpty()) onDismiss() }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight()) {
+    // As a sheet the grid fills the height, as it always has; as a dialog (spec C23) the panel is as
+    // tall as its cards up to the dialog's cap, and wide enough for four columns of them.
+    BerthSheet(onDismiss = onDismiss, sheetState = sheetState, dialogMaxWidth = SwitcherDialogMaxWidth) {
+        val fills = sheetFillsHeight()
+        Column(Modifier.fillMaxWidth().then(if (fills) Modifier.fillMaxHeight() else Modifier)) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -118,7 +118,7 @@ fun TabSwitcher(
                 IconAction(onClick = { onDismiss(); actions.newTab() }, description = "New tab") { BerthIcon(BerthIcons.add, tint = c.text1) }
                 BerthButton("Done", kind = ButtonKind.TEXT, onClick = onDismiss)
             }
-            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f, fill = fills)) {
                 val columns = when {
                     maxWidth >= 840.dp -> 4
                     maxWidth >= 600.dp -> 3

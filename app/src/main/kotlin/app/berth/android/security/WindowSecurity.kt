@@ -5,23 +5,23 @@ import android.os.Build
 import android.view.WindowManager
 import app.berth.domain.model.SecuritySettings
 
-/**
- * Window flags from the Security settings. `FLAG_SECURE` on the activity window blocks screenshots
- * and the Recents preview for every window the app opens: Compose dialogs, sheets and menus inherit
- * it (`SecureFlagPolicy.Inherit`). The app lock also keeps its content out of Recents, through the
- * dedicated switch on Android 13 and later and through `FLAG_SECURE` before that.
- */
 object WindowSecurity {
-    /**
-     * Before Android 13 there is no switch for the Recents preview alone, so the app lock keeps its
-     * content out of Recents with `FLAG_SECURE`, and screenshots go with it; the Block screenshots
-     * row says so on those devices.
-     */
     val lockForcesSecure: Boolean get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+
+    /**
+     * Whether a window of Berth's blocks screenshots, recording and casting under [settings]: when
+     * the setting says so, or when the app lock has no narrower way to keep a locked task out of
+     * Recents. Every window reads this, the Activities through [apply] and a dialog's window through
+     * its own policy, so a second window over the Activity is never the one that shows.
+     */
+    fun secure(settings: SecuritySettings): Boolean {
+        val recentsSwitch = !lockForcesSecure
+        return settings.blockScreenshots || (settings.appLock && !recentsSwitch)
+    }
 
     fun apply(activity: Activity, settings: SecuritySettings) {
         val recentsSwitch = !lockForcesSecure
-        val secure = settings.blockScreenshots || (settings.appLock && !recentsSwitch)
+        val secure = secure(settings)
         if (secure) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
