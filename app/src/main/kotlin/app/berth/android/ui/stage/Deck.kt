@@ -104,6 +104,14 @@ fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
     layers.filter { layer -> hasSnippets || !(layer.keys.size == 1 && layer.keys[0].snippets) }
 
 /**
+ * The layer [Deck] shows for [layerIndex]: the index held to the usable layers the way the Deck
+ * holds it, so a Deck cut to one layer (the compact Deck under a hardware keyboard) is named for
+ * that layer whatever index the whole Deck had saved.
+ */
+fun DeckLayout.shownLayer(layerIndex: Int, hasSnippets: Boolean = false): DeckLayer? =
+    usableLayers(hasSnippets).let { layers -> layers.getOrNull(layerIndex.coerceIn(0, layers.lastIndex.coerceAtLeast(0))) }
+
+/**
  * The tag every Deck control carries (keys, the Nub, the grip, the layer key, an editor slot), and
  * the Deck publishes as the control's resource id, so an accessibility audit can tell a Deck key
  * from any other control. The Deck is a keyboard: seven or more keys share a row, so on a phone
@@ -201,6 +209,7 @@ fun Deck(
             DeckRow(
                 layout = layout,
                 layer = layer,
+                layerCount = layers.size,
                 input = input,
                 enabled = enabled,
                 haptics = haptics,
@@ -218,6 +227,7 @@ fun Deck(
                 DeckRow(
                     layout = layout,
                     layer = layers[second],
+                    layerCount = layers.size,
                     input = input,
                     enabled = enabled,
                     haptics = haptics,
@@ -278,11 +288,15 @@ private val DeckEdge = 8.dp
 /** Touch column of the Grip; the 6 × 24 pill is centred in it. */
 private val GripWidth = 20.dp
 
-/** One row of the Deck: grip or its spacer, the layer's slots, the layer key. */
+/**
+ * One row of the Deck: grip or its spacer, the layer's slots, then the layer key, or on a Deck of
+ * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]).
+ */
 @Composable
 private fun DeckRow(
     layout: DeckLayout,
     layer: DeckLayer,
+    layerCount: Int,
     input: StageInput,
     enabled: Boolean,
     haptics: HapticFeedback,
@@ -353,15 +367,24 @@ private fun DeckRow(
                 }
             }
         }
-        LayerKey(
-            enabled = enabled,
-            haptics = haptics,
-            layerName = layer.name,
-            modifier = Modifier.width(40.dp).fillMaxHeight(),
-            onNext = onNext,
-            onPrevious = onPrevious,
-            onHold = onLayerHold,
-        )
+        if (layerCount > 1) {
+            LayerKey(
+                enabled = enabled,
+                haptics = haptics,
+                layerName = layer.name,
+                modifier = Modifier.width(40.dp).fillMaxHeight(),
+                onNext = onNext,
+                onPrevious = onPrevious,
+                onHold = onLayerHold,
+            )
+        } else {
+            DeckEditorKey(
+                enabled = enabled,
+                haptics = haptics,
+                modifier = Modifier.width(40.dp).fillMaxHeight(),
+                onOpen = onLayerHold,
+            )
+        }
     }
 }
 

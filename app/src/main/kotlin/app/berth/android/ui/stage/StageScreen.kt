@@ -716,8 +716,10 @@ private fun StageBody(
                 AnimatedVisibility(visible = deckAllowed, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
                     Deck(
                         layout = deckLayout,
-                        layerIndex = if (compactDeck) 0 else layerIndex,
-                        onLayerIndexChange = { if (!compactDeck) onLayerIndexChange(it) },
+                        // The Deck holds the index to its layers; the one-layer compact Deck shows its
+                        // one, and the layer the user was on comes back with the whole Deck.
+                        layerIndex = layerIndex,
+                        onLayerIndexChange = onLayerIndexChange,
                         input = input,
                         // The Deck and the strip that stands in for it are the one region Ctrl+Shift+K enters.
                         modifier = Modifier.stageRegion(focus, StageRegion.Deck),
@@ -734,7 +736,7 @@ private fun StageBody(
                 }
                 if (!deckVisible && deckStateOk) {
                     DeckStrip(
-                        layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(if (compactDeck) 0 else layerIndex)?.name ?: "Base",
+                        layerName = deckLayout.shownLayer(layerIndex, pinnedSnippets.isNotEmpty())?.name ?: "Base",
                         latch = latch,
                         onExpand = { onDeckVisibleChange(true) },
                         modifier = Modifier.stageRegion(focus, StageRegion.Deck),

@@ -168,6 +168,9 @@ class HardwareKeyboardScreenshotTest {
         assertTrue("Ctrl stays", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNodes().isNotEmpty())
         assertTrue("Paste is added", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Paste", substring = true)).fetchSemanticsNodes().isNotEmpty())
         assertTrue("Esc goes", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Esc", substring = true)).fetchSemanticsNodes().isEmpty())
+        // One layer has nothing to cycle: the row ends in the Deck editor key, and no key says "Layer".
+        assertTrue("the trailing key is the Deck editor", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Deck editor")).fetchSemanticsNodes().isNotEmpty())
+        assertTrue("no layer key on the compact Deck", compose.onAllNodes(hasContentDescription("Layer")).fetchSemanticsNodes().isEmpty())
         awaitFocused(hasTestTag(TerminalTag), "the terminal still, after the Deck opened")
         capture("stage-hardware-keyboard-compact-deck")
 
