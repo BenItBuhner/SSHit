@@ -18,23 +18,28 @@ import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
+import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.stage.StageScreen
@@ -42,8 +47,12 @@ import app.berth.android.ui.stage.StageTools
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
+import app.berth.android.ui.terminal.HANDLE_RADIUS
+import app.berth.android.ui.terminal.HandleSpot
+import app.berth.android.ui.terminal.SelectionHandle
 import app.berth.android.ui.terminal.TerminalPaints
 import app.berth.android.ui.terminal.TerminalPaintsCache
+import app.berth.android.ui.terminal.handleCenters
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
@@ -53,8 +62,19 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
+import app.berth.ssh.AcceptAllHostKeys
+import app.berth.ssh.HostKeyPolicy
+import app.berth.ssh.SshAuth
 import app.berth.ssh.SshSecurity
+import app.berth.terminal.PasteClassifier
+import app.berth.terminal.TerminalKey
+import app.berth.terminal.TerminalText
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -83,9 +103,11 @@ import java.util.concurrent.TimeUnit
  * its matches lit in the canvas, and the history sheet. Offline cases put a detached tab on stage
  * with a frame that has history behind the screen, wrapped lines, wide cells and a link, and hand
  * the Stage the test's own [StageTools] so the state a gesture leaves can be read; the gestures
- * themselves (long-press, drag, the handles, double-tap, two fingers) are driven for real.
+ * themselves (long-press, drag, the handles, double-tap, two fingers) are driven for real. The
+ * paste preview with its buttons enabled needs a tab that reads Live, which the offline cases
+ * get from a session whose record says so and which has no shell, so nothing goes anywhere.
  * `terminal tools live flow` opens the real app against the local sshd and selects, copies,
- * searches and re-runs real output.
+ * searches, pastes and re-runs real output.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -191,13 +213,31 @@ class TerminalToolsScreenshotTest {
         return row to rows[row].indexOf(token)
     }
 
-    /** Where the selection's end handle hangs on the canvas: under the bottom-right corner of its last cell. */
-    private fun endHandle(session: TerminalSession, tools: StageTools): Offset {
+    private val handleRadius: Float get() = HANDLE_RADIUS.value * context.resources.displayMetrics.density
+
+    /** The selection's two handles as the canvas places them for the view now: under their cells, or above on the bottom row, inside the edges. */
+    private fun handles(session: TerminalSession, tools: StageTools): Pair<HandleSpot?, HandleSpot?> {
         val p = paints()
         val range = tools.selection.range!!
         val top = session.emulator.scrollbackSize - tools.viewport.scrollOffset
-        val radius = 9f * context.resources.displayMetrics.density
-        return Offset((range.end.col + 1) * p.cellWidth, (range.end.row - top + 1) * p.cellHeight + radius)
+        val size = compose.onNodeWithContentDescription("Terminal").fetchSemanticsNode().size
+        return handleCenters(range.shiftRows(-top), session.emulator.rows, p.cellWidth, p.cellHeight, handleRadius, size.width.toFloat(), size.height.toFloat())
+    }
+
+    /** Where the selection's end handle is on the canvas. */
+    private fun endHandle(session: TerminalSession, tools: StageTools): Offset = handles(session, tools).second!!.center
+
+    /** Both handles' discs lie inside the canvas by their radius; fails naming the one that does not. */
+    private fun assertHandlesInside(session: TerminalSession, tools: StageTools) {
+        val size = compose.onNodeWithContentDescription("Terminal").fetchSemanticsNode().size
+        val r = handleRadius
+        val (s, e) = handles(session, tools)
+        for ((name, spot) in listOf("start" to s, "end" to e)) {
+            if (spot == null) continue
+            val (x, y) = spot.center
+            assertTrue("the $name handle's x $x is inside 0..${size.width} by $r", x >= r && x <= size.width - r)
+            assertTrue("the $name handle's y $y is inside 0..${size.height} by $r", y >= r && y <= size.height - r)
+        }
     }
 
     /** Holds a finger at [at] past the long-press timeout, so the word under it is selected; the finger stays down. */
@@ -225,6 +265,34 @@ class TerminalToolsScreenshotTest {
         graph.sessions.setActive(session.id)
         val tools = StageTools()
         themed { Stage(session, tools) }
+        awaitGrid(session)
+        return session to tools
+    }
+
+    /**
+     * The same tab on stage reading Live, with no shell behind it: the record says Live and the
+     * frame is the same, so the paste routes see a connected tab, the preview's buttons are enabled,
+     * and what they send has nowhere to go. The strip has no chip for it, which the sheet covers.
+     */
+    private fun stageLive(): Pair<TerminalSession, StageTools> {
+        seedHomelab(withHistory = false)
+        val env = object : SessionEnvironment {
+            override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
+            override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
+            override val networkAvailable: Flow<Unit> = emptyFlow()
+            override fun onClipboardText(text: String) = Unit
+        }
+        val session = TerminalSession(homelabRecord(SessionState.LIVE, PersistenceLayer.IN_APP), CoroutineScope(SupervisorJob() + Dispatchers.Default), env) {}
+        session.restoreFrame(frame(FRAME_LINES, emptyList()))
+        val tools = StageTools()
+        themed { Stage(session, tools) }
+        awaitGrid(session)
+        assertEquals(SessionState.LIVE, session.state)
+        return session to tools
+    }
+
+    /** Waits for the canvas to size the grid to itself, so cells map to pixels, and for history to be behind the screen. */
+    private fun awaitGrid(session: TerminalSession) {
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Terminal")).fetchSemanticsNodes().isNotEmpty() }
         val p = paints()
         compose.waitUntil(5_000) {
@@ -235,7 +303,6 @@ class TerminalToolsScreenshotTest {
         }
         settle(300)
         assertTrue("history behind the screen", session.emulator.scrollbackSize > 0)
-        return session to tools
     }
 
     // ---- selection (spec C18) -------------------------------------------------------------------------
@@ -259,18 +326,24 @@ class TerminalToolsScreenshotTest {
         assertTrue(text.lines().last().endsWith("demo@homelab:~/srv$"))
         assertTrue(text.lines().none { it.endsWith(" ") })
         compose.onNodeWithText("Copy").assertIsDisplayed()
-        compose.onNodeWithText("Paste").assertIsDisplayed()
+        // A frozen frame has nothing to paste into, so the bar does not offer it; the rest stands.
+        compose.onAllNodesWithText("Paste").assertCountEquals(0)
         compose.onNodeWithText("Search").assertIsDisplayed()
         compose.onNodeWithText("Share").assertIsDisplayed()
+        assertHandlesInside(session, tools)
         settle(200)
         capture("terminal-selection")
 
-        // The end handle: dragged up a row it moves that end alone, cell by cell.
+        // The end handle: grabbed, it moves that end by the finger's travel from the cell it marks,
+        // one row up and three columns back here, cell by cell.
+        val p = paints()
+        val endCol = tools.selection.range!!.end.col
         canvas.performTouchInput { down(endHandle(session, tools)) }
-        compose.waitUntil(5_000) { tools.selection.dragging != null }
-        canvas.performTouchInput { moveTo(cellCenter(row + 1, col + 5)) }
+        compose.waitUntil(5_000) { tools.selection.dragging == SelectionHandle.END }
+        canvas.performTouchInput { moveBy(Offset((col + 5 - endCol) * p.cellWidth, -p.cellHeight)) }
         canvas.performTouchInput { up() }
         compose.waitUntil(5_000) { tools.selection.summary == "2 lines" && tools.selection.dragging == null }
+        assertEquals(col + 5, tools.selection.range!!.end.col)
         assertTrue(tools.selection.text(session.emulator).startsWith("gitea/gitea:1.22"))
         settle(200)
         capture("terminal-selection-handle")
@@ -387,9 +460,17 @@ class TerminalToolsScreenshotTest {
         assertTrue(all.lines().none { it.endsWith(" ") })
         assertTrue(all.endsWith("demo@homelab:~/srv$"))
         assertEquals("${all.lines().size} lines", tools.selection.summary)
+        // The end is at the last column: its handle is pulled inside the right edge, and a finger there takes it.
+        assertHandlesInside(session, tools)
+        val endSpot = handles(session, tools).second!!
         settle(200)
         // The start hangs off screen in history, so only the end handle draws.
         capture("terminal-select-all")
+        canvas.performTouchInput { down(endSpot.center) }
+        compose.waitUntil(5_000) { tools.selection.dragging == SelectionHandle.END }
+        canvas.performTouchInput { up() }
+        compose.waitUntil(5_000) { tools.selection.dragging == null }
+        assertEquals(all, tools.selection.text(session.emulator))
 
         // Share hands the text to the system chooser and clears.
         compose.onNodeWithText("Share").performClick()
@@ -399,27 +480,118 @@ class TerminalToolsScreenshotTest {
         assertEquals(Intent.ACTION_CHOOSER, shared.action)
     }
 
+    @Test
+    fun `handles on the bottom row flip above it and stay inside the canvas`() {
+        val (session, tools) = stageDetached()
+        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val rows = session.emulator.rows
+        // The restored frame leaves the cursor on a blank bottom row; a prompt typed there puts text on it.
+        session.emulator.write("demo@homelab:~/srv$ tail -n 3 caddy/access.log")
+        compose.waitUntil(5_000) { session.emulator.screenText().getOrNull(rows - 1)?.contains("access.log") == true }
+        settle(300)
+        val (row, col) = cellOf(session, "caddy/access.log")
+        assertEquals("the prompt is on the bottom row", rows - 1, row)
+
+        longPress(cellCenter(row, col + 8)) { tools.selection.active }
+        canvas.performTouchInput { up() }
+        assertEquals("caddy/access.log", tools.selection.text(session.emulator))
+        // No room under the bottom row (the pill row and the Deck are there, and a touch there is
+        // theirs): both handles sit above the row, shoulder down, inside the canvas.
+        val (start, end) = handles(session, tools)
+        assertTrue("the start handle flips above the row", start!!.above)
+        assertTrue("the end handle flips above the row", end!!.above)
+        assertHandlesInside(session, tools)
+        settle(200)
+        capture("terminal-selection-bottom-row")
+
+        // The flipped handle takes the finger, and the end follows its travel on the same row: four
+        // columns back shortens the word by four cells.
+        canvas.performTouchInput { down(end.center) }
+        compose.waitUntil(5_000) { tools.selection.dragging == SelectionHandle.END }
+        canvas.performTouchInput { moveBy(Offset(-4 * paints().cellWidth, 0f)) }
+        canvas.performTouchInput { up() }
+        compose.waitUntil(5_000) { tools.selection.dragging == null && tools.selection.text(session.emulator) == "caddy/access" }
+        assertEquals(row, tools.selection.range!!.end.row - (session.emulator.scrollbackSize - tools.viewport.scrollOffset))
+    }
+
     // ---- paste with a preview (spec C18) ----------------------------------------------------------------
 
     @Test
-    fun `paste preview sheet`() {
+    fun `paste on a detached tab is turned down with a notice`() {
         val (session, tools) = stageDetached()
-        // One plain line goes straight through.
+        // Every route comes through the tools: without a shell the paste says Not connected and holds nothing for the sheet.
         compose.runOnIdle { tools.paste(session, "docker compose ps", null) }
         assertNull(tools.pendingPaste)
-        // Several lines, one with an escape in it: the sheet, with the count, the warning and what the shell will do.
+        assertEquals(StageTools.NOT_CONNECTED, tools.notice)
+        waitForText("Not connected")
+        compose.mainClock.advanceTimeBy(1_600)
+        waitForNoText("Not connected")
+
+        // The two-finger tap, the same: the notice, no sheet.
+        setClipboard("echo one\necho two\n")
+        compose.onNodeWithContentDescription("Terminal").performTouchInput {
+            down(0, cellCenter(5, 5))
+            down(1, cellCenter(5, 25))
+            up(0)
+            up(1)
+        }
+        waitForText("Not connected")
+        assertNull(tools.pendingPaste)
+        compose.onAllNodesWithText("Paste 2 lines").assertCountEquals(0)
+        compose.mainClock.advanceTimeBy(1_600)
+        waitForNoText("Not connected")
+
+        // A sheet that was open when the tab stopped being Live: the sending buttons disable and the caption says why.
+        compose.runOnIdle { tools.pendingPaste = PasteClassifier.analyze("cd /srv\ndocker compose pull\n\u001b[Aecho done\n") }
+        waitForText("Paste 3 lines")
+        compose.onNodeWithText("Not connected").assertIsDisplayed()
+        compose.onNodeWithText("Paste without control characters").assertIsNotEnabled()
+        compose.onNodeWithText("Paste as is").assertIsNotEnabled()
+        compose.onNodeWithText("Paste as one line").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").assertIsEnabled()
+        settle(300)
+        capture("terminal-paste-preview-detached")
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(5_000) { tools.pendingPaste == null }
+    }
+
+    @Test
+    fun `paste preview sheet`() {
+        val (session, tools) = stageLive()
+        // One plain line goes straight through, no sheet and no notice.
+        compose.runOnIdle { tools.paste(session, "docker compose ps", null) }
+        assertNull(tools.pendingPaste)
+        assertNull(tools.notice)
+
+        // Several lines, one with an escape in it: the sheet is a warning. The title's caption counts
+        // and names the control characters, the filled button drops them, Paste as is stands plain
+        // beside it, and the escape shows by its caret name rather than acting on the sheet.
         val text = "cd /srv\ndocker compose pull\ndocker compose up -d --remove-orphans\n\u001b[Aecho done\n"
         compose.runOnIdle { tools.paste(session, text, null) }
         waitForText("Paste 4 lines")
-        compose.onNodeWithText("Contains control characters the shell would act on.").assertIsDisplayed()
+        compose.onNodeWithText("Has 1 control character (^[) the shell would act on.").assertIsDisplayed()
         compose.onNodeWithText("Bracketed paste is off: the shell will run 4 commands as the lines land.").assertIsDisplayed()
-        // The escape shows as its caret name rather than acting on the sheet.
         waitForText("^[[Aecho done", substring = true)
+        compose.onNodeWithText("Paste without control characters").assertIsEnabled()
+        compose.onNodeWithText("Paste as is").assertIsEnabled()
+        compose.onNodeWithText("Paste as one line").assertIsEnabled()
+        compose.onAllNodesWithText("Paste").assertCountEquals(0)
         settle(300)
         capture("terminal-paste-preview")
-        compose.onNodeWithText("Paste as one line").performClick()
+        compose.onNodeWithText("Paste without control characters").performClick()
         compose.waitUntil(5_000) { tools.pendingPaste == null }
         waitForNoText("Paste 4 lines")
+
+        // Without control characters the sheet is the spec's: Paste filled, Paste as one line, Cancel, and no warning.
+        compose.runOnIdle { tools.paste(session, "echo one\necho two\n", null) }
+        waitForText("Paste 2 lines")
+        compose.onNodeWithText("Paste").assertIsEnabled()
+        compose.onNodeWithText("Paste as one line").assertIsEnabled()
+        compose.onAllNodesWithText("Paste as is").assertCountEquals(0)
+        compose.onAllNodes(hasText("control character", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(5_000) { tools.pendingPaste == null }
+
         // A long single line is looked at too, and Cancel keeps it off the wire.
         compose.runOnIdle { tools.paste(session, "x".repeat(300), null) }
         waitForText("Paste 300 characters")
@@ -467,6 +639,24 @@ class TerminalToolsScreenshotTest {
         compose.onNodeWithContentDescription("Match case").performClick()
         compose.waitUntil(5_000) { tools.search.matches.size == total }
 
+        // `.*` with a pattern that does not compile (`caddy[`, half a class) finds the literal text,
+        // every `caddy[812]` line, rather than the red 0 of no matches; closed, the class is a pattern
+        // again and `caddy` before a digit is nowhere.
+        compose.onNodeWithContentDescription("Regular expression").performClick()
+        compose.waitUntil(5_000) { tools.search.regex }
+        field("Find in scrollback").performTextInput("[")
+        // The run settles behind the field, so wait for the count to move off `caddy`'s before reading it.
+        compose.waitUntil(5_000) { tools.search.query == "caddy[" && tools.search.matches.size != total }
+        assertEquals(FRAME_LINES.count { it.contains("caddy[") }, tools.search.matches.size)
+        field("Find in scrollback").performTextInput("0-9]")
+        compose.waitUntil(5_000) { tools.search.query == "caddy[0-9]" && tools.search.matches.isEmpty() }
+        assertEquals("0", tools.search.countLabel)
+        field("Find in scrollback").performTextClearance()
+        field("Find in scrollback").performTextInput("caddy")
+        compose.onNodeWithContentDescription("Regular expression").performClick()
+        compose.waitUntil(5_000) { !tools.search.regex && tools.search.query == "caddy" && tools.search.matches.size == total }
+        compose.waitUntil(5_000) { tools.search.countLabel == "$total/$total" }
+
         // Previous steps back through the matches and into history once they leave the screen.
         var steps = 0
         while (tools.viewport.scrollOffset == 0 && steps < total) {
@@ -499,6 +689,76 @@ class TerminalToolsScreenshotTest {
         assertEquals("postgres:16", tools.search.query)
         compose.waitUntil(5_000) { tools.search.matches.size == 1 }
         assertEquals("1/1", tools.search.countLabel)
+    }
+
+    // ---- the grid changing under a selection and a search (spec C17, C18) -------------------------------------
+
+    /** Waits for a bar to take height from the canvas and rows from the grid with it, naming what did not move. */
+    private fun awaitFewerRows(session: TerminalSession, canvas: SemanticsNodeInteraction, heightBefore: Int, rowsBefore: Int) {
+        try {
+            // Every frame of the bar's expansion redraws the terminal through native graphics, so this is wall time.
+            compose.waitUntil(10_000) { canvas.fetchSemanticsNode().size.height < heightBefore && session.emulator.rows < rowsBefore }
+        } catch (e: ComposeTimeoutException) {
+            val size = canvas.fetchSemanticsNode().size
+            throw AssertionError("the canvas is $size from a height of $heightBefore; the grid ${session.emulator.cols}x${session.emulator.rows} from $rowsBefore rows", e)
+        }
+    }
+
+    /** The logical line under the search's current match, which a re-wrap moves but does not change. */
+    private fun matchLine(session: TerminalSession, tools: StageTools): String {
+        val range = tools.search.currentRange(session.emulator)!!
+        return synchronized(session.emulator.lock) {
+            val grid = session.emulator.grid
+            TerminalText.extract(grid, TerminalText.snapToLine(grid, range.start))
+        }
+    }
+
+    @Test
+    fun `a selection carries through a change of height and ends with a change of width, and a search keeps its place through both`() {
+        val (session, tools) = stageDetached()
+        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val (row, col) = cellOf(session, "gitea/gitea:1.22")
+        val rowsBefore = session.emulator.rows
+        val colsBefore = session.emulator.cols
+
+        // A word selected; the search bar opening under the selection bar takes rows from the grid, the
+        // way the keyboard or the Deck does, and the selection holds with its text.
+        longPress(cellCenter(row, col + 3)) { tools.selection.active }
+        canvas.performTouchInput { up() }
+        assertEquals("gitea/gitea:1.22", tools.selection.text(session.emulator))
+        val heightBefore = canvas.fetchSemanticsNode().size.height
+        compose.runOnIdle { tools.openSearch() }
+        awaitFewerRows(session, canvas, heightBefore, rowsBefore)
+        settle(400)
+        assertEquals(colsBefore, session.emulator.cols)
+        assertTrue(tools.selection.active)
+        assertEquals("gitea/gitea:1.22", tools.selection.text(session.emulator))
+        compose.onNodeWithText("Copy").assertIsDisplayed()
+
+        // The search finds its matches and steps back three.
+        field("Find in scrollback").performTextInput("caddy")
+        compose.waitUntil(5_000) { tools.search.matches.isNotEmpty() }
+        val total = tools.search.matches.size
+        repeat(3) {
+            compose.onNodeWithContentDescription("Previous match").performClick()
+            compose.waitForIdle()
+        }
+        compose.waitUntil(5_000) { tools.search.countLabel == "${total - 3}/$total" }
+        val matched = matchLine(session, tools)
+
+        // A bigger font, as a pinch step gives: fewer columns, history re-wrapped. The selection ends and
+        // the bar with it, rather than standing over nothing with Copy giving nothing; the search keeps
+        // its third-from-last by index, and the same line is under it.
+        val font = runBlocking { graph.settings.terminalFont.first() }
+        compose.runOnIdle { graph.viewModel.setFontSize(font.sizeSp + 4) }
+        compose.waitUntil(10_000) { session.emulator.cols < colsBefore }
+        settle(500)
+        compose.waitUntil(5_000) { !tools.selection.active }
+        waitForNoText("Copy")
+        compose.waitUntil(5_000) { tools.search.matches.size == total && tools.search.countLabel == "${total - 3}/$total" }
+        assertEquals(matched, matchLine(session, tools))
+        settle(200)
+        capture("terminal-search-after-resize")
     }
 
     // ---- command history (spec C16) ------------------------------------------------------------------------
@@ -590,10 +850,12 @@ class TerminalToolsScreenshotTest {
         compose.waitUntil(5_000) { session.commands.value.any { it.text == "echo re-run from history" } }
         assertTrue(session.emulator.screenText().any { it.contains(" demo ") })
 
-        // Long-press on the owner column: the word, then two more rows of the listing by dragging.
+        // Long-press on the owner column: the word, then two more rows of the listing by dragging. On a
+        // Live tab the bar offers Paste.
         val (row, col) = cellOf(session, " demo ")
         longPress(cellCenter(row, col + 2), barShown)
         waitForText("4 chars")
+        compose.onNodeWithText("Paste").assertIsDisplayed()
         canvas.performTouchInput { moveTo(cellCenter(row + 2, col + 2)) }
         canvas.performTouchInput { up() }
         waitForText("3 lines")
@@ -634,6 +896,25 @@ class TerminalToolsScreenshotTest {
         compose.onNodeWithText("Cancel").performClick()
         waitForNoText("Paste 2 lines")
 
+        // A clipboard carrying an escape and a ^C: the sheet is a warning that counts and names them, and
+        // its filled button drops them. What lands at the prompt is the text alone; Enter runs it.
+        setClipboard("echo pasted\u001b\u0003 clean")
+        longPress(cellCenter(row, col + 2), barShown)
+        canvas.performTouchInput { up() }
+        compose.onNodeWithText("Paste").performClick()
+        waitForText("Paste 19 characters")
+        compose.onNodeWithText("Has 2 control characters (^[, ^C) the shell would act on.").assertIsDisplayed()
+        compose.onNodeWithText("Paste as is").assertIsDisplayed()
+        compose.onAllNodesWithText("Paste as one line").assertCountEquals(0)
+        settle(300)
+        capture("terminal-live-paste-control")
+        compose.onNodeWithText("Paste without control characters").performClick()
+        waitForNoText("Paste 19 characters")
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.contains("echo pasted clean") } }
+        session.sendKey(TerminalKey.ENTER)
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.trim() == "pasted clean" } }
+        settle(400)
+
         // History: the echoed command is there; Run sends it again and its output lands a second time.
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("History").performClick()
@@ -653,37 +934,38 @@ class TerminalToolsScreenshotTest {
 
     // ---- fixtures ---------------------------------------------------------------------------------------------
 
+    private val homelab = Host(
+        id = "homelab",
+        name = "homelab",
+        color = SwatchColor.VERDIGRIS,
+        monogram = Host.monogramFor("homelab"),
+        address = "192.168.1.20",
+        user = "demo",
+        auth = AuthMethod.Password("host-password:homelab"),
+        lastConnectedAt = now - TimeUnit.MINUTES.toMillis(18),
+        createdAt = now - TimeUnit.DAYS.toMillis(30),
+    )
+
+    private fun homelabRecord(state: SessionState, layer: PersistenceLayer) = SessionRecord(
+        id = "s-homelab",
+        workspaceId = Workspace.DEFAULT_ID,
+        hostId = homelab.id,
+        hostSnapshot = homelab,
+        state = state,
+        layer = layer,
+        title = homelab.name,
+        cwd = "~/srv",
+        lastCommand = "journalctl -u caddy -n 4 --no-pager",
+        sortOrder = 0,
+        createdAt = now - TimeUnit.HOURS.toMillis(5),
+        lastLiveAt = now - TimeUnit.MINUTES.toMillis(12),
+    )
+
     private fun seedHomelab(withHistory: Boolean) = runBlocking {
-        val homelab = Host(
-            id = "homelab",
-            name = "homelab",
-            color = SwatchColor.VERDIGRIS,
-            monogram = Host.monogramFor("homelab"),
-            address = "192.168.1.20",
-            user = "demo",
-            auth = AuthMethod.Password("host-password:homelab"),
-            lastConnectedAt = now - TimeUnit.MINUTES.toMillis(18),
-            createdAt = now - TimeUnit.DAYS.toMillis(30),
-        )
         graph.hosts.upsert(homelab)
         graph.workspaces.upsert(Workspace(Workspace.DEFAULT_ID, Workspace.DEFAULT_NAME, SwatchColor.COPPER, "H", sortOrder = 0, createdAt = now - TimeUnit.DAYS.toMillis(30)))
         graph.settings.setCurrentWorkspaceId(Workspace.DEFAULT_ID)
-        graph.sessionRecords.upsert(
-            SessionRecord(
-                id = "s-homelab",
-                workspaceId = Workspace.DEFAULT_ID,
-                hostId = homelab.id,
-                hostSnapshot = homelab,
-                state = SessionState.DETACHED,
-                layer = PersistenceLayer.LOCAL_FRAME,
-                title = homelab.name,
-                cwd = "~/srv",
-                lastCommand = "journalctl -u caddy -n 4 --no-pager",
-                sortOrder = 0,
-                createdAt = now - TimeUnit.HOURS.toMillis(5),
-                lastLiveAt = now - TimeUnit.MINUTES.toMillis(12),
-            ),
-        )
+        graph.sessionRecords.upsert(homelabRecord(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME))
         val history = if (withHistory) HISTORY.map { (text, minutesAgo) -> text to now - TimeUnit.MINUTES.toMillis(minutesAgo) } else emptyList()
         graph.sessionRecords.saveFrame("s-homelab", frame(FRAME_LINES, history))
     }
