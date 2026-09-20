@@ -3,7 +3,6 @@ package app.berth.android.ui.components
 import android.app.Application
 import android.view.Window
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -12,9 +11,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.window.DialogWindowProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.security.WindowSecurity
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.InterfaceTheme
@@ -33,15 +33,19 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The sheet as a dialog is a window of its own (spec C23), so the Activity's `FLAG_SECURE` does
  * not reach it: it must carry the flag itself from the same state the Activity's comes from, or a
- * trust sheet's fingerprint would cast from a tablet when it would not from a phone.
+ * trust sheet's fingerprint would cast from a tablet when it would not from a phone. Runs on the
+ * release variant as well (testReleaseUnitTest), the manifest and resources the phone gets.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w1280dp-h800dp-land-320dpi")
 class BerthSheetTest {
-    @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private var dialogWindow: Window? = null
     private var sheetPresentation: SheetPresentation? = null
