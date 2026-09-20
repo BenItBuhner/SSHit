@@ -47,6 +47,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.HostKeyChangedDecision
+import app.berth.android.session.LinkFingerprint
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.TunnelStatus
@@ -616,6 +617,76 @@ class BerthScreenshotTest {
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.Passphrase }
         capture("prompt-passphrase")
         (graph.prompts.current.value as Prompt.Passphrase).cancel()
+    }
+
+    /**
+     * The trust sheets when the login was opened by a link carrying `;fingerprint=`: a match is one
+     * line under the fingerprint and the sheet is otherwise the first-connection sheet; a mismatch
+     * leads the sheet in danger with the link's fingerprint as a second row and no primary action;
+     * a value Berth cannot read is said to be that, quoted clean; and the changed-key sheet says
+     * whose fingerprint the link carried. The comparison decides nothing: the actions are the same.
+     */
+    @Test
+    fun `trust sheets with the fingerprint a link carried`() {
+        seedLibrary()
+        val host = graph.hosts.items.value.first { it.id == "prod-api" }
+        val key = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val other = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val request = HostKeyRequest(
+            host = host.address,
+            port = host.port,
+            keyType = "ssh-ed25519",
+            publicKey = key,
+            publicKeyBase64 = SshKeys.openSshPublic(key).split(" ")[1],
+            fingerprintSha256 = SshKeys.fingerprintSha256(key),
+        )
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
+        val bg = CoroutineScope(Dispatchers.IO)
+
+        // The link named this key: the sheet is the first-connection sheet with one more line, and Trust stays primary.
+        bg.launch { graph.prompts.trustHostKey(host, request, emptyList(), link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        compose.onNodeWithText("First connection").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried the same fingerprint.").assertExists()
+        compose.onNodeWithText("Trust and connect").assertExists()
+        capture("prompt-trust-host-key-link-match")
+        (graph.prompts.current.value as Prompt.TrustHostKey).cancel()
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
+        // The link named another key: danger leads, the link's fingerprint is a row, and trusting is the destructive action at the bottom.
+        bg.launch { graph.prompts.trustHostKey(host, request, emptyList(), link = LinkFingerprint.of(SshKeys.fingerprintSha256(other), key)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        compose.onNodeWithText("Key does not match the link").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried a different fingerprint for this server.").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried a different fingerprint from this key's.").assertExists()
+        compose.onNodeWithText("LINK").assertExists()
+        compose.onNodeWithText("Trust and connect anyway").assertExists()
+        compose.onAllNodesWithText("Trust and connect").assertCountEquals(0)
+        capture("prompt-trust-host-key-link-mismatch")
+        (graph.prompts.current.value as Prompt.TrustHostKey).cancel()
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
+        // A fingerprint in no form Berth reads: said so, the link's text quoted short and clean; nothing is compared and nothing alarms.
+        bg.launch { graph.prompts.trustHostKey(host, request, emptyList(), link = LinkFingerprint.of("not-a-fingerprint\u202e", key)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        compose.onNodeWithText("First connection").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried a fingerprint Berth cannot read (\u201Cnot-a-fingerprint\u201D), so there is nothing to compare here.").assertExists()
+        capture("prompt-trust-host-key-link-unreadable")
+        (graph.prompts.current.value as Prompt.TrustHostKey).cancel()
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
+        // The saved key changed and the link carried the offered key's fingerprint: said in the changed-key sheet, which stays as alarming as it is.
+        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(40), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
+        bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
+        compose.onNodeWithText("Host key changed").assertExists()
+        compose.onNodeWithText("The link that opened this connection carried the offered key's fingerprint.").assertExists()
+        capture("prompt-host-key-changed-link-offered")
+        (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
     }
 
     // ---- live session against the local sshd -------------------------------------------------
