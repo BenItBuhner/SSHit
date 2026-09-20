@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
+import app.berth.domain.model.TabKind
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -209,7 +210,8 @@ private fun TabCard(
     onActivate: () -> Unit,
 ) {
     val c = Berth.colors
-    val session = slot.tab as? TerminalSession
+    // Only a terminal has a frame to thumbnail; a Tunnels tab shows its glyph like a Files tab does.
+    val session = (slot.tab as? TerminalSession)?.takeIf { !it.tunnelsOnly }
     val record by slot.tab.record.collectAsState()
     val host = record.hostSnapshot
     val interaction = remember { MutableInteractionSource() }
@@ -294,7 +296,7 @@ private fun TabCard(
                     // The same cursor rule as the Stage: only a live screen shows one, and only the active card follows changes.
                     FrameThumbnail(session, theme, font, live = active && record.state == SessionState.LIVE, modifier = Modifier.fillMaxWidth().fillMaxHeight())
                 } else {
-                    BerthIcon(BerthIcons.folder, tint = c.text3, size = 36.dp)
+                    BerthIcon(if (record.kind == TabKind.Tunnels) BerthIcons.link else BerthIcons.folder, tint = c.text3, size = 36.dp)
                 }
             }
         }

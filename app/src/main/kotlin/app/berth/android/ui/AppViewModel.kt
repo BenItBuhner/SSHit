@@ -165,8 +165,14 @@ class AppViewModel @Inject constructor(
 
     // ---- sessions --------------------------------------------------------------------------------
 
+    /** Connect from the host list or the New tab sheet: a terminal, or the host's forwards alone when it is marked tunnels only. */
     fun open(host: Host, workspaceId: String? = null) {
-        viewModelScope.launch { sessions.open(host, workspaceId) }
+        viewModelScope.launch { sessions.connect(host, workspaceId) }
+    }
+
+    /** A Tunnels tab on [host] (spec C14): its port forwards with no shell, whatever the host's toggle says. */
+    fun openTunnels(host: Host, workspaceId: String? = null) {
+        viewModelScope.launch { sessions.openTunnels(host, workspaceId) }
     }
 
     /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
