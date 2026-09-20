@@ -61,6 +61,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
@@ -152,7 +153,7 @@ fun rememberStageTools(tabId: String?): StageTools = remember(tabId) { StageTool
 fun StageToolbar(tools: StageTools, session: TerminalSession?, header: @Composable () -> Unit) {
     val selected = session != null && tools.selection.active
     if (session != null && selected) SelectionBar(tools, session) else header()
-    AnimatedVisibility(visible = session != null && tools.search.open) {
+    AnimatedVisibility(visible = session != null && tools.search.open, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
         if (session != null) SearchBar(tools, session)
     }
     BackHandler(enabled = selected) { tools.selection.clear() }

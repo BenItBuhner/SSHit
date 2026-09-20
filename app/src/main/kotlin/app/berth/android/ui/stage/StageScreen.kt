@@ -84,6 +84,7 @@ import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.TerminalAnnouncer
 import app.berth.android.ui.a11y.reachingClickable
@@ -663,7 +664,7 @@ private fun StageBody(
                     .background(if (deckStateOk) c.surface1 else c.surface0)
                     .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
             ) {
-                AnimatedVisibility(visible = deckAllowed) {
+                AnimatedVisibility(visible = deckAllowed, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
                     Deck(
                         layout = deckLayout,
                         layerIndex = if (compactDeck) 0 else layerIndex,

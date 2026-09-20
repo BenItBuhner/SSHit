@@ -14,10 +14,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -95,6 +91,7 @@ import app.berth.android.files.TransferState
 import app.berth.android.session.FilesTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
@@ -532,7 +529,7 @@ fun FilesPane(
         }
         val lastFoot = remember { mutableStateOf(foot) }
         if (foot != null) lastFoot.value = foot
-        AnimatedVisibility(visible = foot != null, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut() + slideOutVertically { it / 2 }) {
+        AnimatedVisibility(visible = foot != null, enter = BerthMotion.riseIn(), exit = BerthMotion.sinkOut()) {
             Crossfade(targetState = lastFoot.value, animationSpec = tween(150), label = "foot") { which ->
                 when (which) {
                     Foot.ACTIONS -> SelectionActions(
@@ -887,7 +884,7 @@ private fun EntryList(
     // stays open while the listing is on its way and closes when it lands.
     val slot by animateDpAsState(
         if (refreshing) RefreshSlot else RefreshSlot * pull.distanceFraction.coerceIn(0f, 1f),
-        if (refreshing || pull.distanceFraction > 0f) snap() else tween(200),
+        if (refreshing || pull.distanceFraction > 0f) snap() else BerthMotion.transform(tween(200)),
         label = "refresh",
     )
     Column(
@@ -1055,8 +1052,8 @@ private fun NoticeLine(notice: Notice?, onDismiss: () -> Unit, modifier: Modifie
     AnimatedVisibility(
         visible = notice != null,
         modifier = modifier,
-        enter = fadeIn() + slideInVertically { it / 2 },
-        exit = fadeOut() + slideOutVertically { it / 2 },
+        enter = BerthMotion.riseIn(),
+        exit = BerthMotion.sinkOut(),
     ) {
         last.value?.let { n ->
             Box(

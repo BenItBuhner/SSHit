@@ -1,11 +1,6 @@
 package app.berth.android.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -42,6 +37,7 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import app.berth.android.security.LockState
 import app.berth.android.security.WindowSecurity
+import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.ConnectionAnnouncer
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
@@ -246,13 +242,18 @@ private fun Shell(vm: AppViewModel) {
         )
     }
     val screens: @Composable () -> Unit = {
+        // A screen slides in a sixth of the way over its fade; under reduced motion the two screens crossfade (spec A7).
+        val screenIn = BerthMotion.screenIn()
+        val screenOut = BerthMotion.screenOut()
+        val fadeIn = BerthMotion.fadeInPlace()
+        val fadeOut = BerthMotion.fadeOutOfPlace()
         NavDisplay(
             backStack = backStack,
             onBack = { back() },
             entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
-            transitionSpec = { slideInHorizontally(tween(220)) { it / 6 } + fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
-            popTransitionSpec = { fadeIn(tween(160)) togetherWith slideOutHorizontally(tween(220)) { it / 6 } + fadeOut(tween(160)) },
-            predictivePopTransitionSpec = { fadeIn(tween(160)) togetherWith slideOutHorizontally(tween(220)) { it / 6 } + fadeOut(tween(160)) },
+            transitionSpec = { screenIn togetherWith fadeOut },
+            popTransitionSpec = { fadeIn togetherWith screenOut },
+            predictivePopTransitionSpec = { fadeIn togetherWith screenOut },
             entryProvider = { key ->
                 when (key) {
                     is Screen.Stage -> NavEntry(key) {

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -105,6 +106,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.R
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.spoken
@@ -202,10 +205,13 @@ fun StatusDot(state: SessionState, modifier: Modifier = Modifier, size: Dp = 8.d
     }
     val spinning = state == SessionState.CONNECTING || state == SessionState.RECONNECTING
     // Read in the draw lambda only: each frame of the spin redraws this canvas and recomposes nothing.
-    val rotation: State<Float>? = if (spinning) {
-        rememberInfiniteTransition(label = "reconnect-arc")
+    // Under reduced motion the arc holds still at its resting angle (spec A7), with no clock behind it.
+    val rotation: State<Float>? = when {
+        !spinning -> null
+        LocalReducedMotion.current -> BerthMotion.staticArc
+        else -> rememberInfiniteTransition(label = "reconnect-arc")
             .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
-    } else null
+    }
     Canvas(
         modifier
             .size(size + if (spinning) 6.dp else 0.dp)
@@ -568,7 +574,8 @@ fun BerthSlider(
     var widthPx by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf(false) }
     var rawX by remember { mutableFloatStateOf(0f) }
-    val knob by animateDpAsState(if (dragging) 10.dp else 8.dp, label = "slider knob")
+    // The knob grows under the finger; under reduced motion it is simply larger while held.
+    val knob by animateDpAsState(if (dragging) 10.dp else 8.dp, BerthMotion.transform(spring()), label = "slider knob")
     val alpha = if (enabled) 1f else 0.5f
 
     fun fraction(v: Float) = if (span == 0f) 0f else ((v - valueRange.start) / span).coerceIn(0f, 1f)

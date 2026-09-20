@@ -108,6 +108,8 @@ import androidx.compose.ui.zIndex
 import app.berth.android.session.PaneSide
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TabSource
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.components.BerthIcon
@@ -327,8 +329,11 @@ fun TabStrip(
     val controller = remember(state, scope) { DragController(state, latestEntries, latestActions, haptics, scope) }
     controller.gapPx = gapPx
     controller.edgePx = edgePx
+    controller.reducedMotion = LocalReducedMotion.current
 
     // The active tab is scrolled into view in 120 ms (spec C3, Header row); a lift owns the scroll instead.
+    // Under reduced motion it is put into view in a frame.
+    val reducedMotion = LocalReducedMotion.current
     LaunchedEffect(activeId, entries) {
         if (state.drag != null) return@LaunchedEffect
         val index = entries.indexOfFirst { it is StripEntry.Tab && it.slot.id == activeId }
@@ -345,13 +350,13 @@ fun TabStrip(
         val item = info.visibleItemsInfo.firstOrNull { it.key == key }
         if (item == null) {
             // Item offsets count from the end of the start inset, so offset 0 is the resting place: the inset in from the edge.
-            state.listState.animateScrollToItem(if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
+            state.listState.bring(reducedMotion, if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
             return@LaunchedEffect
         }
         val lead = if (leadIndex == index) item else info.visibleItemsInfo.firstOrNull { it.key == leadKey }
         if (lead == null) {
             // The tab is in view but its chip is off the start: brought to rest at the inset, tab following.
-            state.listState.animateScrollToItem(leadIndex)
+            state.listState.bring(reducedMotion, leadIndex)
             return@LaunchedEffect
         }
         // The viewport's ends are the physical edges (negative by the inset at the start); the tab rests the inset inside them,
@@ -363,7 +368,9 @@ fun TabStrip(
             item.offset + item.size > restEnd -> item.offset + item.size - restEnd
             else -> 0
         }
-        if (delta != 0) state.listState.animateScrollBy(delta.toFloat(), tween(120))
+        if (delta != 0) {
+            if (reducedMotion) state.listState.scrollBy(delta.toFloat()) else state.listState.animateScrollBy(delta.toFloat(), tween(120))
+        }
     }
 
     // The entries changed under the viewport. LazyList keeps the first visible item's key in place, which is right
@@ -435,7 +442,7 @@ fun TabStrip(
                     leadGap = if (index > 0) chipLead else 0.dp,
                     modifier = Modifier.liftable(entry.key, state),
                 )
-                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, topReach = topReach, modifier = Modifier.animateItem())
+                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, topReach = topReach, modifier = stripItem())
             }
         }
     }
@@ -497,6 +504,7 @@ internal class DragController(
 ) {
     var gapPx = 0f
     var edgePx = 0f
+    var reducedMotion = false
     private var settle: Job? = null
 
     fun lift(key: String, grabX: Float, isChip: Boolean): Boolean {
@@ -621,7 +629,9 @@ internal class DragController(
         settle = scope.launch {
             val travel = Animatable(state.dragTravel)
             try {
-                travel.animateTo(rest, tween(120)) { state.dragTravel = value }
+                // Under reduced motion the item is in its slot the frame the finger lifts.
+                if (reducedMotion) state.dragTravel = rest
+                else travel.animateTo(rest, tween(120)) { state.dragTravel = value }
             } finally {
                 if (state.drag === drag) state.drag = null
             }
@@ -815,7 +825,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         record.state == SessionState.DETACHED || record.state == SessionState.CLOSED -> c.text3
         else -> c.text2
     }
-    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, tween(120), label = "tab lift")
+    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, BerthMotion.transform(tween(120)), label = "tab lift")
     val stateText = when (record.state) {
         SessionState.LIVE -> "live"
         SessionState.IDLE, SessionState.CONNECTING -> "connecting"
@@ -850,7 +860,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
 
     Box(
         modifier
-            .then(if (draggedHere) Modifier else Modifier.animateItem())
+            .then(if (draggedHere) Modifier else stripItem())
             .fillMaxHeight()
             .then(if (carry != null) Modifier.onGloballyPositioned { bounds = it.boundsInRoot() } else Modifier)
             .graphicsLayer {
@@ -1002,20 +1012,29 @@ internal fun TabSwatch(
     radius: Dp = style.swatchRadius,
 ) {
     val c = Berth.colors
+    val reducedMotion = LocalReducedMotion.current
     val ring = remember { Animatable(0f) }
-    LaunchedEffect(attention) {
-        if (attention) {
-            ring.snapTo(3f)
-            ring.animateTo(1.5f, tween(600))
-        } else ring.snapTo(0f)
+    LaunchedEffect(attention, reducedMotion) {
+        when {
+            !attention -> ring.snapTo(0f)
+            // The single 600 ms pulse (spec A7); under reduced motion the ring is simply there.
+            reducedMotion -> ring.snapTo(1.5f)
+            else -> {
+                ring.snapTo(3f)
+                ring.animateTo(1.5f, tween(600))
+            }
+        }
     }
     val spinning = state == SessionState.CONNECTING || state == SessionState.RECONNECTING
     // The arc's angle is read in the draw lambda only, so each frame of the spin invalidates the
-    // dot's drawing and nothing recomposes: not this swatch, not the strip item around it.
-    val rotation: State<Float>? = if (spinning) {
-        rememberInfiniteTransition(label = "tab arc")
+    // dot's drawing and nothing recomposes: not this swatch, not the strip item around it. Under
+    // reduced motion the arc holds still at its resting angle (spec A7), with no clock behind it.
+    val rotation: State<Float>? = when {
+        !spinning -> null
+        reducedMotion -> BerthMotion.staticArc
+        else -> rememberInfiniteTransition(label = "tab arc")
             .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
-    } else null
+    }
     val dotColor = when (state) {
         SessionState.LIVE -> if (showLiveDot) c.live else null
         SessionState.CONNECTING, SessionState.RECONNECTING, SessionState.IDLE -> c.pending
@@ -1102,7 +1121,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     val draggedHere = state.drag?.key == entry.key
     val liftedHere = state.lifted == entry.key
     var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, tween(120), label = "chip lift")
+    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, BerthMotion.transform(tween(120)), label = "chip lift")
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
     val label = chipLabel(group, entry.tabs.size, style.style)
     val tap: () -> Unit = {
@@ -1115,7 +1134,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
 
     Box(
         modifier
-            .then(if (draggedHere) Modifier else Modifier.animateItem())
+            .then(if (draggedHere) Modifier else stripItem())
             .fillMaxHeight()
             .graphicsLayer {
                 val drag = state.drag

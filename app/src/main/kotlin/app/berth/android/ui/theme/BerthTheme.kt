@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.rememberReducedMotion
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
@@ -270,15 +272,21 @@ fun berthShapes(): Shapes = Shapes(
     extraLarge = RoundedCornerShape(BerthRadius.sheet),
 )
 
+/**
+ * The app's theme. [reducedMotion] is the system's reduced-motion setting by default (spec A7), so
+ * every motion under the theme answers it through [LocalReducedMotion]; a test passes its own.
+ */
 @Composable
 fun BerthTheme(
     theme: InterfaceTheme = InterfaceTheme.DEFAULT,
+    reducedMotion: Boolean = rememberReducedMotion(),
     content: @Composable () -> Unit,
 ) {
     val colors = rememberBerthColors(theme)
     CompositionLocalProvider(
         LocalBerthColors provides colors,
         LocalRadiusScale provides theme.radiusScale.coerceIn(InterfaceTheme.MIN_RADIUS_SCALE, InterfaceTheme.MAX_RADIUS_SCALE),
+        LocalReducedMotion provides reducedMotion,
     ) {
         MaterialTheme(
             colorScheme = colors.toMaterial(),
