@@ -773,7 +773,8 @@ internal fun StatePill(
                 .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp))
+            // In a pane too narrow for all of it (spec C23) the age is what gives, never an action.
+            Text(text, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp))
             for ((label, action) in actions) {
                 // The neighbours' own 8 dp insets space the dot; it carries none itself.
                 Text("\u00B7", style = BerthType.caption, color = c.text3)
