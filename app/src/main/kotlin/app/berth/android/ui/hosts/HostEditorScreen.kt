@@ -49,6 +49,7 @@ import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.components.TrailingMenuAnchor
+import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -58,6 +59,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.tunnels.PendingTunnelRow
 import app.berth.android.ui.tunnels.TunnelsPanelContent
 import app.berth.domain.model.AddressFamily
+import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
@@ -122,11 +124,13 @@ fun HostEditorScreen(
     var remoteClipboard by remember { mutableStateOf(RemoteClipboardPolicy.INHERIT) }
     var jumpHostIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var tunnelsOnly by remember { mutableStateOf(fromLink?.tunnelsOnly ?: false) }
+    var altKey by remember { mutableStateOf<AltKeyMode?>(null) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
             remoteClipboard = vm.security.settings.filterNotNull().first().remoteClipboardPolicy(hostId)
+            altKey = vm.hardwareKeyboard.value.altKeyOverride(hostId)
             vm.host(hostId)?.let { h ->
                 original = h
                 name = h.name
@@ -195,8 +199,11 @@ fun HostEditorScreen(
         )
         val secret = password.takeIf { it.isNotEmpty() }
         if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
-        // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
-        if (base != null) vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
+        // The overrides live in the settings documents, keyed by the host's id; they commit here with the rest.
+        if (base != null) {
+            vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
+            vm.updateHardwareKeyboard { it.withHostAltKey(base.id, altKey) }
+        }
         onDone()
     }
 
@@ -365,6 +372,7 @@ fun HostEditorScreen(
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
                 HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }
+                HostAltKeyPicker(vm, original?.id, altKey) { altKey = it }
             }
 
             if (original != null) {

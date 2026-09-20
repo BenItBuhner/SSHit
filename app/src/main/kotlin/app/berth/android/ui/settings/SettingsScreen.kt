@@ -73,7 +73,6 @@ fun SettingsScreen(
     val deck by vm.deckLayout.collectAsState()
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
-    val ctrlTabKeys by vm.ctrlTabKeysReachTerminal.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
 
@@ -163,10 +162,7 @@ fun SettingsScreen(
                 Text("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
             }
 
-            Panel(label = "Hardware keyboard") {
-                ToggleRow("Ctrl+T and Ctrl+W go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline's transpose and delete word")
-                Text("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
-            }
+            HardwareKeyboardPanel(vm)
 
             NotificationsSection(vm.notifier)
 
