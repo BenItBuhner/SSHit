@@ -44,7 +44,11 @@ sealed interface SshAuth {
     /** [password] returning null means the user cancelled; the method is skipped. */
     class Password(val password: () -> CharArray?) : SshAuth
 
-    class PublicKey(val keyProvider: KeyProvider) : SshAuth
+    /**
+     * A key. With a [signer] the userauth signature comes from it rather than from a JCA
+     * `Signature` sshj builds itself: a Keystore key that a prompt has just unlocked for one use.
+     */
+    class PublicKey(val keyProvider: KeyProvider, val signer: SshSigner? = null) : SshAuth
 
     /** [respond] receives each server prompt and whether the answer should echo; null cancels. */
     class KeyboardInteractive(val respond: (instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
@@ -289,7 +293,7 @@ class SshConnection(
 
             override fun shouldRetry(resource: Resource<*>?): Boolean = false
         })
-        is SshAuth.PublicKey -> AuthPublickey(keyProvider)
+        is SshAuth.PublicKey -> signer?.let { SignerAuthPublickey(keyProvider, it) } ?: AuthPublickey(keyProvider)
         is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(object : ChallengeResponseProvider {
             private var instruction = ""
             override fun getSubmethods(): List<String> = emptyList()

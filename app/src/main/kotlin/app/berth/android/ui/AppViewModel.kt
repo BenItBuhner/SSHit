@@ -3,6 +3,7 @@ package app.berth.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
+import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.FilesTab
@@ -13,7 +14,9 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
+import android.os.Build
 import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
@@ -78,6 +81,8 @@ class AppViewModel @Inject constructor(
     private val workspaceRepository: WorkspaceRepository,
     /** File browsers and the transfer queue; the Files screen talks to this directly. */
     val files: FilesCenter,
+    /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
+    val security: SecurityCenter,
 ) : ViewModel() {
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -298,6 +303,7 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch {
             secrets.delete(AuthResolver.passwordSecretId(id))
             hostRepository.delete(id)
+            security.forgetHost(id)
         }
     }
 
@@ -309,6 +315,23 @@ class AppViewModel @Inject constructor(
     }
 
     val strongBoxAvailable: Boolean get() = hardwareKeys.strongBoxAvailable
+
+    /**
+     * The model a new biometric key on this device gets: per use from Android 11, the timed window
+     * on 10 (see [HardwareKeys]); the generate sheet says which before the key is made.
+     */
+    val newBiometricKeyModel: KeyAuthModel
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) KeyAuthModel.PER_USE else KeyAuthModel.TIMED_WINDOW
+
+    /**
+     * How the Keystore key behind [identity] lets itself sign, or null for a software key or a
+     * Keystore entry that cannot be read (gone, or a fixture); the Keys screen names it on the row.
+     */
+    fun keyAuthModel(identity: Identity): KeyAuthModel? {
+        if (identity.storage != KeyStorage.ANDROID_KEYSTORE) return null
+        val alias = identity.keystoreAlias ?: HardwareKeys.aliasFor(identity.id)
+        return runCatching { hardwareKeys.authModel(alias) }.getOrNull()
+    }
 
     suspend fun generateIdentity(name: String, algorithm: KeyAlgorithm, hardware: Boolean, protection: KeyProtection, comment: String, passphrase: CharArray?): KeyGenResult =
         withContext(Dispatchers.Default) {

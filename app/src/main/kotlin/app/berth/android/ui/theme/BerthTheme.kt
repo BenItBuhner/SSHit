@@ -57,6 +57,16 @@ data class BerthColors(
         3 -> surface3
         else -> surface4
     }
+
+    /** The tonal step [color] is, or null when it is not one of the five surfaces. */
+    fun stepOf(color: Color): Int? = when (color) {
+        surface0 -> 0
+        surface1 -> 1
+        surface2 -> 2
+        surface3 -> 3
+        surface4 -> 4
+        else -> null
+    }
 }
 
 /** Multiplier applied to every radius; set by [BerthTheme] from [InterfaceTheme.radiusScale]. */

@@ -36,6 +36,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
+import app.berth.android.security.LockState
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -47,6 +48,9 @@ import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
+import app.berth.android.ui.security.BerthClipboardLocals
+import app.berth.android.ui.security.LockCover
+import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
@@ -88,10 +92,17 @@ sealed interface Screen : NavKey {
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
     val hapticLevel by vm.hapticLevel.collectAsState()
+    val lock by vm.security.lock.state.collectAsState()
     BerthTheme(theme) {
         CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
-                Shell(vm)
+                // Nothing is composed until the lock is decided (the splash holds meanwhile). From
+                // then on the shell stays composed, locked or not, so an edit in progress, an open
+                // sheet and a running Stage are where they were when the lock lifts. While locked,
+                // the cover hides it in this window and the lock window (LockActivity) lies over
+                // both, since sheets, menus and prompts are windows of their own.
+                if (lock != LockState.UNKNOWN) BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
+                if (lock == LockState.LOCKED) LockCover()
             }
         }
     }
@@ -271,4 +282,5 @@ private fun Shell(vm: AppViewModel) {
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)
+    RemoteClipboardNoticeSheet(vm.security.remoteClipboard)
 }

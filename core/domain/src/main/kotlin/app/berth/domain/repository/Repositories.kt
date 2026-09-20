@@ -7,6 +7,7 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.TabSwipeGesture
@@ -138,4 +139,10 @@ interface SettingsRepository {
     /** Ctrl+T and Ctrl+W go to the terminal as readline keys instead of opening and closing tabs. */
     val ctrlTabKeysReachTerminal: Flow<Boolean>
     suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean)
+
+    /** App lock, screenshot blocking, clipboard hygiene and the OSC 52 gate (spec C20, Security). */
+    val securitySettings: Flow<SecuritySettings>
+
+    /** Read-modify-write under one lock, so a host's override and a toggle flipped at the same moment both land. */
+    suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings)
 }

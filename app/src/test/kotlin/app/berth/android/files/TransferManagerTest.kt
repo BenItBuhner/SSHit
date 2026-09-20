@@ -76,7 +76,7 @@ class TransferManagerTest {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
         override val networkAvailable: Flow<Unit> = emptyFlow()
-        override fun onClipboardText(text: String) = Unit
+        override fun onClipboardText(host: Host, text: String) = Unit
     }
     private val host = Host(id = "h", name = "prod-web", color = SwatchColor.MOSS, monogram = "PW", address = "10.0.0.7", user = "demo", createdAt = 0)
 

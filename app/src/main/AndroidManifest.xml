@@ -32,6 +32,16 @@
             </intent-filter>
         </activity>
 
+        <!-- The lock screen's window, over MainActivity in the same task while the app is locked: a
+             window of its own is what covers the main window's sheets, menus and dialogs. Same theme
+             minus the launch splash, with no transition either way. -->
+        <activity
+            android:name=".LockActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.App.Lock"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|uiMode" />
+
         <!-- Hands a downloaded file to the share sheet without copying it anywhere the user can see. -->
         <provider
             android:name="androidx.core.content.FileProvider"

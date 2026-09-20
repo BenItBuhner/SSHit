@@ -183,7 +183,7 @@ class FilesTabTest {
             override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
             override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
             override val networkAvailable: Flow<Unit> = emptyFlow()
-            override fun onClipboardText(text: String) = Unit
+            override fun onClipboardText(host: Host, text: String) = Unit
         }
         val a = TerminalSession(terminal("a", DETACHED, lastLiveAt = 500), backgroundScope, env) {}
         val b = TerminalSession(terminal("b", DETACHED, 1, lastLiveAt = 900), backgroundScope, env) {}

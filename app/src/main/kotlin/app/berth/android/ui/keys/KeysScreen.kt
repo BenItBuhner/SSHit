@@ -56,6 +56,8 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Identity
+import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.ssh.SshKeys
@@ -108,11 +110,13 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
             ) {
                 items(identities, key = { it.id }) { identity ->
                     var menu by remember { mutableStateOf(false) }
+                    val model = remember(identity.id, identity.protection) { vm.keyAuthModel(identity) }
                     Box {
                         ListRow(
                             title = identity.name,
-                            subtitle = identity.summary(),
+                            subtitle = identity.summary(model),
                             subtitleStyle = BerthType.caption,
+                            subtitleMaxLines = 2,
                             onClick = { menu = true },
                             onLongClick = { menu = true },
                         )
@@ -157,18 +161,31 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
     }
 }
 
-fun Identity.summary(): String {
+/**
+ * The row's two lines: what the key is, then how it is protected. A biometric key names its
+ * model ([KeyAuthModel]) so the user knows whether every sign-in asks or a window opens; [model]
+ * null when the Keystore could not say.
+ */
+fun Identity.summary(model: KeyAuthModel? = null): String {
     val parts = ArrayList<String>()
     parts += algorithm.displayName
     if (isHardwareBacked) parts += "hardware-backed"
     // `SHA256:Qk3f 8vLm…`, the spec's row anatomy: hash name, then the first two groups.
     parts += "SHA256:" + SshKeys.groupedFingerprint(fingerprintSha256).take(9) + "\u2026"
-    when (protection) {
-        KeyProtection.BIOMETRIC -> parts += "biometric"
-        KeyProtection.PASSPHRASE -> parts += "passphrase"
-        KeyProtection.NONE -> Unit
+    val first = parts.joinToString(" \u00B7 ")
+    val second = when (protection) {
+        KeyProtection.BIOMETRIC -> biometricModelLabel(model)
+        KeyProtection.PASSPHRASE -> "Passphrase \u00B7 asked for on each connection"
+        KeyProtection.NONE -> null
     }
-    return parts.joinToString(" \u00B7 ")
+    return if (second == null) first else "$first\n$second"
+}
+
+/** `Biometric · asks each time it signs in`, or the window a timed key opens; plain `Biometric` when the model is unknown. */
+fun biometricModelLabel(model: KeyAuthModel?): String = when (model) {
+    KeyAuthModel.PER_USE -> "Biometric \u00B7 asks each time it signs in"
+    KeyAuthModel.TIMED_WINDOW -> "Biometric \u00B7 unlocked for ${HardwareKeys.AUTH_WINDOW_SECONDS} s after your fingerprint"
+    KeyAuthModel.NONE, null -> "Biometric"
 }
 
 private enum class KeyKind(val label: String) { ED25519("Ed25519"), HARDWARE("ECDSA P-256, hardware"), RSA("RSA 4096") }
@@ -224,6 +241,18 @@ fun GenerateKeySheet(vm: AppViewModel, onDismiss: () -> Unit) {
             BerthField(name, { name = it }, label = "Name", placeholder = defaultName)
             Text("Protect", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp))
             SegmentedControl(protections, protection, { protection = it })
+            if (kind == KeyKind.HARDWARE && protection == 1) {
+                // Which model the key gets is decided here, by the Android version, and cannot change later.
+                Text(
+                    when (vm.newBiometricKeyModel) {
+                        KeyAuthModel.TIMED_WINDOW -> "${biometricModelLabel(KeyAuthModel.TIMED_WINDOW)}. Any unlock opens the window; the key is destroyed if new biometrics are enrolled."
+                        else -> "${biometricModelLabel(KeyAuthModel.PER_USE)}, a reconnect included; the key is destroyed if new biometrics are enrolled."
+                    },
+                    style = BerthType.caption,
+                    color = c.text3,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
             if (kind != KeyKind.HARDWARE && protection == 1) {
                 BerthField(passphrase, { passphrase = it }, label = "Passphrase", password = true, helper = "Asked for on each connection; the key file is also encrypted at rest.")
             }

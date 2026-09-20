@@ -15,6 +15,7 @@ import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
@@ -34,6 +35,8 @@ import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -226,6 +229,13 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override val ctrlTabKeysReachTerminal: Flow<Boolean> = document(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer()) { false }
     override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) = write(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer(), enabled)
 
+    private val securityLock = Mutex()
+    override val securitySettings: Flow<SecuritySettings> = document(KEY_SECURITY, SecuritySettings.serializer()) { SecuritySettings() }
+    override suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings) = securityLock.withLock {
+        val current = db.preferences().get(KEY_SECURITY)?.let { runCatching { dataJson.decodeFromString(SecuritySettings.serializer(), it) }.getOrNull() } ?: SecuritySettings()
+        write(KEY_SECURITY, SecuritySettings.serializer(), change(current))
+    }
+
     companion object {
         const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
@@ -238,5 +248,6 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_CURRENT_WORKSPACE = "current_workspace"
         const val KEY_TAB_SWIPE = "tab_swipe_gesture"
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
+        const val KEY_SECURITY = "security"
     }
 }

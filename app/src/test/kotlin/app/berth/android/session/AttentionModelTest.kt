@@ -45,7 +45,7 @@ class AttentionModelTest {
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
         // Never emits and never completes, like the real monitor between outages.
         override val networkAvailable: Flow<Unit> = MutableSharedFlow()
-        override fun onClipboardText(text: String) = Unit
+        override fun onClipboardText(host: Host, text: String) = Unit
         override fun now(): Long = clock
     }
 

@@ -1,6 +1,7 @@
 package app.berth.android.session
 
 import app.berth.domain.model.Host
+import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.HostKeyRequest
 import kotlinx.coroutines.CompletableDeferred
@@ -70,6 +71,33 @@ sealed interface Prompt {
         fun submit(passphrase: CharArray) = answer.complete(passphrase)
         fun cancel() = answer.complete(null)
     }
+
+    /**
+     * A Keystore key needs the user before it signs. The system prompt is up over this sheet, which
+     * says which key and why; Cancel here withdraws the prompt and the connection fails plainly.
+     */
+    class UnlockKey(
+        override val host: Host,
+        val identityName: String,
+        internal val cancelled: CompletableDeferred<Unit>,
+    ) : Prompt {
+        fun cancel() {
+            cancelled.complete(Unit)
+        }
+    }
+
+    /**
+     * Android destroyed the key's ability to sign because the device's biometrics changed. The
+     * only way forward is a new key pair, which the server has to be told about.
+     */
+    class KeyInvalidated(
+        override val host: Host,
+        val identity: Identity,
+        internal val answer: CompletableDeferred<Boolean>,
+    ) : Prompt {
+        fun regenerate() = answer.complete(true)
+        fun cancel() = answer.complete(false)
+    }
 }
 
 enum class HostKeyChangedDecision { DISCONNECT, TRUST_ONCE, REPLACE_SAVED }
@@ -109,4 +137,19 @@ class PromptCenter @Inject constructor() {
 
     suspend fun passphrase(host: Host, identityName: String): CharArray? =
         ask { Prompt.Passphrase(host, identityName, it) }
+
+    /** Shows the unlock sheet for as long as [work] (the system prompt) runs; the sheet's Cancel reaches [work] through the prompt. */
+    suspend fun <T> unlockKey(host: Host, identityName: String, work: suspend (Prompt.UnlockKey) -> T): T = gate.withLock {
+        val prompt = Prompt.UnlockKey(host, identityName, CompletableDeferred())
+        _current.value = prompt
+        try {
+            work(prompt)
+        } finally {
+            _current.value = null
+        }
+    }
+
+    /** True when the user chose to regenerate the key. */
+    suspend fun keyInvalidated(host: Host, identity: Identity): Boolean =
+        ask { Prompt.KeyInvalidated(host, identity, it) }
 }
