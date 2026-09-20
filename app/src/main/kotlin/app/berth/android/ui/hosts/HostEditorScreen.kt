@@ -40,6 +40,7 @@ import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
@@ -73,6 +74,7 @@ fun HostEditorScreen(
 ) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
+    val hosts by vm.hosts.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
     var loaded by remember { mutableStateOf(hostId == null) }
     var original by remember { mutableStateOf<Host?>(null) }
@@ -97,6 +99,8 @@ fun HostEditorScreen(
     var compression by remember { mutableStateOf(false) }
     var addressFamily by remember { mutableStateOf(AddressFamily.AUTO) }
     var remoteClipboard by remember { mutableStateOf(RemoteClipboardPolicy.INHERIT) }
+    var jumpHostIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var tunnelsOnly by remember { mutableStateOf(false) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
@@ -122,6 +126,8 @@ fun HostEditorScreen(
                 terminalType = h.terminalType
                 compression = h.compression
                 addressFamily = h.addressFamily
+                jumpHostIds = h.jumpHostIds
+                tunnelsOnly = h.tunnelsOnly
             }
         }
         loaded = true
@@ -135,8 +141,9 @@ fun HostEditorScreen(
     fun save() {
         val base = original
         val finalName = name.ifBlank { address }
-        val host = Host(
-            id = base?.id ?: UUID.randomUUID().toString(),
+        // The saved host is the base, so what this screen has no field for (tags, agent forwarding,
+        // environment, the bell) comes through unchanged rather than reset to the defaults.
+        val host = (base ?: Host(id = UUID.randomUUID().toString(), name = finalName, color = color, monogram = "", address = "", user = "", createdAt = System.currentTimeMillis())).copy(
             name = finalName,
             color = color,
             monogram = (if (monogramEdited) monogram else Host.monogramFor(finalName)).ifBlank { Host.monogramFor(finalName) },
@@ -144,6 +151,7 @@ fun HostEditorScreen(
             port = portValue ?: 22,
             user = user.trim(),
             auth = auth,
+            jumpHostIds = jumpHostIds,
             persistence = (base?.persistence ?: app.berth.domain.model.PersistencePolicy()).copy(
                 keepaliveSeconds = keepalive,
                 reconnectMinutes = reconnectMinutes,
@@ -155,9 +163,7 @@ fun HostEditorScreen(
             compression = compression,
             addressFamily = addressFamily,
             appearance = (base?.appearance ?: app.berth.domain.model.AppearanceOverride()).copy(terminalThemeId = themeId, fontSizeSp = fontSize),
-            tags = base?.tags ?: emptyList(),
-            lastConnectedAt = base?.lastConnectedAt,
-            createdAt = base?.createdAt ?: System.currentTimeMillis(),
+            tunnelsOnly = tunnelsOnly,
         )
         vm.saveHost(host, password.takeIf { it.isNotEmpty() })
         // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
@@ -220,6 +226,15 @@ fun HostEditorScreen(
                 BerthField(user, { user = it }, label = "User", placeholder = "ben", mono = true, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
             }
 
+            Panel(label = "Jump hosts") {
+                JumpHostsPicker(
+                    hosts = hosts,
+                    selfId = original?.id,
+                    chain = jumpHostIds,
+                    onChange = { jumpHostIds = it },
+                )
+            }
+
             Panel(label = "Identity") {
                 var pick by remember { mutableStateOf(false) }
                 val label = when (val a = auth) {
@@ -263,10 +278,16 @@ fun HostEditorScreen(
                 }
             }
 
-            original?.let { saved ->
-                Panel(label = "Tunnels") {
-                    TunnelsPanelContent(vm, saved)
-                }
+            Panel(label = "Tunnels") {
+                ToggleRow(
+                    "Tunnels only",
+                    tunnelsOnly,
+                    { tunnelsOnly = it },
+                    caption = "Connect opens this host's port forwards with no shell, as a Tunnels tab. Terminal and Files stay a menu away.",
+                    captionLines = 2,
+                )
+                original?.let { saved -> TunnelsPanelContent(vm, saved) }
+                    ?: PanelNote("Save the host to add tunnels.")
             }
 
             Panel(label = "Look") {
