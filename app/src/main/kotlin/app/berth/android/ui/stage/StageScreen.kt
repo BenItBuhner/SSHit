@@ -277,6 +277,8 @@ fun StageScreen(
                 actions = actions,
                 modifier = Modifier.stageRegion(focus, StageRegion.Strip),
                 state = strip,
+                // Ctrl+Shift+S lands on the first tab, in or out of touch mode.
+                firstTab = focus.entry(StageRegion.Strip),
                 trailing = {
                     if (slots.isNotEmpty()) {
                         // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.

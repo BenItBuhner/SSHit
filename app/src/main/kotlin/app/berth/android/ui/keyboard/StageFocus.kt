@@ -30,17 +30,19 @@ enum class StageRegion { Strip, Bar, Body, Deck }
 
 /**
  * Where the keyboard's focus is on the Stage, and the way to move it. Each region is a focus group
- * ([stageRegion]) that a chord enters as one ([focus]), landing on its first control: the terminal
- * for a shell tab's body, the first tunnel or folder row for the others, the first key of the Deck
- * or the collapsed strip that shows it; Tab and the arrows then walk the region's controls, since
- * a control has the focus rather than the region. A terminal takes Tab, the arrows and Escape for
- * the host, so the chords are the way out of it (Ctrl+Shift+S to the strip, Ctrl+Shift+K to the
- * Deck) and Escape from either is the way back. The Deck's region lies inside the body's, being
- * the shell tab's, so [region] names the innermost that holds the focus.
+ * ([stageRegion]) that a chord enters as one ([focus]), landing on the control it names as its
+ * entry ([entry]: the strip's first tab) or else on its first control by the focus system's own
+ * search: the terminal for a shell tab's body, the first tunnel or folder row for the others, the
+ * first key of the Deck or the collapsed strip that shows it; Tab and the arrows then walk the
+ * region's controls, since a control has the focus rather than the region. A terminal takes Tab,
+ * the arrows and Escape for the host, so the chords are the way out of it (Ctrl+Shift+S to the
+ * strip, Ctrl+Shift+K to the Deck) and Escape from either is the way back. The Deck's region lies
+ * inside the body's, being the shell tab's, so [region] names the innermost that holds the focus.
  */
 @Stable
 class StageFocus {
     private val requesters = StageRegion.entries.associateWith { FocusRequester() }
+    private val entries = StageRegion.entries.associateWith { FocusRequester() }
     // How many of a region's nodes hold the focus. A region may be marked on more than one node (the
     // search bar and the selection bar are both the Bar), and the reports of a focus moving between
     // them, or of a body and the Deck inside it, land in either order; a count is right in every order.
@@ -63,11 +65,23 @@ class StageFocus {
     fun requester(region: StageRegion): FocusRequester = requesters.getValue(region)
 
     /**
-     * The focus into [region], on its first control. False when the region has none to give it: a
-     * body not yet on stage, a Deck the tab's state has taken down, a tab kind with no Deck, a bar
-     * that is not open.
+     * The control a chord into [region] lands on, for the region to put on it (the strip on its
+     * first tab): a focus group entered as one lands on the control the focus system's search
+     * finds first, which is the one nearest its top-left corner unless a control reaches above that
+     * corner, as the header's count tile and overflow do by the target they take above the row
+     * (a control in that beam beats every one out of it, whatever the distance), so out of touch
+     * mode, when those are focusable, a search alone would land on the count tile. Optional: a
+     * region with no entry, or whose entry is off the screen, is entered by the search.
      */
-    fun focus(region: StageRegion): Boolean = runCatching { requester(region).requestFocus() }.getOrDefault(false)
+    fun entry(region: StageRegion): FocusRequester = entries.getValue(region)
+
+    /**
+     * The focus into [region], on its entry or else on its first control. False when the region
+     * has none to give it: a body not yet on stage, a Deck the tab's state has taken down, a tab
+     * kind with no Deck, a bar that is not open.
+     */
+    fun focus(region: StageRegion): Boolean =
+        runCatching { entry(region).requestFocus() }.getOrDefault(false) || runCatching { requester(region).requestFocus() }.getOrDefault(false)
 
     /**
      * The focus back onto the Stage after the control holding it has gone: into the region it left,

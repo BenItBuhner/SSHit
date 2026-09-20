@@ -71,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -260,6 +262,7 @@ fun TabHeader(
     modifier: Modifier = Modifier,
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
+    firstTab: FocusRequester? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val resolved = rememberResolvedTabStyle(style)
@@ -268,7 +271,7 @@ fun TabHeader(
     val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
-            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach)
+            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, firstTab = firstTab)
             Spacer(Modifier.width(style.trailingGap))
             // The fixed slots take the same reach the tabs do: the row is the full height and the
             // controls in it read the reach as target above their visual (IconAction, CountTile).
@@ -299,6 +302,7 @@ fun TabHeader(
  * behaviour goes through [actions]. Each tab observes its own record, so the strip itself
  * recomposes only when tabs open, close, move or the active tab changes. [topReach] is extra
  * height above the visual row that the items take as touch target (the header lends the inset).
+ * [firstTab] is put on the first tab, the control a keyboard's chord into the strip lands on.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -311,6 +315,7 @@ fun TabStrip(
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
     topReach: Dp = 0.dp,
+    firstTab: FocusRequester? = null,
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId) }
@@ -326,6 +331,7 @@ fun TabStrip(
     // Every neighbour already gets [gap]; a chip after the first adds the rest of [groupGap] ahead of itself.
     val chipLead = (style.groupGap - style.gap).coerceAtLeast(0.dp)
     val tabCount = slots.size
+    val firstTabIndex = remember(entries) { entries.indexOfFirst { it is StripEntry.Tab } }
     val scope = rememberCoroutineScope()
 
     val controller = remember(state, scope) { DragController(state, latestEntries, latestActions, haptics, scope) }
@@ -432,7 +438,7 @@ fun TabStrip(
                     actions = actions,
                     groups = orderedGroups,
                     topReach = topReach,
-                    modifier = Modifier.liftable(entry.key, state),
+                    modifier = Modifier.liftable(entry.key, state).then(if (firstTab != null && index == firstTabIndex) Modifier.focusRequester(firstTab) else Modifier),
                 )
                 is StripEntry.Chip -> GroupChip(
                     entry = entry,
