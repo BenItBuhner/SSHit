@@ -1,6 +1,5 @@
 package app.berth.android.ui.stage
 
-import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -67,7 +66,6 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -93,6 +91,8 @@ import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.ShortcutSheet
 import app.berth.android.ui.keyboard.StageShortcutActions
+import app.berth.android.ui.keyboard.compactForHardwareKeyboard
+import app.berth.android.ui.keyboard.rememberHardwareKeyboardAttached
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -197,21 +197,6 @@ fun StageScreen(
         HardwareShortcuts(tabs, stage)
     }
     if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, onDismiss = { shortcutSheet = false })
-
-    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
-    // and the user's own choice survives otherwise. Remembered by the Stage, not the tab, so a tab
-    // switch never re-collapses a Deck the user opened.
-    val configuration = LocalConfiguration.current
-    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
-        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
-    var seenHardwareKeyboard by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(hardwareKeyboard) {
-        if (hardwareKeyboard != seenHardwareKeyboard) {
-            val first = seenHardwareKeyboard == null
-            seenHardwareKeyboard = hardwareKeyboard
-            if (!first || hardwareKeyboard) deckVisible = !hardwareKeyboard
-        }
-    }
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -512,7 +497,12 @@ private fun StageBody(
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
     // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
-    val deckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    val fittedDeckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    // With a hardware keyboard attached the Deck shrinks to its modifier and action row (spec C4,
+    // Settings › Hardware keyboard › Compact Deck); the strip still stands in for a hidden Deck.
+    val hardwareKeyboard by vm.hardwareKeyboard.collectAsState()
+    val compactDeck = rememberHardwareKeyboardAttached() && hardwareKeyboard.compactDeck
+    val deckLayout = remember(fittedDeckLayout, compactDeck) { if (compactDeck) fittedDeckLayout.compactForHardwareKeyboard() else fittedDeckLayout }
     val fontSetting by vm.terminalFont.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
@@ -657,8 +647,8 @@ private fun StageBody(
                 AnimatedVisibility(visible = deckAllowed) {
                     Deck(
                         layout = deckLayout,
-                        layerIndex = layerIndex,
-                        onLayerIndexChange = onLayerIndexChange,
+                        layerIndex = if (compactDeck) 0 else layerIndex,
+                        onLayerIndexChange = { if (!compactDeck) onLayerIndexChange(it) },
                         input = input,
                         enabled = live,
                         onGripTap = onOpenSessionSheet,
@@ -673,7 +663,7 @@ private fun StageBody(
                 }
                 if (!deckVisible && deckStateOk) {
                     DeckStrip(
-                        layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
+                        layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(if (compactDeck) 0 else layerIndex)?.name ?: "Base",
                         latch = latch,
                         onExpand = { onDeckVisibleChange(true) },
                     )
