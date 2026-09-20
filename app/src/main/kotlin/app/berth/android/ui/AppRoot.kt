@@ -42,6 +42,7 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import app.berth.android.security.LockState
 import app.berth.android.security.WindowSecurity
+import app.berth.android.ui.a11y.ConnectionAnnouncer
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -140,6 +141,8 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
                 // the cover hides it in this window and the lock window (LockActivity) lies over
                 // both, since sheets, menus and prompts are windows of their own.
                 if (lock != LockState.UNKNOWN) BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
+                // Every login's state changes, spoken from one live region whatever screen is up (spec A11).
+                if (lock != LockState.UNKNOWN) ConnectionAnnouncer(vm.sessions, Modifier.align(Alignment.TopStart))
                 if (lock == LockState.LOCKED) LockCover()
             }
         }
