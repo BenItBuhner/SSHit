@@ -12,6 +12,7 @@ import com.google.android.apps.common.testing.accessibility.framework.Accessibil
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
 import com.google.android.apps.common.testing.accessibility.framework.Parameters
 import com.google.android.apps.common.testing.accessibility.framework.ViewChecker
+import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
 import com.google.common.collect.ImmutableSet
 import org.robolectric.shadows.ShadowBuild
 import kotlin.math.abs
@@ -55,7 +56,17 @@ fun ComposeTestRule.dumpA11yFindings(label: String) {
                 val check = result.accessibilityHierarchyCheckResult?.sourceCheckClass?.simpleName ?: result.javaClass.simpleName
                 val size = "${(bounds.width / density).roundToInt()}x${(bounds.height / density).roundToInt()}dp"
                 val el = "res=${element.resourceName} cd=${element.contentDescription} text=${element.text} at=$bounds window=${element.window.boundsInScreen}"
-                println("A11YDIAG\t$label\t${result.type}\t$check\t$size\t$el\t${node?.let(::describe) ?: "no node"}")
+                // The framework's own ancestry of the element, with bounds: a target's box is cut where an ancestor's ends.
+                val above = ArrayList<String>()
+                var parent: ViewHierarchyElement? = element.parentView
+                while (parent != null && above.size < 4) {
+                    val className: CharSequence? = parent.className
+                    val description: CharSequence? = parent.contentDescription
+                    val named: String = if (description == null) "" else "($description)"
+                    above += "${className?.toString()?.substringAfterLast('.')}$named@${parent.boundsInScreen}"
+                    parent = parent.parentView
+                }
+                println("A11YDIAG\t$label\t${result.type}\t$check\t$size\t$el\tabove=${above.joinToString(" < ")}\t${node?.let(::describe) ?: "no node"}")
             }
         }
     } finally {
@@ -87,5 +98,7 @@ private fun describe(node: SemanticsNode): String {
     node.children.forEach { collect(it, 1) }
     if (inside.isNotEmpty()) parts += "inside=${inside.take(4).joinToString(",")}"
     parts += "bounds=${node.boundsInWindow}"
+    // The box accessibility measures: the layout grown to the minimum touch target where there is room.
+    parts += "touch=${node.touchBoundsInRoot}"
     return "[" + parts.joinToString(" ") + "]"
 }
