@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  * The names the stored JSON carries for the sealed kinds, and that every kind reads back under its
  * own. A host snapshot writes its [AuthMethod] and a [SessionRecord] its [TabKind] as an object with
  * the subclass named in a `type` field; the name is the `@SerialName` where there is one (`"ssh"`,
- * `"files"`) and the class's own name where there is not (the auth methods), fixed by the compiler
+ * `"files"`, `"tunnels"`) and the class's own name where there is not (the auth methods), fixed by the compiler
  * plugin as a string in the serializer, so a build must read what an earlier one wrote whatever R8
  * renames the classes to. The kinds are listed from the sealed serializers' own descriptors, not
  * written out here, so a kind added later is covered as soon as it exists. `./gradlew testR8` runs
@@ -47,7 +47,8 @@ class SerializedNamesTest {
     @Test
     fun `every tab kind reads back from its serial name, which is the id the database stores`() {
         val names = TabKind.serializer().sealedNames()
-        assertTrue(names.containsAll(listOf("ssh", "files")), "the tab kinds are $names")
+        // `tunnels` is the name @SerialName gives TabKind.Tunnels; R8 stripping it would leave the class's name here.
+        assertTrue(names.containsAll(listOf("ssh", "files", "tunnels")), "the tab kinds are $names")
         for (name in names) {
             val kind = json.decodeFromString(TabKind.serializer(), """{"type":"$name"}""")
             assertEquals(name, kind.id, "the kind named $name in JSON must be the kind stored as $name")
@@ -98,8 +99,13 @@ class SerializedNamesTest {
             assertTrue(""""auth":{"type":"$typeName"""" in text, text)
             assertEquals(host.copy(auth = auth), json.decodeFromString(Host.serializer(), text))
         }
+        // The schema-4 fields ride the snapshot: a tunnels-only host with a chain reads back as one.
+        val tunnelsOnly = host.copy(tunnelsOnly = true)
+        val stored = json.encodeToString(Host.serializer(), tunnelsOnly)
+        assertTrue(""""tunnelsOnly":true""" in stored, stored)
+        assertEquals(tunnelsOnly, json.decodeFromString(Host.serializer(), stored))
         // An unknown key in a stored snapshot, as a newer build's field would be, is read past.
-        val withExtra = json.encodeToString(Host.serializer(), host).replaceFirst("{", """{"tunnelsOnly":true,""")
-        assertEquals(host, json.decodeFromString(Host.serializer(), withExtra))
+        val withExtra = stored.replaceFirst("{", """{"fieldFromALaterBuild":true,""")
+        assertEquals(tunnelsOnly, json.decodeFromString(Host.serializer(), withExtra))
     }
 }
