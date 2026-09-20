@@ -331,8 +331,9 @@ private fun StageOverflow(
                     if (record.state != SessionState.LIVE && record.state != SessionState.CONNECTING) item("Reconnect") { actions.reconnect(tab.id) }
                     if (record.state.isActive) item("Detach") { actions.detach(tab.id) }
                     if (tab.kind == TabKind.Tunnels) {
-                        // No shell behind a Tunnels tab: no Deck, nothing to find or to have run; a terminal on the host is one row away.
+                        // No shell behind a Tunnels tab: no Deck, nothing to find or to have run; a terminal or Files on the host is one row away.
                         item("Terminal") { actions.openTerminal(tab.id) }
+                        item("Files") { actions.openFiles(tab.id) }
                     } else {
                         item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
                         item("Find", action = onFind)
