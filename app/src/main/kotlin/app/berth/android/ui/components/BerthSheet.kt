@@ -22,7 +22,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -42,15 +45,30 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 
 /** The widest a sheet's content goes when it opens as a dialog (spec C23): a phone's width and a half. */
-private val SheetDialogMaxWidth = 560.dp
+val SheetDialogMaxWidth = 560.dp
+
+/** How a [BerthSheet] is on screen: rising from the bottom edge, or as a panel in the middle of a large window. */
+enum class SheetPresentation { SHEET, DIALOG }
+
+/** The presentation of the [BerthSheet] this content is in; [SheetPresentation.SHEET] outside one. */
+val LocalSheetPresentation = compositionLocalOf { SheetPresentation.SHEET }
+
+/**
+ * Whether the sheet's content should fill the sheet's height. As a bottom sheet a list that fills
+ * the height is the design (spec A: a search field over a list, room for the keyboard); as a dialog
+ * the panel wraps what it holds up to its cap and scrolls past it, so six rows are six rows and not
+ * a panel that is mostly empty.
+ */
+@Composable
+fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresentation.SHEET
 
 /**
  * A Berth sheet (spec A, Sheet): radius 28 on `surface.1` with the handle, rising from the bottom
  * on a phone. On a window where a strip across the bottom would be absurd (spec C23, any width and
  * height past compact) the same content opens as a dialog: a panel of the sheet's radius and
- * surface, centred, at most [SheetDialogMaxWidth] wide, over the theme's scrim, with nothing else
- * changed for its content. On a phone the call is the bottom sheet, parameter for parameter, so
- * the phone's frames are what they were.
+ * surface, centred, at most [dialogMaxWidth] wide, over the theme's scrim, with nothing else
+ * changed for its content but what it asks through [sheetFillsHeight]. On a phone the call is the
+ * bottom sheet, parameter for parameter, so the phone's frames are what they were.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,11 +77,14 @@ fun BerthSheet(
     modifier: Modifier = Modifier,
     sheetState: SheetState = rememberModalBottomSheetState(),
     scrimColor: Color = BottomSheetDefaults.ScrimColor,
+    dialogMaxWidth: Dp = SheetDialogMaxWidth,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Berth.colors
     if (windowLayout().dialogs) {
-        SheetDialog(onDismiss = onDismiss, modifier = modifier, content = content)
+        CompositionLocalProvider(LocalSheetPresentation provides SheetPresentation.DIALOG) {
+            SheetDialog(onDismiss = onDismiss, modifier = modifier, maxWidth = dialogMaxWidth, content = content)
+        }
     } else {
         ModalBottomSheet(
             onDismissRequest = onDismiss,
@@ -86,7 +107,7 @@ fun BerthSheet(
  * content that pads for a navigation bar under a sheet pads for nothing here.
  */
 @Composable
-private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp, content: @Composable ColumnScope.() -> Unit) {
     val c = Berth.colors
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
@@ -107,7 +128,7 @@ private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, content: @Com
         ) {
             Column(
                 modifier
-                    .widthIn(max = SheetDialogMaxWidth)
+                    .widthIn(max = maxWidth)
                     .heightIn(max = maxHeight)
                     .clip(RoundedCornerShape(BerthRadius.sheet))
                     .background(c.surface1)

@@ -48,6 +48,7 @@ import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.sheetFillsHeight
 import app.berth.android.ui.hosts.rowSubtitle
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
@@ -111,10 +112,12 @@ fun NewTabSheet(
     }
 
     BerthSheet(onDismiss = onDismiss) {
+        // As a sheet the list fills the height, room for the keyboard under the field; as a dialog
+        // the panel is as tall as its rows (spec C23), so six hosts are not a panel that is mostly empty.
         LazyColumn(
             Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(),
+                .then(if (sheetFillsHeight()) Modifier.fillMaxHeight() else Modifier),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
