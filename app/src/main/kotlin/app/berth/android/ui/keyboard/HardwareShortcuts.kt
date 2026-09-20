@@ -99,8 +99,8 @@ class HardwareShortcuts(
 /** One line of the shortcut sheet: the keys as shown and what they do. */
 data class ShortcutEntry(val keys: String, val action: String)
 
-/** A titled run of the shortcut sheet. */
-data class ShortcutGroup(val title: String, val entries: List<ShortcutEntry>)
+/** A titled run of the shortcut sheet, with a [note] under the rows for what is said once rather than per row. */
+data class ShortcutGroup(val title: String, val entries: List<ShortcutEntry>, val note: String? = null)
 
 /**
  * What the shortcut sheet lists (spec C22), as the dispatchers above and the terminal actually
@@ -130,9 +130,9 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
         ShortcutEntry("Ctrl+Shift+V", "Paste"),
         ShortcutEntry("Ctrl+Shift+E", "Show or hide the Deck"),
         ShortcutEntry("Ctrl+Shift+=  \u00B7  Ctrl+Shift+\u2212", "Font size"),
-        ShortcutEntry("Ctrl+Shift+S", "Focus the tab strip; Tab and the arrows walk it, Enter switches"),
-        ShortcutEntry("Ctrl+Shift+K", "Focus the Deck at its grip; Tab and the arrows walk the keys, Enter presses one"),
-        ShortcutEntry("Esc", "From the strip, the Deck or the search, back to the terminal"),
+        ShortcutEntry("Ctrl+Shift+S", "Focus the tab strip"),
+        ShortcutEntry("Ctrl+Shift+K", "Focus the Deck"),
+        ShortcutEntry("Esc", "Back to the terminal"),
         ShortcutEntry("Ctrl+Shift+/", "This sheet"),
     )
     val paneChords = listOf(
@@ -141,7 +141,7 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
     )
     val terminalKeys = buildList {
         add(ShortcutEntry("Ctrl+letter", "Control characters, ^C to ^Z"))
-        add(ShortcutEntry("Alt+key", "Meta: Escape then the key, or the eighth bit (Settings \u203A Hardware keyboard)"))
+        add(ShortcutEntry("Alt+key", "Meta: Escape then the key, or the eighth bit"))
         add(ShortcutEntry("Shift, Ctrl, Alt + arrows", "Modified arrows, Home, End, Page Up and Down"))
         add(ShortcutEntry("F1 \u2026 F12", "Function keys, with any modifier"))
         add(ShortcutEntry("Esc, Tab, Insert, Delete", "As on the host"))
@@ -149,8 +149,9 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
     }
     return listOf(
         ShortcutGroup("Tabs", tabChords),
-        ShortcutGroup("Stage", stageChords),
+        // The walking rule once, under the rows, rather than in each focus row's action.
+        ShortcutGroup("Stage", stageChords, note = "On the strip and the Deck, Tab and the arrows walk, Enter presses. Esc from the strip, the Deck or the search is back to the terminal."),
         ShortcutGroup("Panes", paneChords),
-        ShortcutGroup("Terminal", terminalKeys),
+        ShortcutGroup("Terminal", terminalKeys, note = "Which Alt is per host: Settings \u203A Hardware keyboard. Unbound combinations always reach the terminal."),
     )
 }

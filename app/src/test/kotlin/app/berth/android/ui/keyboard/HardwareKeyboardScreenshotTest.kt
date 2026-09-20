@@ -31,11 +31,13 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -190,7 +192,31 @@ class HardwareKeyboardScreenshotTest {
         chord(KEYCODE_SLASH, META_CTRL_ON or META_SHIFT_ON)
         waitForText("Keyboard shortcuts")
         waitForText("Next tab")
+        assertShortcutTable()
         capture("shortcut-sheet")
+    }
+
+    /**
+     * C22's table (design review, item 4): a row per chord with the action as its title and the keys
+     * trailing in mono, one line each on a 40 dp row, the reader hearing the action first; and the
+     * whole sheet under two screens, where the two-line rows ran to four.
+     */
+    private fun assertShortcutTable() {
+        val row = compose.onNode(hasContentDescription("Next tab, Ctrl+Tab")).fetchSemanticsNode()
+        val density = compose.density.density
+        assertTrue("a one-line row, ${row.size.height / density} dp", row.size.height / density <= 44f)
+        // The row merges its texts for the reader; the two texts are found under it in the unmerged tree.
+        val title = compose.onNode(hasText("Next tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()
+        val keys = compose.onNode(hasText("Ctrl+Tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()
+        assertTrue("the action leads and the keys trail on the one line", title.boundsInRoot.left < keys.boundsInRoot.left && keys.boundsInRoot.right <= row.boundsInRoot.right)
+        assertTrue("the two share the line", title.boundsInRoot.top < keys.boundsInRoot.bottom && keys.boundsInRoot.top < title.boundsInRoot.bottom)
+        // The sheet's scroll: what is on screen plus what is left to scroll is the whole table.
+        val scroll = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and hasAnyDescendant(hasText("Keyboard shortcuts"))).fetchSemanticsNode()
+        val range = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+        val whole = (scroll.size.height + range.maxValue()) / density
+        // Two roots stand, the Stage's and the sheet's window, both the screen's size.
+        val screen = compose.onAllNodes(isRoot()).fetchSemanticsNodes().maxOf { it.size.height } / density
+        assertTrue("the sheet is under two screens: $whole dp of $screen", whole < 2 * screen)
     }
 
     @Test
