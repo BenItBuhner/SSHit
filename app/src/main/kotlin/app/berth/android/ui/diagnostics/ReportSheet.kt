@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -35,7 +36,9 @@ import app.berth.android.ui.prompts.PromptSheet
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
@@ -64,13 +67,17 @@ fun CrashReportHost(reports: CrashReporter) {
  * One report in full, from the sheet on launch or from the Diagnostics list: the text in Mono
  * so it reads as what it is, one paragraph saying what it holds, including what in it would
  * name the user's own hosts, then Share, Copy and [last] (Keep for later on launch, Delete from the list).
+ * The file is read off the main thread; until it is here the box says so and the two buttons
+ * that would send its text wait, as they do when the file could not be read at all.
  */
 @Composable
 fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () -> Unit, last: @Composable () -> Unit) {
     val c = Berth.colors
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val text = remember(report.id) { report.read() }
+    val read by produceState<String?>(initialValue = null, report.id) { value = withContext(Dispatchers.IO) { report.read() } }
+    val text = read
+    val readable = !text.isNullOrEmpty()
     var copied by remember { mutableStateOf(false) }
     if (copied) LaunchedEffect(Unit) { delay(1_500); copied = false }
     PromptSheet(onDismiss = onDismiss) {
@@ -78,7 +85,11 @@ fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () ->
         // Wrapped, the way a log reads on a phone: a stack frame or a 200-character log line runs on to the
         // next line rather than past the box's edge, where a horizontal scroll with no cue reads as a cut.
         Text(
-            text.ifEmpty { "The report could not be read." },
+            when {
+                text == null -> "Reading the report\u2026"
+                text.isEmpty() -> "The report could not be read."
+                else -> text
+            },
             style = BerthType.mono.copy(fontSize = 11.sp, lineHeight = 15.sp),
             color = c.text1,
             modifier = Modifier
@@ -100,8 +111,8 @@ fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () ->
             color = c.text2,
         )
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            BerthButton("Share report", onClick = { shareText(context, "${report.kind.heading} \u00B7 ${formatDateTime(report.at)}", text, mime = "text/plain") }, kind = ButtonKind.PRIMARY, modifier = Modifier.fillMaxWidth())
-            BerthButton(if (copied) "Copied" else "Copy report", onClick = { clipboard.setText(AnnotatedString(text)); copied = true }, kind = ButtonKind.SECONDARY, modifier = Modifier.fillMaxWidth())
+            BerthButton("Share report", onClick = { text?.let { shareText(context, "${report.kind.heading} \u00B7 ${formatDateTime(report.at)}", it, mime = "text/plain") } }, kind = ButtonKind.PRIMARY, enabled = readable, modifier = Modifier.fillMaxWidth())
+            BerthButton(if (copied) "Copied" else "Copy report", onClick = { text?.let { clipboard.setText(AnnotatedString(it)); copied = true } }, kind = ButtonKind.SECONDARY, enabled = readable, modifier = Modifier.fillMaxWidth())
             last()
         }
     }

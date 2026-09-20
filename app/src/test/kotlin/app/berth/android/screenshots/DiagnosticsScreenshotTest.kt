@@ -137,10 +137,11 @@ class DiagnosticsScreenshotTest {
 
         compose.setContent { AppRoot(graph.viewModel) }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Berth crashed last time").fetchSemanticsNodes().isNotEmpty() }
+        // The file is read off the main thread; the box holds it once it is here, whole and once.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth crash report", substring = true)).fetchSemanticsNodes().size == 1 }
         compose.onNodeWithText("Share report").assertIsDisplayed()
         compose.onNodeWithText("Copy report").assertIsDisplayed()
         compose.onNodeWithText("Keep for later").assertIsDisplayed()
-        compose.onAllNodes(hasText("Berth crash report", substring = true)).assertCountEquals(1)
         compose.onAllNodes(hasText("java.lang.IllegalStateException: Frame 1 of 1 has no cells for row 24", substring = true)).assertCountEquals(1)
         // What the report holds is said once, on the sheet and not inside the file, and says what in it names the
         // user's own hosts; the caption alone says nothing was sent.
@@ -204,7 +205,7 @@ class DiagnosticsScreenshotTest {
 
         compose.onNodeWithText("Connection lost: homelab").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Share report").fetchSemanticsNodes().isNotEmpty() }
-        compose.onAllNodes(hasText("Berth connection report", substring = true)).assertCountEquals(1)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth connection report", substring = true)).fetchSemanticsNodes().size == 1 }
         compose.onAllNodes(hasText("Reason    Broken pipe", substring = true)).assertCountEquals(1)
         settle(300)
         capture("diagnostics-report")

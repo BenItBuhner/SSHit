@@ -120,13 +120,15 @@ class CrashReporterTest {
         assertTrue(text, text.contains(" D App: process started\n"))
         assertTrue(text, text.contains(" E Crash: uncaught exception on thread ${Thread.currentThread().name} ! java.lang.IllegalStateException: boom\n"))
 
-        // The process that crashed shows no sheet; the next launch over the same store does, once.
+        // The process that crashed shows no sheet; the next launch over the same store does, once. install()
+        // reads the store on a thread of its own, off the startup path, so the launch waits for it here.
         assertNull(reports.unread.value)
         val next = reporter().also { it.install() }
+        await("the next launch has read the store") { next.unread.value != null }
         assertEquals(report.id, next.unread.value?.id)
         next.markRead()
         assertNull(next.unread.value)
-        assertNull("read stays read", reporter().also { it.install() }.unread.value)
+        assertNull("read stays read", reporter().also { it.reload() }.unread.value)
         assertEquals("the report itself is kept", listOf(report.id), next.reports.value.map { it.id })
 
         // Installing twice does not stack handlers: the second call finds its own kind in place.
@@ -162,10 +164,18 @@ class CrashReporterTest {
         reports.onCrash(Thread.currentThread(), RuntimeException("gone"))
         val report = reports.reports.value.single()
         report.file.delete()
-        val next = reporter().also { it.install() }
+        val next = reporter().also { it.reload() }
         assertNull(next.unread.value)
         assertTrue(next.reports.value.isEmpty())
         assertFalse(File(dir, "unread").exists())
+    }
+
+    private fun await(what: String, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionError("timed out waiting for $what")
+            Thread.sleep(10)
+        }
     }
 
     @Test

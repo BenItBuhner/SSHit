@@ -78,17 +78,22 @@ class CrashReporter(
     /** The crash of a previous run the user has not seen yet; the sheet shows it, [markRead] clears it. */
     val unread: StateFlow<Report?> = _unread.asStateFlow()
 
-    /** Puts this in front of the default handler (once; a second call only re-reads the store). */
+    /**
+     * Puts this in front of the default handler, at once and on the calling thread, so a crash anywhere
+     * after this line is written; a second call finds its own handler in place and leaves it. The store
+     * (up to [MAX_REPORTS] files, three lines read from each) is then read on a thread of its own, off
+     * the startup path, and [reports] and [unread] are set from there.
+     */
     fun install() {
         val current = Thread.getDefaultUncaughtExceptionHandler()
         if (current !is CrashHandler) {
             previous = current
             Thread.setDefaultUncaughtExceptionHandler(CrashHandler())
         }
-        reload()
+        Thread(::reload, "berth-reports").apply { isDaemon = true }.start()
     }
 
-    /** Re-reads the store, the way the next launch's [install] does: tests stand in for that launch with this. */
+    /** Re-reads the store on the calling thread, the way the next launch's [install] does: tests stand in for that launch with this. */
     internal fun reload() {
         synchronized(lock) { refresh() }
     }
