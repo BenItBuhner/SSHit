@@ -240,7 +240,7 @@ class RemoteClipboardGateTest {
     fun `an empty write reads as empty and counts its bytes in UTF-8`() {
         assertEquals("(empty)", ClipboardPreview.of("").shown)
         assertFalse(ClipboardPreview.of("").truncated)
-        assertEquals(6, ClipboardPreview.of("caf\u00E9\u65E5").totalBytes)
+        assertEquals("c a f, é in two bytes, 日 in three", 8, ClipboardPreview.of("caf\u00E9\u65E5").totalBytes)
     }
 
     @Test
