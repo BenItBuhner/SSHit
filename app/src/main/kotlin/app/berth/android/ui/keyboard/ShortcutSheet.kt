@@ -34,7 +34,7 @@ import app.berth.android.ui.theme.JetBrainsMono
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ShortcutSheet(ctrlTabKeysReachTerminal: Boolean, onDismiss: () -> Unit) {
+fun ShortcutSheet(ctrlTabKeysReachTerminal: Boolean, onDismiss: () -> Unit, panes: Boolean = false) {
     val c = Berth.colors
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -56,7 +56,7 @@ fun ShortcutSheet(ctrlTabKeysReachTerminal: Boolean, onDismiss: () -> Unit) {
                 if (ctrlTabKeysReachTerminal) "Ctrl+T, Ctrl+W and Ctrl+F go to the shell; their Shift chords act here (Settings \u203A Hardware keyboard)."
                 else "Ctrl+Shift+/ opens this sheet; Settings \u203A Hardware keyboard hands Ctrl+T and Ctrl+W to the shell.",
             )
-            for (group in shortcutGroups(ctrlTabKeysReachTerminal)) {
+            for (group in shortcutGroups(ctrlTabKeysReachTerminal, panes)) {
                 Panel(label = group.title) {
                     for (entry in group.entries) ShortcutRow(entry)
                 }

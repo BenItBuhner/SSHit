@@ -3,12 +3,14 @@ package app.berth.android.ui.keyboard
 import android.view.KeyEvent.ACTION_DOWN
 import android.view.KeyEvent.ACTION_UP
 import android.view.KeyEvent.KEYCODE_C
+import android.view.KeyEvent.KEYCODE_D
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_EQUALS
 import android.view.KeyEvent.KEYCODE_F
 import android.view.KeyEvent.KEYCODE_MINUS
 import android.view.KeyEvent.KEYCODE_NUMPAD_ADD
 import android.view.KeyEvent.KEYCODE_NUMPAD_SUBTRACT
+import android.view.KeyEvent.KEYCODE_O
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_TAB
 import android.view.KeyEvent.KEYCODE_V
@@ -45,6 +47,8 @@ class HardwareShortcutsTest {
             override fun toggleDeck() { calls += "deck" }
             override fun fontStep(step: Int) { calls += "font $step" }
             override fun shortcutSheet() { calls += "sheet" }
+            override fun split() { calls += "split" }
+            override fun focusOtherPane() { calls += "other pane" }
         },
     )
 
@@ -95,10 +99,30 @@ class HardwareShortcutsTest {
     }
 
     @Test
+    fun `the pane chords are taken on every width, and the plain letters stay the shell's`() {
+        assertTrue(shortcuts.handle(key(KEYCODE_D, META_CTRL_ON or META_SHIFT_ON), false))
+        assertTrue(shortcuts.handle(key(KEYCODE_O, META_CTRL_ON or META_SHIFT_ON), false))
+        // Ctrl+D is end-of-file and Ctrl+O readline's operate-and-get-next; both reach the shell.
+        assertFalse(shortcuts.handle(key(KEYCODE_D, META_CTRL_ON), false))
+        assertFalse(shortcuts.handle(key(KEYCODE_O, META_CTRL_ON), false))
+        assertEquals(listOf("split", "other pane"), calls)
+    }
+
+    @Test
+    fun `the sheet's pane rows say when they wait for a wider screen`() {
+        val phone = shortcutGroups(ctrlTabKeysReachTerminal = false, panes = false).first { it.title == "Panes" }.entries
+        val tablet = shortcutGroups(ctrlTabKeysReachTerminal = false, panes = true).first { it.title == "Panes" }.entries
+        assertEquals(listOf("Ctrl+Shift+D", "Ctrl+Shift+O"), phone.map { it.keys })
+        assertEquals(phone.map { it.keys }, tablet.map { it.keys })
+        assertTrue(phone.all { "wide screen" in it.action || "when the Stage is split" in it.action })
+        assertEquals(listOf("Split the Stage", "Focus the other pane"), tablet.map { it.action })
+    }
+
+    @Test
     fun `the sheet lists the readline keys on whichever side the setting puts them`() {
         val app = shortcutGroups(ctrlTabKeysReachTerminal = false)
         val shell = shortcutGroups(ctrlTabKeysReachTerminal = true)
-        assertEquals(listOf("Tabs", "Stage", "Terminal"), app.map { it.title })
+        assertEquals(listOf("Tabs", "Stage", "Panes", "Terminal"), app.map { it.title })
         val appKeys = app.flatMap { it.entries }.map { it.keys }
         val shellKeys = shell.flatMap { it.entries }.map { it.keys }
         assertTrue("Ctrl+T" in appKeys && "Ctrl+W" in appKeys && "Ctrl+F" in appKeys)

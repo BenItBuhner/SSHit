@@ -30,6 +30,16 @@ interface StageShortcutActions {
 
     /** Ctrl+Shift+/ (Ctrl+?): the shortcut sheet. */
     fun shortcutSheet()
+
+    /** Ctrl+Shift+D: split the Stage into panes (spec C22, medium and expanded widths; [PaneActions.split]). */
+    fun split()
+
+    /**
+     * Ctrl+Shift+O: the keyboard to the other pane ([PaneActions.focusOtherPane]). `O` is tmux's
+     * `select-pane` key, and the arrows and Tab are the shell's, so a chord is the one way out of a
+     * canvas that does not go through a sheet.
+     */
+    fun focusOtherPane()
 }
 
 /**
@@ -59,6 +69,8 @@ class HardwareShortcuts(
             Key.Minus -> if (shift) { stage.fontStep(-1); true } else false
             Key.NumPadSubtract -> { stage.fontStep(-1); true }
             Key.Slash -> if (shift) { stage.shortcutSheet(); true } else false
+            Key.D -> if (shift) { stage.split(); true } else false
+            Key.O -> if (shift) { stage.focusOtherPane(); true } else false
             else -> false
         }
     }
@@ -72,9 +84,11 @@ data class ShortcutGroup(val title: String, val entries: List<ShortcutEntry>)
 
 /**
  * What the shortcut sheet lists (spec C22), as the dispatchers above and the terminal actually
- * behave; [ctrlTabKeysReachTerminal] moves Ctrl+T, Ctrl+W and Ctrl+F to the terminal's side.
+ * behave; [ctrlTabKeysReachTerminal] moves Ctrl+T, Ctrl+W and Ctrl+F to the terminal's side, and
+ * [panes] says whether the Stage on screen has panes for the pane chords to act on, since the sheet
+ * lists them either way (they are taken either way) and says when they wait for a wider screen.
  */
-fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean): List<ShortcutGroup> {
+fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): List<ShortcutGroup> {
     val tabChords = buildList {
         add(ShortcutEntry("Ctrl+Tab", "Next tab"))
         add(ShortcutEntry("Ctrl+Shift+Tab", "Previous tab"))
@@ -98,6 +112,10 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean): List<ShortcutGroup> {
         ShortcutEntry("Ctrl+Shift+=  \u00B7  Ctrl+Shift+\u2212", "Font size"),
         ShortcutEntry("Ctrl+Shift+/", "This sheet"),
     )
+    val paneChords = listOf(
+        ShortcutEntry("Ctrl+Shift+D", if (panes) "Split the Stage" else "Split the Stage, on a wide screen"),
+        ShortcutEntry("Ctrl+Shift+O", if (panes) "Focus the other pane" else "Focus the other pane, when the Stage is split"),
+    )
     val terminalKeys = buildList {
         add(ShortcutEntry("Ctrl+letter", "Control characters, ^C to ^Z"))
         add(ShortcutEntry("Alt+key", "Meta: Escape then the key, or the eighth bit (Settings \u203A Hardware keyboard)"))
@@ -109,6 +127,7 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean): List<ShortcutGroup> {
     return listOf(
         ShortcutGroup("Tabs", tabChords),
         ShortcutGroup("Stage", stageChords),
+        ShortcutGroup("Panes", paneChords),
         ShortcutGroup("Terminal", terminalKeys),
     )
 }

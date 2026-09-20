@@ -92,6 +92,7 @@ import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.ShortcutSheet
+import app.berth.android.ui.keyboard.LocalPaneActions
 import app.berth.android.ui.keyboard.StageShortcutActions
 import app.berth.android.ui.keyboard.compactForHardwareKeyboard
 import app.berth.android.ui.keyboard.rememberHardwareKeyboardAttached
@@ -160,7 +161,9 @@ fun StageScreen(
     var shortcutSheet by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val haptics = rememberDeckHaptics()
-    val shortcuts = remember(vm, actions, tab, tools) {
+    // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
+    val panes = LocalPaneActions.current
+    val shortcuts = remember(vm, actions, tab, tools, panes) {
         val tabs = TabShortcuts(
             step = vm::stepTab,
             jump = { index ->
@@ -198,10 +201,12 @@ fun StageScreen(
                 vm.setFontSize(size + step)
             }
             override fun shortcutSheet() { shortcutSheet = true }
+            override fun split() { panes.split?.invoke() }
+            override fun focusOtherPane() { panes.focusOtherPane?.invoke() }
         }
         HardwareShortcuts(tabs, stage)
     }
-    if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, onDismiss = { shortcutSheet = false })
+    if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, panes = panes.available, onDismiss = { shortcutSheet = false })
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -528,13 +533,13 @@ private fun StageBody(
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = tools.viewport
     val focusRequester = focusRequester ?: remember { FocusRequester() }
+    // The screen reader's terminal: the canvas' text and the live region beside it share it.
+    val accessibility = remember(session.id) { TerminalAccessibility() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
     val input = remember(session.id) {
         StageInput(
             session = { session },
-    // The screen reader's terminal: the canvas' text and the live region beside it share it.
-    val accessibility = remember(session.id) { TerminalAccessibility() }
             latch = latch,
             // A Deck key bound to a snippet lands here: run it, or ask for its placeholders first.
             onSnippet = { id ->
@@ -611,14 +616,14 @@ private fun StageBody(
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },
+                accessibility = accessibility,
             )
+            TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
                 EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
             ScrolledPill(viewport, Modifier.align(Alignment.TopEnd))
-                accessibility = accessibility,
             NoticePill(tools, Modifier.align(Alignment.TopCenter))
-            TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (record.state == SessionState.FAILED) {
                 FailedPanel(
                     plain = failure?.plain ?: "Couldn't connect.",
