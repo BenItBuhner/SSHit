@@ -93,8 +93,8 @@ import kotlin.math.roundToInt
 /** The gap between the panes (spec C23): 12 dp, draggable, no line. */
 private val PaneGap = 12.dp
 
-/** How far past the gap the divider answers a finger, each side (spec A11: targets of 44). */
-private val DividerReach = 16.dp
+/** How far past the gap the divider answers a finger, each side: the 48 dp target every control has (spec A11). */
+private val DividerReach = 18.dp
 
 /** The least a pane can be: enough for a 40-column terminal at the default size, or a Files row. */
 private val MinPaneWidth = 240.dp
@@ -449,7 +449,7 @@ private fun PaneHeader(
  * The gap between the panes, draggable (spec C23): a 4 × 24 pill in `text.3` centred in the gap,
  * resting at [DividerRestAlpha] so two same-theme terminals still show where the boundary is and
  * that it moves (a grip, not a line), full while a finger holds it. The touch area reaches
- * [DividerReach] over each pane's edge, so a 12 dp gap answers a 44 dp target. TalkBack moves it
+ * [DividerReach] over each pane's edge, so a 12 dp gap answers a 48 dp target. TalkBack moves it
  * in tenths.
  */
 @Composable
