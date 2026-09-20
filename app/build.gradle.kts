@@ -132,8 +132,9 @@ roborazzi {
 }
 
 tasks.withType<Test>().configureEach {
-    // Screenshot tests that drive a live session read the same sshd variables as :core:ssh.
-    for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD")) {
+    // Screenshot tests that drive a live session read the same sshd variables as :core:ssh, plus the
+    // P-256 key the Keystore stand-in signs with (its public half in the test user's authorized_keys).
+    for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD", "SSH_TEST_P256_KEY_FILE")) {
         environment(name, System.getenv(name) ?: "")
     }
     maxHeapSize = "3g"
