@@ -35,7 +35,7 @@ sealed interface NotificationPrompt {
     /** Raised once, after the first successful connect: why Berth wants to notify, then the system dialog. */
     data object Rationale : NotificationPrompt
 
-    /** The permission was refused: a one-time notice of what that costs and where to turn it on. */
+    /** The permission was refused: `Notifications are off · Settings`, a six-second notice shown once. */
     data object Denied : NotificationPrompt
 }
 
@@ -58,7 +58,7 @@ data class SessionsSummary(val lines: List<SessionLine>, val tunnels: Int, val t
  * app is away) and Problems (high, a reconnect that gave up or a sign-in that failed). Every
  * notification about one tab opens that tab. The runtime permission is asked for once, after the
  * first successful connect and with its reason, never on a cold first launch; a refusal earns one
- * in-app notice, and Settings keeps a row to the system page.
+ * six-second notice, and Settings keeps a row to the system page.
  */
 @Singleton
 class SessionNotifier @Inject constructor(@ApplicationContext private val context: Context) {
@@ -106,6 +106,14 @@ class SessionNotifier @Inject constructor(@ApplicationContext private val contex
     /** The rationale's "Not now": no second ask; Settings › Notifications is the way back. */
     fun onRationaleDeclined() {
         prefs.edit().putBoolean(KEY_ASKED, true).apply()
+        if (_prompt.value == NotificationPrompt.Rationale) _prompt.value = null
+    }
+
+    /**
+     * The rationale was swiped or scrimmed away without an answer: gone for this process, nothing
+     * remembered, so the next process's first Live raises it again. Only the button is a decision.
+     */
+    fun onRationaleDismissed() {
         if (_prompt.value == NotificationPrompt.Rationale) _prompt.value = null
     }
 

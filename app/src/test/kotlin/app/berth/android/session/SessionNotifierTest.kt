@@ -79,7 +79,7 @@ class SessionNotifierTest {
     // ---- the permission ------------------------------------------------------------------------
 
     @Test
-    fun `the permission is asked once, after the first live, with its rationale first`() {
+    fun `the permission is asked once, after the first live, with its rationale first, and Not now is the answer`() {
         assertTrue(notifier.needsPermission)
         assertFalse(notifier.asked)
         assertFalse(notifier.enabled.value)
@@ -94,6 +94,24 @@ class SessionNotifierTest {
         assertTrue(next.asked)
         next.onFirstLive()
         assertNull(next.prompt.value)
+    }
+
+    @Test
+    fun `a swipe or scrim dismissal puts the sheet away without answering, so the next process asks again`() {
+        notifier.onFirstLive()
+        assertEquals(NotificationPrompt.Rationale, notifier.prompt.value)
+        notifier.onRationaleDismissed()
+        assertNull("gone for this process", notifier.prompt.value)
+        assertFalse("but nothing was decided", notifier.asked)
+        val next = SessionNotifier(context)
+        assertFalse(next.asked)
+        next.onFirstLive()
+        assertEquals("the next process's first Live raises it again", NotificationPrompt.Rationale, next.prompt.value)
+        // Dismissing something other than the rationale changes nothing.
+        next.onPermissionResult(granted = false)
+        assertEquals(NotificationPrompt.Denied, next.prompt.value)
+        next.onRationaleDismissed()
+        assertEquals(NotificationPrompt.Denied, next.prompt.value)
     }
 
     @Test

@@ -4,11 +4,16 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.NotificationPrompt
@@ -16,12 +21,15 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
+import kotlinx.coroutines.delay
 
 /**
  * The notification permission's two moments (spec C1 note, C21): the rationale sheet after the
- * first successful connect, which hands over to the system dialog, and the one-time notice when
+ * first successful connect, which hands over to the system dialog, and the six-second notice when
  * that dialog was refused. Whatever the notifier says is due is shown; its `on…` calls clear it.
  */
 @Composable
@@ -31,28 +39,32 @@ fun NotificationPermissionHost(notifier: SessionNotifier) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         notifier.onPermissionResult(granted)
     }
-    when (prompt) {
-        null -> Unit
-        NotificationPrompt.Rationale -> NotificationRationaleSheet(
+    if (prompt == NotificationPrompt.Rationale) {
+        NotificationRationaleSheet(
             onContinue = { launcher.launch(Manifest.permission.POST_NOTIFICATIONS) },
             onNotNow = notifier::onRationaleDeclined,
-        )
-        NotificationPrompt.Denied -> NotificationDeniedSheet(
-            onOpenSettings = {
-                notifier.onDeniedNoticeDismissed()
-                context.startActivity(notifier.systemSettingsIntent())
-            },
-            onDismiss = notifier::onDeniedNoticeDismissed,
+            onDismiss = notifier::onRationaleDismissed,
         )
     }
+    NotificationDeniedNotice(
+        visible = prompt == NotificationPrompt.Denied,
+        onSettings = {
+            notifier.onDeniedNoticeDismissed()
+            context.startActivity(notifier.systemSettingsIntent())
+        },
+        onTimeout = notifier::onDeniedNoticeDismissed,
+    )
 }
 
-/** Why Berth wants to notify, in the spec's words, before the system asks. Dismissing is "Not now". */
+/**
+ * Why Berth wants to notify, before the system asks. Only "Not now" is an answer; a swipe or a tap
+ * on the scrim just puts the sheet away ([onDismiss]), and the next process asks again.
+ */
 @Composable
-internal fun NotificationRationaleSheet(onContinue: () -> Unit, onNotNow: () -> Unit) {
+internal fun NotificationRationaleSheet(onContinue: () -> Unit, onNotNow: () -> Unit, onDismiss: () -> Unit) {
     val c = Berth.colors
-    PromptSheet(onDismiss = onNotNow) {
-        SheetTitle("Allow notifications", "To keep sessions alive when you switch apps.")
+    PromptSheet(onDismiss = onDismiss) {
+        SheetTitle("Allow notifications", "To hear from your sessions while you're in another app.")
         Text(
             "Berth shows one quiet notification while sessions are connected, with Detach all on it. " +
                 "A tab that needs you, or a connection that gives up, gets its own.",
@@ -67,21 +79,25 @@ internal fun NotificationRationaleSheet(onContinue: () -> Unit, onNotNow: () -> 
     }
 }
 
-/** Shown once after a refusal: what is lost, and the way back through the system page. */
+/**
+ * `Notifications are off · Settings` for six seconds after a refusal, once: the same bar as Reopen,
+ * at the bottom of whatever screen is up. The user just said no, so nothing argues; the way back is
+ * the action here and the Settings row after.
+ */
 @Composable
-internal fun NotificationDeniedSheet(onOpenSettings: () -> Unit, onDismiss: () -> Unit) {
-    val c = Berth.colors
-    PromptSheet(onDismiss = onDismiss) {
-        SheetTitle("Notifications are off", "Sessions keep running in the background either way.")
-        Text(
-            "Without them there is no Detach all outside the app, no word when a tab needs you and no warning " +
-                "when a connection gives up. Turn them on in the system settings whenever you like.",
-            style = BerthType.body,
-            color = c.text2,
+internal fun NotificationDeniedNotice(visible: Boolean, onSettings: () -> Unit, onTimeout: () -> Unit) {
+    LaunchedEffect(visible) {
+        if (!visible) return@LaunchedEffect
+        delay(NOTICE_BAR_MS)
+        onTimeout()
+    }
+    Box(Modifier.fillMaxSize()) {
+        NoticeBar(
+            visible = visible,
+            text = "Notifications are off",
+            action = "Settings",
+            onAction = onSettings,
+            modifier = Modifier.align(Alignment.BottomCenter),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BerthButton("Open settings", onClick = onOpenSettings, kind = ButtonKind.PRIMARY)
-            BerthButton("Dismiss", onClick = onDismiss, kind = ButtonKind.TEXT)
-        }
     }
 }
