@@ -207,20 +207,26 @@ class AppViewModel @Inject constructor(
 
     /**
      * An `ssh://` or `sftp://` link, or a bare `user@host:port` ([SshLink]). A saved host at the
-     * link's address, port and user opens straight away, as the link asks ([openFromLink]); no such
-     * host sends the shell to the editor, prefilled from the link, and saving there connects. A link
-     * that cannot be read ends in a notice naming what was wrong, never in a crash.
+     * link's address, port and user opens straight away, as the link asks ([openFromLink]), unless
+     * the link carries forwards that host does not have: nothing a link asks for is saved or
+     * started unseen, so those open the host's editor with the forwards as pending rows, and Save
+     * there adds them and connects ([LinkOutcome.ConfirmForwards]). No such host sends the shell to
+     * the editor prefilled from the link, where the same rows show, and saving there connects. A
+     * link that cannot be read ends in a notice naming what was wrong, never in a crash.
      */
     suspend fun openLink(raw: String) {
         _linkOutcome.value = when (val result = SshLink.parse(raw)) {
             is SshLink.Result.Malformed -> LinkOutcome.Malformed(result.reason)
             is SshLink.Result.Parsed -> {
-                val host = hostFor(result.link)
-                if (host == null) {
-                    LinkOutcome.NewHost(raw)
-                } else {
-                    openFromLink(host, result.link)
-                    LinkOutcome.Staged
+                val link = result.link
+                val host = hostFor(link)
+                when {
+                    host == null -> LinkOutcome.NewHost(raw)
+                    pendingForwards(link, tunnelsOf(host.id)).isNotEmpty() -> LinkOutcome.ConfirmForwards(host.id, raw)
+                    else -> {
+                        openFromLink(host, link)
+                        LinkOutcome.Staged
+                    }
                 }
             }
         }
@@ -237,11 +243,10 @@ class AppViewModel @Inject constructor(
     /**
      * Opens what [link] asks for on [host]: Files at the link's folder for `sftp://`, the host's
      * forwards alone for a tunnels-only link, otherwise a terminal (or the forwards, when the host
-     * itself is marked tunnels only). Forwards the link carries are saved on the host first, each
-     * once, so they start with the login and stay in the host's tunnels.
+     * itself is marked tunnels only). Saves nothing: forwards the link carries reach the host's
+     * tunnels only through the editor's Save ([saveHostFromLink]).
      */
     suspend fun openFromLink(host: Host, link: SshLink) {
-        saveForwards(host, link.forwards)
         when {
             link.scheme == SshLink.Scheme.SFTP -> sessions.openFilesForHost(host, folder = link.path)
             link.tunnelsOnly -> sessions.openTunnels(host)
@@ -249,38 +254,22 @@ class AppViewModel @Inject constructor(
         }
     }
 
-    /** Saves a host made in the editor from a link, then opens what the link asked for on it. */
-    fun saveHostFromLink(host: Host, password: String?, link: SshLink) {
+    /**
+     * The editor's Save for a host opened from a link, new or saved: stores the host, adds
+     * [forwards] (the link's pending rows the user kept, already seen on screen) to its tunnels,
+     * enabled so they start with the login the link asks for, then opens what the link asked for.
+     */
+    fun saveHostFromLink(host: Host, password: String?, link: SshLink, forwards: List<SshConfigForward>) {
         viewModelScope.launch {
             val saved = saveHostNow(host, password)
+            for (fwd in pendingForwards(forwards, tunnelsOf(saved.id))) tunnelRepository.upsert(fwd.toTunnel(saved.id))
             openFromLink(saved, link)
             _linkOutcome.value = LinkOutcome.Staged
         }
     }
 
-    private suspend fun saveForwards(host: Host, forwards: List<SshConfigForward>) {
-        if (forwards.isEmpty()) return
-        val existing = tunnelRepository.observeAll().first().filter { it.hostId == host.id }
-        for (fwd in forwards) {
-            val same = existing.any {
-                it.type == fwd.type && it.bindAddress == fwd.bindAddress && it.bindPort == fwd.bindPort &&
-                    (fwd.type == TunnelType.DYNAMIC || (it.destinationHost == fwd.destinationHost && it.destinationPort == fwd.destinationPort))
-            }
-            if (same) continue
-            tunnelRepository.upsert(
-                Tunnel(
-                    id = UUID.randomUUID().toString(),
-                    hostId = host.id,
-                    type = fwd.type,
-                    bindAddress = fwd.bindAddress,
-                    bindPort = fwd.bindPort,
-                    destinationHost = fwd.destinationHost.ifEmpty { "localhost" },
-                    destinationPort = fwd.destinationPort,
-                    enabled = true,
-                ),
-            )
-        }
-    }
+    /** The saved tunnels of the host [hostId], read once. */
+    suspend fun tunnelsOf(hostId: String): List<Tunnel> = tunnelRepository.observeAll().first().filter { it.hostId == hostId }
 
     /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
     fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): Boolean {
@@ -733,6 +722,32 @@ class AppViewModel @Inject constructor(
 
         fun newThemeId(): String = "theme-" + UUID.randomUUID().toString().take(8)
 
+        /**
+         * The forwards of [link] that a host's [saved] tunnels do not already carry: what its editor
+         * lists as pending rows and Save adds. One the host already has is nothing to ask about, so a
+         * link opened twice adds nothing the second time.
+         */
+        fun pendingForwards(link: SshLink, saved: List<Tunnel>): List<SshConfigForward> = pendingForwards(link.forwards, saved)
+
+        fun pendingForwards(forwards: List<SshConfigForward>, saved: List<Tunnel>): List<SshConfigForward> =
+            forwards.filterNot { fwd -> saved.any { it.carries(fwd) } }
+
+        private fun Tunnel.carries(fwd: SshConfigForward): Boolean =
+            type == fwd.type && bindAddress == fwd.bindAddress && bindPort == fwd.bindPort &&
+                (fwd.type == TunnelType.DYNAMIC || (destinationHost == fwd.destinationHost && destinationPort == fwd.destinationPort))
+
+        /** A forward from a link as a tunnel on [hostId], enabled: the login the link asks for carries it. */
+        fun SshConfigForward.toTunnel(hostId: String, id: String = UUID.randomUUID().toString()): Tunnel = Tunnel(
+            id = id,
+            hostId = hostId,
+            type = type,
+            bindAddress = bindAddress,
+            bindPort = bindPort,
+            destinationHost = destinationHost.ifEmpty { "localhost" },
+            destinationPort = destinationPort,
+            enabled = true,
+        )
+
         private val QUICK = Regex("""^(?:ssh://)?(?:([^@\s]+)@)?(\[[0-9a-fA-F:.]+]|[^:\s/@]+)(?::(\d{1,5}))?/?$""")
 
         /** Returns (user, address, port) or null when [spec] is not an address. */
@@ -756,6 +771,12 @@ sealed interface LinkOutcome {
 
     /** No saved host matched: the editor opens prefilled from [raw], and saving there connects. */
     data class NewHost(val raw: String) : LinkOutcome
+
+    /**
+     * The saved host [hostId] matched, but [raw] carries forwards it does not have: the editor
+     * opens on the host with them as pending rows, and saving there adds them and connects.
+     */
+    data class ConfirmForwards(val hostId: String, val raw: String) : LinkOutcome
 
     /** The link could not be read; [reason] is one sentence for the notice bar. */
     data class Malformed(val reason: String) : LinkOutcome

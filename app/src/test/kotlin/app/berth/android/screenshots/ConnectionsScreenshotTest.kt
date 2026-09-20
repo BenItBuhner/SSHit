@@ -1,6 +1,7 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.os.Looper
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -61,6 +62,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -200,8 +202,9 @@ class ConnectionsScreenshotTest {
     /**
      * An `ssh://` link no saved host answers to: the editor opens with the name from the fragment,
      * the address, port and user from the link, Tunnels only on because the link asks only for
-     * forwards, a line at the top saying where the fields came from and that its two forwards are
-     * saved with the host, and the header's button doing both: Save and open tunnels.
+     * forwards, a line at the top saying no saved host matched, and the header's button doing both:
+     * Save and open tunnels. The Tunnels panel lists the link's two forwards as pending rows, each
+     * with its switch, over the note that Save is what keeps them; nothing is saved before that.
      */
     @Test
     fun `host editor prefilled from a link`() {
@@ -209,16 +212,62 @@ class ConnectionsScreenshotTest {
         val link = "ssh://ops@edge.example.net:2200/?L=8443:localhost:443&D=1080#edge"
         themed { HostEditorScreen(graph.viewModel, hostId = null, onDone = {}, link = link) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Save and open tunnels")).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("From the link ops@edge.example.net:2200: no saved host has this address, port and user. Its 2 forwards are saved as tunnels with the host.").assertExists()
+        compose.onNodeWithText("No saved host matches ops@edge.example.net:2200 from the link.").assertExists()
         compose.onNodeWithText("edge").assertExists()
         compose.onNodeWithText("edge.example.net").assertExists()
         compose.onNodeWithText("2200").assertExists()
         compose.onNodeWithText("ops").assertExists()
         capture("host-editor-from-link")
-        compose.onNodeWithText("Save the host to add tunnels.").performScrollTo()
+        compose.onNodeWithText("From the link: Save keeps what is switched on, and nothing starts before then.").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Tunnels only").assertExists()
+        compose.onNodeWithText("127.0.0.1:8443 \u2192 localhost:443").assertExists()
+        compose.onNodeWithText("SOCKS5 on 127.0.0.1:1080").assertExists()
+        compose.onNodeWithText("Local \u00B7 from the link").assertExists()
+        compose.onNodeWithText("Dynamic \u00B7 from the link").assertExists()
+        compose.onAllNodesWithText("Save the host to add tunnels.").assertCountEquals(0)
+        assertEquals("opening the editor saved nothing; the three are the seed's", 3, graph.tunnels.items.value.size)
         capture("host-editor-from-link-tunnels")
+    }
+
+    /**
+     * A link to a saved host carrying forwards it does not have: the link opens prod-db's editor,
+     * not a login, and nothing is saved. Under the host's saved tunnels the link's new forwards are
+     * pending rows: the one it already has is not asked about, the listener on every interface is
+     * marked in the attention colour, and the header reads Save and open tunnels. A row switched off
+     * reads `left out`, and Save adds the kept one alone and opens the Tunnels tab.
+     */
+    @Test
+    fun `host editor confirming a link's forwards on a saved host`() {
+        seed()
+        val link = "ssh://deploy@10.0.4.12/?L=8080:localhost:80&L=*:15432:localhost:5432&R=9000:localhost:3000"
+        runBlocking { graph.viewModel.openLink(link) }
+        assertEquals(LinkOutcome.ConfirmForwards("prod-db", link), graph.viewModel.linkOutcome.value)
+        assertEquals("the link saved nothing", 3, graph.tunnels.items.value.count { it.hostId == "prod-db" })
+        assertTrue("the link opened nothing", graph.sessions.tabs.value.isEmpty())
+        themed { HostEditorScreen(graph.viewModel, hostId = "prod-db", onDone = {}, link = link) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Save and open tunnels")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("The link carries 2 forwards prod-db does not have yet. Nothing is saved or started until Save.").assertExists()
+        compose.onNodeWithText("From the link: Save keeps what is switched on, and nothing starts before then.").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("0.0.0.0:15432 \u2192 localhost:5432").assertExists()
+        compose.onNodeWithText("remote:9000 \u2192 localhost:3000").assertExists()
+        compose.onAllNodesWithText("127.0.0.1:8080 \u2192 localhost:80").assertCountEquals(1) // the saved row alone; the link's copy of it is nothing to confirm
+        compose.onNodeWithText("Local \u00B7 from the link \u00B7 all interfaces").assertExists()
+        compose.onNodeWithText("Remote \u00B7 from the link").assertExists()
+        capture("host-editor-link-forwards")
+
+        compose.onNodeWithText("remote:9000 \u2192 localhost:3000").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Remote \u00B7 left out")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Save and open tunnels").performClick()
+        awaitOnMain("the kept forward is saved and the tunnels open") { graph.viewModel.linkOutcome.value == LinkOutcome.Staged }
+        val mine = graph.tunnels.items.value.filter { it.hostId == "prod-db" }
+        assertEquals(4, mine.size)
+        val added = mine.single { it.bindPort == 15432 }
+        assertEquals("0.0.0.0", added.bindAddress)
+        assertTrue(added.enabled)
+        assertTrue("the row switched off was not saved", mine.none { it.type == TunnelType.REMOTE })
+        assertEquals(TabKind.Tunnels, graph.sessions.tab(graph.sessions.activeTabId.value!!)!!.kind)
     }
 
     // ---- links ---------------------------------------------------------------------------------
@@ -479,6 +528,18 @@ class ConnectionsScreenshotTest {
             lines.forEach(d::writeUTF)
         }
         return out.toByteArray()
+    }
+
+    /** Runs the main looper (the view model's scope) with the compose clock until [condition] holds. */
+    private fun awaitOnMain(what: String, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            compose.waitForIdle()
+            if (condition()) return
+            Thread.sleep(20)
+        }
+        throw AssertionError("timed out waiting for $what")
     }
 
     /** Waits for [text] on screen; a miss names the session's state and hop and prints every root, so what showed instead is in the failure. */

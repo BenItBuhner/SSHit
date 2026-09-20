@@ -31,9 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.AppViewModel.Companion.toTunnel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthMenu
@@ -53,6 +55,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.tunnels.PendingTunnelRow
 import app.berth.android.ui.tunnels.TunnelsPanelContent
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AuthMethod
@@ -60,6 +63,7 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TmuxMode
+import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshLink
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -68,8 +72,11 @@ import java.util.UUID
 /**
  * Add or edit a host. Panels stacked with 12 dp gaps; Save waits for Address and User. Opened for
  * an `ssh://` or `sftp://` [link] no saved host answered to, the fields start from the link (its
- * name, address, port and user, and Tunnels only when it asks for forwards alone) and Save also
- * connects the way the link asked ([AppViewModel.saveHostFromLink]).
+ * name, address, port and user, and Tunnels only when it asks for forwards alone). Opened for a
+ * saved host with a link that carries forwards the host does not have, the fields are the host's.
+ * Either way the link's forwards are pending rows in the Tunnels panel, each with a switch, and
+ * nothing is saved or started until Save, which keeps the ones switched on and connects the way the
+ * link asked ([AppViewModel.saveHostFromLink]).
  */
 @Composable
 fun HostEditorScreen(
@@ -83,9 +90,15 @@ fun HostEditorScreen(
     val identities by vm.identities.collectAsState()
     val hosts by vm.hosts.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
+    val allTunnels by vm.tunnels.collectAsState()
     val fromLink = remember(link) { link?.let { (SshLink.parse(it) as? SshLink.Result.Parsed)?.link } }
     var loaded by remember { mutableStateOf(hostId == null) }
     var original by remember { mutableStateOf<Host?>(null) }
+    // The link's forwards the host does not have yet, and the ones the user switched off; Save keeps the rest.
+    val pending = remember(fromLink, hostId, allTunnels) {
+        fromLink?.let { AppViewModel.pendingForwards(it, allTunnels.filter { t -> t.hostId == hostId }) } ?: emptyList()
+    }
+    var leftOut by remember { mutableStateOf(emptySet<SshConfigForward>()) }
 
     var name by remember { mutableStateOf(fromLink?.name ?: "") }
     var monogramEdited by remember { mutableStateOf(false) }
@@ -174,7 +187,7 @@ fun HostEditorScreen(
             tunnelsOnly = tunnelsOnly,
         )
         val secret = password.takeIf { it.isNotEmpty() }
-        if (fromLink != null && base == null) vm.saveHostFromLink(host, secret, fromLink) else vm.saveHost(host, secret)
+        if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
         // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
         if (base != null) vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
         onDone()
@@ -194,7 +207,7 @@ fun HostEditorScreen(
             actions = {
                 BerthButton(
                     when {
-                        fromLink == null || original != null -> "Save"
+                        fromLink == null -> "Save"
                         fromLink.scheme == SshLink.Scheme.SFTP -> "Save and open files"
                         fromLink.tunnelsOnly -> "Save and open tunnels"
                         else -> "Save and connect"
@@ -213,10 +226,13 @@ fun HostEditorScreen(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
         ) {
-            if (fromLink != null && original == null) {
+            if (fromLink != null) {
                 Text(
-                    "From the link ${fromLink.target}: no saved host has this address, port and user." +
-                        if (fromLink.forwards.isNotEmpty()) " Its ${if (fromLink.forwards.size == 1) "forward is" else "${fromLink.forwards.size} forwards are"} saved as tunnels with the host." else "",
+                    when {
+                        original == null -> "No saved host matches ${fromLink.target} from the link."
+                        pending.size == 1 -> "The link carries a forward ${original!!.name} does not have yet. Nothing is saved or started until Save."
+                        else -> "The link carries ${pending.size} forwards ${original!!.name} does not have yet. Nothing is saved or started until Save."
+                    },
                     style = BerthType.caption,
                     color = c.text2,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -314,8 +330,26 @@ fun HostEditorScreen(
                     caption = "Connect opens this host's port forwards with no shell, as a Tunnels tab. Terminal and Files stay a menu away.",
                     captionLines = 2,
                 )
-                original?.let { saved -> TunnelsPanelContent(vm, saved) }
-                    ?: PanelNote("Save the host to add tunnels.")
+                // The link's forwards, seen here before anything is saved: the switch is what Save reads.
+                val pendingRows: @Composable () -> Unit = {
+                    pending.forEachIndexed { index, fwd ->
+                        val draft = fwd.toTunnel(hostId = original?.id ?: "", id = "pending-$index")
+                        PendingTunnelRow(
+                            tunnel = draft,
+                            kept = fwd !in leftOut,
+                            onKeptChange = { keep -> leftOut = if (keep) leftOut - fwd else leftOut + fwd },
+                            // The same check the tunnel editor runs, so a port a saved tunnel already listens on is said here, not found at login.
+                            problem = draft.validate(allTunnels),
+                            surface = Color.Transparent,
+                        )
+                    }
+                    if (pending.isNotEmpty()) PanelNote("From the link: Save keeps what is switched on, and nothing starts before then.")
+                }
+                when {
+                    original != null -> TunnelsPanelContent(vm, original!!, pending = pendingRows)
+                    pending.isNotEmpty() -> pendingRows()
+                    else -> PanelNote("Save the host to add tunnels.")
+                }
             }
 
             Panel(label = "Look") {

@@ -78,7 +78,7 @@ import kotlinx.serialization.Serializable
 sealed interface Screen : NavKey {
     @Serializable data object Stage : Screen
     @Serializable data class Hosts(val picker: Boolean = false) : Screen
-    /** The editor for [hostId], or for a new host; [link] is the `ssh://` or `sftp://` link a new host starts from. */
+    /** The editor for [hostId], or for a new host; [link] is the `ssh://` or `sftp://` link a new host starts from, or one whose forwards a saved host has to confirm. */
     @Serializable data class HostEditor(val hostId: String?, val link: String? = null) : Screen
     @Serializable data object Keys : Screen
     @Serializable data object Settings : Screen
@@ -146,7 +146,8 @@ private fun Shell(vm: AppViewModel) {
     }
 
     // An ssh:// or sftp:// link (AppViewModel.openLink): a tab opened, so the Stage; no host, so the
-    // editor prefilled from the link; unreadable, so a notice saying what was wrong.
+    // editor prefilled from the link; a host but forwards it does not have, so that host's editor
+    // with them pending; unreadable, so a notice saying what was wrong.
     val linkOutcome by vm.linkOutcome.collectAsState()
     var linkNotice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(linkOutcome) {
@@ -158,6 +159,7 @@ private fun Shell(vm: AppViewModel) {
                 if (drawer.isOpen) drawer.close()
             }
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
+            is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
         }
         vm.clearLinkOutcome()

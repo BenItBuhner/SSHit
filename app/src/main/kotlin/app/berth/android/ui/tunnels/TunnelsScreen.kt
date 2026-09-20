@@ -220,18 +220,7 @@ fun TunnelRow(
                 if (failed) {
                     BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, modifier = Modifier.height(36.dp))
                 }
-                Switch(
-                    checked = tunnel.enabled,
-                    onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = c.onAccent,
-                        checkedTrackColor = c.accent,
-                        checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = c.text2,
-                        uncheckedTrackColor = c.surface4,
-                        uncheckedBorderColor = Color.Transparent,
-                    ),
-                )
+                TunnelSwitch(checked = tunnel.enabled, onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) })
             },
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
@@ -246,6 +235,63 @@ fun TunnelRow(
             DropdownMenuItem(text = { Text("Delete", style = BerthType.body, color = c.danger) }, onClick = { menu = false; vm.deleteTunnel(tunnel.id) })
         }
     }
+}
+
+/**
+ * A forward an `ssh://` link asks for, not yet saved (spec C10): the same row as a saved tunnel,
+ * so the two read alike, with the dot grey since nothing runs yet, `from the link` where a saved
+ * row has its state (or the [problem] the tunnel editor would raise, in danger), `all interfaces`
+ * in the attention colour the tunnel editor warns in, and the switch deciding whether Save keeps
+ * it. Nothing here is saved or started until the editor's Save.
+ */
+@Composable
+fun PendingTunnelRow(
+    tunnel: Tunnel,
+    kept: Boolean,
+    onKeptChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    problem: String? = null,
+    surface: Color = Berth.colors.surface2,
+) {
+    val c = Berth.colors
+    ListRow(
+        title = tunnel.spec,
+        modifier = modifier,
+        titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+        titleColor = if (kept) c.text1 else c.text2,
+        subtitle = buildAnnotatedString {
+            append(tunnel.type.label)
+            append(" \u00B7 ")
+            when {
+                !kept -> append("left out")
+                problem != null -> withStyle(SpanStyle(color = c.danger)) { append(problem) }
+                else -> append("from the link")
+            }
+            if (kept && tunnel.exposed) withStyle(SpanStyle(color = c.attention)) { append(" \u00B7 all interfaces") }
+        },
+        surface = surface,
+        onClick = { onKeptChange(!kept) },
+        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.DETACHED) } },
+        trailing = { TunnelSwitch(checked = kept, onCheckedChange = onKeptChange) },
+    )
+}
+
+/** The switch at the end of a tunnel row, in the app's colours. */
+@Composable
+private fun TunnelSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val c = Berth.colors
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = c.onAccent,
+            checkedTrackColor = c.accent,
+            checkedBorderColor = Color.Transparent,
+            uncheckedThumbColor = c.text2,
+            uncheckedTrackColor = c.surface4,
+            uncheckedBorderColor = Color.Transparent,
+        ),
+    )
 }
 
 /**
@@ -358,9 +404,12 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
     }
 }
 
-/** The host editor's Tunnels panel body (C10): the host's tunnels as rows on the panel surface, then `+ Add tunnel`. */
+/**
+ * The host editor's Tunnels panel body (C10): the host's tunnels as rows on the panel surface,
+ * then [pending] (a link's forwards awaiting Save, so they sit with their peers), then `+ Add tunnel`.
+ */
 @Composable
-fun TunnelsPanelContent(vm: AppViewModel, host: Host) {
+fun TunnelsPanelContent(vm: AppViewModel, host: Host, pending: @Composable () -> Unit = {}) {
     val c = Berth.colors
     val all by vm.tunnels.collectAsState()
     val statuses by vm.tunnelStatuses.collectAsState()
@@ -371,6 +420,7 @@ fun TunnelsPanelContent(vm: AppViewModel, host: Host) {
     for (t in mine) {
         TunnelRow(vm, t, statuses[t.id], hostActive = active, onEdit = { editor = TunnelEditorTarget(host.id, t) }, surface = Color.Transparent)
     }
+    pending()
     ListRow(
         title = "Add tunnel",
         surface = Color.Transparent,
