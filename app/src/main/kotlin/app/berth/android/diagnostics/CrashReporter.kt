@@ -266,10 +266,29 @@ class CrashReporter(
             val version = info?.let { "${it.versionName} (${it.longVersionCode})" } ?: "(unknown version)"
             return buildString {
                 appendLine("App       $label $version \u00B7 ${context.packageName} \u00B7 ${if (debuggable) "debuggable" else "release"} build")
+                appendLine("Mapping   ${mappingLine()}")
                 appendLine("Device    ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}) \u00B7 Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) \u00B7 build ${Build.DISPLAY}")
                 appendLine("Hardware  ${Build.SUPPORTED_ABIS.joinToString(", ")}")
                 append("Locale    ${Locale.getDefault()} \u00B7 ${TimeZone.getDefault().id}")
             }
         }
+
+        /**
+         * How the frames in the report read, from the source file the running code's own frame names. In a
+         * release build R8 has renamed the classes and methods, renumbered the lines, and written the
+         * release's map id into every class's SourceFile in place of the file name, so a frame is
+         * `yp3.Q(r8-map-id-75b2\u2026:57)` and reads only through that release's `mapping.txt`
+         * (`retrace mapping.txt report.txt`), whose header carries the same id as `pg_map_id`. The id is in
+         * the report's head once, so a report trimmed to its first lines, or retyped, still says which
+         * mapping reads it. A debuggable build's frames name their source file and line as written.
+         */
+        internal fun mappingLine(source: String? = Throwable().stackTrace.firstOrNull()?.fileName): String = when {
+            source == null -> "none in the frames; they name classes and methods only"
+            source.startsWith(R8_MAP_ID) -> "$source \u00B7 the frames below are R8's and read through this release's mapping.txt"
+            else -> "none needed; the frames name their source file and line"
+        }
+
+        /** What R8 writes as every class's SourceFile when the attribute is kept: this prefix and the mapping's `pg_map_id`. */
+        const val R8_MAP_ID = "r8-map-id-"
     }
 }

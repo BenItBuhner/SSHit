@@ -203,8 +203,10 @@ roborazzi {
 // Robolectric suite cannot run over the APK's DEX, so for the app module the proof of the rules in
 // proguard-rules.pro is the DEX's own class table (a class kept by name is defined there under it), R8's seeds
 // (the members the rules matched, so a constructor reflection calls is in the output), its mapping (what a
-// missing name became, and that line numbers survived) and the APK's resources (the service file SLF4J reads
-// names the binding). Runs after every assembleRelease; the JVM modules' testR8 covers what runs on this machine.
+// missing name became; that it carries a line table at all, so a frame retraces rather than reading as line 0;
+// and that the map id R8 wrote into the DEX as every class's SourceFile is this mapping's pg_map_id, so a report
+// from this APK names the mapping that reads it) and the APK's resources (the service file SLF4J reads names the
+// binding). Runs after every assembleRelease; the JVM modules' testR8 covers what runs on this machine.
 androidComponents {
     // The Android Gradle plugin builds unit tests for the debug variant only. The Robolectric suite runs over the
     // release variant as well (testReleaseUnitTest, part of test): the release manifest and resources, no
@@ -227,27 +229,29 @@ androidComponents {
                 val apks = apkDir.get().asFile.listFiles { f -> f.extension == "apk" }.orEmpty()
                 if (apks.isEmpty()) throw GradleException("verifyReleaseKeepRules: no APK in ${apkDir.get().asFile}")
 
-                // The classes an APK's classes*.dex define, as dotted names: the class table is the record of what
-                // is on the phone under which name. Each class_def_item names its type, each type its descriptor
-                // string ("Lorg/bouncycastle/openssl/PEMDecryptor;"); the header holds the three tables' offsets.
-                fun dexClasses(apk: File): Set<String> {
+                // The classes an APK's classes*.dex define, as dotted names, and the source file each names: the
+                // class table is the record of what is on the phone under which name. Each class_def_item names
+                // its type (each type its descriptor string, "Lorg/bouncycastle/openssl/PEMDecryptor;") and its
+                // source_file_idx, a string index or NO_INDEX; the header holds the tables' offsets.
+                class DexTable(val classes: Set<String>, val sourceFiles: Set<String>)
+                fun dexTable(apk: File): DexTable {
                     val names = HashSet<String>()
+                    val sources = HashSet<String>()
                     ZipFile(apk).use { zip ->
                         for (entry in zip.entries().asSequence().filter { Regex("""classes\d*\.dex""").matches(it.name) }) {
                             val dex = ByteBuffer.wrap(zip.getInputStream(entry).use { it.readBytes() }).order(ByteOrder.LITTLE_ENDIAN)
                             val stringIds = dex.getInt(0x3C)
                             val typeIds = dex.getInt(0x44)
                             val classDefs = dex.getInt(0x60) to dex.getInt(0x64)
-                            for (i in 0 until classDefs.first) {
-                                val typeIndex = dex.getInt(classDefs.second + i * 32)
-                                var at = dex.getInt(stringIds + dex.getInt(typeIds + typeIndex * 4) * 4)
+                            fun string(index: Int): String {
+                                var at = dex.getInt(stringIds + index * 4)
                                 while (dex.get(at).toInt() and 0x80 != 0) at++ // uleb128 length in UTF-16 units
                                 at++
-                                val descriptor = StringBuilder()
+                                val text = StringBuilder()
                                 while (true) { // modified UTF-8, one to three bytes a character, NUL-terminated
                                     val a = dex.get(at++).toInt() and 0xFF
                                     if (a == 0) break
-                                    descriptor.append(
+                                    text.append(
                                         when {
                                             a < 0x80 -> a
                                             a and 0xE0 == 0xC0 -> ((a and 0x1F) shl 6) or (dex.get(at++).toInt() and 0x3F)
@@ -255,11 +259,18 @@ androidComponents {
                                         }.toChar(),
                                     )
                                 }
+                                return text.toString()
+                            }
+                            for (i in 0 until classDefs.first) {
+                                val classDef = classDefs.second + i * 32
+                                val descriptor = string(dex.getInt(typeIds + dex.getInt(classDef) * 4))
                                 names += descriptor.substring(1, descriptor.length - 1).replace('/', '.')
+                                val sourceFile = dex.getInt(classDef + 16)
+                                if (sourceFile != -1) sources += string(sourceFile)
                             }
                         }
                     }
-                    return names
+                    return DexTable(names, sources)
                 }
 
                 // mapping.txt: "original -> renamed:" per class, members indented under it. It says what a missing
@@ -268,8 +279,15 @@ androidComponents {
                 val renamed: Map<String, String> = mappingFile.readLines()
                     .filter { it.endsWith(":") && !it.startsWith(" ") && !it.startsWith("#") && " -> " in it }
                     .associate { line -> line.removeSuffix(":").split(" -> ").let { it[0] to it[1] } }
+                // A line table at all (R8's own numbering, "56:58:void <init>(...):88:88", not the source's): without
+                // it every frame reads as line 0 and nothing retraces (-keepattributes LineNumberTable).
                 val lineNumbers = mappingFile.useLines { lines -> lines.any { it.startsWith("    ") && Regex("""^\s+\d+:\d+:""").containsMatchIn(it) } }
-                if (!lineNumbers) problems += "the mapping carries no line numbers; a crash report's frames would read as line 0 (-keepattributes LineNumberTable)"
+                if (!lineNumbers) problems += "the mapping carries no line table; a crash report's frames would read as line 0 (-keepattributes LineNumberTable)"
+                // The map id. With SourceFile kept, R8 writes "r8-map-id-<pg_map_id>" as every class's SourceFile
+                // in place of the file name, and the mapping's header carries the same id, so a report's frames
+                // (yp3.Q(r8-map-id-75b2...:57)) name the mapping that reads them; checked below against the DEX.
+                val mapId = mappingFile.useLines { lines -> lines.take(20).firstOrNull { it.startsWith("# pg_map_id: ") }?.removePrefix("# pg_map_id: ")?.trim() }
+                if (mapId.isNullOrEmpty()) problems += "the mapping has no pg_map_id header; a report's frames could not name it"
                 renamed.filter { (from, to) -> from.startsWith("org.bouncycastle.jcajce.provider.") && from != to }.keys.take(5)
                     .forEach { problems += "$it was renamed to ${renamed[it]}; BouncyCastleProvider loads it by name" }
 
@@ -281,7 +299,11 @@ androidComponents {
                 )
                 var providerClasses = 0
                 for (apk in apks) {
-                    val defined = dexClasses(apk)
+                    val table = dexTable(apk)
+                    val defined = table.classes
+                    if (!mapId.isNullOrEmpty() && table.sourceFiles != setOf("r8-map-id-$mapId")) {
+                        problems += "${apk.name}'s classes name ${table.sourceFiles.size} source files (${table.sourceFiles.take(3)}) where every one should be this mapping's id, r8-map-id-$mapId; a report's frames would not name the mapping that reads them (-keepattributes SourceFile)"
+                    }
                     for (name in byName) {
                         if (name !in defined) {
                             problems += renamed[name]?.let { "$name is ${it} in ${apk.name}, and the code looks it up by name" }
@@ -317,7 +339,7 @@ androidComponents {
                 }
 
                 if (problems.isNotEmpty()) throw GradleException("Release keep rules do not hold:\n" + problems.joinToString("\n") { "  - $it" })
-                logger.lifecycle("verifyReleaseKeepRules: ${byName.size} classes defined by name, $providerClasses BouncyCastle provider classes, constructors and the SLF4J service file present in ${apks.map { it.name }}")
+                logger.lifecycle("verifyReleaseKeepRules: ${byName.size} classes defined by name, $providerClasses BouncyCastle provider classes, constructors and the SLF4J service file present in ${apks.map { it.name }}; every class's SourceFile is the mapping's id r8-map-id-$mapId")
             }
         }
         tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }

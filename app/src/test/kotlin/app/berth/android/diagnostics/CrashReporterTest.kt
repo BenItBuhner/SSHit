@@ -170,6 +170,20 @@ class CrashReporterTest {
         assertFalse(File(dir, "unread").exists())
     }
 
+    @Test
+    fun `the head says how the frames read, from the source file the running code's frame names`() {
+        // R8 writes the release's map id into every class's SourceFile, so the frames retrace with that mapping.
+        val release = CrashReporter.mappingLine("${CrashReporter.R8_MAP_ID}75b21c223e555e811e4802716327302f8ba3df3ab6b6cfadd2c7483bb8787ba6")
+        assertTrue(release, release.startsWith("r8-map-id-75b21c223e555e811e4802716327302f8ba3df3ab6b6cfadd2c7483bb8787ba6 \u00B7 "))
+        assertTrue(release, release.contains("mapping.txt"))
+        // A debuggable build's frames name their source; this JVM's do.
+        assertEquals("none needed; the frames name their source file and line", CrashReporter.mappingLine("CrashReporter.kt"))
+        assertEquals("none needed; the frames name their source file and line", CrashReporter.mappingLine())
+        assertEquals("none in the frames; they name classes and methods only", CrashReporter.mappingLine(null))
+        val install = CrashReporter.describeInstall(ApplicationProvider.getApplicationContext())
+        assertTrue(install, Regex("""^App       .*\nMapping   none needed; the frames name their source file and line\nDevice    """).containsMatchIn(install))
+    }
+
     private fun await(what: String, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000
         while (!condition()) {

@@ -5,9 +5,14 @@
 # and app/build.gradle.kts reads the release APK's DEX, and R8's seeds and mapping, for the names below
 # (verifyReleaseKeepRules).
 
-# Crash reports are read on the phone, with no mapping at hand: the source file and line number of every frame
-# stay, so a frame reads TerminalSession.kt:212 even with its class and method renamed. The mapping written to
-# app/build/outputs/mapping/release/mapping.txt is archived with each release for the rest.
+# Crash reports are written on the phone and read elsewhere, with the release's mapping at hand. R8 renames the
+# classes and methods, renumbers the line table, and writes the release's map id into every class's SourceFile in
+# place of the file name, so a release frame reads yp3.Q(r8-map-id-75b2...:57), not TerminalSession.kt:212; the
+# two attributes are kept so that frame retraces at all (retrace mapping.txt report.txt), and the id in it names
+# which mapping.txt reads it (the mapping's own pg_map_id header; the report's head repeats it once, and
+# verifyReleaseKeepRules checks the APK and the mapping agree on it). The mapping written to
+# app/build/outputs/mapping/release/mapping.txt is attached to the GitHub release the tag builds
+# (.github/workflows/release.yml), for as long as the release exists; for a pull request it is CI's 14-day artifact.
 -keepattributes SourceFile,LineNumberTable
 
 # SLF4J finds the app's logger binding (the diagnostics log ring) through META-INF/services, by name, and
