@@ -102,6 +102,7 @@ import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 
 /**
@@ -192,7 +193,7 @@ fun StageScreen(
             state = strip,
             trailing = {
                 if (slots.isNotEmpty()) {
-                    // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not laid out in the strip.
+                    // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
                     val lit by vm.attentionTabIds.collectAsState()
                     val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
                     CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
@@ -350,7 +351,6 @@ private fun StageBody(
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
-    val retryIn by session.retryIn.collectAsState()
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
     val deckLayout by vm.deckLayout.collectAsState()
@@ -471,7 +471,7 @@ private fun StageBody(
 
         StatePill(
             state = record.state,
-            retryIn = retryIn,
+            retryIn = session.retryIn,
             lastLiveAt = record.lastLiveAt,
             onReconnect = { vm.reconnect(session.id) },
             onDetach = { vm.detach(session.id) },
@@ -581,12 +581,14 @@ private val StatePillHeight = 32.dp
 /**
  * One floating pill for the non-live states (C2, A9): `Detached · 4 min ago · Reconnect · Close`,
  * full radius on surface.3 with Caption text, the actions in accent. Nothing when Live. The age
- * follows its own clock unless a [now] is given, so the minute tick recomposes the pill alone.
+ * follows its own clock unless a [now] is given, and the reconnect countdown is collected here
+ * from [retryIn], so the minute tick and the 1 Hz backoff tick recompose the pill alone and the
+ * Stage around it never re-runs for either.
  */
 @Composable
 internal fun StatePill(
     state: SessionState,
-    retryIn: Int?,
+    retryIn: StateFlow<Int?>?,
     lastLiveAt: Long?,
     onReconnect: () -> Unit,
     onDetach: () -> Unit,
@@ -596,10 +598,11 @@ internal fun StatePill(
     val c = Berth.colors
     if (state != SessionState.RECONNECTING && state != SessionState.DETACHED && state != SessionState.CONNECTING && state != SessionState.IDLE) return
     val clock = now ?: ageTicker()
+    val seconds = retryIn?.collectAsState()?.value
     val (text, actions) = when (state) {
         // Spec D4: "Connecting…" over the dimmed previous frame, no actions until the connect resolves.
         SessionState.CONNECTING, SessionState.IDLE -> "Connecting\u2026" to emptyList()
-        SessionState.RECONNECTING -> (if (retryIn != null) "Reconnecting \u00B7 retry in ${retryIn}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
+        SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
     Box(

@@ -202,10 +202,18 @@ class TabStripState internal constructor(val listState: LazyListState) {
     internal var menuKey by mutableStateOf<String?>(null)
     internal var autoScroll by mutableIntStateOf(0)
 
-    /** Ids of the tabs laid out right now, fully or partly; a tab with attention outside this set lights the count tile. */
+    /**
+     * Ids of the tabs wholly inside the viewport right now. A tab cut by either edge is out of view
+     * for the ring's purpose (spec C3, "scrolled out of view"): its swatch is its first 26 dp and
+     * sits behind the edge fade, so a lit tab resting with its tail behind the leading fade, the
+     * strip's normal state after scroll-to-active, lights the count tile as well as what is left of
+     * its own ring. The double signal is fine; none was not.
+     */
     val visibleTabIds: Set<String> by derivedStateOf(structuralEqualityPolicy()) {
-        listState.layoutInfo.visibleItemsInfo.mapNotNullTo(HashSet()) { item ->
-            (item.key as? String)?.takeIf { it.startsWith(TAB_KEY_PREFIX) }?.substring(TAB_KEY_PREFIX.length)
+        val info = listState.layoutInfo
+        info.visibleItemsInfo.mapNotNullTo(HashSet()) { item ->
+            val whole = item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset
+            if (!whole) null else (item.key as? String)?.takeIf { it.startsWith(TAB_KEY_PREFIX) }?.substring(TAB_KEY_PREFIX.length)
         }
     }
 
