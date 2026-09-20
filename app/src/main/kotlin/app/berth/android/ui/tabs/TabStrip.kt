@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -47,6 +48,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
@@ -106,6 +108,8 @@ import androidx.compose.ui.zIndex
 import app.berth.android.session.PaneSide
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TabSource
+import app.berth.android.ui.a11y.LocalTargetReach
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.stage.DeckHaptics
@@ -262,7 +266,11 @@ fun TabHeader(
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
             TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach)
             Spacer(Modifier.width(style.trailingGap))
-            Row(Modifier.padding(top = reach).height(style.height), verticalAlignment = Alignment.CenterVertically) { trailing() }
+            // The fixed slots take the same reach the tabs do: the row is the full height and the
+            // controls in it read the reach as target above their visual (IconAction, CountTile).
+            Row(Modifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
+                CompositionLocalProvider(LocalTargetReach provides reach) { trailing() }
+            }
         }
     }
     when (style.chrome) {
@@ -1244,7 +1252,8 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
 /**
  * The count tile (spec C3, Switcher): a 24 dp square on `surface.2` with the tab count in Label;
  * a ring when a tab scrolled out of view needs attention. Sits in the header's fixed slots inside
- * a 44 dp target and opens the switcher; held, it jumps to the unread tab.
+ * a 48 dp target (required, like [app.berth.android.ui.components.IconAction]'s, and reaching up
+ * by the [reach] the header lends) and opens the switcher; held, it jumps to the unread tab.
  */
 @Composable
 fun CountTile(
@@ -1255,6 +1264,7 @@ fun CountTile(
     /** Hold: the tab that needs the user comes on stage (jump to unread, spec C3), so the ring is one gesture from its cause. */
     onLongClick: (() -> Unit)? = null,
     style: TabStripStyle = LocalTabStripStyle.current,
+    reach: Dp = LocalTargetReach.current,
 ) {
     val c = Berth.colors
     val resolved = rememberResolvedTabStyle(style)
@@ -1262,12 +1272,14 @@ fun CountTile(
     val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier
-            .size(44.dp)
+            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
             .clearAndSetSemantics {
                 contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention, hold to jump to it" else ""
                 role = Role.Button
-            },
+                if (onLongClick != null) onLongClick { onLongClick(); true }
+            }
+            .padding(top = reach),
         contentAlignment = Alignment.Center,
     ) {
         Box(

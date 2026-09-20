@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -42,6 +43,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -92,6 +94,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
@@ -102,6 +105,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.R
+import app.berth.android.ui.a11y.LocalTargetReach
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.spoken
+import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -177,9 +184,15 @@ fun Swatch(
     }
 }
 
-/** 8 dp state dot; connecting and reconnecting add the one continuous motion in the app: a rotating arc. */
+/**
+ * 8 dp state dot; connecting and reconnecting add the one continuous motion in the app: a rotating
+ * arc. The dot says its state to a screen reader as a state description ([description], the
+ * state's own word unless the caller has a better one: `Waiting for the login`, `Loading`), which
+ * a row or card merging its children then carries and announces when it changes; null says nothing,
+ * for a dot beside text that already says it.
+ */
 @Composable
-fun StatusDot(state: SessionState, modifier: Modifier = Modifier, size: Dp = 8.dp) {
+fun StatusDot(state: SessionState, modifier: Modifier = Modifier, size: Dp = 8.dp, description: String? = state.spoken()) {
     val c = Berth.colors
     val color = when (state) {
         SessionState.LIVE -> c.live
@@ -193,7 +206,11 @@ fun StatusDot(state: SessionState, modifier: Modifier = Modifier, size: Dp = 8.d
         rememberInfiniteTransition(label = "reconnect-arc")
             .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
     } else null
-    Canvas(modifier.size(size + if (spinning) 6.dp else 0.dp)) {
+    Canvas(
+        modifier
+            .size(size + if (spinning) 6.dp else 0.dp)
+            .then(if (description != null) Modifier.semantics { stateDescription = description } else Modifier),
+    ) {
         val center = Offset(this.size.width / 2, this.size.height / 2)
         drawCircle(color, radius = size.toPx() / 2, center = center)
         if (rotation != null) {
@@ -265,6 +282,9 @@ const val DisabledAlpha = 0.5f
  * caption that is a sentence; [subtitleMinLines] holds lines open before they have text, so a row
  * whose second line arrives later (a forward's traffic once it is up) does not grow when it does.
  * A row that is not [enabled] takes no tap, does not press, and draws its text at [DisabledAlpha].
+ * [role] names what the tap does to a screen reader when the row is more than a row (a picker, a
+ * switch); [interactionSource] lets a wrapper that owns the gesture (a toggleable) drive the
+ * pressed tone, in which case the row itself takes no click.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -286,9 +306,11 @@ fun ListRow(
     subtitleMaxLines: Int = 1,
     subtitleMinLines: Int = 1,
     enabled: Boolean = true,
+    role: Role? = null,
+    interactionSource: MutableInteractionSource? = null,
 ) {
     val c = Berth.colors
-    val interaction = remember { MutableInteractionSource() }
+    val interaction = interactionSource ?: remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val bg by animateColorAsState(
         when {
@@ -308,7 +330,7 @@ fun ListRow(
             .background(bg)
             .then(
                 if (onClick != null || onLongClick != null) {
-                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = { onClick?.invoke() }, onLongClick = onLongClick)
+                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, role = role, onClick = { onClick?.invoke() }, onLongClick = onLongClick)
                 } else Modifier,
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -364,11 +386,12 @@ fun PickerRow(
         title = title,
         subtitle = caption,
         subtitleMaxLines = captionLines,
-        minHeight = 44.dp,
+        minHeight = TouchTargetSize,
         surface = Color.Transparent,
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
+        role = Role.DropdownList,
         trailing = {
             Text(value, style = BerthType.body, color = c.text2.copy(alpha = c.text2.alpha * alpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
             BerthIcon(BerthIcons.chevronRight, tint = c.text3.copy(alpha = c.text3.alpha * alpha), size = 20.dp)
@@ -379,7 +402,9 @@ fun PickerRow(
 /**
  * A switch row; the [caption] under the title has one line unless [captionLines] gives it more.
  * Not [enabled], the switch is drawn disabled and neither it nor the row takes a tap; the caption
- * is where the row says why.
+ * is where the row says why. To a screen reader the row is the switch: one node carrying the
+ * title, the caption and the on/off state, toggled by a tap anywhere on it; the switch itself is
+ * silent, so a screen never has a run of anonymous `On`, `Off` controls.
  */
 @Composable
 fun ToggleRow(
@@ -392,20 +417,29 @@ fun ToggleRow(
     enabled: Boolean = true,
 ) {
     val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
     ListRow(
         title = title,
         subtitle = caption,
         subtitleMaxLines = captionLines,
-        minHeight = 44.dp,
+        minHeight = TouchTargetSize,
         surface = Color.Transparent,
-        onClick = { onCheckedChange(!checked) },
-        modifier = modifier,
+        modifier = modifier.toggleable(
+            value = checked,
+            enabled = enabled,
+            role = Role.Switch,
+            interactionSource = interaction,
+            indication = null,
+            onValueChange = onCheckedChange,
+        ),
+        interactionSource = interaction,
         enabled = enabled,
         trailing = {
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
                 enabled = enabled,
+                modifier = Modifier.clearAndSetSemantics { },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = c.onAccent,
                     checkedTrackColor = c.accent,
@@ -625,22 +659,72 @@ fun Pill(text: String, modifier: Modifier = Modifier, mono: Boolean = false, col
     }
 }
 
-/** 28 dp chip, radius 8; selected chips step up to surface.4. */
+/**
+ * 28 dp chip, radius 8; selected chips step up to surface.4. The chip is a filter or a pick, so it
+ * is a toggle to a screen reader (`Name, selected`) and sits centred in a 48 dp target box that
+ * takes the tap; [modifier] sizes the chip itself.
+ */
 @Composable
 fun Chip(text: String, selected: Boolean = false, modifier: Modifier = Modifier, mono: Boolean = false, onClick: () -> Unit) {
     val c = Berth.colors
     Box(
-        modifier
-            .height(28.dp)
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (selected) c.surface4 else c.surface2)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+        Modifier
+            .selectable(selected = selected, role = Role.Button, indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onClick)
+            .touchTarget(),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = if (mono) BerthType.mono else BerthType.label, color = c.text1, maxLines = 1)
+        Box(
+            modifier
+                .height(28.dp)
+                .clip(RoundedCornerShape(BerthRadius.swatch))
+                .background(if (selected) c.surface4 else c.surface2)
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text, style = if (mono) BerthType.mono else BerthType.label, color = c.text1, maxLines = 1)
+        }
     }
 }
+
+/**
+ * One colour in a row of colours to choose from (a host's swatch, a group's, the interface accent):
+ * the colour at `indicator` radius inside a [size] step at `swatch` radius that turns surface.4 when
+ * chosen (concentric), centred in a 48 dp target that takes the tap, so a row of them keeps a 48 dp
+ * pitch and no two share a target. To a screen reader it is a radio button named for its colour,
+ * [name], with its chosen state; the colour itself is never the only thing that says which is which.
+ */
+@Composable
+fun ColorOption(
+    color: Color,
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 36.dp,
+    inset: Dp = 4.dp,
+) {
+    val c = Berth.colors
+    Box(
+        modifier
+            .selectable(selected = selected, role = Role.RadioButton, indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onClick)
+            .semantics { contentDescription = name }
+            .touchTarget(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(size)
+                .clip(RoundedCornerShape(BerthRadius.swatch))
+                .background(if (selected) c.surface4 else c.surface2)
+                .padding(inset),
+        ) {
+            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(BerthRadius.indicator)).background(color))
+        }
+    }
+}
+
+/** The spoken name of a [SwatchColor] (`Copper`, `Verdigris`), for the option that carries it. */
+fun SwatchColor.spokenName(): String = name.lowercase().replaceFirstChar { it.uppercase() }
 
 // ---- Buttons ----------------------------------------------------------------------------------------
 
@@ -668,16 +752,24 @@ fun BerthButton(
         ButtonKind.TEXT -> c.accent
         ButtonKind.DESTRUCTIVE -> c.danger
     }
+    // The fill is the spec's 44 dp; the box that takes the tap is 48 unless the caller sizes the
+    // button shorter, in which case Compose grows the hit area into the row around it.
     Box(
         modifier
-            .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
-            .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (enabled) fill else fill.copy(alpha = fill.alpha * 0.5f))
-            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 18.dp),
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+            .touchTarget(),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = BerthType.label, color = if (enabled) label else label.copy(alpha = 0.5f), maxLines = 1)
+        Box(
+            Modifier
+                .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
+                .clip(RoundedCornerShape(BerthRadius.row))
+                .background(if (enabled) fill else fill.copy(alpha = fill.alpha * 0.5f))
+                .padding(horizontal = 18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text, style = BerthType.label, color = if (enabled) label else label.copy(alpha = 0.5f), maxLines = 1)
+        }
     }
 }
 
@@ -866,10 +958,21 @@ fun BerthField(
 
 // ---- Sheets and misc ---------------------------------------------------------------------------------
 
-/** 32 x 4 handle in text.3 centred in a 20 dp zone. */
+/**
+ * 32 x 4 handle in text.3 centred in the sheet's handle zone. The zone is the sheet's one control
+ * (the sheet wraps it in a tap that closes or expands and in the drag), so it is a full 48 dp
+ * target (the spec's 20 was the pill's clearance, not a target) and names itself to a screen
+ * reader, which then hears the sheet's own actions after it.
+ */
 @Composable
 fun SheetHandle(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().height(20.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(TouchTargetSize)
+            .semantics { contentDescription = "Drag handle" },
+        contentAlignment = Alignment.Center,
+    ) {
         Box(
             Modifier
                 .size(32.dp, 4.dp)
@@ -921,54 +1024,74 @@ fun ScreenHeader(
     actions: @Composable RowScope.() -> Unit = {},
     navigation: (@Composable () -> Unit)? = null,
 ) {
+    // The icon actions are 48 dp targets around 44 dp circles, so they sit flush (the 2 dp of target
+    // either side of each circle is the 4 dp gap there was) and the margin gives back the 2 dp.
     Row(
         modifier
             .fillMaxWidth()
             .height(56.dp)
-            .padding(horizontal = BerthSpace.screenMargin - 8.dp),
+            .padding(horizontal = BerthSpace.screenMargin - 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when {
             navigation != null -> {
                 navigation()
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(2.dp))
             }
             onBack != null -> {
                 IconAction(onClick = onBack, description = "Back") {
                     BerthIcon(BerthIcons.back)
                 }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(2.dp))
             }
-            else -> Spacer(Modifier.width(8.dp))
+            else -> Spacer(Modifier.width(10.dp))
         }
         Text(title, style = BerthType.title, color = Berth.colors.text1, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), content = actions)
+        Row(verticalAlignment = Alignment.CenterVertically, content = actions)
     }
 }
 
 /**
- * 44 dp touch target for a glyph or icon; no fill until pressed. The size is required rather than
- * requested, so inside a shorter row (the 40 dp ribbon) the target stays a 44 dp circle centred on
- * the row instead of squashing to an ellipse.
+ * A glyph or icon in a 44 dp circle that fills when pressed, inside a 48 dp touch target. The
+ * target is required rather than requested, so inside a shorter row (the 40 dp ribbon) it stays a
+ * 48 dp square centred on the row instead of squashing, and the circle stays a circle. [reach] is
+ * extra target above the circle for a header that lends its status-bar inset (the ribbon's
+ * [app.berth.android.ui.tabs.TabStripStyle.topReach]): the target grows upward by it and the circle
+ * stays centred on the row beneath, the way the tabs beside it do.
  */
 @Composable
-fun IconAction(onClick: () -> Unit, description: String, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable BoxScope.() -> Unit) {
+fun IconAction(
+    onClick: () -> Unit,
+    description: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    reach: Dp = LocalTargetReach.current,
+    content: @Composable BoxScope.() -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Box(
         modifier
-            .requiredSize(44.dp)
-            .clip(CircleShape)
-            .background(if (pressed) Berth.colors.surface3 else Color.Transparent)
+            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
             // The glyph is decoration; screen readers get the action's name, not the character.
             .clearAndSetSemantics {
                 contentDescription = description
                 role = Role.Button
-            },
+                if (!enabled) disabled()
+            }
+            .padding(top = reach),
         contentAlignment = Alignment.Center,
-        content = content,
-    )
+    ) {
+        Box(
+            Modifier
+                .requiredSize(44.dp)
+                .clip(CircleShape)
+                .background(if (pressed) Berth.colors.surface3 else Color.Transparent),
+            contentAlignment = Alignment.Center,
+            content = content,
+        )
+    }
 }
 
 /** Text glyph used as an icon; kept for callers that still pass characters. Prefer [BerthIcon]. */

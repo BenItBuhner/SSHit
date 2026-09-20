@@ -41,6 +41,7 @@ import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.PickerRow
@@ -48,6 +49,7 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
@@ -260,10 +262,11 @@ fun HostEditorScreen(
             }
             if (colorPicker) {
                 Panel(label = "Colour and monogram") {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // The options' 48 dp targets set the pitch; the swatches inside them sit 12 dp apart.
+                    Row(Modifier.fillMaxWidth()) {
                         for (swatch in SwatchColor.entries.take(6)) SwatchOption(swatch, color == swatch) { color = swatch }
                     }
-                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
                         for (swatch in SwatchColor.entries.drop(6)) SwatchOption(swatch, color == swatch) { color = swatch }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -383,24 +386,10 @@ fun HostEditorScreen(
     }
 }
 
+/** The host's swatch colour as a [ColorOption]: named for a screen reader, in a 48 dp target. */
 @Composable
 private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (selected) c.surface4 else c.surface2)
-            .clickable(onClick = onClick)
-            .padding(4.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(4.dp))
-                .background(swatch.rgb.toColor()),
-        )
-    }
+    ColorOption(color = swatch.rgb.toColor(), name = swatch.spokenName(), selected = selected, onClick = onClick)
 }
 
 /**

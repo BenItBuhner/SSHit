@@ -32,6 +32,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -812,15 +813,17 @@ class BerthScreenshotTest {
         }
         assertEquals("berth tunnel ok", fetched)
 
-        // Pinned snippets are a Deck layer; tapping one types it into the shell.
-        repeat(4) { compose.onNode(hasContentDescription("Layer", substring = true)).performClick() }
+        // Pinned snippets are a Deck layer; tapping one types it into the shell. The layer key is the
+        // `Layer` button to a reader, in the state of the layer it is on.
+        repeat(4) { compose.onNode(hasContentDescription("Layer")).performClick() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("uptime")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Snippets")).assertExists()
         capture("stage-live-snippets-layer")
         compose.onNode(hasContentDescription("uptime")).performClick()
         settle(1_200)
         capture("stage-live-snippet-ran")
         // Back to Base (the fifth tap wraps), so the captures that follow show the Deck as a launch does, not the layer this test stepped to.
-        compose.onNode(hasContentDescription("Layer", substring = true)).performClick()
+        compose.onNode(hasContentDescription("Layer")).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("uptime")).fetchSemanticsNodes().isEmpty() }
 
         // The Session sheet sits behind the overflow now that the header row is the strip.

@@ -44,7 +44,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -491,7 +496,11 @@ private fun LayerChip(text: String, selected: Boolean, onClick: () -> Unit, onLo
             .clip(RoundedCornerShape(BerthRadius.swatch))
             .background(if (selected) c.surface4 else c.surface2)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics { contentDescription = "Layer $text" + if (selected) ", selected" else "" }
+            // The selection is a state, not a word in the name, so a reader says it once in its own voice.
+            .semantics {
+                contentDescription = "Layer $text"
+                this.selected = selected
+            }
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -548,7 +557,14 @@ private fun PresetsSheet(previewInput: StageInput, snippets: List<Snippet>, onPi
                     Modifier
                         .fillMaxWidth()
                         .clickable(interactionSource = interaction, indication = null) { onPick(preset) }
-                        .semantics { contentDescription = "Preset ${preset.name}" },
+                        // One button, said as its name and caption: the Deck drawn inside is for
+                        // looking at (the overlay below takes every touch on it), so neither its keys
+                        // nor the overlay are controls of their own to a reader.
+                        .clearAndSetSemantics {
+                            contentDescription = "Preset ${preset.name}, ${preset.caption}"
+                            role = Role.Button
+                            onClick { onPick(preset); true }
+                        },
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
