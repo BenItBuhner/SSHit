@@ -4,17 +4,16 @@ import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.compositionLocalOf
 
 /**
- * What a Stage laid out in panes (spec C23) can do for a hardware keyboard, handed down to the
- * Stage's chord dispatcher without the Stage knowing how the panes are built. A one-pane Stage,
- * which is every phone in portrait, provides the empty value: the chords are still taken (a bound
- * chord never reaches the shell, whatever the width, so `Ctrl+Shift+D` does not turn into a
- * control character on a phone) and do nothing. The pane layer provides both when it is on screen:
- * [split] opens the Stage into two panes or, with two already open, is what the Session sheet's
- * Split does; [focusOtherPane] moves the keyboard to the other pane through the same path a touch
+ * What a Stage laid out in panes (spec C23, `PaneStageScreen`) does for a hardware keyboard,
+ * handed down to the Stage's chord dispatcher without the Stage knowing how the panes are built. A
+ * one-pane Stage, which is every phone in portrait, provides the empty value: the chords are still
+ * taken (a bound chord never reaches the shell, whatever the width, so `Ctrl+Shift+D` does not
+ * turn into a control character on a phone) and do nothing. The pane layer provides both while it
+ * is on screen: [split] is what Overflow's Split or Unsplit row does, the Stage into two panes or
+ * back to one; [focusOtherPane] moves the keyboard to the other pane through the same path a touch
  * on it takes, so the pane the header marks focused, the Deck under it and the canvas the keys go
- * to agree, which is the point of a chord over a plain focus move (a Tab or D-pad press from one
- * canvas lands in the other's without telling the pane model, and the panes disagree; a canvas
- * takes those keys for the shell in any case).
+ * to agree. A canvas takes Tab and the arrows for the shell, so the chord is the one way out of a
+ * terminal into the pane beside it that does not go through a sheet.
  */
 class PaneActions(
     val split: (() -> Unit)? = null,

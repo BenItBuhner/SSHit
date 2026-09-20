@@ -160,6 +160,11 @@ fun StageScreen(
     onUnsplit: (() -> Unit)? = null,
     /** Lays out the body area for the active [tab] under the header, with the modifier that fills it. */
     layer: (@Composable StageBodies.(tab: ManagedTab, modifier: Modifier) -> Unit)? = null,
+    /**
+     * Where the keyboard's focus is, strip, bar, body or Deck, and the chords that move it (spec A11).
+     * A [layer] hands in its own, since it marks the body's region on the pane the focus belongs to.
+     */
+    focus: StageFocus = rememberStageFocus(),
 ) {
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
@@ -175,8 +180,6 @@ fun StageScreen(
     val haptics = rememberDeckHaptics()
     // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
     val panes = LocalPaneActions.current
-    // Where the keyboard's focus is, strip, bar, body or Deck, and the chords that move it (spec A11).
-    val focus = rememberStageFocus()
     val shortcuts = remember(vm, actions, tab, tools, panes, focus) {
         val tabs = TabShortcuts(
             step = vm::stepTab,
@@ -218,8 +221,9 @@ fun StageScreen(
             override fun split() { panes.split?.invoke() }
             override fun focusOtherPane() { panes.focusOtherPane?.invoke() }
             override fun focusStrip() { focus.focus(StageRegion.Strip) }
-            // Only a shell tab has a Deck or its collapsed strip; elsewhere the chord finds no region and does nothing.
-            override fun focusDeck() { if (session != null) focus.focus(StageRegion.Deck) }
+            // The Deck on screen, or the strip standing in for it, whichever terminal's it is (under two
+            // panes it may be the other pane's, spec C23); with neither the chord finds no region and does nothing.
+            override fun focusDeck() { focus.focus(StageRegion.Deck) }
             override fun returnToBody(): Boolean = when (focus.region) {
                 // From the terminal itself Escape is the host's; with nothing focused there is nothing to return from.
                 StageRegion.Body, null -> false
@@ -297,7 +301,9 @@ fun StageScreen(
                 },
             )
         }
-        val body = Modifier.weight(1f).fillMaxWidth().stageRegion(focus, StageRegion.Body)
+        val body = Modifier.weight(1f).fillMaxWidth()
+        // The one body is the keyboard's body region; a layer marks the region itself, on each pane (spec C23).
+        val oneBody = body.stageRegion(focus, StageRegion.Body)
         val bodies = StageBodies(
             vm = vm,
             holder = holder,
@@ -313,7 +319,7 @@ fun StageScreen(
             actions = actions,
         )
         when {
-            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, body)
+            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, oneBody)
             // The tab flows run a frame behind the manager: while an active id is set but its tab has not
             // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
             // that has them (spec C3, Persistence: restore is instant).
@@ -324,7 +330,7 @@ fun StageScreen(
                 Spacer(body)
                 LaunchedEffect(slots) { vm.setActive(slots.first().id) }
             }
-            else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
+            else -> EmptyStage(onNewTab = actions::newTab, modifier = oneBody)
         }
     }
 }

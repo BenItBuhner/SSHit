@@ -88,11 +88,14 @@ fun rememberStageFocus(): StageFocus = remember { StageFocus() }
  * Marks a region of the Stage: a focus group the keyboard enters as one, a traversal group a
  * reader hears as one, and a report to [focus] of whether a control inside it holds the focus,
  * withdrawn when the region leaves the screen with the control still focused (a tab switched under
- * its terminal), which the focus system tells no one about.
+ * its terminal), which the focus system tells no one about. A region marked on more than one node
+ * at once (the two panes of a split Stage are both the body, spec C23) is entered through the one
+ * marked as its [entry]; the others report and group, and a chord into the region lands on the
+ * entry's first control.
  */
-fun Modifier.stageRegion(focus: StageFocus, region: StageRegion): Modifier = this
+fun Modifier.stageRegion(focus: StageFocus, region: StageRegion, entry: Boolean = true): Modifier = this
     .then(StageRegionElement(focus, region))
-    .focusRequester(focus.requester(region))
+    .then(if (entry) Modifier.focusRequester(focus.requester(region)) else Modifier)
     .focusGroup()
     .semantics { isTraversalGroup = true }
 

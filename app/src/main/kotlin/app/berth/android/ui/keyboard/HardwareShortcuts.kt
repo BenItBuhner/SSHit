@@ -31,7 +31,7 @@ interface StageShortcutActions {
     /** Ctrl+Shift+/ (Ctrl+?): the shortcut sheet. */
     fun shortcutSheet()
 
-    /** Ctrl+Shift+D: split the Stage into panes (spec C22, medium and expanded widths; [PaneActions.split]). */
+    /** Ctrl+Shift+D: the Stage into two panes, or back to one (spec C22, medium and expanded widths; [PaneActions.split]). */
     fun split()
 
     /**
@@ -135,7 +135,7 @@ fun shortcutGroups(ctrlTabKeysReachTerminal: Boolean, panes: Boolean = false): L
         ShortcutEntry("Ctrl+Shift+/", "This sheet"),
     )
     val paneChords = listOf(
-        ShortcutEntry("Ctrl+Shift+D", if (panes) "Split the Stage" else "Split the Stage, on a wide screen"),
+        ShortcutEntry("Ctrl+Shift+D", if (panes) "Split the Stage in two, or back to one" else "Split the Stage, on a wide screen"),
         ShortcutEntry("Ctrl+Shift+O", if (panes) "Focus the other pane" else "Focus the other pane, when the Stage is split"),
     )
     val terminalKeys = buildList {

@@ -77,6 +77,12 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.keyboard.LocalPaneActions
+import app.berth.android.ui.keyboard.PaneActions
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabCarry
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.TabActions
@@ -121,6 +127,13 @@ private const val DividerRestAlpha = 0.4f
  * tab's body are the Stage's own, composed through [StageBodies.TabBody]; this only decides where
  * the bodies go and who has the keys. The panes own the window's bottom insets, so a body that
  * pads for the navigation bar itself (Files, Tunnels) pads for nothing inside one.
+ *
+ * A hardware keyboard reaches the panes the way a finger does (spec A11, C22): Ctrl+Shift+D is
+ * Overflow's Split or Unsplit, Ctrl+Shift+O puts the focus in the other pane, and a focus that
+ * lands in the unfocused pane by any route, Tab or the D-pad out of a header or a Files row as
+ * much as the chord, is a focus change like a touch there: the pane model hears of it, so the
+ * header's ×, the Deck under both panes and the canvas the keys go to never disagree. Both panes
+ * are the Stage's body region, entered on the focused one.
  */
 @Composable
 fun PaneStageScreen(
@@ -136,10 +149,10 @@ fun PaneStageScreen(
     val panes by vm.panes.collectAsState()
     val carry = remember { TabCarry() }
     val tools = remember { HashMap<String, StageTools>() }
-    val focus = remember { HashMap<String, FocusRequester>() }
+    val requesters = remember { HashMap<String, FocusRequester>() }
     val chrome = remember { HashMap<String, StageChromeHost>() }
     fun toolsFor(id: String) = tools.getOrPut(id) { StageTools() }
-    fun focusFor(id: String) = focus.getOrPut(id) { FocusRequester() }
+    fun focusFor(id: String) = requesters.getOrPut(id) { FocusRequester() }
     fun chromeFor(id: String) = chrome.getOrPut(id) { StageChromeHost() }
 
     // Both panes are in view while this layer is up: the companion is on stage too (its bells stay quiet).
@@ -153,25 +166,57 @@ fun PaneStageScreen(
         carry.activeId = active?.id
         // A tab's tools, focus and chrome live as long as it is in view.
         tools.keys.retainAll(shown)
-        focus.keys.retainAll(shown)
+        requesters.keys.retainAll(shown)
         chrome.keys.retainAll(shown)
     }
     // The keys follow the focused pane (a header tap, a drop, the strip, a pane closing) when a body in
     // this layer holds them: the focused body says so through [tracking], and the word stands over the
     // body's own removal, since a body that moves between the panes and the single slot is composed anew.
-    // Nothing here takes the keys from nowhere: as on a phone, a terminal is first focused by a tap.
+    // Nothing here takes the keys from nowhere: as on a phone, a terminal is first focused by a tap,
+    // or asked for by the chord ([keysAskedFor]), which is the one route that puts them where none were.
     var keysIn by remember { mutableStateOf<String?>(null) }
+    var keysAskedFor by remember { mutableStateOf<String?>(null) }
     fun tracking(id: String) = Modifier.onFocusChanged { if (it.hasFocus) keysIn = id else if (keysIn == id) keysIn = null }
     val focusedId = panes?.focusedTab?.id ?: active?.id
-    LaunchedEffect(focusedId, panes != null) {
+    val focus = rememberStageFocus()
+    LaunchedEffect(focusedId, panes != null, keysAskedFor) {
         val id = focusedId ?: return@LaunchedEffect
-        if (keysIn == null) return@LaunchedEffect
-        runCatching { focusFor(id).requestFocus() }
+        // The chord names the tab it wants the keys in, so the frame before the pane model has caught up
+        // with it (its flows run a frame behind the call) cannot spend the request on the pane leaving.
+        val asked = keysAskedFor == id
+        if (asked) keysAskedFor = null
+        if (keysIn == null && !asked) return@LaunchedEffect
+        // The keys already in the focused pane's body, and held there: a focus that landed in this pane
+        // moved the model (below), not the reverse, and it stays on the row it landed on.
+        if (keysIn == id && !asked && focus.region == StageRegion.Body) return@LaunchedEffect
+        // The body's region is entered on the focused pane: its terminal, or the first row of a Files or
+        // Tunnels pane, which the pane's own requester (the terminal's) could not reach.
+        if (!focus.focus(StageRegion.Body)) runCatching { focusFor(id).requestFocus() }
     }
+    // A focus that lands in the unfocused pane, by Tab or the D-pad out of a header or a row, or by
+    // the chord, is a touch on that pane as far as the pane model is concerned: the same route a
+    // header tap takes ([PaneLayer]'s onFocus), so the header's ×, the Deck and the keys agree.
+    LaunchedEffect(keysIn) {
+        val id = keysIn ?: return@LaunchedEffect
+        val two = panes ?: return@LaunchedEffect
+        if (id != two.focusedTab.id && two.sideOf(id) != null) vm.setActive(id)
+    }
+    // Ctrl+Shift+D and Ctrl+Shift+O (spec C22), for the Stage's chord dispatcher.
+    val onSplit: (() -> Unit)? = if (panes == null && active != null) actions::splitActive else null
+    val onUnsplit: (() -> Unit)? = panes?.let { p -> { actions.closePane(p.focused.other) } }
+    val paneActions = PaneActions(
+        split = onSplit ?: onUnsplit,
+        focusOtherPane = panes?.let { p ->
+            {
+                keysAskedFor = p.otherTab.id
+                vm.setActive(p.otherTab.id)
+            }
+        },
+    )
 
     val idle = remember { StageTools() }
     val activeTools = active?.let { toolsFor(it.id) } ?: idle
-    CompositionLocalProvider(LocalTabCarry provides carry) {
+    CompositionLocalProvider(LocalTabCarry provides carry, LocalPaneActions provides paneActions) {
         StageScreen(
             vm = vm,
             tab = active,
@@ -182,21 +227,28 @@ fun PaneStageScreen(
             modifier = modifier,
             onOpenDeckEditor = onOpenDeckEditor,
             tools = activeTools,
-            onSplit = if (panes == null && active != null) actions::splitActive else null,
-            onUnsplit = panes?.let { p -> { actions.closePane(p.focused.other) } },
+            onSplit = onSplit,
+            onUnsplit = onUnsplit,
+            focus = focus,
             layer = { tab, body ->
                 val two = panes
                 if (two == null || two.sideOf(tab.id) == null) {
                     // One tab on the Stage: its body fills the width, the chrome where the body puts it, and
                     // the body's halves take a tab from the strip, which splits the Stage (spec C23).
                     SplitTargets(carry, modifier = body) {
-                        TabBody(tab, toolsFor(tab.id), Modifier.fillMaxSize().then(tracking(tab.id)), focusRequester = focusFor(tab.id))
+                        TabBody(
+                            tab,
+                            toolsFor(tab.id),
+                            Modifier.fillMaxSize().then(tracking(tab.id)).stageRegion(focus, StageRegion.Body),
+                            focusRequester = focusFor(tab.id),
+                        )
                     }
                 } else {
                     PaneLayer(
                         panes = two,
                         bodies = this,
                         carry = carry,
+                        focus = focus,
                         toolsFor = ::toolsFor,
                         focusFor = ::focusFor,
                         chromeFor = ::chromeFor,
@@ -223,6 +275,7 @@ private fun PaneLayer(
     panes: Panes,
     bodies: StageBodies,
     carry: TabCarry,
+    focus: StageFocus,
     toolsFor: (String) -> StageTools,
     focusFor: (String) -> FocusRequester,
     chromeFor: (String) -> StageChromeHost,
@@ -275,6 +328,7 @@ private fun PaneLayer(
                     focused = panes.focused == PaneSide.LEFT,
                     dropTarget = carry.target == PaneSide.LEFT,
                     bodies = bodies,
+                    focus = focus,
                     tools = toolsFor(panes.left.id),
                     focusRequester = focusFor(panes.left.id),
                     chrome = chromeFor(panes.left.id),
@@ -291,6 +345,7 @@ private fun PaneLayer(
                     focused = panes.focused == PaneSide.RIGHT,
                     dropTarget = carry.target == PaneSide.RIGHT,
                     bodies = bodies,
+                    focus = focus,
                     tools = toolsFor(panes.right.id),
                     focusRequester = focusFor(panes.right.id),
                     chrome = chromeFor(panes.right.id),
@@ -335,7 +390,9 @@ private fun PaneLayer(
  * focused pane to close the pane) over the tab's body. A touch in the unfocused pane focuses it,
  * seen on the way down and consumed by nobody, so the body's own gestures are untouched; the
  * focused pane's touches are its own, since a scroll in it has nothing to say to the manager.
- * While a tab is carried over it the pane's surface steps up to say it will take the drop.
+ * While a tab is carried over it the pane's surface steps up to say it will take the drop. To the
+ * keyboard the pane, header and all, is the Stage's body region ([StageRegion.Body]), and the
+ * focused pane's body is where a chord into the region lands (spec A11).
  */
 @Composable
 private fun Pane(
@@ -344,6 +401,7 @@ private fun Pane(
     focused: Boolean,
     dropTarget: Boolean,
     bodies: StageBodies,
+    focus: StageFocus,
     tools: StageTools,
     focusRequester: FocusRequester,
     chrome: StageChromeHost,
@@ -374,7 +432,8 @@ private fun Pane(
             .semantics {
                 contentDescription = "${record.displayTitle}, $sideName pane"
                 stateDescription = if (focused) "Focused" else "Not focused"
-            },
+            }
+            .stageRegion(focus, StageRegion.Body, entry = false),
     ) {
         PaneHeader(
             title = record.displayTitle.ifBlank { host.name },
@@ -389,7 +448,7 @@ private fun Pane(
         bodies.TabBody(
             tab = tab,
             tools = tools,
-            modifier = Modifier.weight(1f).fillMaxWidth().then(tracking),
+            modifier = Modifier.weight(1f).fillMaxWidth().then(tracking).stageRegion(focus, StageRegion.Body, entry = focused),
             chrome = chrome,
             focusRequester = focusRequester,
             lendsOverflow = focused,

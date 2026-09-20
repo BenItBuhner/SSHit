@@ -150,7 +150,7 @@ class HardwareShortcutsTest {
         assertEquals(listOf("Ctrl+Shift+D", "Ctrl+Shift+O"), phone.map { it.keys })
         assertEquals(phone.map { it.keys }, tablet.map { it.keys })
         assertTrue(phone.all { "wide screen" in it.action || "when the Stage is split" in it.action })
-        assertEquals(listOf("Split the Stage", "Focus the other pane"), tablet.map { it.action })
+        assertEquals(listOf("Split the Stage in two, or back to one", "Focus the other pane"), tablet.map { it.action })
     }
 
     @Test
