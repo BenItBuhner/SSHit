@@ -51,6 +51,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -81,6 +82,7 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionState
 import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
+import app.berth.terminal.ScrollbackSearch
 import kotlinx.coroutines.delay
 
 /**
@@ -347,7 +349,8 @@ private fun SearchBarRow(
                     search.caseSensitive = it
                     search.invalidate()
                 }
-                Toggle(".*", search.regex, "Regular expression") {
+                // A pattern that does not compile is searched as literal text; the glyph in the danger colour says so.
+                Toggle(".*", search.regex, "Regular expression", warn = search.regex && search.query.isNotEmpty() && !ScrollbackSearch.isValidRegex(search.query)) {
                     search.regex = it
                     search.invalidate()
                 }
@@ -370,9 +373,9 @@ private fun SearchBarRow(
     }
 }
 
-/** `Aa` or `.*` behind the field: mono Caption, accent when on, text.3 when off. */
+/** `Aa` or `.*` behind the field: mono Caption, accent when on, text.3 when off, danger while [warn] (the pattern is invalid and the search is literal). */
 @Composable
-private fun Toggle(glyph: String, on: Boolean, description: String, onChange: (Boolean) -> Unit) {
+private fun Toggle(glyph: String, on: Boolean, description: String, warn: Boolean = false, onChange: (Boolean) -> Unit) {
     val c = Berth.colors
     Box(
         Modifier
@@ -384,12 +387,16 @@ private fun Toggle(glyph: String, on: Boolean, description: String, onChange: (B
             .semantics {
                 contentDescription = description
                 role = Role.Switch
+                if (warn) stateDescription = INVALID_PATTERN
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(glyph, style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = if (on) c.accent else c.text3, maxLines = 1)
+        Text(glyph, style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = if (warn) c.danger else if (on) c.accent else c.text3, maxLines = 1)
     }
 }
+
+/** The `.*` toggle's state while its pattern does not compile and the literal text is searched instead. */
+const val INVALID_PATTERN = "Invalid pattern, searching the text as typed"
 
 /**
  * The look before a paste that is more than one line, long, or carries control characters (spec

@@ -24,6 +24,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.moveBy
@@ -42,6 +43,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.stage.INVALID_PATTERN
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.StageTools
 import app.berth.android.ui.tabs.ShellTabActions
@@ -640,22 +642,30 @@ class TerminalToolsScreenshotTest {
         compose.waitUntil(5_000) { tools.search.matches.size == total }
 
         // `.*` with a pattern that does not compile (`caddy[`, half a class) finds the literal text,
-        // every `caddy[812]` line, rather than the red 0 of no matches; closed, the class is a pattern
-        // again and `caddy` before a digit is nowhere.
+        // every `caddy[812]` line, rather than the red 0 of no matches, and the `.*` glyph goes to the
+        // danger colour to say so; closed, the class is a pattern again, the glyph is the accent again,
+        // and `caddy` before a digit is nowhere.
+        val invalid = hasContentDescription("Regular expression") and hasStateDescription(INVALID_PATTERN)
         compose.onNodeWithContentDescription("Regular expression").performClick()
         compose.waitUntil(5_000) { tools.search.regex }
+        compose.onAllNodes(invalid).assertCountEquals(0)
         field("Find in scrollback").performTextInput("[")
         // The run settles behind the field, so wait for the count to move off `caddy`'s before reading it.
         compose.waitUntil(5_000) { tools.search.query == "caddy[" && tools.search.matches.size != total }
         assertEquals(FRAME_LINES.count { it.contains("caddy[") }, tools.search.matches.size)
+        compose.onNode(invalid).assertIsDisplayed()
+        settle(200)
+        capture("terminal-search-invalid-pattern")
         field("Find in scrollback").performTextInput("0-9]")
         compose.waitUntil(5_000) { tools.search.query == "caddy[0-9]" && tools.search.matches.isEmpty() }
         assertEquals("0", tools.search.countLabel)
+        compose.onAllNodes(invalid).assertCountEquals(0)
         field("Find in scrollback").performTextClearance()
         field("Find in scrollback").performTextInput("caddy")
         compose.onNodeWithContentDescription("Regular expression").performClick()
         compose.waitUntil(5_000) { !tools.search.regex && tools.search.query == "caddy" && tools.search.matches.size == total }
         compose.waitUntil(5_000) { tools.search.countLabel == "$total/$total" }
+        compose.onAllNodes(invalid).assertCountEquals(0)
 
         // Previous steps back through the matches and into history once they leave the screen.
         var steps = 0
