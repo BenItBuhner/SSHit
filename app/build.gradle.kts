@@ -111,6 +111,9 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
 
+    // sshj logs through SLF4J; the app binds it to its own log ring (RingLoggerProvider), so a report carries the transport's account.
+    implementation(libs.slf4j.api)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
