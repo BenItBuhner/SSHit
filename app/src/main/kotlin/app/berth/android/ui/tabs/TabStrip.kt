@@ -71,6 +71,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -84,6 +85,8 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -100,6 +103,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import app.berth.android.session.PaneSide
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TabSource
 import app.berth.android.ui.components.BerthIcon
@@ -656,10 +660,27 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
     return outcome ?: PressOutcome.Held(latest)
 }
 
+/** How far below the tab the finger goes before a lifted tab leaves the strip for a pane (spec C23). */
+private val CARRY_REACH = 24.dp
+
+/**
+ * A tab a lifted item can leave the strip as (spec C23): the carry to feed, what the tab is, where
+ * the item sits in the root, and what a drop on a pane does. Null where there is no pane to drop on.
+ */
+internal class CarryTarget(
+    val carry: TabCarry,
+    val tab: () -> CarriedTab,
+    val bounds: () -> Rect,
+    val onDrop: (id: String, side: PaneSide) -> Unit,
+)
+
 /**
  * Tap, long-press and drag for one strip item. Consumes nothing until the item is lifted, so a
  * horizontal pull scrolls the strip as usual; once lifted every change is consumed in the Main
  * pass (this node sees it before the row's scroll does), so the row stays still while the item moves.
+ * With a [carryTarget], a lifted tab pulled [CARRY_REACH] below the strip leaves it: the item
+ * settles back into its slot and the tab travels with the finger over the panes, to be dropped on
+ * one (spec C23) or let go over nothing.
  */
 private fun Modifier.stripItemGestures(
     key: String,
@@ -668,7 +689,9 @@ private fun Modifier.stripItemGestures(
     state: TabStripState,
     onTap: () -> Unit,
     onPressedChange: (Boolean) -> Unit,
-): Modifier = pointerInput(key, controller) {
+    carryTarget: CarryTarget? = null,
+): Modifier = pointerInput(key, controller, carryTarget) {
+    val carryReach = CARRY_REACH.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = true, pass = PointerEventPass.Main)
         onPressedChange(true)
@@ -682,6 +705,10 @@ private fun Modifier.stripItemGestures(
                 var moved = false
                 var travelled = 0f
                 var dropped = false
+                // The finger in root coordinates: where the item was when pressed, plus every change since.
+                val origin = (carryTarget?.bounds?.invoke() ?: Rect.Zero).topLeft + down.position
+                var finger = origin
+                var carrying = false
                 try {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
@@ -691,22 +718,40 @@ private fun Modifier.stripItemGestures(
                             dropped = true
                             break
                         }
-                        val dx = change.positionChange().x
+                        val delta = change.positionChange()
                         change.consume()
-                        travelled += dx
+                        finger += delta
+                        if (carrying) {
+                            carryTarget?.carry?.moveTo(finger)
+                            continue
+                        }
+                        travelled += delta.x
                         if (!moved && abs(travelled) > viewConfiguration.touchSlop) {
                             moved = true
                             state.menuKey = null
                         }
-                        if (moved) controller.moveBy(dx)
+                        if (carryTarget != null && !isChip && finger.y > carryTarget.bounds().bottom + carryReach) {
+                            carrying = true
+                            moved = true
+                            state.menuKey = null
+                            controller.cancel()
+                            carryTarget.carry.begin(carryTarget.tab(), finger)
+                            continue
+                        }
+                        if (moved) controller.moveBy(delta.x)
                     }
                 } finally {
-                    if (dropped) {
-                        // Released: settle, then open the menu if the finger never travelled (spec C3, Long-press menu).
-                        controller.drop()
-                        if (!moved) state.menuKey = key
-                    } else {
-                        controller.cancel()
+                    when {
+                        carrying -> {
+                            val landed = carryTarget?.carry?.drop()
+                            if (dropped && landed != null) carryTarget.onDrop(landed.first.id, landed.second)
+                        }
+                        dropped -> {
+                            // Released: settle, then open the menu if the finger never travelled (spec C3, Long-press menu).
+                            controller.drop()
+                            if (!moved) state.menuKey = key
+                        }
+                        else -> controller.cancel()
                     }
                 }
             }
@@ -767,11 +812,26 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         SessionState.FAILED -> "failed"
         SessionState.CLOSED -> "closed"
     }
+    // On a window with two panes (spec C23) the tab says which pane it sits in, and can be carried to one.
+    val carry = LocalTabCarry.current
+    val paneSide = carry?.sideOf(id)
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    val carryTarget = carry?.let { c ->
+        remember(c, id) {
+            CarryTarget(
+                carry = c,
+                tab = { CarriedTab(id, entry.slot.tab.record.value.displayTitle, entry.slot.tab.record.value.hostSnapshot.color, entry.slot.tab.record.value.hostSnapshot.monogram) },
+                bounds = { bounds },
+                onDrop = { tabId, side -> actions.openInPane(tabId, side) },
+            )
+        }
+    }
     val description = buildString {
         append(title).append(", ").append(stateText)
         append(", tab ").append(entry.stripIndex + 1).append(" of ").append(tabCount)
         entry.group?.let { if (groupCount > 1) append(", group ").append(it.name) }
         if (record.needsAttention) append(", needs attention")
+        if (paneSide != null) append(", in the ").append(if (paneSide == PaneSide.LEFT) "left" else "right").append(" pane")
     }
     val stripIndex = entry.stripIndex
 
@@ -779,6 +839,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         modifier
             .then(if (draggedHere) Modifier else Modifier.animateItem())
             .fillMaxHeight()
+            .then(if (carry != null) Modifier.onGloballyPositioned { bounds = it.boundsInRoot() } else Modifier)
             .graphicsLayer {
                 val drag = state.drag
                 translationX = if (drag != null && drag.key == entry.key) {
@@ -786,19 +847,23 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                     drag.startOffset + state.dragTravel - current
                 } else 0f
             }
-            .stripItemGestures(entry.key, isChip = false, controller, state, onTap = { actions.activate(id) }, onPressedChange = { pressed = it })
+            .stripItemGestures(entry.key, isChip = false, controller, state, onTap = { actions.activate(id) }, onPressedChange = { pressed = it }, carryTarget = carryTarget)
             .clearAndSetSemantics {
                 role = Role.Tab
                 selected = active
                 contentDescription = description
                 onClick { actions.activate(id); true }
                 onLongClick { state.menuKey = entry.key; true }
-                customActions = listOf(
-                    CustomAccessibilityAction("Close") { actions.close(id); true },
-                    CustomAccessibilityAction("Move left") { actions.move(id, stripIndex - 1, null); true },
-                    CustomAccessibilityAction("Move right") { actions.move(id, stripIndex + 1, null); true },
-                    CustomAccessibilityAction("More options") { state.menuKey = entry.key; true },
-                )
+                customActions = buildList {
+                    add(CustomAccessibilityAction("Close") { actions.close(id); true })
+                    add(CustomAccessibilityAction("Move left") { actions.move(id, stripIndex - 1, null); true })
+                    add(CustomAccessibilityAction("Move right") { actions.move(id, stripIndex + 1, null); true })
+                    if (carry != null) {
+                        if (paneSide != PaneSide.LEFT) add(CustomAccessibilityAction("Open in left pane") { actions.openInPane(id, PaneSide.LEFT); true })
+                        if (paneSide != PaneSide.RIGHT) add(CustomAccessibilityAction("Open in right pane") { actions.openInPane(id, PaneSide.RIGHT); true })
+                    }
+                    add(CustomAccessibilityAction("More options") { state.menuKey = entry.key; true })
+                }
             }
             // The target is the whole box, reach included; the visual sits centred in the row beneath it.
             .padding(top = topReach),
@@ -844,6 +909,10 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                     modifier = Modifier.weight(1f, fill = false).padding(end = 2.dp),
                 )
             }
+            if (paneSide != null) {
+                Spacer(Modifier.width(4.dp))
+                PaneMark(paneSide, tint = titleColor)
+            }
             if (active && s.closeOnActive) {
                 Spacer(Modifier.width(2.dp))
                 CloseGlyph(onClick = { actions.close(id) })
@@ -856,6 +925,28 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
             actions = actions,
             onDismiss = { if (state.menuKey == entry.key) state.menuKey = null },
         )
+    }
+}
+
+/**
+ * Which pane the tab sits in (spec C23): two 5 × 10 cells with a 2 dp gap, radius 1.5, the tab's
+ * pane filled and the other outlined in the title's colour. Decoration; the description says it in words.
+ */
+@Composable
+private fun PaneMark(side: PaneSide, tint: Color) {
+    Canvas(Modifier.size(12.dp, 10.dp)) {
+        val cell = 5.dp.toPx()
+        val gap = 2.dp.toPx()
+        val radius = CornerRadius(1.5.dp.toPx())
+        val stroke = 1.dp.toPx()
+        for ((index, at) in listOf(0f, cell + gap).withIndex()) {
+            val filled = (index == 0) == (side == PaneSide.LEFT)
+            if (filled) {
+                drawRoundRect(tint, Offset(at, 0f), Size(cell, size.height), radius)
+            } else {
+                drawRoundRect(tint, Offset(at + stroke / 2, stroke / 2), Size(cell - stroke, size.height - stroke), radius, style = Stroke(stroke))
+            }
+        }
     }
 }
 

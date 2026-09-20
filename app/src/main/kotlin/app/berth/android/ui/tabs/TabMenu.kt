@@ -58,8 +58,12 @@ fun TabMenu(
     LaunchedEffect(expanded) { if (!expanded) groupsPage = false }
     val id = record.id
     val files = record.kind == TabKind.Files
+    // On a window with two panes (spec C23) a tab in neither can open beside the active one.
+    val carry = LocalTabCarry.current
+    val beside = carry != null && carry.activeId != id && carry.sideOf(id) == null
     MenuPanel(expanded = expanded, onDismiss = onDismiss) {
         if (!groupsPage) {
+            if (beside) MenuRow("Open beside") { onDismiss(); actions.openInPane(id, null) }
             MenuRow("Duplicate") { onDismiss(); actions.duplicate(id) }
             MenuRow("Rename") { onDismiss(); actions.rename(id) }
             // A Files tab offers the terminal it rides; a terminal offers Files; a Tunnels tab, with no shell of its own, offers both.
