@@ -98,9 +98,10 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // The scope, said plainly while history is per tab: the host, this tab, the count.
             SheetTitle(
                 "History",
-                record.displayTitle + " \u00B7 " + when (commands.size) {
+                record.hostSnapshot.name + " \u00B7 this tab \u00B7 " + when (commands.size) {
                     0 -> "no commands yet"
                     1 -> "1 command"
                     else -> "${commands.size} commands"
