@@ -72,17 +72,14 @@ interface SessionEnvironment {
     fun hostKeyPolicyFor(host: Host): HostKeyPolicy
 
     /**
-     * The policy for [host] as a jump host of another login ([via]), so what it asks the user
-     * says which hop it is and where the chain is going. The plain policy unless overridden.
+     * The policy for [host] with what the login knows about it: [via] when the host is a jump host
+     * of another login, so what the policy asks the user says which hop it is and where the chain is
+     * going; [linkFingerprint] when a link opened the login and carried a fingerprint for the
+     * server's key (`;fingerprint=`), so the trust sheets can say how it compares. A link names the
+     * destination's key, never a hop's, so the two are never set together. The plain policy unless
+     * overridden; stand-ins that accept every key need not override it.
      */
-    fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = hostKeyPolicyFor(host)
-
-    /**
-     * The policy for a login a link opened, given the fingerprint the link carried for the
-     * server's key (`;fingerprint=`), so the trust sheets can say how it compares; the plain
-     * policy when the link carried none. Stand-ins that accept every key need not override it.
-     */
-    fun hostKeyPolicyFor(host: Host, linkFingerprint: String?): HostKeyPolicy = hostKeyPolicyFor(host)
+    fun hostKeyPolicyFor(host: Host, via: HopRole?, linkFingerprint: String?): HostKeyPolicy = hostKeyPolicyFor(host)
     val networkAvailable: Flow<Unit>
 
     /**
@@ -656,9 +653,9 @@ class TerminalSession(
         // Hops first, in the order they are made, so their prompts come in that order too.
         val chain = env.jumpHostsFor(h)
         chainHosts = chain
-        val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h))) }
+        val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h), null)) }
         val endpoint = endpointFor(h, env.authFor(h))
-        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h, linkFingerprint), hops)
+        val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h, null, linkFingerprint), hops)
         connection = conn
         val progress = scope.launch {
             conn.state.collect { s ->
