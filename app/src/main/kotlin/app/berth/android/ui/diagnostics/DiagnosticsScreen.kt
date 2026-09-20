@@ -21,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.ReportKind
@@ -30,6 +29,8 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.ScreenHeader
+import app.berth.android.ui.stage.ageText
+import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
@@ -59,6 +60,10 @@ fun DiagnosticsScreen(reports: CrashReporter, onBack: () -> Unit, modifier: Modi
             Spacer(Modifier.height(48.dp))
             EmptyState("No reports.", "A crash, or a connection that failed or fell over, is written here with the app, the device and the last lines of Berth\u2019s own log. Nothing is sent anywhere unless you share it.") {}
         } else {
+            // The list's one job is to tell reports apart: the title whole on up to two lines, the kind and
+            // the error's line under it, and the age the way the Hosts rows give it (`18 min ago`); the full
+            // date and time are the sheet's caption, so they are not spent here on a third of the row.
+            val now = ageTicker()
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 12.dp),
@@ -69,8 +74,9 @@ fun DiagnosticsScreen(reports: CrashReporter, onBack: () -> Unit, modifier: Modi
                         title = report.title,
                         subtitle = report.kind.label + if (report.summary.isNotEmpty()) " \u00B7 ${report.summary}" else "",
                         onClick = { open = report.id },
+                        titleMaxLines = 2,
                         trailing = {
-                            Text(formatDateTime(report.at), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(ageText(report.at, now), style = BerthType.caption, color = c.text3, maxLines = 1)
                         },
                     )
                 }

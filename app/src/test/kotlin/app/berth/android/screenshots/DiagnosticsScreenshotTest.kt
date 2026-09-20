@@ -22,6 +22,7 @@ import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.ReportKind
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.diagnostics.DiagnosticsScreen
+import app.berth.android.ui.diagnostics.formatDateTime
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
@@ -195,6 +196,9 @@ class DiagnosticsScreenshotTest {
         compose.onNodeWithText("Gave up reconnecting: homelab").assertIsDisplayed()
         compose.onNodeWithText("Connection \u00B7 java.io.IOException: Broken pipe").assertIsDisplayed()
         compose.onNodeWithText("Connection \u00B7 ${homelab.name} \u00B7 ${homelab.user}@${homelab.address}:${homelab.port}").assertIsDisplayed()
+        // The age in the trailing slot the way the Hosts rows give it, not a date that takes a third of the row.
+        compose.onAllNodesWithText("just now").assertCountEquals(3)
+        compose.onAllNodes(hasText(formatDateTime(graph.reports.reports.value.first().at))).assertCountEquals(0)
         settle(200)
         capture("diagnostics")
 
