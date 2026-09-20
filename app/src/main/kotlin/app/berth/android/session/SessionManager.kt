@@ -761,8 +761,11 @@ class SessionManager @Inject constructor(
     // ---- files tabs --------------------------------------------------------------------------------
 
     /** The host's Files tab, first in strip order, when it has one. */
-    fun filesTabFor(hostId: String): FilesTab? =
-        stripNow().firstOrNull { it.kind == TabKind.Files && it.hostSnapshot.id == hostId }?.let { _filesTabs.value[it.id] }
+    fun filesTabFor(hostId: String): FilesTab? = filesTabsFor(hostId).firstOrNull()
+
+    /** The host's Files tabs in strip order. */
+    private fun filesTabsFor(hostId: String): List<FilesTab> =
+        stripNow().filter { it.kind == TabKind.Files && it.hostSnapshot.id == hostId }.mapNotNull { _filesTabs.value[it.id] }
 
     /**
      * Files from a terminal tab's menu or the Session sheet: the host's Files tab comes on stage
@@ -789,8 +792,9 @@ class SessionManager @Inject constructor(
      */
     suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null): FilesTab {
         restore()
-        // The host's Files tab comes on stage, unless an `sftp://` link names a folder it is not showing: that is a tab of its own at the folder.
-        filesTabFor(host.id)?.takeIf { folder == null || it.folder == folder }?.let {
+        // The host's Files tab comes on stage; an `sftp://` link naming a folder takes the tab showing it, or opens one of its own there.
+        val showing = filesTabsFor(host.id)
+        (if (folder == null) showing.firstOrNull() else showing.firstOrNull { it.folder == folder })?.let {
             setActive(it.id)
             return it
         }

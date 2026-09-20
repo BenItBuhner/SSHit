@@ -307,11 +307,13 @@ private fun Shell(vm: AppViewModel) {
     Box(Modifier.fillMaxSize()) {
         ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
         // The link notice is kept through the bar's exit, so the text does not blank as it slides away.
+        // It is the parser's reason alone (`The IPv6 address is missing its closing bracket.`): the
+        // bar has one line, and the reason says it was the link.
         val shownNotice = remember { mutableStateOf(linkNotice) }
         if (linkNotice != null) shownNotice.value = linkNotice
         NoticeBar(
             visible = linkNotice != null,
-            text = "Link not opened. ${shownNotice.value ?: ""}",
+            text = shownNotice.value ?: "",
             action = "OK",
             onAction = { linkNotice = null },
             modifier = Modifier.align(Alignment.BottomCenter),
