@@ -10,10 +10,9 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /** The remote end of one proxied connection: a `direct-tcpip` channel, or a plain socket in tests. */
 internal interface ForwardedStream : Closeable {
@@ -29,13 +28,14 @@ internal interface ForwardedStream : Closeable {
  */
 internal class SocksProxy(
     private val serverSocket: ServerSocket,
+    /** Where the bytes and connections it carries are counted. */
+    private val traffic: ForwardTraffic = ForwardTraffic(),
     /** Opens the remote side of a forwarded connection; throws [OpenFailException] when the server refuses. */
     private val open: (host: String, port: Int) -> ForwardedStream,
 ) : Closeable {
     private val closed = AtomicBoolean(false)
-    private val pool: ExecutorService = Executors.newCachedThreadPool { runnable ->
-        Thread(runnable, "berth-socks-${counter.incrementAndGet()}").apply { isDaemon = true }
-    }
+    private val pool: ExecutorService = StreamPump.newPool("socks")
+    private val carried: MutableSet<Closeable> = Collections.synchronizedSet(HashSet())
 
     val localPort: Int get() = serverSocket.localPort
 
@@ -53,6 +53,7 @@ internal class SocksProxy(
 
     private fun serve(socket: Socket) {
         var remote: ForwardedStream? = null
+        carried += socket
         try {
             socket.tcpNoDelay = true
             val input = DataInputStream(socket.getInputStream())
@@ -72,41 +73,13 @@ internal class SocksProxy(
                 return
             }
             target.accept(output)
-            pump(socket, remote)
+            StreamPump.pump(socket, remote, traffic, pool)
         } catch (_: IOException) {
             // The client went away mid-handshake or the channel dropped; nothing to report.
         } finally {
             runCatching { remote?.close() }
             runCatching { socket.close() }
-        }
-    }
-
-    /** Copies both directions until one side ends; returns when both copiers have finished. */
-    private fun pump(socket: Socket, remote: ForwardedStream) {
-        val toRemote = pool.submit {
-            copy(socket.getInputStream(), remote.output)
-            runCatching { remote.output.close() }
-        }
-        try {
-            copy(remote.input, socket.getOutputStream())
-        } finally {
-            runCatching { socket.shutdownOutput() }
-            runCatching { remote.close() }
-            runCatching { toRemote.get() }
-        }
-    }
-
-    private fun copy(from: InputStream, to: OutputStream) {
-        val buffer = ByteArray(32 * 1024)
-        try {
-            while (true) {
-                val n = from.read(buffer)
-                if (n < 0) break
-                to.write(buffer, 0, n)
-                to.flush()
-            }
-        } catch (_: IOException) {
-            // Either end closed; the caller tears both down.
+            carried -= socket
         }
     }
 
@@ -202,10 +175,7 @@ internal class SocksProxy(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { serverSocket.close() }
+        synchronized(carried) { carried.toList() }.forEach { runCatching { it.close() } }
         pool.shutdownNow()
-    }
-
-    private companion object {
-        val counter = AtomicInteger()
     }
 }
