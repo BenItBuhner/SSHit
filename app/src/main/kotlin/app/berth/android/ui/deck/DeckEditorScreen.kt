@@ -44,11 +44,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -467,16 +473,17 @@ private fun QuietAction(text: String, onClick: () -> Unit, enabled: Boolean = tr
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = enabled && interaction.showsFocus()
     Box(
         Modifier
             .defaultMinSize(minHeight = 44.dp, minWidth = 44.dp)
             .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (pressed && enabled) c.surface2 else Color.Transparent)
+            .background(if ((pressed && enabled) || focused) c.surface2 else Color.Transparent)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = BerthType.label, color = c.text2.copy(alpha = if (enabled) 1f else 0.5f), maxLines = 1)
+        Text(text, style = BerthType.label, color = if (focused) c.accent else c.text2.copy(alpha = if (enabled) 1f else 0.5f), maxLines = 1)
     }
 }
 
@@ -491,7 +498,11 @@ private fun LayerChip(text: String, selected: Boolean, onClick: () -> Unit, onLo
             .clip(RoundedCornerShape(BerthRadius.swatch))
             .background(if (selected) c.surface4 else c.surface2)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .semantics { contentDescription = "Layer $text" + if (selected) ", selected" else "" }
+            // The selection is a state, not a word in the name, so a reader says it once in its own voice.
+            .semantics {
+                contentDescription = "Layer $text"
+                this.selected = selected
+            }
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -543,12 +554,20 @@ private fun PresetsSheet(previewInput: StageInput, snippets: List<Snippet>, onPi
             for (preset in DeckPresets.all) {
                 val interaction = remember { MutableInteractionSource() }
                 val pressed by interaction.collectIsPressedAsState()
-                val lift by animateColorAsState(if (pressed) c.surface2 else c.surface1, tween(120), label = "preset")
+                val focused = interaction.showsFocus()
+                val lift by animateColorAsState(if (pressed || focused) c.surface2 else c.surface1, tween(120), label = "preset")
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .clickable(interactionSource = interaction, indication = null) { onPick(preset) }
-                        .semantics { contentDescription = "Preset ${preset.name}" },
+                        // One button, said as its name and caption: the Deck drawn inside is for
+                        // looking at (the overlay below takes every touch on it), so neither its keys
+                        // nor the overlay are controls of their own to a reader.
+                        .clearAndSetSemantics {
+                            contentDescription = "Preset ${preset.name}, ${preset.caption}"
+                            role = Role.Button
+                            onClick { onPick(preset); true }
+                        },
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {

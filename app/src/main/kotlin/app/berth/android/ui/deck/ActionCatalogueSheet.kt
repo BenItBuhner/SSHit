@@ -1,6 +1,5 @@
 package app.berth.android.ui.deck
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.reachingClickable
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
@@ -80,7 +80,7 @@ internal fun ActionCatalogueSheet(
                 onValueChange = { query = it },
                 placeholder = "Search keys and actions",
                 trailing = if (query.isNotEmpty()) {
-                    { Text("Clear", style = BerthType.label, color = c.accent, modifier = Modifier.clickable { query = "" }) }
+                    { Text("Clear", style = BerthType.label, color = c.accent, modifier = Modifier.reachingClickable(onClick = { query = "" })) }
                 } else null,
             )
             if (query.isNotBlank()) {

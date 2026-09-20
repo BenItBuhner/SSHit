@@ -18,6 +18,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -38,6 +39,7 @@ import app.berth.android.session.PaneSide
 import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.a11y.TerminalTag
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -56,7 +58,6 @@ import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -138,10 +139,7 @@ class LargeScreenScreenshotTest {
         graph.close()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     // ---- the phone -------------------------------------------------------------------------------
 
@@ -266,7 +264,7 @@ class LargeScreenScreenshotTest {
 
         // Another tab carried onto the one body (spec C23): over its right half the half steps up and the
         // ghost travels with the finger; letting go splits the Stage, pi-hole on the right with the keys.
-        val body = compose.onNode(hasContentDescription("Terminal")).fetchSemanticsNode().boundsInRoot
+        val body = compose.onNode(hasTestTag(TerminalTag)).fetchSemanticsNode().boundsInRoot
         val pihole = carry("pi-hole", Offset(body.left + body.width * 0.75f, body.center.y))
         capture("tablet-landscape-carry-to-split")
         pihole.performTouchInput { up() }
@@ -323,7 +321,7 @@ class LargeScreenScreenshotTest {
         compose.waitUntil(5_000) { graph.sessions.panes.value == null && graph.sessions.activeTabId.value == "s-homelab" }
         compose.waitForIdle()
 
-        val body = compose.onNode(hasContentDescription("Terminal")).fetchSemanticsNode().boundsInRoot
+        val body = compose.onNode(hasTestTag(TerminalTag)).fetchSemanticsNode().boundsInRoot
         carry("build box", Offset(body.left + body.width * 0.4f, body.center.y)).performTouchInput { up() }
         waitForPane("s-build", PaneSide.LEFT)
         val panes = graph.sessions.panes.value!!

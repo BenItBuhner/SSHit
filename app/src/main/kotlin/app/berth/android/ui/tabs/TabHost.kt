@@ -1,10 +1,6 @@
 package app.berth.android.ui.tabs
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -47,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.PaneSide
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
@@ -395,8 +393,8 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
     ) {
         AnimatedVisibility(
             visible = visible,
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut() + slideOutVertically { it / 2 },
+            enter = BerthMotion.riseIn(),
+            exit = BerthMotion.sinkOut(),
         ) {
             Row(
                 Modifier
@@ -430,13 +428,14 @@ private fun BarAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
             .drawBehind {
-                if (pressed) {
+                if (pressed || focused) {
                     val h = 24.dp.toPx()
                     drawRoundRect(color = c.surface4, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
                 }

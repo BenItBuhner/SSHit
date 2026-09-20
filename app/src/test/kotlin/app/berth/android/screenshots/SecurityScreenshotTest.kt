@@ -65,7 +65,6 @@ import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -126,10 +125,7 @@ class SecurityScreenshotTest {
         graph = TestGraph(context)
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
@@ -395,8 +391,10 @@ class SecurityScreenshotTest {
         seedLibrary()
         themed { HostEditorScreen(graph.viewModel, hostId = null, onDone = {}) }
         compose.onNodeWithText("Remote clipboard").performScrollTo()
-        compose.onNodeWithText("Save the host first").assertIsDisplayed()
+        // The Alt key row (Settings > Hardware keyboard's per-host override) waits on the same rule.
+        compose.onAllNodesWithText("Save the host first").assertCountEquals(2)
         compose.onNodeWithText("Remote clipboard").assertIsNotEnabled()
+        compose.onNodeWithText("Alt key").assertIsNotEnabled()
         compose.onNodeWithText("Remote clipboard").performClick()
         compose.waitForIdle()
         hasNoText("Inherit (blocked)")

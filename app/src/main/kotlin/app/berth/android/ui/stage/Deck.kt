@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -55,14 +56,29 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import app.berth.android.ui.a11y.alwaysFocusable
+import app.berth.android.ui.a11y.keyPressable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.theme.Berth
@@ -77,6 +93,7 @@ import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckReach
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.describe
 import app.berth.domain.model.isEmpty
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.withTimeoutOrNull
@@ -85,6 +102,25 @@ import kotlin.math.abs
 /** Layers that can be shown: a layer that is only the snippets slot needs pinned snippets to show. */
 fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
     layers.filter { layer -> hasSnippets || !(layer.keys.size == 1 && layer.keys[0].snippets) }
+
+/**
+ * The layer [Deck] shows for [layerIndex]: the index held to the usable layers the way the Deck
+ * holds it, so a Deck cut to one layer (the compact Deck under a hardware keyboard) is named for
+ * that layer whatever index the whole Deck had saved.
+ */
+fun DeckLayout.shownLayer(layerIndex: Int, hasSnippets: Boolean = false): DeckLayer? =
+    usableLayers(hasSnippets).let { layers -> layers.getOrNull(layerIndex.coerceIn(0, layers.lastIndex.coerceAtLeast(0))) }
+
+/**
+ * The tag every Deck control carries (keys, the Nub, the grip, the layer key, an editor slot), and
+ * the Deck publishes as the control's resource id, so an accessibility audit can tell a Deck key
+ * from any other control. The Deck is a keyboard: seven or more keys share a row, so on a phone
+ * a key is 43 dp wide by the spec's 44 dp tall and cannot be the 48 dp square every other control
+ * is held to (spec A9 sets the height; the width is the row divided by the keys). Every key is a
+ * button to a screen reader, with its alternates as actions, and the audit's touch-target check
+ * exempts what carries this tag, the way the framework's own scanner exempts a keyboard's keys.
+ */
+const val DeckKeyTag: String = "deck-key"
 
 /**
  * Hooks the Deck editor passes so the very same composable becomes the editing surface: a tap
@@ -106,6 +142,7 @@ class DeckEditing(
  * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun Deck(
     layout: DeckLayout,
@@ -143,7 +180,9 @@ fun Deck(
             modifier
                 .fillMaxWidth()
                 .background(surface)
-                .alpha(if (enabled) 1f else 0.5f),
+                .alpha(if (enabled) 1f else 0.5f)
+                // Publishes [DeckKeyTag] on the keys as their resource id, for the audit's exemption.
+                .semantics { testTagsAsResourceId = true },
         ) {
             strip?.let { keys ->
                 Row(
@@ -170,6 +209,7 @@ fun Deck(
             DeckRow(
                 layout = layout,
                 layer = layer,
+                layerCount = layers.size,
                 input = input,
                 enabled = enabled,
                 haptics = haptics,
@@ -187,6 +227,7 @@ fun Deck(
                 DeckRow(
                     layout = layout,
                     layer = layers[second],
+                    layerCount = layers.size,
                     input = input,
                     enabled = enabled,
                     haptics = haptics,
@@ -204,12 +245,38 @@ fun Deck(
     }
 }
 
+/**
+ * What a slot holds, as the editor's reader hears it: the key's label, or for the snippets key the
+ * pinned snippets it stands for (the keys it expands to send nothing in the editor, so the slot
+ * names them), or `empty`.
+ */
+private fun DeckKey.editorLabel(pinned: List<Snippet>): String = when {
+    snippets && pinned.isNotEmpty() -> "Snippets: " + pinned.joinToString { it.name }
+    else -> withSnippetName(pinned).label.ifEmpty { "empty" }
+}
+
 /** A key bound to a snippet without a display label takes the snippet's name; the editor's hook. */
 private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
     if (display != null) return this
     val id = (tap as? DeckAction.Snippet)?.snippetId ?: return this
     val name = snippets.firstOrNull { it.id == id }?.name ?: return this
     return copy(display = name.take(12))
+}
+
+/**
+ * A key's text sized from the key rather than from the system's font size (spec A11 at the
+ * interface's 1.3× cap): the key stands 44 dp whatever the font size, so a label in sp outgrows it,
+ * and at the cap the alternate's hint at the top right ran into the label under it (`S-Tab` into
+ * `Tab`, `^C` into `Ctrl`). Font size and line height are read as dp, the way a terminal's cell text
+ * is sized, so the two texts sit where they sit at 1×; what a reader hears is not affected, and the
+ * key height setting is where a larger Deck comes from.
+ */
+@Composable
+private fun TextStyle.keySized(): TextStyle = with(LocalDensity.current) {
+    copy(
+        fontSize = fontSize.value.dp.toSp(),
+        lineHeight = if (lineHeight.isSpecified) lineHeight.value.dp.toSp() else lineHeight,
+    )
 }
 
 /** Gap between Deck keys and between the keys and the strip's edges (A11). */
@@ -221,11 +288,15 @@ private val DeckEdge = 8.dp
 /** Touch column of the Grip; the 6 × 24 pill is centred in it. */
 private val GripWidth = 20.dp
 
-/** One row of the Deck: grip or its spacer, the layer's slots, the layer key. */
+/**
+ * One row of the Deck: grip or its spacer, the layer's slots, then the layer key, or on a Deck of
+ * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]).
+ */
 @Composable
 private fun DeckRow(
     layout: DeckLayout,
     layer: DeckLayer,
+    layerCount: Int,
     input: StageInput,
     enabled: Boolean,
     haptics: HapticFeedback,
@@ -267,7 +338,7 @@ private fun DeckRow(
                 .fillMaxHeight()
             val selected = editing != null && editing.selectedSlot == slot
             Box(
-                if (editing == null) base else base.editableSlot(slot, editingState, keyCount, drag, patterns, mirror),
+                if (editing == null) base else base.editableSlot(slot, key.editorLabel(snippets), editingState, keyCount, drag, patterns, mirror),
                 contentAlignment = Alignment.Center,
             ) {
                 SlotContent(
@@ -282,7 +353,7 @@ private fun DeckRow(
                     snippets = snippets,
                 )
                 if (editing != null && key.isEmpty) {
-                    Text("empty", style = BerthType.caption, color = c.text3)
+                    Text("empty", style = BerthType.caption.keySized(), color = c.text3)
                 }
                 if (selected) {
                     Box(
@@ -296,14 +367,24 @@ private fun DeckRow(
                 }
             }
         }
-        LayerKey(
-            enabled = enabled,
-            haptics = haptics,
-            modifier = Modifier.width(40.dp).fillMaxHeight(),
-            onNext = onNext,
-            onPrevious = onPrevious,
-            onHold = onLayerHold,
-        )
+        if (layerCount > 1) {
+            LayerKey(
+                enabled = enabled,
+                haptics = haptics,
+                layerName = layer.name,
+                modifier = Modifier.width(40.dp).fillMaxHeight(),
+                onNext = onNext,
+                onPrevious = onPrevious,
+                onHold = onLayerHold,
+            )
+        } else {
+            DeckEditorKey(
+                enabled = enabled,
+                haptics = haptics,
+                modifier = Modifier.width(40.dp).fillMaxHeight(),
+                onOpen = onLayerHold,
+            )
+        }
     }
 }
 
@@ -392,10 +473,13 @@ private class DragState {
  * Editing gestures for a slot. A tap selects. A long-press, or a horizontal pull past touch slop,
  * lifts the key; while lifted it follows the finger and swaps places with a neighbour each time it
  * crosses half a key, so the row reorders live under the drag. Vertical movement is left to the
- * page so the editor still scrolls.
+ * page so the editor still scrolls. To a screen reader the slot is one button, `Slot 3` in the
+ * state [label] (the key it holds, or `empty`), that selects on activation and moves left or right
+ * through its actions; the key inside says nothing of its own here, since it sends nothing.
  */
 private fun Modifier.editableSlot(
     slot: Int,
+    label: String,
     editing: State<DeckEditing?>,
     keyCount: State<Int>,
     drag: DragState,
@@ -410,7 +494,19 @@ private fun Modifier.editableSlot(
             scaleY = 1.06f
         }
     }
-    .semantics { contentDescription = "Slot ${slot + 1}" }
+    .testTag(DeckKeyTag)
+    .clearAndSetSemantics {
+        contentDescription = "Slot ${slot + 1}"
+        stateDescription = label
+        role = Role.Button
+        onClick { editing.value?.onSelectSlot(slot); true }
+        // "Left" and "right" are the user's: a left-reach row is mirrored, so its index runs the other way.
+        val dir = if (mirror) -1 else 1
+        customActions = buildList {
+            if (slot - dir in 0 until keyCount.value) add(CustomAccessibilityAction("Move left") { editing.value?.onMoveKey(slot, slot - dir); true })
+            if (slot + dir in 0 until keyCount.value) add(CustomAccessibilityAction("Move right") { editing.value?.onMoveKey(slot, slot + dir); true })
+        }
+    }
     .pointerInput(slot, mirror) {
         awaitEachGesture {
             val down = awaitFirstDown()
@@ -477,11 +573,15 @@ private fun Modifier.editableSlot(
 @Composable
 private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
-    val color by animateColorAsState(if (accent) c.accent else c.text3, tween(120), label = "grip")
+    val interaction = remember { MutableInteractionSource() }
+    // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
+    val focused = interaction.showsFocus()
+    val color by animateColorAsState(if (accent || focused) c.accent else c.text3, tween(120), label = "grip")
     Box(
         Modifier
             .width(GripWidth)
             .fillMaxHeight()
+            .keyPressable(enabled = true, interactionSource = interaction, onPress = onTap)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
@@ -512,7 +612,17 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
                     }
                 }
             }
-            .semantics { contentDescription = "Grip: tap for the session sheet, swipe down to hide the keyboard, hold to jump to the tab that needs you" },
+            .testTag(DeckKeyTag)
+            // A button that opens the session sheet; the swipe and the hold are its actions.
+            .semantics {
+                contentDescription = "Grip, opens the session sheet"
+                role = Role.Button
+                onClick { onTap(); true }
+                customActions = listOf(
+                    CustomAccessibilityAction("Hide the keyboard") { onSwipeDown(); true },
+                    CustomAccessibilityAction("Jump to the tab that needs you") { onLongPress(); true },
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -547,29 +657,40 @@ fun DeckKeyView(
     val modifierAction = key.tap as? DeckAction.Modifier
     val latchState = modifierAction?.let { latch.state(it.modifier) } ?: LatchState.NONE
     val latched = latchState != LatchState.NONE
+    // The keyboard's focus (spec, Components): one tonal step up and the label in accent, while keys drive.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     val bg by animateColorAsState(
         when {
             latched -> c.accent
             pressed -> c.surface4
-            selected -> c.surface3
+            selected || focused -> c.surface3
             else -> c.surface2
         },
         tween(80),
         label = "key",
     )
-    val labelColor = if (latched) c.onAccent else c.text1
+    val labelColor = when {
+        latched -> c.onAccent
+        focused -> c.accent
+        else -> c.text1
+    }
     val secondaryColor = if (latched) c.onAccent.copy(alpha = 0.7f) else c.text3
     val currentKey by rememberUpdatedState(key)
     val currentOnAction by rememberUpdatedState(onAction)
     val currentOnHold by rememberUpdatedState(onHold)
-    val description = buildString {
-        append(key.label)
-        when (latchState) {
-            LatchState.ONE_SHOT -> append(", one-shot")
-            LatchState.LOCKED -> append(", locked")
-            LatchState.NONE -> Unit
-        }
-        key.secondaryLabel?.let { append(", swipe up for $it") }
+    // One path for a release and for a screen reader's activation, so both feel the same pattern.
+    val fire: (DeckAction) -> Unit = { action ->
+        currentOnAction(action)
+        // The latch has settled by now, so the pattern can tell one-shot from lock.
+        if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
+    }
+    // The key's name and latch state; its swipe and hold alternates are actions rather than
+    // gesture instructions, since a screen reader's user reaches them from the actions menu.
+    val description = when (latchState) {
+        LatchState.ONE_SHOT -> "${key.label}, one-shot"
+        LatchState.LOCKED -> "${key.label}, locked"
+        LatchState.NONE -> key.label
     }
 
     // Left reach mirrors the strip by flipping its layout direction; the inside of a key is not
@@ -580,7 +701,25 @@ fun DeckKeyView(
             modifier
                 .clip(RoundedCornerShape(BerthRadius.key))
                 .background(bg)
-                .semantics { contentDescription = description }
+                .testTag(DeckKeyTag)
+                // One node for the key: its label and alternates inside merge into it, so a reader
+                // hears the description once rather than the button and then its text.
+                .semantics(mergeDescendants = true) {
+                    contentDescription = description
+                    role = Role.Button
+                    if (enabled) {
+                        key.tap?.let { tap -> onClick { fire(tap); true } }
+                        customActions = buildList {
+                            key.up?.let { up -> add(CustomAccessibilityAction(up.describe()) { fire(up); true }) }
+                            key.down?.let { down -> add(CustomAccessibilityAction(down.describe()) { fire(down); true }) }
+                            key.hold?.let { hold -> add(CustomAccessibilityAction(hold.describe()) { patterns.hold(); currentOnHold(hold); true }) }
+                        }
+                    } else {
+                        disabled()
+                    }
+                }
+                // Enter, Space or the D-pad's centre from a keyboard is the tap; the alternates stay the reader's actions.
+                .keyPressable(enabled, interaction) { currentKey.tap?.let(fire) }
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
@@ -625,11 +764,7 @@ fun DeckKeyView(
                                             -1 -> k.down ?: k.tap
                                             else -> k.tap
                                         }
-                                        if (action != null) {
-                                            currentOnAction(action)
-                                            // The latch has settled by now, so the pattern can tell one-shot from lock.
-                                            if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
-                                        }
+                                        if (action != null) fire(action)
                                     }
                                     break
                                 }
@@ -655,7 +790,7 @@ fun DeckKeyView(
             val shown = if (previewing) secondary!! else key.label
             Text(
                 text = shown,
-                style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
+                style = (if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
                 color = labelColor,
                 maxLines = 1,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
@@ -664,7 +799,7 @@ fun DeckKeyView(
                 // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
                 Text(
                     text = secondary,
-                    style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
+                    style = (if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
                     color = secondaryColor,
                     maxLines = 1,
                     modifier = Modifier
@@ -713,13 +848,33 @@ fun Nub(
     var active by remember { mutableStateOf<TerminalKey?>(null) }
     var pressed by remember { mutableStateOf(false) }
     val currentOnArrow by rememberUpdatedState(onArrow)
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(
             Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (pressed) c.surface4 else if (selected) c.surface3 else c.surface2)
-                .semantics { contentDescription = "Nub, tap for Up, drag to move the cursor" }
+                .background(if (pressed) c.surface4 else if (selected || focused) c.surface3 else c.surface2)
+                .testTag(DeckKeyTag)
+                // Activation is the tap (Up); each arrow is an action, since a screen reader cannot drag it.
+                .semantics {
+                    contentDescription = "Nub, the arrow keys"
+                    role = Role.Button
+                    if (enabled) {
+                        onClick { patterns.keyTap(); currentOnArrow(TerminalKey.UP); true }
+                        customActions = listOf(
+                            CustomAccessibilityAction("Up") { patterns.nubStep(); currentOnArrow(TerminalKey.UP); true },
+                            CustomAccessibilityAction("Down") { patterns.nubStep(); currentOnArrow(TerminalKey.DOWN); true },
+                            CustomAccessibilityAction("Left") { patterns.nubStep(); currentOnArrow(TerminalKey.LEFT); true },
+                            CustomAccessibilityAction("Right") { patterns.nubStep(); currentOnArrow(TerminalKey.RIGHT); true },
+                        )
+                    } else {
+                        disabled()
+                    }
+                }
+                // A keyboard's press is the tap, Up; its own arrows walk the Deck rather than drive the Nub.
+                .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnArrow(TerminalKey.UP) }
                 .pointerInput(enabled) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
@@ -803,11 +958,16 @@ fun Nub(
     }
 }
 
-/** The trailing layer key: tap for the next layer, swipe up for the previous one, hold for the Deck editor. */
+/**
+ * The trailing layer key: tap for the next layer, swipe up for the previous one, hold for the Deck
+ * editor. To a reader it is the `Layer` button in the state [layerName], whose activation is
+ * `Next layer` and whose actions are the previous layer and the editor.
+ */
 @Composable
 private fun LayerKey(
     enabled: Boolean,
     haptics: HapticFeedback,
+    layerName: String,
     modifier: Modifier = Modifier,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -821,11 +981,28 @@ private fun LayerKey(
     val currentOnNext by rememberUpdatedState(onNext)
     val currentOnPrevious by rememberUpdatedState(onPrevious)
     val currentOnHold by rememberUpdatedState(onHold)
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .clip(RoundedCornerShape(BerthRadius.key))
-            .background(if (pressed) c.surface4 else c.surface2)
-            .semantics { contentDescription = "Layer: tap for the next layer, swipe up for the previous" + if (onHold != null) ", hold for the Deck editor" else "" }
+            .background(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2)
+            .testTag(DeckKeyTag)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Layer"
+                stateDescription = layerName
+                role = Role.Button
+                if (enabled) {
+                    onClick(label = "Next layer") { patterns.keyTap(); currentOnNext(); true }
+                    customActions = buildList {
+                        add(CustomAccessibilityAction("Previous layer") { patterns.keyTap(); currentOnPrevious(); true })
+                        if (onHold != null) add(CustomAccessibilityAction("Deck editor") { patterns.hold(); currentOnHold?.invoke(); true })
+                    }
+                } else {
+                    disabled()
+                }
+            }
+            .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnNext() }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
@@ -861,7 +1038,7 @@ private fun LayerKey(
             },
         contentAlignment = Alignment.Center,
     ) {
-        BerthIcon(BerthIcons.moreHoriz, tint = c.text2)
+        BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
     }
 }
 
@@ -879,11 +1056,15 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
     }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Row(
         modifier
             .fillMaxWidth()
             .height(20.dp)
-            .background(if (pressed) c.surface2 else c.surface1)
+            .background(if (pressed || focused) c.surface2 else c.surface1)
+            // Where Ctrl+Shift+K lands while the Deck is hidden, and where a Deck hidden under the
+            // keyboard's focus hands it: taken in touch mode too, or the chord would find nothing here.
+            .alwaysFocusable()
             // A real click, so a touch that merely starts here (or a swipe passing through) does not
             // open the Deck, and the announced button can be activated.
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
@@ -891,7 +1072,8 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption, color = c.text3)
+        // Sized from the 20 dp strip like a key's text from its key, so the line holds at the interface's font cap.
+        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption.keySized(), color = if (focused) c.accent else c.text3)
         Spacer(Modifier.weight(1f))
     }
 }

@@ -1,11 +1,11 @@
 package app.berth.android.ui.stage
 
-import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -67,13 +67,16 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.FailedHop
@@ -81,6 +84,11 @@ import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.TerminalAccessibility
+import app.berth.android.ui.a11y.TerminalAnnouncer
+import app.berth.android.ui.a11y.reachingClickable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -89,6 +97,21 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
+import app.berth.android.ui.keyboard.FoldDeckOnHardwareKeyboard
+import app.berth.android.ui.keyboard.HardwareShortcuts
+import app.berth.android.ui.keyboard.KeepStageFocus
+import app.berth.android.ui.keyboard.LocalWindowFocus
+import app.berth.android.ui.keyboard.ShortcutSheet
+import app.berth.android.ui.keyboard.LocalPaneActions
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
+import app.berth.android.ui.keyboard.StageShortcutActions
+import app.berth.android.ui.keyboard.WindowFocus
+import app.berth.android.ui.keyboard.compactForHardwareKeyboard
+import app.berth.android.ui.keyboard.rememberHardwareKeyboardAttached
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
+import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -141,6 +164,11 @@ fun StageScreen(
     onUnsplit: (() -> Unit)? = null,
     /** Lays out the body area for the active [tab] under the header, with the modifier that fills it. */
     layer: (@Composable StageBodies.(tab: ManagedTab, modifier: Modifier) -> Unit)? = null,
+    /**
+     * Where the keyboard's focus is, strip, bar, body or Deck, and the chords that move it (spec A11).
+     * A [layer] hands in its own, since it marks the body's region on the pane the focus belongs to.
+     */
+    focus: StageFocus = rememberStageFocus(),
 ) {
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
@@ -151,8 +179,13 @@ fun StageScreen(
     val strip = rememberTabStripState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
-    val shortcuts = remember(vm, actions) {
-        TabShortcuts(
+    var shortcutSheet by rememberSaveable { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val haptics = rememberDeckHaptics()
+    // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
+    val panes = LocalPaneActions.current
+    val shortcuts = remember(vm, actions, tab, tools, panes, focus) {
+        val tabs = TabShortcuts(
             step = vm::stepTab,
             jump = { index ->
                 val list = vm.stripSlots.value
@@ -163,22 +196,66 @@ fun StageScreen(
             switcher = actions::openSwitcher,
             jumpToUnread = { vm.jumpToUnread() },
         )
-    }
-
-    // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
-    // and the user's own choice survives otherwise. Remembered by the Stage, not the tab, so a tab
-    // switch never re-collapses a Deck the user opened.
-    val configuration = LocalConfiguration.current
-    val hardwareKeyboard = configuration.keyboard == Configuration.KEYBOARD_QWERTY &&
-        configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
-    var seenHardwareKeyboard by rememberSaveable { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(hardwareKeyboard) {
-        if (hardwareKeyboard != seenHardwareKeyboard) {
-            val first = seenHardwareKeyboard == null
-            seenHardwareKeyboard = hardwareKeyboard
-            if (!first || hardwareKeyboard) deckVisible = !hardwareKeyboard
+        // The chords beyond the strip's act on the terminal tab on stage (spec C22), and only on one
+        // whose kind is a shell: keyed off TabKind like the overflow, so a Files tab, a tab kind with
+        // no terminal behind it, or an empty stage takes the chord and does nothing with it, since
+        // none of them means anything typed anywhere else.
+        val session = (tab as? TerminalSession)?.takeIf { it.kind == TabKind.Ssh }
+        val stage = object : StageShortcutActions {
+            override fun find() { if (session != null) tools.openSearch() }
+            override fun copy() {
+                session ?: return
+                val text = tools.selection.text(session.emulator)
+                if (text.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(text))
+                    haptics.copy()
+                    tools.notice = "Copied"
+                }
+                tools.selection.clear()
+            }
+            override fun paste() { if (session != null) clipboard.getText()?.text?.let { tools.paste(session, it, haptics) } }
+            override fun toggleDeck() { if (session != null) deckVisible = !deckVisible }
+            override fun fontStep(step: Int) {
+                session ?: return
+                val size = session.record.value.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
+                haptics.fontStep()
+                vm.setFontSize(size + step)
+            }
+            override fun shortcutSheet() { shortcutSheet = true }
+            override fun split() { panes.split?.invoke() }
+            override fun focusOtherPane() { panes.focusOtherPane?.invoke() }
+            override fun focusStrip() { focus.focus(StageRegion.Strip) }
+            // The Deck on screen, or the strip standing in for it, whichever terminal's it is (under two
+            // panes it may be the other pane's, spec C23); with neither the chord finds no region and does nothing.
+            override fun focusDeck() { focus.focus(StageRegion.Deck) }
+            override fun returnToBody(): Boolean = when (focus.region) {
+                // From the terminal itself Escape is the host's; with nothing focused there is nothing to return from.
+                StageRegion.Body, null -> false
+                StageRegion.Bar -> {
+                    // Escape in the search closes it, the way its × does; the terminal then has the focus.
+                    if (session != null && tools.search.open) tools.closeSearch()
+                    focus.focus(StageRegion.Body)
+                    true
+                }
+                StageRegion.Strip, StageRegion.Deck -> {
+                    focus.focus(StageRegion.Body)
+                    true
+                }
+            }
         }
+        HardwareShortcuts(tabs, stage)
     }
+    if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, panes = panes.available, onDismiss = { shortcutSheet = false })
+    // A hardware keyboard folds the Deck to its strip (spec C4), once on attach and back on removal;
+    // the Stage's visibility, so every tab's Deck folds and the user's own choice holds between.
+    val hardwareKeyboardAttached = rememberHardwareKeyboardAttached()
+    FoldDeckOnHardwareKeyboard(hardwareKeyboardAttached) { deckVisible = it }
+    // With a keyboard attached the focus stays on the Stage across tab switches and the Deck's coming
+    // and going, and a body coming on stage takes it. The keeper tells a loss from a move by the
+    // window's root; a Stage composed alone marks its own root and stands in for the window.
+    val shellWindow = LocalWindowFocus.current
+    val ownWindow = if (shellWindow == null) remember { WindowFocus() } else null
+    KeepStageFocus(focus, enabled = hardwareKeyboardAttached, window = shellWindow ?: ownWindow)
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -200,15 +277,19 @@ fun StageScreen(
             // The header absorbs the status bar and the bottom chrome the navigation bar and IME; in
             // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .then(if (ownWindow != null) Modifier.windowFocus(ownWindow) else Modifier)
             .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
     ) {
-        StageToolbar(tools, tab as? TerminalSession) {
+        StageToolbar(tools, tab as? TerminalSession, focus) {
             TabHeader(
                 slots = slots,
                 groups = groups,
                 activeId = activeId,
                 actions = actions,
+                modifier = Modifier.stageRegion(focus, StageRegion.Strip),
                 state = strip,
+                // Ctrl+Shift+S lands on the active tab, or the first in view, in or out of touch mode.
+                entry = focus.entry(StageRegion.Strip),
                 trailing = {
                     if (slots.isNotEmpty()) {
                         // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
@@ -234,9 +315,12 @@ fun StageScreen(
             )
         }
         val body = Modifier.weight(1f).fillMaxWidth()
+        // The one body is the keyboard's body region; a layer marks the region itself, on each pane (spec C23).
+        val oneBody = body.stageRegion(focus, StageRegion.Body)
         val bodies = StageBodies(
             vm = vm,
             holder = holder,
+            focus = focus,
             deckVisible = deckVisible,
             onDeckVisibleChange = { deckVisible = it },
             layerIndex = layerIndex,
@@ -248,7 +332,7 @@ fun StageScreen(
             actions = actions,
         )
         when {
-            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, body)
+            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, oneBody)
             // The tab flows run a frame behind the manager: while an active id is set but its tab has not
             // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
             // that has them (spec C3, Persistence: restore is instant).
@@ -259,7 +343,7 @@ fun StageScreen(
                 Spacer(body)
                 LaunchedEffect(slots) { vm.setActive(slots.first().id) }
             }
-            else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
+            else -> EmptyStage(onNewTab = actions::newTab, modifier = oneBody)
         }
     }
 }
@@ -276,6 +360,8 @@ fun StageScreen(
 class StageBodies internal constructor(
     private val vm: AppViewModel,
     private val holder: SaveableStateHolder,
+    /** Where the keyboard's focus is on the Stage (spec A11); a layer marks the pane the body's region is on. */
+    val focus: StageFocus,
     internal val deckVisible: Boolean,
     internal val onDeckVisibleChange: (Boolean) -> Unit,
     internal val layerIndex: Int,
@@ -312,6 +398,7 @@ class StageBodies internal constructor(
                     vm = vm,
                     session = tab,
                     tools = tools,
+                    focus = focus,
                     deckVisible = deckVisible,
                     onDeckVisibleChange = onDeckVisibleChange,
                     layerIndex = layerIndex,
@@ -463,6 +550,7 @@ private fun StageBody(
     vm: AppViewModel,
     session: TerminalSession,
     tools: StageTools,
+    focus: StageFocus,
     deckVisible: Boolean,
     onDeckVisibleChange: (Boolean) -> Unit,
     layerIndex: Int,
@@ -479,7 +567,13 @@ private fun StageBody(
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
     // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
-    val deckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    val fittedDeckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    // With a hardware keyboard attached the Deck stands folded to its strip (spec C4, the Stage's
+    // FoldDeckOnHardwareKeyboard); what the strip expands to is one row of modifiers and actions
+    // (Settings › Hardware keyboard › Compact Deck when expanded), or the whole Deck with that off.
+    val hardwareKeyboard by vm.hardwareKeyboard.collectAsState()
+    val compactDeck = rememberHardwareKeyboardAttached() && hardwareKeyboard.compactDeck
+    val deckLayout = remember(fittedDeckLayout, compactDeck) { if (compactDeck) fittedDeckLayout.compactForHardwareKeyboard() else fittedDeckLayout }
     val fontSetting by vm.terminalFont.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
@@ -500,6 +594,8 @@ private fun StageBody(
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = tools.viewport
     val focusRequester = focusRequester ?: remember { FocusRequester() }
+    // The screen reader's terminal: the canvas' text and the live region beside it share it.
+    val accessibility = remember(session.id) { TerminalAccessibility() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
     val input = remember(session.id) {
@@ -581,7 +677,9 @@ private fun StageBody(
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },
+                accessibility = accessibility,
             )
+            TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
                 EdgeSwipeZone(onSwipe = { forward -> vm.stepTab(if (forward) 1 else -1) }, modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight())
             }
@@ -621,12 +719,16 @@ private fun StageBody(
                     .background(if (deckStateOk) c.surface1 else c.surface0)
                     .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
             ) {
-                AnimatedVisibility(visible = deckAllowed) {
+                AnimatedVisibility(visible = deckAllowed, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
                     Deck(
                         layout = deckLayout,
+                        // The Deck holds the index to its layers; the one-layer compact Deck shows its
+                        // one, and the layer the user was on comes back with the whole Deck.
                         layerIndex = layerIndex,
                         onLayerIndexChange = onLayerIndexChange,
                         input = input,
+                        // The Deck and the strip that stands in for it are the one region Ctrl+Shift+K enters.
+                        modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                         enabled = live,
                         onGripTap = onOpenSessionSheet,
                         onGripSwipeDown = {
@@ -640,9 +742,10 @@ private fun StageBody(
                 }
                 if (!deckVisible && deckStateOk) {
                     DeckStrip(
-                        layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
+                        layerName = deckLayout.shownLayer(layerIndex, pinnedSnippets.isNotEmpty())?.name ?: "Base",
                         latch = latch,
                         onExpand = { onDeckVisibleChange(true) },
+                        modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                     )
                 }
             }
@@ -710,6 +813,7 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .padding(end = 8.dp)
@@ -720,7 +824,7 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
             }
             .padding(horizontal = 4.dp, vertical = 9.dp),
     ) {
-        Pill("scrolled", color = if (pressed) c.surface4 else c.surface3, textColor = c.accent)
+        Pill("scrolled", color = if (pressed || focused) c.surface4 else c.surface3, textColor = c.accent)
     }
 }
 
@@ -795,13 +899,14 @@ private fun PillAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
             .drawBehind {
-                if (pressed) {
+                if (pressed || focused) {
                     val h = (StatePillHeight - 8.dp).toPx()
                     drawRoundRect(
                         color = c.surface4,
@@ -823,6 +928,8 @@ private fun PillAction(label: String, onClick: () -> Unit) {
  * behind Details. When the login failed at a jump host ([hop]), the credentials or key that failed
  * are that host's, so the action beside Retry opens its editor, named for it (`Edit old bastion`,
  * or `Edit jump host` when the name is long); the target's editor stays a text action behind it.
+ * To a reader and a keyboard the panel is one group read top to bottom: the heading, the reason,
+ * Details (a button that says whether it is open), then Retry, the hop's editor, the host's.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -842,17 +949,21 @@ internal fun FailedPanel(
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.panel))
             .background(c.surface2)
-            .padding(20.dp),
+            .padding(20.dp)
+            .focusGroup()
+            .semantics { isTraversalGroup = true },
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Couldn't connect", style = BerthType.headline, color = c.text1)
+        Text("Couldn't connect", style = BerthType.headline, color = c.text1, modifier = Modifier.semantics { heading() })
         Text(plain, style = BerthType.body, color = c.text2)
         if (raw != null) {
             Text(
                 if (details) raw else "Details",
                 style = if (details) BerthType.mono else BerthType.label,
                 color = if (details) c.text3 else c.accent,
-                modifier = Modifier.clickable { details = !details },
+                modifier = Modifier
+                    .reachingClickable(onClick = { details = !details }, onClickLabel = if (details) "hide the details" else "show the details")
+                    .semantics { stateDescription = if (details) "Expanded" else "Collapsed" },
             )
         }
         // A flow, so a third action or a long hop name wraps under the first two rather than leaving the panel.

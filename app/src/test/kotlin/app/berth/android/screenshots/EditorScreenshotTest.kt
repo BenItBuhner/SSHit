@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -54,7 +55,6 @@ import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.ThemeSlot
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -101,12 +101,7 @@ class EditorScreenshotTest {
         seed()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        val file = File(outDir, "$name.png")
-        file.parentFile.mkdirs()
-        captureScreenRoboImage(file.path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
@@ -208,10 +203,10 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers[0].keys[2].hold == DeckAction.Key(DeckKeyCode.PGUP) }
 
-        // The Snippets layer previews as one key per pinned snippet, named after them.
+        // The Snippets layer previews as one key per pinned snippet, named after them. In the editor
+        // a slot is one button to a reader and what it holds is its state, so the slot names them.
         compose.onNodeWithText("Snippets").performScrollTo().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("compose ps")).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("tail caddy").assertExists()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasStateDescription("Snippets: compose ps, tail caddy")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Slot 1").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Expands to one key per pinned snippet: compose ps, tail caddy.")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Deck preview").performScrollTo()
@@ -219,7 +214,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Base").performClick()
 
         compose.onNodeWithText("Presets").performScrollTo().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim", substring = true).fetchSemanticsNodes().isNotEmpty() }
         capture("deck-editor-presets")
         dismissSheet()
 

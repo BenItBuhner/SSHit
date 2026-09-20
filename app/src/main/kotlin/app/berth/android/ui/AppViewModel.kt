@@ -26,6 +26,7 @@ import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.HapticLevel
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -180,6 +181,14 @@ class AppViewModel @Inject constructor(
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val commandHistoryEnabled: StateFlow<Boolean> = settings.commandHistoryEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** Alt key behaviour, its per-host overrides and the compact Deck (spec C22); Settings › Hardware keyboard and the host editor write it. */
+    val hardwareKeyboard: StateFlow<HardwareKeyboardSettings> =
+        settings.hardwareKeyboardSettings.stateIn(viewModelScope, SharingStarted.Eagerly, HardwareKeyboardSettings())
+
+    fun updateHardwareKeyboard(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) {
+        viewModelScope.launch { settings.updateHardwareKeyboardSettings(change) }
+    }
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
         resolveTerminalTheme(terminalThemes.value, defaultTerminalTheme.value, host, workspaces.value.byId(workspaceId))
@@ -471,6 +480,7 @@ class AppViewModel @Inject constructor(
             secrets.delete(AuthResolver.passwordSecretId(id))
             hostRepository.delete(id)
             security.forgetHost(id)
+            settings.updateHardwareKeyboardSettings { it.withoutHost(id) }
         }
     }
 

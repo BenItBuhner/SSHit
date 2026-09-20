@@ -14,10 +14,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -95,6 +91,10 @@ import app.berth.android.files.TransferState
 import app.berth.android.session.FilesTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.showsFocus
+import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -530,7 +530,7 @@ fun FilesPane(
         }
         val lastFoot = remember { mutableStateOf(foot) }
         if (foot != null) lastFoot.value = foot
-        AnimatedVisibility(visible = foot != null, enter = fadeIn() + slideInVertically { it / 2 }, exit = fadeOut() + slideOutVertically { it / 2 }) {
+        AnimatedVisibility(visible = foot != null, enter = BerthMotion.riseIn(), exit = BerthMotion.sinkOut()) {
             Crossfade(targetState = lastFoot.value, animationSpec = tween(150), label = "foot") { which ->
                 when (which) {
                     Foot.ACTIONS -> SelectionActions(
@@ -716,7 +716,7 @@ private fun SelectionHeader(count: Int, allSelected: Boolean, onClose: () -> Uni
 private fun selectionTitle(count: Int) = if (count == 1) "1 selected" else "$count selected"
 
 /**
- * Selection under a host's header: the breadcrumb row's 44 dp with Clear selection leading, the
+ * Selection under a host's header: the breadcrumb row's height with Clear selection leading, the
  * count where the crumbs were, and All or None trailing. The same row swaps for the crumbs and
  * back, so a tab strip above keeps the top to itself and the listing never moves.
  */
@@ -726,9 +726,8 @@ private fun SelectionBar(count: Int, allSelected: Boolean, onClose: () -> Unit, 
     Row(
         Modifier
             .fillMaxWidth()
-            .height(44.dp)
-            .padding(horizontal = BerthSpace.screenMargin - 8.dp)
-            .semantics { contentDescription = selectionTitle(count) },
+            .height(PathRowHeight)
+            .padding(horizontal = BerthSpace.screenMargin - 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconAction(onClick = onClose, description = "Clear selection") { BerthIcon(BerthIcons.close) }
@@ -756,11 +755,13 @@ private fun Breadcrumb(
     val crumbs = remember(path) { SftpPaths.crumbs(path) }
     val scroll = rememberScrollState()
     LaunchedEffect(path, scroll.maxValue) { scroll.scrollTo(scroll.maxValue) }
+    // The row is one target tall, and the icon actions at its end are 48 dp boxes around 44 dp
+    // circles, so the end margin gives back the 2 dp of box beside the circle.
     Row(
         Modifier
             .fillMaxWidth()
-            .height(44.dp)
-            .padding(start = BerthSpace.screenMargin - 6.dp, end = BerthSpace.screenMargin - 8.dp)
+            .height(PathRowHeight)
+            .padding(start = BerthSpace.screenMargin - 6.dp, end = BerthSpace.screenMargin - 10.dp)
             .semantics { contentDescription = "Path $path" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -789,29 +790,43 @@ private fun Breadcrumb(
     }
 }
 
-/** One crumb: the pressed step Berth's pressables share, no ripple. */
+/** The breadcrumb row and the selection bar that swaps in for it: one touch target tall. */
+private val PathRowHeight = TouchTargetSize
+
+/**
+ * One crumb: the pressed step Berth's pressables share, no ripple. A short crumb (`var`, `~`) is
+ * widened to a full target; the text stays where it was and the pressed step stays the text's size.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Crumb(label: String, last: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    Text(
-        label,
-        style = if (last) BerthType.bodyMedium else BerthType.body,
-        color = if (last) c.text1 else c.text2,
-        maxLines = 1,
-        modifier = Modifier
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (pressed) c.surface3 else Color.Transparent)
+    val focused = interaction.showsFocus()
+    Box(
+        Modifier
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 6.dp, vertical = 8.dp),
-    )
+            .touchTarget(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = if (last) BerthType.bodyMedium else BerthType.body,
+            color = if (focused) c.accent else if (last) c.text1 else c.text2,
+            maxLines = 1,
+            modifier = Modifier
+                .clip(RoundedCornerShape(BerthRadius.swatch))
+                .background(if (pressed || focused) c.surface3 else Color.Transparent)
+                .padding(horizontal = 6.dp, vertical = 8.dp),
+        )
+    }
 }
 
 /**
  * Sort chips and the hidden-files chip at the trailing edge. Every sort chip is as wide as its label
- * with the direction arrow, so the arrow moving to the active one does not reflow the row.
+ * with the direction arrow, so the arrow moving to the active one does not reflow the row. The
+ * chips' 48 dp targets give the row its height and its clearance from the crumbs and the listing.
  */
 @Composable
 private fun FilterRow(prefs: FilesPrefs, onSort: (FilesSort) -> Unit, onShowHidden: (Boolean) -> Unit, hiddenCount: Int) {
@@ -820,8 +835,7 @@ private fun FilterRow(prefs: FilesPrefs, onSort: (FilesSort) -> Unit, onShowHidd
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = BerthSpace.screenMargin)
-            .padding(bottom = 8.dp),
+            .padding(horizontal = BerthSpace.screenMargin),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -872,7 +886,7 @@ private fun EntryList(
     // stays open while the listing is on its way and closes when it lands.
     val slot by animateDpAsState(
         if (refreshing) RefreshSlot else RefreshSlot * pull.distanceFraction.coerceIn(0f, 1f),
-        if (refreshing || pull.distanceFraction > 0f) snap() else tween(200),
+        if (refreshing || pull.distanceFraction > 0f) snap() else BerthMotion.transform(tween(200)),
         label = "refresh",
     )
     Column(
@@ -1040,8 +1054,8 @@ private fun NoticeLine(notice: Notice?, onDismiss: () -> Unit, modifier: Modifie
     AnimatedVisibility(
         visible = notice != null,
         modifier = modifier,
-        enter = fadeIn() + slideInVertically { it / 2 },
-        exit = fadeOut() + slideOutVertically { it / 2 },
+        enter = BerthMotion.riseIn(),
+        exit = BerthMotion.sinkOut(),
     ) {
         last.value?.let { n ->
             Box(

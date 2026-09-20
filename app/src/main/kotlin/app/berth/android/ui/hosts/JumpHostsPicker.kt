@@ -13,8 +13,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.reorderActions
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
@@ -68,6 +71,15 @@ fun JumpHostsPicker(
                 minHeight = 44.dp,
                 onClick = { menu = true },
                 onLongClick = { menu = true },
+                // Tap and long-press both open the menu, which a screen reader cannot reorder through;
+                // the same three moves are the row's accessibility actions (TalkBack's actions menu).
+                modifier = Modifier
+                    .semantics { stateDescription = "Hop ${index + 1} of ${chain.size}" }
+                    .reorderActions(
+                        onMoveUp = if (index > 0) ({ onChange(chain.swapped(index, index - 1)) }) else null,
+                        onMoveDown = if (index < chain.lastIndex) ({ onChange(chain.swapped(index, index + 1)) }) else null,
+                        onRemove = { onChange(chain.filterIndexed { i, _ -> i != index }) },
+                    ),
                 titleColor = if (host != null) c.text1 else c.text2,
                 leading = {
                     Row(verticalAlignment = Alignment.CenterVertically) {

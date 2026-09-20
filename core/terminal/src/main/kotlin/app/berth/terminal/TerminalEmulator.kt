@@ -199,7 +199,8 @@ class TerminalEmulator(
         KeyEncoder.encode(key, modifiers, applicationCursorKeys, applicationKeypad)
     }
 
-    fun encodeText(codePoint: Int, modifiers: Int = 0): ByteArray = KeyEncoder.encodeText(codePoint, modifiers)
+    fun encodeText(codePoint: Int, modifiers: Int = 0, altSendsMeta: Boolean = false): ByteArray =
+        KeyEncoder.encodeText(codePoint, modifiers, altSendsMeta)
 
     /**
      * Encodes a mouse event for the application's tracking mode, or returns null when the

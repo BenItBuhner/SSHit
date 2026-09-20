@@ -10,6 +10,7 @@ import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -238,6 +239,16 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         write(KEY_SECURITY, SecuritySettings.serializer(), change(current))
     }
 
+    private val hardwareKeyboardLock = Mutex()
+    override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> =
+        document(KEY_HARDWARE_KEYBOARD, HardwareKeyboardSettings.serializer()) { HardwareKeyboardSettings() }
+    override suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) = hardwareKeyboardLock.withLock {
+        val current = db.preferences().get(KEY_HARDWARE_KEYBOARD)
+            ?.let { runCatching { dataJson.decodeFromString(HardwareKeyboardSettings.serializer(), it) }.getOrNull() }
+            ?: HardwareKeyboardSettings()
+        write(KEY_HARDWARE_KEYBOARD, HardwareKeyboardSettings.serializer(), change(current))
+    }
+
     companion object {
         const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
@@ -252,5 +263,6 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
         const val KEY_SECURITY = "security"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
+        const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
     }
 }

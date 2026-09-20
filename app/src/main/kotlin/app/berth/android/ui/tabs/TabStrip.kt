@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -47,6 +48,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
@@ -69,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -106,6 +110,12 @@ import androidx.compose.ui.zIndex
 import app.berth.android.session.PaneSide
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TabSource
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.LocalTargetReach
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.keyPressable
+import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.stage.DeckHaptics
@@ -252,6 +262,7 @@ fun TabHeader(
     modifier: Modifier = Modifier,
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
+    entry: FocusRequester? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val resolved = rememberResolvedTabStyle(style)
@@ -260,9 +271,13 @@ fun TabHeader(
     val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
-            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach)
+            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, entry = entry)
             Spacer(Modifier.width(style.trailingGap))
-            Row(Modifier.padding(top = reach).height(style.height), verticalAlignment = Alignment.CenterVertically) { trailing() }
+            // The fixed slots take the same reach the tabs do: the row is the full height and the
+            // controls in it read the reach as target above their visual (IconAction, CountTile).
+            Row(Modifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
+                CompositionLocalProvider(LocalTargetReach provides reach) { trailing() }
+            }
         }
     }
     when (style.chrome) {
@@ -287,6 +302,8 @@ fun TabHeader(
  * behaviour goes through [actions]. Each tab observes its own record, so the strip itself
  * recomposes only when tabs open, close, move or the active tab changes. [topReach] is extra
  * height above the visual row that the items take as touch target (the header lends the inset).
+ * [entry] is the control a keyboard's chord into the strip lands on: put on the active tab, where
+ * the user already is, while the strip shows it, else on the first tab in view.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -299,6 +316,7 @@ fun TabStrip(
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
     topReach: Dp = 0.dp,
+    entry: FocusRequester? = null,
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId) }
@@ -314,13 +332,37 @@ fun TabStrip(
     // Every neighbour already gets [gap]; a chip after the first adds the rest of [groupGap] ahead of itself.
     val chipLead = (style.groupGap - style.gap).coerceAtLeast(0.dp)
     val tabCount = slots.size
+    // The tab [entry] is put on: the active tab while any of it is laid out, so a chord into the
+    // strip lands where the user already is rather than eight tabs back (the focus brings a tab cut
+    // by an edge back into view); once a hand has scrolled the active one off, the first tab wholly
+    // in view, else the first laid out; the first tab of all before the first layout. Derived from
+    // the layout, so the strip recomposes when the answer changes and not on every scrolled frame.
+    val entryRequester = entry
+    val tabKeys = remember(entries) { entries.filterIsInstance<StripEntry.Tab>().map { it.key }.toSet() }
+    val activeKey = remember(entries, activeId) { entries.firstOrNull { it is StripEntry.Tab && it.slot.id == activeId }?.key }
+    val entryKey by remember(state, tabKeys, activeKey) {
+        derivedStateOf {
+            val info = state.listState.layoutInfo
+            val shown = info.visibleItemsInfo
+            val tabOf = { item: LazyListItemInfo -> (item.key as? String)?.takeIf(tabKeys::contains) }
+            when {
+                activeKey != null && shown.any { it.key == activeKey } -> activeKey
+                else -> shown.firstNotNullOfOrNull { item -> tabOf(item)?.takeIf { item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset } }
+                    ?: shown.firstNotNullOfOrNull(tabOf)
+                    ?: tabKeys.firstOrNull()
+            }
+        }
+    }
     val scope = rememberCoroutineScope()
 
     val controller = remember(state, scope) { DragController(state, latestEntries, latestActions, haptics, scope) }
     controller.gapPx = gapPx
     controller.edgePx = edgePx
+    controller.reducedMotion = LocalReducedMotion.current
 
     // The active tab is scrolled into view in 120 ms (spec C3, Header row); a lift owns the scroll instead.
+    // Under reduced motion it is put into view in a frame.
+    val reducedMotion = LocalReducedMotion.current
     LaunchedEffect(activeId, entries) {
         if (state.drag != null) return@LaunchedEffect
         val index = entries.indexOfFirst { it is StripEntry.Tab && it.slot.id == activeId }
@@ -337,13 +379,13 @@ fun TabStrip(
         val item = info.visibleItemsInfo.firstOrNull { it.key == key }
         if (item == null) {
             // Item offsets count from the end of the start inset, so offset 0 is the resting place: the inset in from the edge.
-            state.listState.animateScrollToItem(if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
+            state.listState.bring(reducedMotion, if (index < state.listState.firstVisibleItemIndex) leadIndex else index)
             return@LaunchedEffect
         }
         val lead = if (leadIndex == index) item else info.visibleItemsInfo.firstOrNull { it.key == leadKey }
         if (lead == null) {
             // The tab is in view but its chip is off the start: brought to rest at the inset, tab following.
-            state.listState.animateScrollToItem(leadIndex)
+            state.listState.bring(reducedMotion, leadIndex)
             return@LaunchedEffect
         }
         // The viewport's ends are the physical edges (negative by the inset at the start); the tab rests the inset inside them,
@@ -355,7 +397,9 @@ fun TabStrip(
             item.offset + item.size > restEnd -> item.offset + item.size - restEnd
             else -> 0
         }
-        if (delta != 0) state.listState.animateScrollBy(delta.toFloat(), tween(120))
+        if (delta != 0) {
+            if (reducedMotion) state.listState.scrollBy(delta.toFloat()) else state.listState.animateScrollBy(delta.toFloat(), tween(120))
+        }
     }
 
     // The entries changed under the viewport. LazyList keeps the first visible item's key in place, which is right
@@ -415,7 +459,7 @@ fun TabStrip(
                     actions = actions,
                     groups = orderedGroups,
                     topReach = topReach,
-                    modifier = Modifier.liftable(entry.key, state),
+                    modifier = Modifier.liftable(entry.key, state).then(if (entryRequester != null && entry.key == entryKey) Modifier.focusRequester(entryRequester) else Modifier),
                 )
                 is StripEntry.Chip -> GroupChip(
                     entry = entry,
@@ -427,7 +471,7 @@ fun TabStrip(
                     leadGap = if (index > 0) chipLead else 0.dp,
                     modifier = Modifier.liftable(entry.key, state),
                 )
-                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, topReach = topReach, modifier = Modifier.animateItem())
+                StripEntry.Plus -> PlusTab(style = resolved, actions = actions, topReach = topReach, modifier = stripItem())
             }
         }
     }
@@ -489,6 +533,7 @@ internal class DragController(
 ) {
     var gapPx = 0f
     var edgePx = 0f
+    var reducedMotion = false
     private var settle: Job? = null
 
     fun lift(key: String, grabX: Float, isChip: Boolean): Boolean {
@@ -613,7 +658,9 @@ internal class DragController(
         settle = scope.launch {
             val travel = Animatable(state.dragTravel)
             try {
-                travel.animateTo(rest, tween(120)) { state.dragTravel = value }
+                // Under reduced motion the item is in its slot the frame the finger lifts.
+                if (reducedMotion) state.dragTravel = rest
+                else travel.animateTo(rest, tween(120)) { state.dragTravel = value }
             } finally {
                 if (state.drag === drag) state.drag = null
             }
@@ -791,11 +838,16 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
     val liftedHere = state.lifted == entry.key
     val draggedHere = state.drag?.key == entry.key
     var pressed by remember { mutableStateOf(false) }
+    // The keyboard's focus (spec, Components): the pressed tone and the title in accent, while keys
+    // drive, and a 2 dp accent bar under the title (drawn below): the tone on the active tab, where
+    // the chord lands, is one step of four, so the cue is a shape as well as a colour.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
 
     val groupTint = entry.group?.color?.rgb?.toColor()
     val fill by animateColorAsState(
         when {
-            liftedHere || pressed -> style.pressedFill
+            liftedHere || pressed || focused -> style.pressedFill
             active && s.activeMark == ActiveTabMark.FILL -> if (groupTint != null && groupCount > 1) lerp(style.activeFill, groupTint, s.groupTintOnActive) else style.activeFill
             else -> s.idleFill ?: Color.Transparent
         },
@@ -803,11 +855,12 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
         label = "tab fill",
     )
     val titleColor = when {
+        focused -> c.accent
         active || pressed -> style.activeTitleColor
         record.state == SessionState.DETACHED || record.state == SessionState.CLOSED -> c.text3
         else -> c.text2
     }
-    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, tween(120), label = "tab lift")
+    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, BerthMotion.transform(tween(120)), label = "tab lift")
     val stateText = when (record.state) {
         SessionState.LIVE -> "live"
         SessionState.IDLE, SessionState.CONNECTING -> "connecting"
@@ -842,7 +895,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
 
     Box(
         modifier
-            .then(if (draggedHere) Modifier else Modifier.animateItem())
+            .then(if (draggedHere) Modifier else stripItem())
             .fillMaxHeight()
             .then(if (carry != null) Modifier.onGloballyPositioned { bounds = it.boundsInRoot() } else Modifier)
             .graphicsLayer {
@@ -853,6 +906,8 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 } else 0f
             }
             .stripItemGestures(entry.key, isChip = false, controller, state, onTap = { actions.activate(id) }, onPressedChange = { pressed = it }, carryTarget = carryTarget)
+            // Focusable from a keyboard, Enter switching to the tab; ahead of the semantics below so the focus stays readable.
+            .keyPressable(enabled = true, interactionSource = interaction) { actions.activate(id) }
             .clearAndSetSemantics {
                 role = Role.Tab
                 selected = active
@@ -885,9 +940,17 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                 .clip(RoundedCornerShape(style.tabRadius))
                 .background(fill)
                 .drawBehind {
-                    if (active && s.activeMark == ActiveTabMark.UNDERLINE) {
+                    // One 2 dp bar along the foot of the tab, inset to the title: the active mark's
+                    // underline in its colour, or the keyboard's focus in accent, the line A1 permits
+                    // and C4 draws under a locked modifier, so the strip and the Deck agree.
+                    val bar = when {
+                        focused -> c.accent
+                        active && s.activeMark == ActiveTabMark.UNDERLINE -> style.underlineColor
+                        else -> null
+                    }
+                    if (bar != null) {
                         val h = 2.dp.toPx()
-                        drawRoundRect(style.underlineColor, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
+                        drawRoundRect(bar, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
                     }
                 }
                 .padding(s.tabPadding),
@@ -961,6 +1024,7 @@ private fun CloseGlyph(onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .size(24.dp)
@@ -972,7 +1036,7 @@ private fun CloseGlyph(onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        BerthIcon(BerthIcons.close, tint = if (pressed) c.text1 else c.text2, size = 16.dp)
+        BerthIcon(BerthIcons.close, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 16.dp)
     }
 }
 
@@ -994,20 +1058,29 @@ internal fun TabSwatch(
     radius: Dp = style.swatchRadius,
 ) {
     val c = Berth.colors
+    val reducedMotion = LocalReducedMotion.current
     val ring = remember { Animatable(0f) }
-    LaunchedEffect(attention) {
-        if (attention) {
-            ring.snapTo(3f)
-            ring.animateTo(1.5f, tween(600))
-        } else ring.snapTo(0f)
+    LaunchedEffect(attention, reducedMotion) {
+        when {
+            !attention -> ring.snapTo(0f)
+            // The single 600 ms pulse (spec A7); under reduced motion the ring is simply there.
+            reducedMotion -> ring.snapTo(1.5f)
+            else -> {
+                ring.snapTo(3f)
+                ring.animateTo(1.5f, tween(600))
+            }
+        }
     }
     val spinning = state == SessionState.CONNECTING || state == SessionState.RECONNECTING
     // The arc's angle is read in the draw lambda only, so each frame of the spin invalidates the
-    // dot's drawing and nothing recomposes: not this swatch, not the strip item around it.
-    val rotation: State<Float>? = if (spinning) {
-        rememberInfiniteTransition(label = "tab arc")
+    // dot's drawing and nothing recomposes: not this swatch, not the strip item around it. Under
+    // reduced motion the arc holds still at its resting angle (spec A7), with no clock behind it.
+    val rotation: State<Float>? = when {
+        !spinning -> null
+        reducedMotion -> BerthMotion.staticArc
+        else -> rememberInfiniteTransition(label = "tab arc")
             .animateFloat(0f, 360f, infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart), label = "arc")
-    } else null
+    }
     val dotColor = when (state) {
         SessionState.LIVE -> if (showLiveDot) c.live else null
         SessionState.CONNECTING, SessionState.RECONNECTING, SessionState.IDLE -> c.pending
@@ -1094,7 +1167,10 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
     val draggedHere = state.drag?.key == entry.key
     val liftedHere = state.lifted == entry.key
     var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, tween(120), label = "chip lift")
+    // The keyboard's focus shows as the pressed tone; the label keeps the group's colour, which is its name.
+    val interaction = remember { MutableInteractionSource() }
+    val focused = interaction.showsFocus()
+    val scale by animateFloatAsState(if (liftedHere) 1.04f else 1f, BerthMotion.transform(tween(120)), label = "chip lift")
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
     val label = chipLabel(group, entry.tabs.size, style.style)
     val tap: () -> Unit = {
@@ -1107,7 +1183,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
 
     Box(
         modifier
-            .then(if (draggedHere) Modifier else Modifier.animateItem())
+            .then(if (draggedHere) Modifier else stripItem())
             .fillMaxHeight()
             .graphicsLayer {
                 val drag = state.drag
@@ -1117,6 +1193,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
                 } else 0f
             }
             .stripItemGestures(entry.key, isChip = true, controller, state, onTap = tap, onPressedChange = { pressed = it })
+            .keyPressable(enabled = true, interactionSource = interaction, onPress = tap)
             .clearAndSetSemantics {
                 role = Role.Button
                 contentDescription = "Group ${group.name}, ${entry.tabs.size} tabs" + (if (group.collapsed) ", collapsed" else "") + (if (attention) ", needs attention" else "")
@@ -1136,7 +1213,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
             label = label,
             tint = tint,
             attention = attention,
-            pressed = pressed || liftedHere,
+            pressed = pressed || liftedHere || focused,
             style = style,
             modifier = Modifier.graphicsLayer {
                 scaleX = scale
@@ -1211,6 +1288,7 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
             .fillMaxHeight()
@@ -1233,10 +1311,10 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
             Modifier
                 .size(style.style.tabHeight)
                 .clip(RoundedCornerShape(style.tabRadius))
-                .background(if (pressed) style.pressedFill else Color.Transparent),
+                .background(if (pressed || focused) style.pressedFill else Color.Transparent),
             contentAlignment = Alignment.Center,
         ) {
-            BerthIcon(BerthIcons.add, tint = if (pressed) c.text1 else c.text2, size = 20.dp)
+            BerthIcon(BerthIcons.add, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 20.dp)
         }
     }
 }
@@ -1244,7 +1322,8 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
 /**
  * The count tile (spec C3, Switcher): a 24 dp square on `surface.2` with the tab count in Label;
  * a ring when a tab scrolled out of view needs attention. Sits in the header's fixed slots inside
- * a 44 dp target and opens the switcher; held, it jumps to the unread tab.
+ * a 48 dp target (required, like [app.berth.android.ui.components.IconAction]'s, and reaching up
+ * by the [reach] the header lends) and opens the switcher; held, it jumps to the unread tab.
  */
 @Composable
 fun CountTile(
@@ -1255,19 +1334,23 @@ fun CountTile(
     /** Hold: the tab that needs the user comes on stage (jump to unread, spec C3), so the ring is one gesture from its cause. */
     onLongClick: (() -> Unit)? = null,
     style: TabStripStyle = LocalTabStripStyle.current,
+    reach: Dp = LocalTargetReach.current,
 ) {
     val c = Berth.colors
     val resolved = rememberResolvedTabStyle(style)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         modifier
-            .size(44.dp)
+            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
             .clearAndSetSemantics {
                 contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention, hold to jump to it" else ""
                 role = Role.Button
-            },
+                if (onLongClick != null) onLongClick { onLongClick(); true }
+            }
+            .padding(top = reach),
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -1286,13 +1369,13 @@ fun CountTile(
                     }
                 }
                 .clip(RoundedCornerShape(resolved.countTileRadius))
-                .background(if (pressed) resolved.pressedFill else resolved.countTileFill),
+                .background(if (pressed || focused) resolved.pressedFill else resolved.countTileFill),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 if (count > 99) "99+" else count.toString(),
                 style = BerthType.label.copy(fontSize = if (count > 99) 9.sp else if (count > 9) 11.sp else 13.sp),
-                color = c.text1,
+                color = if (focused) c.accent else c.text1,
                 maxLines = 1,
             )
         }

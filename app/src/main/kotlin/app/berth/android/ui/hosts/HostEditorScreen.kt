@@ -41,6 +41,7 @@ import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.PickerRow
@@ -48,7 +49,9 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
+import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -58,6 +61,7 @@ import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.tunnels.PendingTunnelRow
 import app.berth.android.ui.tunnels.TunnelsPanelContent
 import app.berth.domain.model.AddressFamily
+import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
@@ -122,11 +126,13 @@ fun HostEditorScreen(
     var remoteClipboard by remember { mutableStateOf(RemoteClipboardPolicy.INHERIT) }
     var jumpHostIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var tunnelsOnly by remember { mutableStateOf(fromLink?.tunnelsOnly ?: false) }
+    var altKey by remember { mutableStateOf<AltKeyMode?>(null) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
             remoteClipboard = vm.security.settings.filterNotNull().first().remoteClipboardPolicy(hostId)
+            altKey = vm.hardwareKeyboard.value.altKeyOverride(hostId)
             vm.host(hostId)?.let { h ->
                 original = h
                 name = h.name
@@ -195,8 +201,11 @@ fun HostEditorScreen(
         )
         val secret = password.takeIf { it.isNotEmpty() }
         if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
-        // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
-        if (base != null) vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
+        // The overrides live in the settings documents, keyed by the host's id; they commit here with the rest.
+        if (base != null) {
+            vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
+            vm.updateHardwareKeyboard { it.withHostAltKey(base.id, altKey) }
+        }
         onDone()
     }
 
@@ -253,10 +262,11 @@ fun HostEditorScreen(
             }
             if (colorPicker) {
                 Panel(label = "Colour and monogram") {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // The options' 48 dp targets set the pitch; the swatches inside them sit 12 dp apart.
+                    Row(Modifier.fillMaxWidth()) {
                         for (swatch in SwatchColor.entries.take(6)) SwatchOption(swatch, color == swatch) { color = swatch }
                     }
-                    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth()) {
                         for (swatch in SwatchColor.entries.drop(6)) SwatchOption(swatch, color == swatch) { color = swatch }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -316,7 +326,7 @@ fun HostEditorScreen(
                     )
                 }
                 if (identities.isEmpty()) {
-                    Text("No keys yet. Create one under Keys in the rail.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                    PanelNote("No keys yet. Create one under Keys in the rail.")
                 }
             }
 
@@ -365,6 +375,7 @@ fun HostEditorScreen(
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
                 HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }
+                HostAltKeyPicker(vm, original?.id, altKey) { altKey = it }
             }
 
             if (original != null) {
@@ -375,24 +386,10 @@ fun HostEditorScreen(
     }
 }
 
+/** The host's swatch colour as a [ColorOption]: named for a screen reader, in a 48 dp target. */
 @Composable
 private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (selected) c.surface4 else c.surface2)
-            .clickable(onClick = onClick)
-            .padding(4.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(4.dp))
-                .background(swatch.rgb.toColor()),
-        )
-    }
+    ColorOption(color = swatch.rgb.toColor(), name = swatch.spokenName(), selected = selected, onClick = onClick)
 }
 
 /**
@@ -400,7 +397,7 @@ private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> 
  * the row's trailing edge on a surface that reads against the panel ([BerthMenu]).
  */
 @Composable
-fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, caption: String? = null, captionLines: Int = 1, onSelect: (T) -> Unit) {
+fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, caption: String? = null, captionLines: Int = 2, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         PickerRow(title, label(value), onClick = { open = true }, caption = caption, captionLines = captionLines)

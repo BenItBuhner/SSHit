@@ -20,6 +20,9 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.CappedFontScale
+import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.rememberReducedMotion
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
@@ -121,10 +124,13 @@ private val CoolTrueBlack = CoolDark.copy(
     surface3 = Color(0xFF202225), surface4 = Color(0xFF2A2C30),
 )
 
+// text.2 sits four steps under the spec's #5B5751 (and the cool set's #565B63): at the spec's
+// value it reads 4.3:1 on surface.4, the pressed and selected step, and the spec promises 4.5 on
+// every surface (A11). The step is below what the eye separates; the ratio is 4.55.
 private val WarmLight = BerthColors(
     surface0 = Color(0xFFF5F2EC), surface1 = Color(0xFFECE8E1), surface2 = Color(0xFFE2DDD4),
     surface3 = Color(0xFFD8D2C8), surface4 = Color(0xFFCEC7BC),
-    text1 = Color(0xFF1E1C19), text2 = Color(0xFF5B5751), text3 = Color(0xFF8B867E),
+    text1 = Color(0xFF1E1C19), text2 = Color(0xFF57534D), text3 = Color(0xFF8B867E),
     accent = Color(0xFFB5782E), onAccent = Color(0xFFFFF8EE),
     live = Color(0xFF4F7F3A), pending = Color(0xFFB5782E), detached = Color(0xFF8B867E),
     attention = Color(0xFF1F8C7E), danger = Color(0xFFB4483A), onDanger = Color(0xFFFFF8EE),
@@ -134,7 +140,7 @@ private val WarmLight = BerthColors(
 private val CoolLight = WarmLight.copy(
     surface0 = Color(0xFFF1F3F6), surface1 = Color(0xFFE7EAEE), surface2 = Color(0xFFDCE0E6),
     surface3 = Color(0xFFD1D6DD), surface4 = Color(0xFFC6CCD4),
-    text1 = Color(0xFF1B1D21), text2 = Color(0xFF565B63), text3 = Color(0xFF858B94),
+    text1 = Color(0xFF1B1D21), text2 = Color(0xFF51565E), text3 = Color(0xFF858B94),
 )
 
 private fun lerp(a: BerthColors, b: BerthColors, t: Float): BerthColors = BerthColors(
@@ -146,35 +152,66 @@ private fun lerp(a: BerthColors, b: BerthColors, t: Float): BerthColors = BerthC
     attention = a.attention, danger = a.danger, onDanger = a.onDanger, scrim = a.scrim, isDark = a.isDark,
 )
 
-/** Text colour that reads on [accent]: near-black on light accents, near-white on dark ones. */
-fun onAccentFor(accent: Color): Color = if (accent.luminance() > 0.45f) Color(0xFF1A1408) else Color(0xFFFFF8EE)
+/** The two inks the spec puts on an accent (A2): warm near-black, warm near-white. */
+private val InkOnLightAccent = Color(0xFF1A1408)
+private val InkOnDarkAccent = Color(0xFFFFF8EE)
+
+/**
+ * WCAG 2 contrast ratio of [this] over [background], 1 to 21; 4.5 is the floor for text, 3 for
+ * large text and for a control's own colour against what it sits on.
+ */
+fun Color.contrastAgainst(background: Color): Float {
+    val a = luminance() + 0.05f
+    val b = background.luminance() + 0.05f
+    return maxOf(a, b) / minOf(a, b)
+}
+
+/**
+ * Text colour that reads on [accent]: whichever of the spec's two inks contrasts more with it. The
+ * inks cross at a luminance near 0.19, so the mid-tone presets (Copper, Verdigris, Slate, Moss,
+ * Rose, Mauve) all take the near-black ink at 6:1 and better; a threshold that sent them the
+ * near-white one left a one-shot Deck key's label at 2:1 on the default accent.
+ */
+fun onAccentFor(accent: Color): Color =
+    if (InkOnLightAccent.contrastAgainst(accent) >= InkOnDarkAccent.contrastAgainst(accent)) InkOnLightAccent else InkOnDarkAccent
 
 fun Int.toColor(): Color = Color(0xFF000000.toInt() or (this and 0xFFFFFF))
 
-@Composable
-fun rememberBerthColors(theme: InterfaceTheme, systemDark: Boolean = isSystemInDarkTheme()): BerthColors {
-    val dark = when (theme.variant) {
-        InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK -> true
-        InterfaceVariant.LIGHT -> false
-        InterfaceVariant.SYSTEM -> systemDark
-    }
+/** Whether [theme] is a dark interface when the system is in [systemDark]. */
+fun InterfaceTheme.isDark(systemDark: Boolean): Boolean = when (variant) {
+    InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK -> true
+    InterfaceVariant.LIGHT -> false
+    InterfaceVariant.SYSTEM -> systemDark
+}
+
+/**
+ * The tokens for [theme] with [accent] (its own, or the system's under Material You), for a
+ * [dark] or light interface: the warm and cool sets of the variant blended by tone, the accent
+ * and its ink over them, and the high-contrast lift of `text.3` and `surface.2` (A11). Pure, so
+ * the contrast of every pairing the spec promises can be measured off the composition.
+ */
+fun berthColors(theme: InterfaceTheme, dark: Boolean, accent: Color = theme.accent.toColor()): BerthColors {
     val trueBlack = theme.variant == InterfaceVariant.TRUE_BLACK
     val warm = if (dark) (if (trueBlack) WarmTrueBlack else WarmDark) else WarmLight
     val cool = if (dark) (if (trueBlack) CoolTrueBlack else CoolDark) else CoolLight
     var colors = lerp(warm, cool, theme.tone.coerceIn(0f, 1f))
+    colors = colors.copy(accent = accent, onAccent = onAccentFor(accent), pending = accent)
+    if (theme.contrast == InterfaceContrast.HIGH) {
+        colors = if (dark) colors.copy(text3 = Color(0xFF8B867E), surface2 = Color(0xFF2A2825)) else colors.copy(text3 = Color(0xFF6A665F))
+    }
+    return colors
+}
 
+@Composable
+fun rememberBerthColors(theme: InterfaceTheme, systemDark: Boolean = isSystemInDarkTheme()): BerthColors {
+    val dark = theme.isDark(systemDark)
     val context = LocalContext.current
     val accent = if (theme.materialYou && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)).primary
     } else {
         theme.accent.toColor()
     }
-    colors = colors.copy(accent = accent, onAccent = onAccentFor(accent), pending = accent)
-
-    if (theme.contrast == InterfaceContrast.HIGH) {
-        colors = if (dark) colors.copy(text3 = Color(0xFF8B867E), surface2 = Color(0xFF2A2825)) else colors.copy(text3 = Color(0xFF6A665F))
-    }
-    return colors
+    return berthColors(theme, dark, accent)
 }
 
 val LocalBerthColors = staticCompositionLocalOf { WarmDark }
@@ -236,21 +273,30 @@ fun berthShapes(): Shapes = Shapes(
     extraLarge = RoundedCornerShape(BerthRadius.sheet),
 )
 
+/**
+ * The app's theme. [reducedMotion] is the system's reduced-motion setting by default (spec A7), so
+ * every motion under the theme answers it through [LocalReducedMotion]; a test passes its own.
+ * Interface text under the theme follows the system font size up to 1.3× (spec A11).
+ */
 @Composable
 fun BerthTheme(
     theme: InterfaceTheme = InterfaceTheme.DEFAULT,
+    reducedMotion: Boolean = rememberReducedMotion(),
     content: @Composable () -> Unit,
 ) {
     val colors = rememberBerthColors(theme)
     CompositionLocalProvider(
         LocalBerthColors provides colors,
         LocalRadiusScale provides theme.radiusScale.coerceIn(InterfaceTheme.MIN_RADIUS_SCALE, InterfaceTheme.MAX_RADIUS_SCALE),
+        LocalReducedMotion provides reducedMotion,
     ) {
-        MaterialTheme(
-            colorScheme = colors.toMaterial(),
-            typography = berthTypography(useSystemFont = theme.useSystemFont),
-            shapes = berthShapes(),
-            content = content,
-        )
+        CappedFontScale {
+            MaterialTheme(
+                colorScheme = colors.toMaterial(),
+                typography = berthTypography(useSystemFont = theme.useSystemFont),
+                shapes = berthShapes(),
+                content = content,
+            )
+        }
     }
 }

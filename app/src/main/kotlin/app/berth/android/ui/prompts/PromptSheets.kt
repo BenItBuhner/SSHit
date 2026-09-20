@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -25,6 +27,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -86,7 +90,13 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
     }
 }
 
-/** The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows; the OSC 52 notice (not a transport prompt) borrows it too. */
+/**
+ * The one bottom sheet every prompt uses: surface.1, the handle, 20 dp margins, 12 dp between rows;
+ * the OSC 52 notice (not a transport prompt) and the crash report borrow it too. The column scrolls:
+ * the sheet itself does not scroll its content, and at the interface's font cap (A11) the changed-key
+ * sheet with a link's row, or a report with its box, stands taller than a phone's window, where an
+ * unscrolled column would lay its last rows, the answers, out at no height.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
@@ -97,6 +107,7 @@ internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit)
             Modifier
                 .fillMaxWidth()
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -111,7 +122,9 @@ private fun HostLine(prompt: Prompt) = HostLine(prompt.host)
  * The host a sheet is about: its swatch, its saved name in text.1 and `user@address:port` in Mono
  * text.2 (`[BA] bastion · demo@127.0.0.1:2223`), so two hosts at one endpoint, a bastion and the
  * target behind it, read apart by more than a monogram. A quick-connect host is named by its
- * address, so the endpoint stands alone. The endpoint is whole first; a long name gives way.
+ * address, so the endpoint stands alone. Name and endpoint share the line while both fit it whole;
+ * when they do not, as at the interface's font cap on a phone (A11), the name takes the line and
+ * the endpoint the one under it, so the name the user knows the host by is not what gives way.
  */
 @Composable
 internal fun HostLine(host: Host) {
@@ -122,10 +135,46 @@ internal fun HostLine(host: Host) {
         Swatch(host.color, host.monogram, 24.dp)
         Spacer(Modifier.width(10.dp))
         if (named) {
-            Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text(" \u00B7 ", style = BerthType.body, color = c.text3)
+            NameAndEndpoint(
+                name = { Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                separator = { Text(" \u00B7 ", style = BerthType.body, color = c.text3) },
+                endpoint = { Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        } else {
+            Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * [name], [separator] and [endpoint] on one line when the three fit it whole, each centred on the
+ * line and the endpoint whole first, as a row would have them; when the name's own width does not
+ * fit what the endpoint leaves, two lines, the name on the first and the endpoint under it, with
+ * no separator. Either way a name wider than a whole line is the one thing cut.
+ */
+@Composable
+private fun NameAndEndpoint(name: @Composable () -> Unit, separator: @Composable () -> Unit, endpoint: @Composable () -> Unit) {
+    Layout(content = { name(); separator(); endpoint() }) { measurables, constraints ->
+        val (nameM, separatorM, endpointM) = measurables
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val separatorP = separatorM.measure(loose)
+        val endpointP = endpointM.measure(loose)
+        val room = constraints.maxWidth - separatorP.width - endpointP.width
+        if (nameM.maxIntrinsicWidth(constraints.maxHeight) <= room) {
+            val nameP = nameM.measure(loose.copy(maxWidth = room))
+            val height = maxOf(nameP.height, separatorP.height, endpointP.height)
+            layout(nameP.width + separatorP.width + endpointP.width, height) {
+                nameP.placeRelative(0, (height - nameP.height) / 2)
+                separatorP.placeRelative(nameP.width, (height - separatorP.height) / 2)
+                endpointP.placeRelative(nameP.width + separatorP.width, (height - endpointP.height) / 2)
+            }
+        } else {
+            val nameP = nameM.measure(loose)
+            layout(maxOf(nameP.width, endpointP.width), nameP.height + endpointP.height) {
+                nameP.placeRelative(0, 0)
+                endpointP.placeRelative(0, nameP.height)
+            }
+        }
     }
 }
 
@@ -367,13 +416,19 @@ private fun fingerprintCaption(label: String?, what: String): AnnotatedString {
     }
 }
 
-/** The one row every fingerprint on a sheet is set in: the caption over the value in Mono at 14 sp. */
+/**
+ * The one row every fingerprint on a sheet is set in: the caption over the value in Mono at 14 sp.
+ * One node to a reader: the caption and the value merge, so a row is heard as `OFFERED ssh-ed25519 ·
+ * SHA256` and then its key in one item rather than a label and, a swipe later, a value with no name.
+ * Since the `LINK` row is set here as well, it reads the same way.
+ */
 @Composable
 private fun FingerprintRow(caption: AnnotatedString, value: String, modifier: Modifier = Modifier, boxed: Boolean = false) {
     val c = Berth.colors
     Column(
         modifier
             .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
             .then(
                 if (boxed) Modifier.clip(RoundedCornerShape(BerthRadius.row)).background(c.surface2).padding(12.dp)
                 else Modifier.padding(horizontal = 4.dp),

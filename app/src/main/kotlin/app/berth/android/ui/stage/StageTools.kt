@@ -15,15 +15,18 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -58,6 +61,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.showsFocus
+import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
@@ -68,6 +75,10 @@ import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
@@ -141,14 +152,15 @@ fun rememberStageTools(tabId: String?): StageTools = remember(tabId) { StageTool
 /**
  * The Stage's header area: the tab [header], or the selection bar in its place while text is
  * selected (spec C18), with the search bar sliding in under either while a search is open (C17).
- * Both bars act on [session]; without a terminal tab only the header shows.
+ * Both bars act on [session]; without a terminal tab only the header shows. To the keyboard either
+ * bar is the Stage's [StageRegion.Bar], the region Escape leaves for the terminal, closing the search.
  */
 @Composable
-fun StageToolbar(tools: StageTools, session: TerminalSession?, header: @Composable () -> Unit) {
+fun StageToolbar(tools: StageTools, session: TerminalSession?, focus: StageFocus = rememberStageFocus(), header: @Composable () -> Unit) {
     val selected = session != null && tools.selection.active
-    if (session != null && selected) SelectionBar(tools, session) else header()
-    AnimatedVisibility(visible = session != null && tools.search.open) {
-        if (session != null) SearchBar(tools, session)
+    if (session != null && selected) Box(Modifier.stageRegion(focus, StageRegion.Bar)) { SelectionBar(tools, session) } else header()
+    AnimatedVisibility(visible = session != null && tools.search.open, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
+        if (session != null) Box(Modifier.stageRegion(focus, StageRegion.Bar)) { SearchBar(tools, session) }
     }
     BackHandler(enabled = selected) { tools.selection.clear() }
     BackHandler(enabled = session != null && tools.search.open) { tools.closeSearch() }
@@ -191,7 +203,7 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
                 color = c.text2,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 12.dp, end = 4.dp).semantics { contentDescription = "Selected ${selection.summary}" },
+                modifier = Modifier.padding(start = 12.dp, end = 4.dp).semantics { contentDescription = "Selection, ${selection.summary}" },
             )
             Spacer(Modifier.weight(1f))
             BarAction("Copy", onClick = ::copy)
@@ -257,13 +269,16 @@ private fun BarAction(label: String, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     Box(
         Modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (pressed) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
+            .background(if (pressed || focused) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
+            // A short word (Copy) still answers to a 48 dp column; the longer ones set their own width.
+            .defaultMinSize(minWidth = TouchTargetSize)
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -376,21 +391,27 @@ private fun SearchBarRow(
 @Composable
 private fun Toggle(glyph: String, on: Boolean, description: String, warn: Boolean = false, onChange: (Boolean) -> Unit) {
     val c = Berth.colors
+    // A 32 dp glyph box in a 48 dp target; the switch's own on/off is what a screen reader hears
+    // unless the pattern does not compile, which then stands in for the state.
     Box(
         Modifier
-            .heightIn(min = 32.dp)
-            .width(32.dp)
-            .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (on) c.surface4 else androidx.compose.ui.graphics.Color.Transparent)
-            .clickable { onChange(!on) }
+            .toggleable(value = on, role = Role.Switch, indication = null, interactionSource = remember { MutableInteractionSource() }, onValueChange = onChange)
             .semantics {
                 contentDescription = description
-                role = Role.Switch
                 if (warn) stateDescription = INVALID_PATTERN
-            },
+            }
+            .touchTarget(),
         contentAlignment = Alignment.Center,
     ) {
-        Text(glyph, style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = if (warn) c.danger else if (on) c.accent else c.text3, maxLines = 1)
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(BerthRadius.row))
+                .background(if (on) c.surface4 else androidx.compose.ui.graphics.Color.Transparent),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(glyph, style = BerthType.mono.copy(fontSize = BerthType.caption.fontSize), color = if (warn) c.danger else if (on) c.accent else c.text3, maxLines = 1)
+        }
     }
 }
 

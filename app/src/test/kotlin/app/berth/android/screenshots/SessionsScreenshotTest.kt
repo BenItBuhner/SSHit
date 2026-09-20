@@ -49,7 +49,6 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -114,10 +113,7 @@ class SessionsScreenshotTest {
         graph.close()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {

@@ -28,10 +28,12 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -50,6 +52,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.a11y.TerminalTag
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.LockWindow
@@ -83,7 +86,6 @@ import app.berth.ssh.SshSecurity
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.TerminalKey
 import app.berth.terminal.TerminalText
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -153,10 +155,7 @@ class TerminalToolsScreenshotTest {
         graph = TestGraph(context)
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
@@ -255,7 +254,7 @@ class TerminalToolsScreenshotTest {
         val p = paints()
         val range = tools.selection.range!!
         val top = session.emulator.scrollbackSize - tools.viewport.scrollOffset
-        val size = compose.onNodeWithContentDescription("Terminal").fetchSemanticsNode().size
+        val size = compose.onNodeWithTag(TerminalTag).fetchSemanticsNode().size
         return handleCenters(range.shiftRows(-top), session.emulator.rows, p.cellWidth, p.cellHeight, handleRadius, size.width.toFloat(), size.height.toFloat())
     }
 
@@ -264,7 +263,7 @@ class TerminalToolsScreenshotTest {
 
     /** Both handles' discs lie inside the canvas by their radius; fails naming the one that does not. */
     private fun assertHandlesInside(session: TerminalSession, tools: StageTools) {
-        val size = compose.onNodeWithContentDescription("Terminal").fetchSemanticsNode().size
+        val size = compose.onNodeWithTag(TerminalTag).fetchSemanticsNode().size
         val r = handleRadius
         val (s, e) = handles(session, tools)
         for ((name, spot) in listOf("start" to s, "end" to e)) {
@@ -277,7 +276,7 @@ class TerminalToolsScreenshotTest {
 
     /** Holds a finger at [at] past the long-press timeout, so the word under it is selected; the finger stays down. */
     private fun longPress(at: Offset, selected: () -> Boolean) {
-        compose.onNodeWithContentDescription("Terminal").performTouchInput { down(at) }
+        compose.onNodeWithTag(TerminalTag).performTouchInput { down(at) }
         compose.mainClock.advanceTimeBy(700)
         compose.waitUntil(5_000, selected)
     }
@@ -328,10 +327,10 @@ class TerminalToolsScreenshotTest {
 
     /** Waits for the canvas to size the grid to itself, so cells map to pixels, and for history to be behind the screen. */
     private fun awaitGrid(session: TerminalSession) {
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Terminal")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TerminalTag)).fetchSemanticsNodes().isNotEmpty() }
         val p = paints()
         compose.waitUntil(5_000) {
-            val size = compose.onNodeWithContentDescription("Terminal").fetchSemanticsNode().size
+            val size = compose.onNodeWithTag(TerminalTag).fetchSemanticsNode().size
             val cols = (size.width / p.cellWidth).toInt()
             val rows = (size.height / p.cellHeight).toInt()
             cols >= 2 && session.emulator.cols == cols && session.emulator.rows == rows
@@ -345,7 +344,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `selection with handles and the action bar`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val (row, col) = cellOf(session, "gitea/gitea:1.22")
 
         // A long-press selects the word under the finger, punctuation and all; a drag two rows down grows it by words.
@@ -405,7 +404,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `double-tap selects a word and double-tap-drag selects whole lines`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val (row, col) = cellOf(session, "gitea/gitea:1.22")
         val at = cellCenter(row, col + 3)
 
@@ -433,7 +432,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `a drag held past the top edge scrolls history under the selection`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val (row, col) = cellOf(session, "NAME")
         val sb = session.emulator.scrollbackSize
         val nameRow = sb + row
@@ -459,7 +458,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `select all takes every row, wide cells and wrapped lines whole, and a link offers Open`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val url = "https://caddyserver.com/docs/"
         val (row, col) = cellOf(session, "docs at https")
         longPress(cellCenter(row, col + 10)) { tools.selection.active }
@@ -518,7 +517,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `handles on the bottom row flip above it and stay inside the canvas`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val rows = session.emulator.rows
         // The restored frame leaves the cursor on a blank bottom row; a prompt typed there puts text on it.
         session.emulator.write("demo@homelab:~/srv$ tail -n 3 caddy/access.log")
@@ -564,7 +563,7 @@ class TerminalToolsScreenshotTest {
 
         // The two-finger tap, the same: the notice, no sheet.
         setClipboard("echo one\necho two\n")
-        compose.onNodeWithContentDescription("Terminal").performTouchInput {
+        compose.onNodeWithTag(TerminalTag).performTouchInput {
             down(0, cellCenter(5, 5))
             down(1, cellCenter(5, 25))
             up(0)
@@ -635,7 +634,7 @@ class TerminalToolsScreenshotTest {
 
         // A two-finger tap on the canvas pastes the clipboard, through the same look.
         setClipboard("echo one\necho two\n")
-        compose.onNodeWithContentDescription("Terminal").performTouchInput {
+        compose.onNodeWithTag(TerminalTag).performTouchInput {
             down(0, cellCenter(5, 5))
             down(1, cellCenter(5, 25))
             up(0)
@@ -726,7 +725,7 @@ class TerminalToolsScreenshotTest {
         val (session, tools) = stageDetached()
         val (row, col) = cellOf(session, "postgres:16")
         longPress(cellCenter(row, col + 2)) { tools.selection.active }
-        compose.onNodeWithContentDescription("Terminal").performTouchInput { up() }
+        compose.onNodeWithTag(TerminalTag).performTouchInput { up() }
         compose.onNodeWithText("Search").performClick()
         compose.waitUntil(5_000) { tools.search.open && !tools.selection.active }
         assertEquals("postgres:16", tools.search.query)
@@ -759,7 +758,7 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `a selection carries through a change of height and ends with a change of width, and a search keeps its place through both`() {
         val (session, tools) = stageDetached()
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val (row, col) = cellOf(session, "gitea/gitea:1.22")
         val rowsBefore = session.emulator.rows
         val colsBefore = session.emulator.cols
@@ -885,7 +884,7 @@ class TerminalToolsScreenshotTest {
         }
         compose.waitUntil(5_000) { graph.appLock.state.value == LockState.UNLOCKED }
         awaitGrid(session)
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
 
         // A word selected, the search on `caddy` stepped back off its last match, and a paste held.
         val (row, col) = cellOf(session, "gitea/gitea:1.22")
@@ -969,7 +968,7 @@ class TerminalToolsScreenshotTest {
         compose.waitUntil(45_000) { graph.sessions.activeSession.value?.state == SessionState.LIVE }
         val session = graph.sessions.activeSession.value!!
         settle(1_200)
-        val canvas = compose.onNodeWithContentDescription("Terminal")
+        val canvas = compose.onNodeWithTag(TerminalTag)
         val barShown = { compose.onAllNodes(hasText("Copy")).fetchSemanticsNodes().isNotEmpty() }
 
         // Real output on the screen: a listing whose rows stay under the canvas's width (the root

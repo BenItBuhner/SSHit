@@ -63,7 +63,6 @@ import app.berth.sftp.FolderProgress
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -135,10 +134,7 @@ class FilesScreenshotTest {
         scope.cancel()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun waitForText(text: String, timeout: Long = 10_000, substring: Boolean = false) {
         compose.waitUntil(timeout) { compose.onAllNodes(hasText(text, substring = substring)).fetchSemanticsNodes().isNotEmpty() }

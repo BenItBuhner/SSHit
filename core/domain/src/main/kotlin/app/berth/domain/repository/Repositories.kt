@@ -3,6 +3,7 @@ package app.berth.domain.repository
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -149,4 +150,10 @@ interface SettingsRepository {
     /** Whether sessions keep the commands they run for the History sheet (spec C16); on by default. */
     val commandHistoryEnabled: Flow<Boolean>
     suspend fun setCommandHistoryEnabled(enabled: Boolean)
+
+    /** Alt key behaviour, per-host overrides and the compact Deck (spec C22, Settings › Hardware keyboard). */
+    val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings>
+
+    /** Read-modify-write under one lock, like [updateSecuritySettings]. */
+    suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings)
 }

@@ -29,6 +29,7 @@ import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
+import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
@@ -61,6 +62,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.createTempDirectory
 
 /** In-memory repositories so screens render against the real view model without Room or Keystore. */
@@ -147,7 +149,13 @@ class InMemoryWorkspaces : WorkspaceRepository {
 
 class InMemorySessions : SessionRepository {
     val items = MutableStateFlow<List<SessionRecord>>(emptyList())
-    val frames = HashMap<String, ByteArray>()
+    /**
+     * Written by the manager's frame saves, one coroutine per tab on Dispatchers.Default, so two
+     * tabs' saves can land at the same instant on two threads: a HashMap put racing another loses
+     * its size increment (both entries present, size 1), and a test comparing `keys` with a set
+     * of two then fails for good, since a set's equals checks sizes first.
+     */
+    val frames = ConcurrentHashMap<String, ByteArray>()
     override fun observeAll(): Flow<List<SessionRecord>> = items.map { list -> list.sortedBy { it.sortOrder } }
     override suspend fun getAll(): List<SessionRecord> = items.value.sortedBy { it.sortOrder }
     override suspend fun upsert(record: SessionRecord) = items.update { list -> list.filter { it.id != record.id } + record }
@@ -204,6 +212,10 @@ class InMemorySettings : SettingsRepository {
     private val commandHistory = MutableStateFlow(true)
     override val commandHistoryEnabled: Flow<Boolean> = commandHistory
     override suspend fun setCommandHistoryEnabled(enabled: Boolean) { commandHistory.value = enabled }
+
+    val hardwareKeyboard = MutableStateFlow(HardwareKeyboardSettings())
+    override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> = hardwareKeyboard
+    override suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) = hardwareKeyboard.update(change)
 }
 
 /**

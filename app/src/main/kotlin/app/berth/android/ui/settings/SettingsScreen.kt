@@ -33,8 +33,10 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSlider
+import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.ToggleRow
@@ -73,7 +75,6 @@ fun SettingsScreen(
     val deck by vm.deckLayout.collectAsState()
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
-    val ctrlTabKeys by vm.ctrlTabKeysReachTerminal.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
 
@@ -117,19 +118,18 @@ fun SettingsScreen(
                     )
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
-                Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (accent in ACCENTS) {
-                        Box(
-                            Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(BerthRadius.swatch))
-                                .background(if (theme.accent == accent && !theme.materialYou) c.surface4 else c.surface2)
-                                .clickable { vm.setInterfaceTheme(theme.copy(accent = accent, materialYou = false)) }
-                                .padding(5.dp),
-                        ) {
-                            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(4.dp)).background(accent.toColor()))
-                        }
+                Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp))
+                // Each option is a 48 dp target around its 32 dp swatch, so the row's pitch is the target's.
+                Row {
+                    for ((name, accent) in ACCENTS) {
+                        ColorOption(
+                            color = accent.toColor(),
+                            name = name,
+                            selected = theme.accent == accent && !theme.materialYou,
+                            onClick = { vm.setInterfaceTheme(theme.copy(accent = accent, materialYou = false)) },
+                            size = 32.dp,
+                            inset = 5.dp,
+                        )
                     }
                 }
                 ToggleRow("Material You accent", theme.materialYou, { vm.setInterfaceTheme(theme.copy(materialYou = it)) }, caption = "Follow the wallpaper colour on Android 12 and later")
@@ -143,6 +143,7 @@ fun SettingsScreen(
                 CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
                 CyclePicker("Font", listOf("JetBrains Mono", "System monospace"), font.family, { it }) { vm.setTerminalFont(font.copy(family = it)) }
                 CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
+                ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
                 CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
                 ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
                 ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
@@ -155,18 +156,15 @@ fun SettingsScreen(
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
                 // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
                 CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
-                Text("Hold the Deck's layer key on the Stage to open the editor from a session.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                PanelNote("Hold the Deck's layer key on the Stage to open the editor from a session; on a Deck of one layer that key is the editor's.")
             }
 
             Panel(label = "Gestures") {
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
-                Text("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
-            Panel(label = "Hardware keyboard") {
-                ToggleRow("Ctrl+T and Ctrl+W go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Readline's transpose and delete word")
-                Text("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
-            }
+            HardwareKeyboardPanel(vm)
 
             NotificationsSection(vm.notifier)
 
@@ -204,7 +202,15 @@ fun SettingsScreen(
     }
 }
 
-private val ACCENTS = listOf(0xE0A458, 0xD9776B, 0x7AD3C6, 0x8FB573, 0x89A7E0, 0xC79BD8)
+/** The accent choices with the names a screen reader gives them; the colour alone never tells them apart. */
+private val ACCENTS = listOf(
+    "Copper" to 0xE0A458,
+    "Coral" to 0xD9776B,
+    "Aqua" to 0x7AD3C6,
+    "Moss" to 0x8FB573,
+    "Periwinkle" to 0x89A7E0,
+    "Lilac" to 0xC79BD8,
+)
 
 private fun swipeLabel(gesture: TabSwipeGesture): String = when (gesture) {
     TabSwipeGesture.TWO_FINGER -> "Two-finger swipe"

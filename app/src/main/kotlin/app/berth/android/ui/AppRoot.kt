@@ -1,11 +1,6 @@
 package app.berth.android.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -42,6 +37,8 @@ import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import app.berth.android.security.LockState
 import app.berth.android.security.WindowSecurity
+import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.ConnectionAnnouncer
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -52,6 +49,9 @@ import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
+import app.berth.android.ui.keyboard.LocalWindowFocus
+import app.berth.android.ui.keyboard.WindowFocus
+import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.layout.LocalWindowLayout
 import app.berth.android.ui.layout.windowLayout
@@ -131,15 +131,20 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val theme by vm.interfaceTheme.collectAsState()
     val hapticLevel by vm.hapticLevel.collectAsState()
     val lock by vm.security.lock.state.collectAsState()
+    // Whether the keyboard's focus is anywhere in this window: the Stage keeps its own while a keyboard
+    // is attached, and this tells it a focus moved to the rail from one that was lost (spec A11).
+    val windowFocus = remember { WindowFocus() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel) {
-            Box(Modifier.fillMaxSize().background(Berth.colors.surface0)) {
+        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus) {
+            Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
                 // sheet and a running Stage are where they were when the lock lifts. While locked,
                 // the cover hides it in this window and the lock window (LockActivity) lies over
                 // both, since sheets, menus and prompts are windows of their own.
                 if (lock != LockState.UNKNOWN) BerthClipboardLocals(vm.security.clipboard) { Shell(vm) }
+                // Every login's state changes, spoken from one live region whatever screen is up (spec A11).
+                if (lock != LockState.UNKNOWN) ConnectionAnnouncer(vm.sessions, Modifier.align(Alignment.TopStart))
                 if (lock == LockState.LOCKED) LockCover()
             }
         }
@@ -243,13 +248,18 @@ private fun Shell(vm: AppViewModel) {
         )
     }
     val screens: @Composable () -> Unit = {
+        // A screen slides in a sixth of the way over its fade; under reduced motion the two screens crossfade (spec A7).
+        val screenIn = BerthMotion.screenIn()
+        val screenOut = BerthMotion.screenOut()
+        val fadeIn = BerthMotion.fadeInPlace()
+        val fadeOut = BerthMotion.fadeOutOfPlace()
         NavDisplay(
             backStack = backStack,
             onBack = { back() },
             entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
-            transitionSpec = { slideInHorizontally(tween(220)) { it / 6 } + fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
-            popTransitionSpec = { fadeIn(tween(160)) togetherWith slideOutHorizontally(tween(220)) { it / 6 } + fadeOut(tween(160)) },
-            predictivePopTransitionSpec = { fadeIn(tween(160)) togetherWith slideOutHorizontally(tween(220)) { it / 6 } + fadeOut(tween(160)) },
+            transitionSpec = { screenIn togetherWith fadeOut },
+            popTransitionSpec = { fadeIn togetherWith screenOut },
+            predictivePopTransitionSpec = { fadeIn togetherWith screenOut },
             entryProvider = { key ->
                 when (key) {
                     is Screen.Stage -> NavEntry(key) {

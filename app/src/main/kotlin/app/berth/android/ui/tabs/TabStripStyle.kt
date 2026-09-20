@@ -71,9 +71,10 @@ data class TabStripStyle(
     val trailingGap: Dp = 8.dp,
     /**
      * How far a tab's touch target reaches up into the status-bar inset above a flat toolbar, so a
-     * 40 dp row gives a 44 dp target (spec C3, Header row); the visual does not move.
+     * 40 dp row gives a 48 dp target (spec C3, Header row, at the accessibility pass's 48 dp floor
+     * rather than the spec's 44); the visual does not move. The header's fixed slots reach with it.
      */
-    val topReach: Dp = 4.dp,
+    val topReach: Dp = 8.dp,
     val tabHeight: Dp = 32.dp,
     /** Null follows `BerthRadius.key` (10 dp at the default scale). */
     val tabRadius: Dp? = null,

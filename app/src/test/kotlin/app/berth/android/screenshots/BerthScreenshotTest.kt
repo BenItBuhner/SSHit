@@ -27,11 +27,13 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ComposeHostRule
 import app.berth.android.R
 import app.berth.android.createBerthComposeRule
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -100,7 +102,6 @@ import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -158,10 +159,7 @@ class BerthScreenshotTest {
         graph = TestGraph(ApplicationProvider.getApplicationContext())
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
@@ -670,6 +668,9 @@ class BerthScreenshotTest {
         compose.onAllNodes(hasText("LINK   SHA256")).assertCountEquals(1)
         compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(other))).assertExists()
         compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(key))).assertExists()
+        // Each row is one item to a reader: the caption and its key in the same node, the LINK row as the offered row.
+        compose.onNode(hasText("OFFERED   ssh-ed25519 \u00B7 SHA256")).assert(hasText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(key))))
+        compose.onNode(hasText("LINK   SHA256")).assert(hasText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(other))))
         compose.onNodeWithText("Trust and connect anyway").assertExists()
         compose.onAllNodesWithText("Trust and connect").assertCountEquals(0)
         capture("prompt-trust-host-key-link-mismatch")
@@ -812,15 +813,17 @@ class BerthScreenshotTest {
         }
         assertEquals("berth tunnel ok", fetched)
 
-        // Pinned snippets are a Deck layer; tapping one types it into the shell.
-        repeat(4) { compose.onNode(hasContentDescription("Layer", substring = true)).performClick() }
+        // Pinned snippets are a Deck layer; tapping one types it into the shell. The layer key is the
+        // `Layer` button to a reader, in the state of the layer it is on.
+        repeat(4) { compose.onNode(hasContentDescription("Layer")).performClick() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("uptime")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Snippets")).assertExists()
         capture("stage-live-snippets-layer")
         compose.onNode(hasContentDescription("uptime")).performClick()
         settle(1_200)
         capture("stage-live-snippet-ran")
         // Back to Base (the fifth tap wraps), so the captures that follow show the Deck as a launch does, not the layer this test stepped to.
-        compose.onNode(hasContentDescription("Layer", substring = true)).performClick()
+        compose.onNode(hasContentDescription("Layer")).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("uptime")).fetchSemanticsNodes().isEmpty() }
 
         // The Session sheet sits behind the overflow now that the header row is the strip.

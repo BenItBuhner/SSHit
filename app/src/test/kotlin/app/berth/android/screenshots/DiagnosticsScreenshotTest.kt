@@ -9,6 +9,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -34,7 +36,6 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -58,8 +59,9 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * The crash sheet on the launch after a crash, Settings \u203A Diagnostics with its reports, and one
- * report open from the list, through Robolectric's native graphics. The crash is a real one through
+ * The crash sheet on the launch after a crash, Settings \u203A Diagnostics with its reports, one
+ * report open from the list and one whose file is gone, through Robolectric's native graphics; each
+ * capture is an accessibility audit as well ([captureAudited]). The crash is a real one through
  * the installed handler's path ([CrashReporter.onCrash]) into this graph's store, with Android's
  * own handler stood in for; the launch after is the graph's reporter re-reading the store.
  */
@@ -92,10 +94,7 @@ class DiagnosticsScreenshotTest {
         graph.close()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
@@ -234,6 +233,27 @@ class DiagnosticsScreenshotTest {
         compose.waitUntil(5_000) { graph.reports.reports.value.isEmpty() }
         compose.onNodeWithText("No reports.").assertIsDisplayed()
         assertTrue(graph.reportsDir.listFiles()!!.isEmpty())
+    }
+
+    /**
+     * A report whose file went from under the list (a storage cleaner, a full disk): the sheet says so and
+     * Share and Copy, which would send its text, are disabled; Delete stays. The capture is audited, so
+     * the two disabled buttons pass under the contrast check by being disabled controls (WCAG 1.4.3's
+     * inactive-component exemption, [captureAudited]), the way the Deck's keys do on a Stage not connected.
+     */
+    @Test
+    fun `a report that cannot be read has Share and Copy disabled, and the audit reads them as disabled controls`() {
+        seedReports()
+        val crash = graph.reports.reports.value.first { it.kind == ReportKind.CRASH }
+        assertTrue(crash.file.delete())
+        themed { DiagnosticsScreen(graph.reports, onBack = {}) }
+        compose.onNodeWithText("Uncaught exception on thread main").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("The report could not be read.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Share report").assertIsNotEnabled()
+        compose.onNodeWithText("Copy report").assertIsNotEnabled()
+        compose.onNodeWithText("Delete").assertIsEnabled()
+        settle(300)
+        capture("diagnostics-report-unreadable")
     }
 
     // ---- fixtures ---------------------------------------------------------------------------------

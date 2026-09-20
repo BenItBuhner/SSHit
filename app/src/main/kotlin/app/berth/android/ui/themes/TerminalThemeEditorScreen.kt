@@ -3,11 +3,12 @@ package app.berth.android.ui.themes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,8 +16,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +25,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,10 +39,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.bleedInto
+import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
@@ -203,7 +209,7 @@ fun TerminalThemeEditorScreen(
                 if (target != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Tap the preview to sample a colour for ${target.title.lowercase()}", style = BerthType.caption, color = c.accent, modifier = Modifier.weight(1f))
-                        BerthButton("Cancel", onClick = { sampling = null }, kind = ButtonKind.TEXT, modifier = Modifier.height(32.dp))
+                        BerthButton("Cancel", onClick = { sampling = null }, kind = ButtonKind.TEXT, fillHeight = 32.dp)
                     }
                 }
                 Box(
@@ -230,20 +236,27 @@ fun TerminalThemeEditorScreen(
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionLabel("ANSI palette", Modifier.padding(start = 4.dp))
-                // Eight equal cells with a fixed gap; the swatch fills its cell up to 40 dp, so the
-                // row keeps its rhythm from 320 dp phones to tablets instead of drifting apart.
-                for (rowStart in listOf(0, 8)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (i in rowStart until rowStart + 8) {
-                            val slot = ThemeSlot.Ansi(i)
-                            Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
-                                PaletteSwatch(
-                                    rgb = draft.ansi[i],
-                                    label = i.toString(),
-                                    title = slot.title,
-                                    selected = editing == slot || sampling == slot,
-                                    onClick = { editing = slot },
-                                )
+                // Equal cells, each at least a 48 dp target with the 40 dp swatch centred, so no two
+                // swatches share a target: eight to a row (the normal eight over the bright eight)
+                // where eight targets fit once the rows take 4 dp of target from either margin, the
+                // swatches themselves staying on the margin line; four to a row on a narrower phone.
+                BoxWithConstraints(Modifier.fillMaxWidth().bleedInto(4.dp)) {
+                    val perRow = if (maxWidth >= TouchTargetSize * 8) 8 else 4
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (rowStart in 0 until 16 step perRow) {
+                            Row(Modifier.fillMaxWidth()) {
+                                for (i in rowStart until rowStart + perRow) {
+                                    val slot = ThemeSlot.Ansi(i)
+                                    Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                                        PaletteSwatch(
+                                            rgb = draft.ansi[i],
+                                            label = i.toString(),
+                                            title = slot.title,
+                                            selected = editing == slot || sampling == slot,
+                                            onClick = { editing = slot },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -317,25 +330,30 @@ fun TerminalThemeEditorScreen(
 }
 
 /**
- * One ANSI swatch with its index beneath: a square up to 40 dp that fills its cell, the colour at
- * `swatch` radius inside a 2 dp step that turns surface.4 when selected (`swatch + 2`, concentric).
+ * One ANSI swatch with its index beneath: a 40 dp square, the colour at `swatch` radius inside a
+ * 2 dp step that turns surface.4 when selected (`swatch + 2`, concentric), centred in a 48 dp
+ * target. To a screen reader it is a radio button named for its slot and its hex, `Red #d9776b`.
  */
 @Composable
 private fun PaletteSwatch(rgb: Int, label: String, title: String, selected: Boolean, onClick: () -> Unit) {
     val c = Berth.colors
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
-                .fillMaxWidth()
-                .widthIn(max = 40.dp)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(BerthRadius.swatch + 2.dp))
-                .background(if (selected) c.surface4 else Color.Transparent)
-                .clickable(onClick = onClick)
+                .selectable(selected = selected, role = Role.RadioButton, indication = null, interactionSource = remember { MutableInteractionSource() }, onClick = onClick)
                 .semantics { contentDescription = "$title ${HexColorSerializer.toHex(rgb)}" }
-                .padding(2.dp),
+                .touchTarget(),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(BerthRadius.swatch)).background(rgb.toColor()))
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(BerthRadius.swatch + 2.dp))
+                    .background(if (selected) c.surface4 else Color.Transparent)
+                    .padding(2.dp),
+            ) {
+                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(BerthRadius.swatch)).background(rgb.toColor()))
+            }
         }
         Text(label, style = BerthType.caption, color = if (selected) c.text1 else c.text3)
     }
@@ -387,10 +405,17 @@ private fun ColourSheet(
         else -> "low"
     }
 
-    BerthSheet(onDismiss = onDismiss, scrimColor = c.scrim) {
+    BerthSheet(
+        onDismiss = onDismiss,
+        // Opens at its full height: its actions are at the bottom, and a half-open sheet would cut
+        // them off (the audit's touch-target check saw a 29 dp Done). It scrolls on a short screen.
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        scrimColor = c.scrim,
+    ) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = BerthSpace.screenMargin)
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),

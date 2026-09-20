@@ -21,14 +21,18 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
@@ -209,8 +213,10 @@ private fun HostRow(
  * Quick connect (spec C11): a `user@host:port` field in Mono, the identity to log in with, Connect;
  * the login opens as an unsaved host. What stops a spec is said under the field in the parser's
  * words, the same ones a link's notice uses. With [fromLink] the sheet is where a plain `ssh://`
- * link no saved host answers to lands (spec, Deep links): the field holds the link's address, the
- * title says why the sheet is up, and a fingerprint the link carried goes to the trust sheet.
+ * link no saved host answers to lands (spec, Deep links): the field holds the link's address with
+ * the caret after it and takes focus as the sheet opens, so a keyboard adds a port or presses
+ * Enter without first reaching for the field; the title says why the sheet is up, and a
+ * fingerprint the link carried goes to the trust sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -218,13 +224,14 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
     val initialSpec = fromLink?.spec
-    var spec by remember { mutableStateOf(initialSpec ?: "") }
+    var spec by remember { mutableStateOf(TextFieldValue(initialSpec ?: "", TextRange(initialSpec?.length ?: 0))) }
     var identityId by remember { mutableStateOf<String?>(null) }
     var pickIdentity by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
     fun connect() {
-        if (spec.isBlank()) return
-        val problem = vm.quickConnect(spec, identityId, fromLink = fromLink)
+        if (spec.text.isBlank()) return
+        val problem = vm.quickConnect(spec.text, identityId, fromLink = fromLink)
         if (problem == null) onConnected() else error = problem
     }
     BerthSheet(onDismiss = onDismiss) {
@@ -245,7 +252,10 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
                 helper = error,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go, autoCorrectEnabled = false),
                 keyboardActions = KeyboardActions(onGo = { connect() }),
+                focusRequester = focus,
             )
+            // Inside the sheet's own composition, so the field is attached in the sheet window by the time this runs.
+            if (initialSpec != null) LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
             Box {
                 PickerRow(
                     title = "Identity",
@@ -260,7 +270,7 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BerthButton("Connect", onClick = ::connect, kind = ButtonKind.PRIMARY, enabled = spec.isNotBlank())
+                BerthButton("Connect", onClick = ::connect, kind = ButtonKind.PRIMARY, enabled = spec.text.isNotBlank())
             }
         }
     }

@@ -57,6 +57,8 @@ import app.berth.android.session.TunnelStatus
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.Tunnel
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.a11y.showsFocus
+import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -168,12 +170,13 @@ private fun SwitcherChip(entry: StripEntry.Chip, style: TabStripStyle, actions: 
     val tint = group.color.rgb.toColor()
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    val focused = interaction.showsFocus()
     val attention by rememberGroupAttention(entry.tabs, enabled = group.collapsed).collectAsState(initial = false)
     val label = chipLabel(group, entry.tabs.size, style)
+    // The pill keeps its size; the box around it that takes the tap is a full target.
     Box(Modifier.fillMaxWidth().padding(top = if (entry.groupIndex == 0) 0.dp else 8.dp), contentAlignment = Alignment.CenterStart) {
         Box(
             Modifier
-                .clip(resolved.chipShape)
                 .combinedClickable(
                     interactionSource = interaction,
                     indication = null,
@@ -184,9 +187,13 @@ private fun SwitcherChip(entry: StripEntry.Chip, style: TabStripStyle, actions: 
                     role = Role.Button
                     contentDescription = "Group ${group.name}, ${entry.tabs.size} tabs" + if (group.collapsed) ", collapsed" else ""
                     onLongClick { onMenu(true); true }
-                },
+                }
+                .touchTarget(),
+            contentAlignment = Alignment.Center,
         ) {
-            ChipPill(label = label, tint = tint, attention = attention, pressed = pressed, style = resolved)
+            Box(Modifier.clip(resolved.chipShape)) {
+                ChipPill(label = label, tint = tint, attention = attention, pressed = pressed || focused, style = resolved)
+            }
         }
         GroupMenu(expanded = expanded, group = group, actions = actions, onDismiss = { onMenu(false) })
     }
@@ -220,9 +227,12 @@ private fun TabCard(
     val host = record.hostSnapshot
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    // The keyboard's focus: the card one tonal step up from wherever it rests, active or not.
+    val focused = interaction.showsFocus()
     val fill = when {
         pressed -> c.surface4
-        active -> c.surface3
+        active -> if (focused) c.surface4 else c.surface3
+        focused -> c.surface3
         else -> c.surface2
     }
     val theme = remember(host, group?.id, vm) { vm.themeFor(host, group?.id) }

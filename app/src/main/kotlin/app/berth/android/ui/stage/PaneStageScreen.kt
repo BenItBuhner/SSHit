@@ -5,7 +5,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +76,12 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.keyboard.LocalPaneActions
+import app.berth.android.ui.keyboard.PaneActions
+import app.berth.android.ui.keyboard.StageFocus
+import app.berth.android.ui.keyboard.StageRegion
+import app.berth.android.ui.keyboard.rememberStageFocus
+import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabCarry
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.TabActions
@@ -93,8 +98,11 @@ import kotlin.math.roundToInt
 /** The gap between the panes (spec C23): 12 dp, draggable, no line. */
 private val PaneGap = 12.dp
 
-/** How far past the gap the divider answers a finger, each side (spec A11: targets of 44). */
-private val DividerReach = 16.dp
+/**
+ * How far past the gap the divider answers a finger, each side: the 48 dp target every control has
+ * (spec A11). The band lies under the panes' own controls, not over them ([paneDividerDrag]).
+ */
+private val DividerReach = 18.dp
 
 /** The least a pane can be: enough for a 40-column terminal at the default size, or a Files row. */
 private val MinPaneWidth = 240.dp
@@ -121,6 +129,13 @@ private const val DividerRestAlpha = 0.4f
  * tab's body are the Stage's own, composed through [StageBodies.TabBody]; this only decides where
  * the bodies go and who has the keys. The panes own the window's bottom insets, so a body that
  * pads for the navigation bar itself (Files, Tunnels) pads for nothing inside one.
+ *
+ * A hardware keyboard reaches the panes the way a finger does (spec A11, C22): Ctrl+Shift+D is
+ * Overflow's Split or Unsplit, Ctrl+Shift+O puts the focus in the other pane, and a focus that
+ * lands in the unfocused pane by any route, Tab or the D-pad out of a header or a Files row as
+ * much as the chord, is a focus change like a touch there: the pane model hears of it, so the
+ * header's ×, the Deck under both panes and the canvas the keys go to never disagree. Both panes
+ * are the Stage's body region, entered on the focused one.
  */
 @Composable
 fun PaneStageScreen(
@@ -136,10 +151,10 @@ fun PaneStageScreen(
     val panes by vm.panes.collectAsState()
     val carry = remember { TabCarry() }
     val tools = remember { HashMap<String, StageTools>() }
-    val focus = remember { HashMap<String, FocusRequester>() }
+    val requesters = remember { HashMap<String, FocusRequester>() }
     val chrome = remember { HashMap<String, StageChromeHost>() }
     fun toolsFor(id: String) = tools.getOrPut(id) { StageTools() }
-    fun focusFor(id: String) = focus.getOrPut(id) { FocusRequester() }
+    fun focusFor(id: String) = requesters.getOrPut(id) { FocusRequester() }
     fun chromeFor(id: String) = chrome.getOrPut(id) { StageChromeHost() }
 
     // Both panes are in view while this layer is up: the companion is on stage too (its bells stay quiet).
@@ -153,25 +168,57 @@ fun PaneStageScreen(
         carry.activeId = active?.id
         // A tab's tools, focus and chrome live as long as it is in view.
         tools.keys.retainAll(shown)
-        focus.keys.retainAll(shown)
+        requesters.keys.retainAll(shown)
         chrome.keys.retainAll(shown)
     }
     // The keys follow the focused pane (a header tap, a drop, the strip, a pane closing) when a body in
     // this layer holds them: the focused body says so through [tracking], and the word stands over the
     // body's own removal, since a body that moves between the panes and the single slot is composed anew.
-    // Nothing here takes the keys from nowhere: as on a phone, a terminal is first focused by a tap.
+    // Nothing here takes the keys from nowhere: as on a phone, a terminal is first focused by a tap,
+    // or asked for by the chord ([keysAskedFor]), which is the one route that puts them where none were.
     var keysIn by remember { mutableStateOf<String?>(null) }
+    var keysAskedFor by remember { mutableStateOf<String?>(null) }
     fun tracking(id: String) = Modifier.onFocusChanged { if (it.hasFocus) keysIn = id else if (keysIn == id) keysIn = null }
     val focusedId = panes?.focusedTab?.id ?: active?.id
-    LaunchedEffect(focusedId, panes != null) {
+    val focus = rememberStageFocus()
+    LaunchedEffect(focusedId, panes != null, keysAskedFor) {
         val id = focusedId ?: return@LaunchedEffect
-        if (keysIn == null) return@LaunchedEffect
-        runCatching { focusFor(id).requestFocus() }
+        // The chord names the tab it wants the keys in, so the frame before the pane model has caught up
+        // with it (its flows run a frame behind the call) cannot spend the request on the pane leaving.
+        val asked = keysAskedFor == id
+        if (asked) keysAskedFor = null
+        if (keysIn == null && !asked) return@LaunchedEffect
+        // The keys already in the focused pane's body, and held there: a focus that landed in this pane
+        // moved the model (below), not the reverse, and it stays on the row it landed on.
+        if (keysIn == id && !asked && focus.region == StageRegion.Body) return@LaunchedEffect
+        // The body's region is entered on the focused pane: its terminal, or the first row of a Files or
+        // Tunnels pane, which the pane's own requester (the terminal's) could not reach.
+        if (!focus.focus(StageRegion.Body)) runCatching { focusFor(id).requestFocus() }
     }
+    // A focus that lands in the unfocused pane, by Tab or the D-pad out of a header or a row, or by
+    // the chord, is a touch on that pane as far as the pane model is concerned: the same route a
+    // header tap takes ([PaneLayer]'s onFocus), so the header's ×, the Deck and the keys agree.
+    LaunchedEffect(keysIn) {
+        val id = keysIn ?: return@LaunchedEffect
+        val two = panes ?: return@LaunchedEffect
+        if (id != two.focusedTab.id && two.sideOf(id) != null) vm.setActive(id)
+    }
+    // Ctrl+Shift+D and Ctrl+Shift+O (spec C22), for the Stage's chord dispatcher.
+    val onSplit: (() -> Unit)? = if (panes == null && active != null) actions::splitActive else null
+    val onUnsplit: (() -> Unit)? = panes?.let { p -> { actions.closePane(p.focused.other) } }
+    val paneActions = PaneActions(
+        split = onSplit ?: onUnsplit,
+        focusOtherPane = panes?.let { p ->
+            {
+                keysAskedFor = p.otherTab.id
+                vm.setActive(p.otherTab.id)
+            }
+        },
+    )
 
     val idle = remember { StageTools() }
     val activeTools = active?.let { toolsFor(it.id) } ?: idle
-    CompositionLocalProvider(LocalTabCarry provides carry) {
+    CompositionLocalProvider(LocalTabCarry provides carry, LocalPaneActions provides paneActions) {
         StageScreen(
             vm = vm,
             tab = active,
@@ -182,21 +229,28 @@ fun PaneStageScreen(
             modifier = modifier,
             onOpenDeckEditor = onOpenDeckEditor,
             tools = activeTools,
-            onSplit = if (panes == null && active != null) actions::splitActive else null,
-            onUnsplit = panes?.let { p -> { actions.closePane(p.focused.other) } },
+            onSplit = onSplit,
+            onUnsplit = onUnsplit,
+            focus = focus,
             layer = { tab, body ->
                 val two = panes
                 if (two == null || two.sideOf(tab.id) == null) {
                     // One tab on the Stage: its body fills the width, the chrome where the body puts it, and
                     // the body's halves take a tab from the strip, which splits the Stage (spec C23).
                     SplitTargets(carry, modifier = body) {
-                        TabBody(tab, toolsFor(tab.id), Modifier.fillMaxSize().then(tracking(tab.id)), focusRequester = focusFor(tab.id))
+                        TabBody(
+                            tab,
+                            toolsFor(tab.id),
+                            Modifier.fillMaxSize().then(tracking(tab.id)).stageRegion(focus, StageRegion.Body),
+                            focusRequester = focusFor(tab.id),
+                        )
                     }
                 } else {
                     PaneLayer(
                         panes = two,
                         bodies = this,
                         carry = carry,
+                        focus = focus,
                         toolsFor = ::toolsFor,
                         focusFor = ::focusFor,
                         chromeFor = ::chromeFor,
@@ -223,6 +277,7 @@ private fun PaneLayer(
     panes: Panes,
     bodies: StageBodies,
     carry: TabCarry,
+    focus: StageFocus,
     toolsFor: (String) -> StageTools,
     focusFor: (String) -> FocusRequester,
     chromeFor: (String) -> StageChromeHost,
@@ -256,6 +311,10 @@ private fun PaneLayer(
     DisposableEffect(carry) { onDispose { carry.bounds = emptyMap() } }
 
     val bottomInsets = WindowInsets.navigationBars.union(WindowInsets.ime)
+    val usable = (rowWidthPx - gapPx).coerceAtLeast(0f)
+    val leftPx = (usable * clampFraction(fraction)).roundToInt()
+    val leftWidth = with(density) { leftPx.toDp() }
+    val bandReachPx = with(density) { (DividerReach + PaneGap / 2).toPx() }
     Column(modifier.onGloballyPositioned { layerOrigin = it.positionInRoot() }) {
         Box(
             Modifier
@@ -263,11 +322,20 @@ private fun PaneLayer(
                 .fillMaxWidth()
                 .onGloballyPositioned { rowWidthPx = it.size.width }
                 // The panes own the window's bottom insets (paid once below both), so no body pads for them.
-                .consumeWindowInsets(bottomInsets),
+                .consumeWindowInsets(bottomInsets)
+                // The divider's 48 dp band is the container's gesture, under the panes' own (see
+                // [paneDividerDrag]): a control at a pane's inner edge keeps its whole target.
+                .paneDividerDrag(
+                    centre = leftPx + gapPx / 2,
+                    reach = bandReachPx,
+                    onDragStart = { dragging = true },
+                    onDrag = { dx -> if (usable > 0f) fraction = clampFraction(fraction + dx / usable) },
+                    onDragEnd = {
+                        dragging = false
+                        fraction = snap(fraction)
+                    },
+                ),
         ) {
-            val usable = (rowWidthPx - gapPx).coerceAtLeast(0f)
-            val leftPx = (usable * clampFraction(fraction)).roundToInt()
-            val leftWidth = with(density) { leftPx.toDp() }
             Row(Modifier.fillMaxSize()) {
                 Pane(
                     side = PaneSide.LEFT,
@@ -275,6 +343,7 @@ private fun PaneLayer(
                     focused = panes.focused == PaneSide.LEFT,
                     dropTarget = carry.target == PaneSide.LEFT,
                     bodies = bodies,
+                    focus = focus,
                     tools = toolsFor(panes.left.id),
                     focusRequester = focusFor(panes.left.id),
                     chrome = chromeFor(panes.left.id),
@@ -291,6 +360,7 @@ private fun PaneLayer(
                     focused = panes.focused == PaneSide.RIGHT,
                     dropTarget = carry.target == PaneSide.RIGHT,
                     bodies = bodies,
+                    focus = focus,
                     tools = toolsFor(panes.right.id),
                     focusRequester = focusFor(panes.right.id),
                     chrome = chromeFor(panes.right.id),
@@ -304,18 +374,11 @@ private fun PaneLayer(
             Divider(
                 dragging = dragging,
                 fraction = clampFraction(fraction),
-                onDragStart = { dragging = true },
-                onDrag = { dx -> if (usable > 0f) fraction = clampFraction(fraction + dx / usable) },
-                onDragEnd = {
-                    dragging = false
-                    fraction = snap(fraction)
-                },
                 onStep = { dir -> fraction = clampFraction(fraction + dir * 0.1f) },
                 modifier = Modifier
-                    .offset { IntOffset(leftPx + (gapPx / 2).roundToInt() - (DividerReach + PaneGap / 2).roundToPx(), 0) }
-                    .width(PaneGap + DividerReach * 2)
-                    .fillMaxHeight()
-                    .zIndex(1f),
+                    .offset { IntOffset(leftPx, 0) }
+                    .width(PaneGap)
+                    .fillMaxHeight(),
             )
             CarryOverlay(carry, layerOrigin)
         }
@@ -334,8 +397,11 @@ private fun PaneLayer(
  * One pane: the header (the tab's swatch and title, the age of a detached frame, and × on the
  * focused pane to close the pane) over the tab's body. A touch in the unfocused pane focuses it,
  * seen on the way down and consumed by nobody, so the body's own gestures are untouched; the
- * focused pane's touches are its own, since a scroll in it has nothing to say to the manager.
- * While a tab is carried over it the pane's surface steps up to say it will take the drop.
+ * focused pane's touches are its own, since a scroll in it has nothing to say to the manager. The
+ * [DividerReach] along the pane's inner edge is the divider's band and says nothing on its own.
+ * While a tab is carried over it the pane's surface steps up to say it will take the drop. To the
+ * keyboard the pane, header and all, is the Stage's body region ([StageRegion.Body]), and the
+ * focused pane's body is where a chord into the region lands (spec A11).
  */
 @Composable
 private fun Pane(
@@ -344,6 +410,7 @@ private fun Pane(
     focused: Boolean,
     dropTarget: Boolean,
     bodies: StageBodies,
+    focus: StageFocus,
     tools: StageTools,
     focusRequester: FocusRequester,
     chrome: StageChromeHost,
@@ -365,16 +432,21 @@ private fun Pane(
             .onGloballyPositioned { onBounds(it.boundsInRoot()) }
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(fill)
-            .pointerInput(Unit) {
+            .pointerInput(side) {
+                val reach = DividerReach.toPx()
                 awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    if (!hasFocus) touched()
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    // A touch in the divider's band is a hand on the divider first ([paneDividerDrag]), not a
+                    // word on which pane has the keys; what it lands on there takes them if it takes focus.
+                    val inBand = if (side == PaneSide.LEFT) down.position.x > size.width - reach else down.position.x < reach
+                    if (!hasFocus && !inBand) touched()
                 }
             }
             .semantics {
                 contentDescription = "${record.displayTitle}, $sideName pane"
                 stateDescription = if (focused) "Focused" else "Not focused"
-            },
+            }
+            .stageRegion(focus, StageRegion.Body, entry = false),
     ) {
         PaneHeader(
             title = record.displayTitle.ifBlank { host.name },
@@ -389,7 +461,7 @@ private fun Pane(
         bodies.TabBody(
             tab = tab,
             tools = tools,
-            modifier = Modifier.weight(1f).fillMaxWidth().then(tracking),
+            modifier = Modifier.weight(1f).fillMaxWidth().then(tracking).stageRegion(focus, StageRegion.Body, entry = focused),
             chrome = chrome,
             focusRequester = focusRequester,
             lendsOverflow = focused,
@@ -402,7 +474,10 @@ private fun Pane(
  * of a detached frame in Caption, and on the focused pane the × that closes the pane (the tab
  * stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
  * height is the strip's (spec C3), so on a phone on its side it shortens with the strip rather than
- * standing taller than the window's own header and costing each pane rows.
+ * standing taller than the window's own header and costing each pane rows. The × is a 48 dp
+ * target on a 40 dp row, so its box reaches 4 dp over the body's top edge, as the strip's own
+ * controls reach over the body on a phone (spec A11); the header stands over the body for it, or
+ * a Tunnels or Files row flush under the header would take that band and leave the × 44 dp.
  */
 @Composable
 private fun PaneHeader(
@@ -420,6 +495,7 @@ private fun PaneHeader(
         Modifier
             .fillMaxWidth()
             .height(LocalTabStripStyle.current.height)
+            .zIndex(1f)
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -446,19 +522,17 @@ private fun PaneHeader(
 }
 
 /**
- * The gap between the panes, draggable (spec C23): a 4 × 24 pill in `text.3` centred in the gap,
- * resting at [DividerRestAlpha] so two same-theme terminals still show where the boundary is and
- * that it moves (a grip, not a line), full while a finger holds it. The touch area reaches
- * [DividerReach] over each pane's edge, so a 12 dp gap answers a 44 dp target. TalkBack moves it
- * in tenths.
+ * The gap between the panes (spec C23): a 4 × 24 pill in `text.3` centred in it, resting at
+ * [DividerRestAlpha] so two same-theme terminals still show where the boundary is and that it
+ * moves (a grip, not a line), full while a finger holds it. The finger's drag is the container's
+ * ([paneDividerDrag]), reaching [DividerReach] over each pane's edge so the 12 dp gap answers a 48 dp
+ * target without lying over either pane; this is the gap alone, what a reader lands on between the
+ * panes and moves in tenths.
  */
 @Composable
 private fun Divider(
     dragging: Boolean,
     fraction: Float,
-    onDragStart: () -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
     onStep: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -466,17 +540,6 @@ private fun Divider(
     val percent = (fraction * 100).roundToInt()
     Box(
         modifier
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { onDragStart() },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragEnd,
-                    onHorizontalDrag = { change, dx ->
-                        change.consume()
-                        onDrag(dx)
-                    },
-                )
-            }
             .semantics {
                 contentDescription = "Divider between the panes"
                 stateDescription = "Left pane $percent percent"

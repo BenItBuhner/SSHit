@@ -35,13 +35,14 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import app.berth.android.R
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.a11y.TerminalAccessibility
+import app.berth.android.ui.a11y.terminalAccessibility
+import app.berth.android.ui.a11y.terminalFontScale
 import app.berth.android.ui.theme.Berth
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
@@ -154,12 +155,16 @@ object TerminalPaintsCache {
     private const val CAPACITY = 12
 }
 
-/** The cached [TerminalPaints] for [font] at the current density. */
+/**
+ * The cached [TerminalPaints] for [font] at the current density and the terminal's own scale: 1,
+ * or the system's font scale when the font follows it (spec A11).
+ */
 @Composable
 fun rememberTerminalPaints(font: TerminalFont): TerminalPaints {
     val context = LocalContext.current
-    val density = LocalDensity.current
-    return remember(font, density.density, density.fontScale) { TerminalPaintsCache.get(context, font, density.density, density.fontScale) }
+    val density = LocalDensity.current.density
+    val scale = terminalFontScale(font)
+    return remember(font, density, scale) { TerminalPaintsCache.get(context, font, density, scale) }
 }
 
 /** How far the view is scrolled into history, in lines; 0 is the live screen. */
@@ -215,6 +220,8 @@ fun TerminalCanvas(
     selection: TerminalSelection? = null,
     search: TerminalSearch? = null,
     onSelectionStarted: () -> Unit = {},
+    /** The screen reader's view of the screen; the Stage shares it with the live region beside the canvas. */
+    accessibility: TerminalAccessibility = remember(session.id) { TerminalAccessibility() },
 ) {
     val density = LocalDensity.current
     val paints = rememberTerminalPaints(font)
@@ -265,6 +272,7 @@ fun TerminalCanvas(
             .collect { (version, wanted) ->
                 val used = withContext(Dispatchers.Default) { frames.back.capture(emulator, wanted, version) }
                 frames.swap()
+                accessibility.onFrame(frames.front)
                 if (used != wanted) viewport.scrollOffset = used
                 currentSelection?.dropIfStale(emulator)
                 frameTick++
@@ -298,7 +306,7 @@ fun TerminalCanvas(
     Canvas(
         modifier
             .fillMaxSize()
-            .semantics { contentDescription = "Terminal" }
+            .terminalAccessibility(accessibility)
             .onSizeChanged { canvasSize = it }
             .terminalInput(sink)
             .focusRequester(focusRequester)

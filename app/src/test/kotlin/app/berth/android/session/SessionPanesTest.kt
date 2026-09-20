@@ -13,8 +13,10 @@ import app.berth.domain.model.Workspace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -84,6 +86,35 @@ class SessionPanesTest {
         assertEquals("s-pihole", graph.sessions.activeTabId.value)
         assertEquals(Split("s-homelab", PaneSide.RIGHT), graph.sessions.split.value)
         awaitPanes(left = "s-homelab", right = "s-pihole", focused = PaneSide.RIGHT)
+    }
+
+    /**
+     * [SessionManager.panes] steps from one consistent pair to the next. The active id and the
+     * split are two writes, and the frame between them, in which the active tab is its own
+     * companion, is never a value: let out, the Stage would lay one tab out in both panes and fall
+     * over on the tab's one saved state. Whether that frame is seen is a matter of which thread runs
+     * first, so a drop, a trade and a close run many times over with every value collected.
+     */
+    @Test
+    fun `panes never holds one tab on both sides, whichever of a split's two writes is seen first`() {
+        val seen = ArrayList<Panes>()
+        val collector = graph.sessions.scope.launch {
+            graph.sessions.panes.collect { p -> if (p != null) synchronized(seen) { seen += p } }
+        }
+        runBlocking {
+            repeat(200) {
+                graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+                panesWhere { it != null && it.focused == PaneSide.RIGHT && it.right.id == "s-pihole" }
+                graph.sessions.setActive("s-homelab")
+                panesWhere { it != null && it.focused == PaneSide.LEFT && it.left.id == "s-homelab" }
+                graph.sessions.closePane(PaneSide.RIGHT)
+                panesWhere { it == null }
+            }
+        }
+        collector.cancel()
+        val twice = synchronized(seen) { seen.filter { it.left.id == it.right.id } }
+        assertTrue("panes with one tab on both sides: $twice", twice.isEmpty())
+        assertTrue("the pairs were seen", synchronized(seen) { seen.isNotEmpty() })
     }
 
     @Test
@@ -359,6 +390,9 @@ class SessionPanesTest {
             if (left == null) panes == null else panes != null && panes.left.id == left && panes.right.id == right && panes.focused == focused
         }
     }
+
+    /** The first value of [SessionManager.panes] the predicate takes, within the same patience as [await]. */
+    private suspend fun panesWhere(predicate: (Panes?) -> Boolean): Panes? = withTimeout(5_000) { graph.sessions.panes.first(predicate) }
 
     private fun await(what: String, condition: () -> Boolean) = runBlocking {
         val deadline = System.currentTimeMillis() + 5_000

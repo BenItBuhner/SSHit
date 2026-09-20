@@ -34,8 +34,10 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -134,10 +136,11 @@ fun GroupEditorSheet(
                 keyboardActions = KeyboardActions(onDone = { commit() }),
             )
             Text("Colour".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // The options' 48 dp targets set the pitch; the swatches inside them sit 12 dp apart.
+            Row(Modifier.fillMaxWidth()) {
                 for (swatch in SwatchColor.entries.take(6)) SwatchOption(swatch, previewColor == swatch) { color = swatch; touchedColor = true; if (group != null) onRecolor(swatch) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth()) {
                 for (swatch in SwatchColor.entries.drop(6)) SwatchOption(swatch, previewColor == swatch) { color = swatch; touchedColor = true; if (group != null) onRecolor(swatch) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -148,27 +151,8 @@ fun GroupEditorSheet(
     }
 }
 
+/** The group's colour as a [ColorOption]: named for a screen reader, in a 48 dp target. */
 @Composable
 private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (selected) c.surface4 else c.surface2)
-            .clickable(onClick = onClick)
-            .semantics {
-                role = Role.RadioButton
-                this.selected = selected
-                contentDescription = swatch.name.lowercase().replaceFirstChar { it.uppercase() }
-            }
-            .padding(4.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(4.dp))
-                .background(swatch.rgb.toColor()),
-        )
-    }
+    ColorOption(color = swatch.rgb.toColor(), name = swatch.spokenName(), selected = selected, onClick = onClick)
 }

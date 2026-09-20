@@ -367,7 +367,11 @@ data class InterfaceTheme(
     }
 }
 
-/** Terminal font settings; bundled families are referenced by name, imported ones by file. */
+/**
+ * Terminal font settings; bundled families are referenced by name, imported ones by file. The
+ * terminal's size is its own, independent of the system's font size (spec A11: the interface
+ * follows the system scale, the terminal does not), unless [followSystemScale] has it follow too.
+ */
 @Serializable
 data class TerminalFont(
     val family: String = "JetBrains Mono",
@@ -378,6 +382,7 @@ data class TerminalFont(
     val boldAsBright: Boolean = false,
     val cursorShape: String = "block",
     val cursorBlink: Boolean = false,
+    val followSystemScale: Boolean = false,
 ) {
     companion object {
         const val MIN_SIZE_SP = 9
