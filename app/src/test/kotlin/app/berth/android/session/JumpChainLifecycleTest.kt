@@ -145,12 +145,14 @@ class JumpChainLifecycleTest {
         val first = awaitValue(20_000, "the bastion's trust prompt") { graph.prompts.current.value as? Prompt.TrustHostKey }
         assertEquals("the first key asked about is the bastion's", bastion.id, first.host.id)
         assertEquals(jumpPort, first.request.port)
+        assertEquals("the hop's prompt knows it is one, and where the chain is going", HopRole(0, 1, target), first.via)
         assertEquals(SessionState.CONNECTING, session.state)
         await(5_000, "the pill names the hop") { session.via.value == "via bastion" }
         first.trust()
 
         val second = awaitValue(20_000, "the target's trust prompt") { (graph.prompts.current.value as? Prompt.TrustHostKey)?.takeIf { it.host.id == target.id } }
         assertEquals("the target's key is offered for the target's own port, not the bastion's", sshPort, second.request.port)
+        assertNull("the target is no hop", second.via)
         second.trust()
 
         await(45_000, "session live") { session.state == SessionState.LIVE }

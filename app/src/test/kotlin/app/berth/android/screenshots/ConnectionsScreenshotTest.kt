@@ -365,11 +365,16 @@ class ConnectionsScreenshotTest {
             waitFor("the bastion's trust prompt", 20_000, tunnels) { (graph.prompts.current.value as? Prompt.TrustHostKey)?.host?.id == "bastion" }
             waitFor("via bastion", 5_000, tunnels) { tunnels.via.value == "via bastion" }
             waitForText("Connecting via bastion\u2026", 5_000, tunnels)
+            // The sheet is the hop's: it says so, names the host beside its endpoint, and says where the chain is going.
+            compose.onNodeWithText("Berth has not seen this jump host before. It is hop 1 of 1 on the way to prod-db.").assertExists()
+            compose.onNodeWithText("bastion").assertExists()
             compose.onNodeWithText("$sshUser@$sshHost:$jumpPort").assertExists()
             settle(500)
             capture("stage-jump-trust-sheet")
             compose.onNodeWithText("Trust and connect").performClick()
             waitFor("the target's trust prompt", 20_000, tunnels) { (graph.prompts.current.value as? Prompt.TrustHostKey)?.host?.id == "target" }
+            compose.onNodeWithText("Berth has not seen this server before.").assertExists()
+            compose.onNodeWithText("prod-db").assertExists()
             compose.onNodeWithText("Trust and connect").performClick()
             waitFor("the Tunnels tab Live", 45_000, tunnels) { tunnels.state == SessionState.LIVE }
             waitFor("both forwards up", 15_000, tunnels) { tunnels.tunnels.value.values.count { it is TunnelStatus.Up } == 2 }

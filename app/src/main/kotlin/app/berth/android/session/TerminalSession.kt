@@ -69,6 +69,12 @@ import java.util.Locale
 interface SessionEnvironment {
     suspend fun authFor(host: Host): List<SshAuth>
     fun hostKeyPolicyFor(host: Host): HostKeyPolicy
+
+    /**
+     * The policy for [host] as a jump host of another login ([via]), so what it asks the user
+     * says which hop it is and where the chain is going. The plain policy unless overridden.
+     */
+    fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = hostKeyPolicyFor(host)
     val networkAvailable: Flow<Unit>
 
     /**
@@ -615,7 +621,7 @@ class TerminalSession(
         // Hops first, in the order they are made, so their prompts come in that order too.
         val chain = env.jumpHostsFor(h)
         chainHosts = chain
-        val hops = chain.map { hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop)) }
+        val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h))) }
         val endpoint = endpointFor(h, env.authFor(h))
         val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h), hops)
         connection = conn

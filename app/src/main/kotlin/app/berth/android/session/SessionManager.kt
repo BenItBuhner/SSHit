@@ -225,6 +225,7 @@ class SessionManager @Inject constructor(
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
+        override fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts, via = via)
         override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
         override val networkAvailable: Flow<Unit> = network.available
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
