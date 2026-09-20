@@ -20,8 +20,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PickerRow
@@ -45,6 +45,7 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.components.TrailingMenuAnchor
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -55,8 +56,11 @@ import app.berth.android.ui.tunnels.TunnelsPanelContent
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
+import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TmuxMode
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import java.util.UUID
 
 /** Add or edit a host. Panels stacked with 12 dp gaps; Save waits for Address and User. */
@@ -92,10 +96,12 @@ fun HostEditorScreen(
     var terminalType by remember { mutableStateOf("xterm-256color") }
     var compression by remember { mutableStateOf(false) }
     var addressFamily by remember { mutableStateOf(AddressFamily.AUTO) }
+    var remoteClipboard by remember { mutableStateOf(RemoteClipboardPolicy.INHERIT) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
+            remoteClipboard = vm.security.settings.filterNotNull().first().remoteClipboardPolicy(hostId)
             vm.host(hostId)?.let { h ->
                 original = h
                 name = h.name
@@ -154,6 +160,8 @@ fun HostEditorScreen(
             createdAt = base?.createdAt ?: System.currentTimeMillis(),
         )
         vm.saveHost(host, password.takeIf { it.isNotEmpty() })
+        // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
+        if (base != null) vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
         onDone()
     }
 
@@ -221,11 +229,13 @@ fun HostEditorScreen(
                 }
                 Box {
                     PickerRow("Key", label, onClick = { pick = true })
-                    DropdownMenu(expanded = pick, onDismissRequest = { pick = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                        DropdownMenuItem(text = { Text("Ask each time", style = BerthType.body, color = c.text1) }, onClick = { auth = AuthMethod.AskEachTime; pick = false })
-                        DropdownMenuItem(text = { Text("Password", style = BerthType.body, color = c.text1) }, onClick = { auth = AuthMethod.Password((auth as? AuthMethod.Password)?.secretId); pick = false })
-                        for (identity in identities) {
-                            DropdownMenuItem(text = { Text(identity.name, style = BerthType.body, color = c.text1) }, onClick = { auth = AuthMethod.Key(identity.id); pick = false })
+                    TrailingMenuAnchor {
+                        BerthMenu(expanded = pick, onDismiss = { pick = false }) {
+                            BerthMenuItem("Ask each time", selected = auth is AuthMethod.AskEachTime, onClick = { auth = AuthMethod.AskEachTime; pick = false })
+                            BerthMenuItem("Password", selected = auth is AuthMethod.Password, onClick = { auth = AuthMethod.Password((auth as? AuthMethod.Password)?.secretId); pick = false })
+                            for (identity in identities) {
+                                BerthMenuItem(identity.name, selected = (auth as? AuthMethod.Key)?.identityId == identity.id, onClick = { auth = AuthMethod.Key(identity.id); pick = false })
+                            }
                         }
                     }
                 }
@@ -270,7 +280,7 @@ fun HostEditorScreen(
                 ToggleRow("Compression", compression, { compression = it })
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
-                if (hostId != null) HostRemoteClipboardPicker(vm, hostId)
+                HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }
             }
 
             if (original != null) {
@@ -301,16 +311,20 @@ private fun SwatchOption(swatch: SwatchColor, selected: Boolean, onClick: () -> 
     }
 }
 
-/** A picker row that shows the current value and opens the choices as a menu. */
+/**
+ * A picker row that shows the current value and opens the choices as a menu under it, hung from
+ * the row's trailing edge on a surface that reads against the panel ([BerthMenu]).
+ */
 @Composable
-fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, onSelect: (T) -> Unit) {
-    val c = Berth.colors
+fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> String, caption: String? = null, captionLines: Int = 1, onSelect: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        PickerRow(title, label(value), onClick = { open = true })
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-            for (option in options) {
-                DropdownMenuItem(text = { Text(label(option), style = BerthType.body, color = if (option == value) c.accent else c.text1) }, onClick = { onSelect(option); open = false })
+        PickerRow(title, label(value), onClick = { open = true }, caption = caption, captionLines = captionLines)
+        TrailingMenuAnchor {
+            BerthMenu(expanded = open, onDismiss = { open = false }) {
+                for (option in options) {
+                    BerthMenuItem(label(option), selected = option == value, onClick = { onSelect(option); open = false })
+                }
             }
         }
     }

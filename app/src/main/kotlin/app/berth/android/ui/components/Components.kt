@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -47,6 +48,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.annotation.DrawableRes
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -249,11 +252,15 @@ fun Panel(
     }
 }
 
+/** The alpha a disabled control's text and fill drop to; one value across buttons, rows and switches. */
+const val DisabledAlpha = 0.5f
+
 /**
  * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
  * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
  * The subtitle takes a plain String or an [AnnotatedString] (mixed Mono and Caption, accent spans),
- * on one line unless [subtitleMaxLines] gives it more, for a caption that is a sentence.
+ * on one line unless [subtitleMaxLines] gives it more, for a caption that is a sentence. A row
+ * that is not [enabled] takes no tap, does not press, and draws its text at [DisabledAlpha].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -272,19 +279,21 @@ fun ListRow(
     titleStyle: TextStyle = BerthType.bodyMedium,
     subtitleStyle: TextStyle = BerthType.caption,
     subtitleMaxLines: Int = 1,
+    enabled: Boolean = true,
 ) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val bg by animateColorAsState(
         when {
-            pressed -> c.surface4
+            pressed && enabled -> c.surface4
             selected -> c.surface3
             else -> surface
         },
         tween(120),
         label = "row",
     )
+    val textAlpha = if (enabled) 1f else DisabledAlpha
     Row(
         modifier
             .fillMaxWidth()
@@ -293,7 +302,7 @@ fun ListRow(
             .background(bg)
             .then(
                 if (onClick != null || onLongClick != null) {
-                    Modifier.combinedClickable(interactionSource = interaction, indication = null, onClick = { onClick?.invoke() }, onLongClick = onLongClick)
+                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = { onClick?.invoke() }, onLongClick = onLongClick)
                 } else Modifier,
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -313,11 +322,12 @@ fun ListRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = titleStyle, color = titleColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = titleStyle, color = titleColor.copy(alpha = titleColor.alpha * textAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
             when (subtitle) {
                 null -> Unit
-                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = c.text2, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
-                else -> Text(subtitle.toString(), style = subtitleStyle, color = c.text2, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
             }
         }
         if (trailing != null) {
@@ -327,27 +337,54 @@ fun ListRow(
     }
 }
 
-/** Row that opens a picker; the value sits at the trailing edge followed by a chevron. */
+/**
+ * Row that opens a picker; the value sits at the trailing edge followed by a chevron. The [caption]
+ * has one line unless [captionLines] gives it more. Not [enabled], the row says its [value] (the
+ * reason nothing can be picked) and opens nothing.
+ */
 @Composable
-fun PickerRow(title: String, value: String, onClick: () -> Unit, modifier: Modifier = Modifier, caption: String? = null) {
+fun PickerRow(
+    title: String,
+    value: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    caption: String? = null,
+    captionLines: Int = 1,
+    enabled: Boolean = true,
+) {
     val c = Berth.colors
+    val alpha = if (enabled) 1f else DisabledAlpha
     ListRow(
         title = title,
         subtitle = caption,
+        subtitleMaxLines = captionLines,
         minHeight = 44.dp,
         surface = Color.Transparent,
         onClick = onClick,
         modifier = modifier,
+        enabled = enabled,
         trailing = {
-            Text(value, style = BerthType.body, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp)
+            Text(value, style = BerthType.body, color = c.text2.copy(alpha = c.text2.alpha * alpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            BerthIcon(BerthIcons.chevronRight, tint = c.text3.copy(alpha = c.text3.alpha * alpha), size = 20.dp)
         },
     )
 }
 
-/** A switch row; the [caption] under the title has one line unless [captionLines] gives it more. */
+/**
+ * A switch row; the [caption] under the title has one line unless [captionLines] gives it more.
+ * Not [enabled], the switch is drawn disabled and neither it nor the row takes a tap; the caption
+ * is where the row says why.
+ */
 @Composable
-fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, caption: String? = null, captionLines: Int = 1) {
+fun ToggleRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    caption: String? = null,
+    captionLines: Int = 1,
+    enabled: Boolean = true,
+) {
     val c = Berth.colors
     ListRow(
         title = title,
@@ -357,10 +394,12 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
         surface = Color.Transparent,
         onClick = { onCheckedChange(!checked) },
         modifier = modifier,
+        enabled = enabled,
         trailing = {
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = enabled,
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = c.onAccent,
                     checkedTrackColor = c.accent,
@@ -368,10 +407,81 @@ fun ToggleRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
                     uncheckedThumbColor = c.text2,
                     uncheckedTrackColor = c.surface4,
                     uncheckedBorderColor = Color.Transparent,
+                    disabledCheckedThumbColor = c.onAccent.copy(alpha = DisabledAlpha),
+                    disabledCheckedTrackColor = c.accent.copy(alpha = DisabledAlpha),
+                    disabledCheckedBorderColor = Color.Transparent,
+                    disabledUncheckedThumbColor = c.text2.copy(alpha = DisabledAlpha),
+                    disabledUncheckedTrackColor = c.surface4.copy(alpha = DisabledAlpha),
+                    disabledUncheckedBorderColor = Color.Transparent,
                 ),
             )
         },
     )
+}
+
+/** A [Panel]'s explanatory paragraph under a row: Caption in text.3, indented to the row's text. */
+@Composable
+fun PanelNote(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = BerthType.caption, color = Berth.colors.text3, modifier = modifier.padding(start = 12.dp, top = 4.dp))
+}
+
+// ---- Menus ------------------------------------------------------------------------------------------
+
+/**
+ * The app's menu: M3's [DropdownMenu] on a surface two tonal steps above whatever it opens over,
+ * since the shadow it comes with does not read on these tones. Inside a surface.2 [Panel] that is
+ * surface.4; on a bare screen or a sheet (no panel, taken as surface.1) it is surface.3. Call it
+ * where a [DropdownMenu] would go: inside the [Box] that holds the row it hangs from, or inside a
+ * [TrailingMenuAnchor] there to have it open under the row's value rather than over its title.
+ */
+@Composable
+fun BerthMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val c = Berth.colors
+    val below = LocalPanelSurface.current ?: c.surface1
+    val step = c.stepOf(below) ?: 1
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        modifier = modifier,
+        containerColor = c.surface(step + 2),
+        shape = RoundedCornerShape(BerthRadius.row),
+        content = content,
+    )
+}
+
+/** One line of a [BerthMenu]: Body text, accent when it is the [selected] value, danger when [destructive]. */
+@Composable
+fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false) {
+    val c = Berth.colors
+    DropdownMenuItem(
+        text = {
+            Text(
+                text,
+                style = BerthType.body,
+                color = when {
+                    destructive -> c.danger
+                    selected -> c.accent
+                    else -> c.text1
+                },
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * Where a row's menu hangs from: a zero-width anchor down the row's trailing edge, so a
+ * [BerthMenu] inside it opens end-aligned under the row's value and leaves the titles of the rows
+ * beneath uncovered. Goes in the [Box] that holds the row, after it.
+ */
+@Composable
+fun BoxScope.TrailingMenuAnchor(content: @Composable () -> Unit) {
+    Box(Modifier.matchParentSize().wrapContentWidth(Alignment.End)) { content() }
 }
 
 // ---- Slider ---------------------------------------------------------------------------------------
