@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -367,13 +368,19 @@ private fun fingerprintCaption(label: String?, what: String): AnnotatedString {
     }
 }
 
-/** The one row every fingerprint on a sheet is set in: the caption over the value in Mono at 14 sp. */
+/**
+ * The one row every fingerprint on a sheet is set in: the caption over the value in Mono at 14 sp.
+ * One node to a reader: the caption and the value merge, so a row is heard as `OFFERED ssh-ed25519 ·
+ * SHA256` and then its key in one item rather than a label and, a swipe later, a value with no name.
+ * Since the `LINK` row is set here as well, it reads the same way.
+ */
 @Composable
 private fun FingerprintRow(caption: AnnotatedString, value: String, modifier: Modifier = Modifier, boxed: Boolean = false) {
     val c = Berth.colors
     Column(
         modifier
             .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
             .then(
                 if (boxed) Modifier.clip(RoundedCornerShape(BerthRadius.row)).background(c.surface2).padding(12.dp)
                 else Modifier.padding(horizontal = 4.dp),

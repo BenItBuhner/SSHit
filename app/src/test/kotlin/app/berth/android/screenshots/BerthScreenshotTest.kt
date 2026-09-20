@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ComposeHostRule
 import app.berth.android.R
 import app.berth.android.createBerthComposeRule
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
@@ -667,6 +668,9 @@ class BerthScreenshotTest {
         compose.onAllNodes(hasText("LINK   SHA256")).assertCountEquals(1)
         compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(other))).assertExists()
         compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(key))).assertExists()
+        // Each row is one item to a reader: the caption and its key in the same node, the LINK row as the offered row.
+        compose.onNode(hasText("OFFERED   ssh-ed25519 \u00B7 SHA256")).assert(hasText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(key))))
+        compose.onNode(hasText("LINK   SHA256")).assert(hasText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(other))))
         compose.onNodeWithText("Trust and connect anyway").assertExists()
         compose.onAllNodesWithText("Trust and connect").assertCountEquals(0)
         capture("prompt-trust-host-key-link-mismatch")
