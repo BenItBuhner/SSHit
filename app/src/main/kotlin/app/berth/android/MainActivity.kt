@@ -34,9 +34,16 @@ class MainActivity : ComponentActivity() {
         openTabFrom(intent)
     }
 
-    /** A notification's tab (spec C21): the manager puts it on stage now, or the moment the strip is restored. */
+    /**
+     * A notification's tab (spec C21): the manager puts it on stage now, or the moment the strip is
+     * restored. The transfers notification names a terminal whose copy waits on the user and asks
+     * for its Files tab, the host's or a new one riding it.
+     */
     private fun openTabFrom(intent: Intent?) {
-        if (intent?.action != SessionNotifier.ACTION_OPEN_TAB) return
-        intent.getStringExtra(SessionNotifier.EXTRA_TAB_ID)?.let(sessions::activateFromNotification)
+        val id = intent?.getStringExtra(SessionNotifier.EXTRA_TAB_ID) ?: return
+        when (intent.action) {
+            SessionNotifier.ACTION_OPEN_TAB -> sessions.activateFromNotification(id)
+            SessionNotifier.ACTION_OPEN_FILES -> sessions.activateFilesFromNotification(id)
+        }
     }
 }

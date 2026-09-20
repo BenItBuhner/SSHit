@@ -5,7 +5,10 @@ import android.app.Application
 import android.app.NotificationManager
 import android.content.ComponentCallbacks2
 import android.content.Intent
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.files.TransferManager
+import app.berth.android.screenshots.FakeSftpFileSystem
 import app.berth.android.screenshots.TestGraph
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
@@ -13,7 +16,10 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
+import app.berth.sftp.ConflictChoice
+import app.berth.sftp.SftpFileSystem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -23,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -35,10 +42,12 @@ import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.io.path.createTempDirectory
 
 /**
  * The manager against the process (vision §4.3 L0, spec C3 Persistence, C21): frames go to disk
@@ -338,6 +347,95 @@ class SessionLifecycleTest {
         assertEquals("s-b", runBlocking { graph.settings.lastActiveSessionId.first() })
     }
 
+    // ---- a copy waiting on the user (the transfers notification, spec C21) -----------------------
+
+    @Test
+    fun `a copy stopped on a question after its Files tab was closed is reachable from the notification's tap`() {
+        grantNotifications()
+        seed()
+        restore()
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        graph.process.stop()
+        assertNull("the tab that would ask is gone", graph.sessions.filesTabFor("homelab"))
+        val staged = ArrayList<String>()
+        val collector = CoroutineScope(Dispatchers.Default)
+        collector.launch { graph.sessions.stageRequests.collect { staged += it } }
+
+        // A folder coming down into a tree that already holds one of its files stops on the question.
+        val (queue, id) = startWaitingDownload("s-a")
+        await("the copy waiting on a.txt") { queue.transfers.value.first { it.id == id }.waiting }
+        await("the summary counts it apart and names the terminal") {
+            graph.notifier.summary.value.let { it.transfers == 1 && it.waiting == 1 && it.waitingSession == "s-a" }
+        }
+        val posted = graph.notifier.sessionsNotification(graph.notifier.summary.value)
+        assertTrue(posted.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString().endsWith("1 transfer \u00B7 waiting on you"))
+        val tap = shadowOf(posted.contentIntent).savedIntent
+        assertEquals(SessionNotifier.ACTION_OPEN_FILES, tap.action)
+        assertEquals("s-a", tap.getStringExtra(SessionNotifier.EXTRA_TAB_ID))
+
+        // The tap, handed on as MainActivity does: a Files tab for the host is created riding that
+        // terminal, comes on stage, and the shell is asked for the Stage, where the pane asks on arrival.
+        graph.sessions.activateFilesFromNotification(tap.getStringExtra(SessionNotifier.EXTRA_TAB_ID)!!)
+        graph.process.start()
+        await("a Files tab for homelab") { graph.sessions.filesTabFor("homelab") != null }
+        val files = graph.sessions.filesTabFor("homelab")!!
+        await("on stage") { graph.sessions.activeTabId.value == files.id }
+        await("riding the terminal whose copy waits") { files.ride.value?.id == "s-a" }
+        await("the shell asked for the Stage") { staged == listOf(files.id) }
+        assertFalse("in front of the user, so not lit", files.record.value.needsAttention)
+
+        // Tapped again with the tab open: the same tab, not a second one.
+        graph.sessions.setActive("s-a")
+        graph.sessions.activateFilesFromNotification("s-a")
+        await("staged again") { staged == listOf(files.id, files.id) }
+        assertEquals(1, graph.sessions.records.value.count { it.kind == TabKind.Files })
+
+        // The answer settles the count and takes the link with it; the tap is the plain one again.
+        queue.resolveConflict(id, ConflictChoice.SKIP, applyToAll = true)
+        await("settled") { graph.notifier.summary.value.let { it.waiting == 0 && it.waitingSession == null } }
+        assertNotEquals(SessionNotifier.ACTION_OPEN_FILES, shadowOf(graph.notifier.sessionsNotification(graph.notifier.summary.value).contentIntent).savedIntent.action)
+        collector.cancel()
+    }
+
+    @Test
+    fun `a tap that starts the process waits for the strip, then opens the Files tab`() {
+        seed()
+        graph.sessions.activateFilesFromNotification("s-a")
+        await("a Files tab for homelab, on stage, after restore") {
+            graph.sessions.restored.value && graph.sessions.filesTabFor("homelab")?.let { it.id == graph.sessions.activeTabId.value && it.ride.value?.id == "s-a" } == true
+        }
+    }
+
+    @Test
+    fun `away, a Files tab whose copy stopped on a question reaches the shade like any tab that needs the user`() {
+        grantNotifications()
+        seed()
+        restore()
+        graph.sessions.setActive("s-a")
+        val files = runBlocking { graph.sessions.openFiles("s-a")!! }
+        graph.sessions.setActive("s-a")
+        graph.process.start()
+        graph.process.stop()
+        val (queue, id) = startWaitingDownload("s-a")
+        await("the copy waiting") { queue.transfers.value.first { it.id == id }.waiting }
+        await("the Files tab lit") { files.record.value.needsAttention }
+        assertEquals(FilesTab.WAITING_ON_YOU, files.record.value.attentionReason)
+        await("and in the shade") { notifications.getNotification(SessionNotifier.attentionTag(files.id), 2) != null }
+        val posted = notifications.getNotification(SessionNotifier.attentionTag(files.id), 2)
+        assertEquals("Files \u00B7 homelab needs you", posted.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
+        assertEquals("waiting on you", posted.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+        val tap = shadowOf(posted.contentIntent).savedIntent
+        assertEquals("its own notification opens the tab itself", SessionNotifier.ACTION_OPEN_TAB, tap.action)
+        assertEquals(files.id, tap.getStringExtra(SessionNotifier.EXTRA_TAB_ID))
+        // Arriving on it is seeing it: the pane asks, the ring and the notification go.
+        graph.sessions.activateFromNotification(files.id)
+        graph.process.start()
+        await("seen") { !files.record.value.needsAttention }
+        await("its notification goes with it") { notifications.getNotification(SessionNotifier.attentionTag(files.id), 2) == null }
+        assertTrue("the copy itself still waits for the pane's answer", queue.transfers.value.first { it.id == id }.waiting)
+    }
+
     // ---- fixture ---------------------------------------------------------------------------------
 
     private fun seed(
@@ -392,6 +490,31 @@ class SessionLifecycleTest {
     private fun restore() = runBlocking {
         graph.sessions.restore()
         assertTrue(graph.sessions.restored.value)
+    }
+
+    /**
+     * A folder download on [sessionId] through the real transfer queue (the one `FilesCenter` runs,
+     * so a Files tab of the session hears of it) over an in-memory server, into a directory that
+     * already holds one of the folder's files: the copy stops on that question at once. Returns the
+     * queue and the transfer's id.
+     */
+    private fun startWaitingDownload(sessionId: String): Pair<TransferManager, String> {
+        val server = FakeSftpFileSystem().dir("/srv/app", 0).file("/srv/app/a.txt", "alpha\n", 0).file("/srv/app/b.txt", "bravo\n", 0)
+        val tree = createTempDirectory("berth-waiting").toFile().also { File(it, "app").mkdirs(); File(it, "app/a.txt").writeText("mine\n") }
+        val queue = graph.files.transfers
+        queue.channelFor = { Channel(server) }
+        val id = queue.downloadFolder(graph.sessions.get(sessionId)!!, runBlocking { server.stat("/srv/app") }, Uri.fromFile(tree))
+        return queue to id
+    }
+
+    /** One channel over the shared fake server: closing it closes this channel only. */
+    private class Channel(inner: FakeSftpFileSystem) : SftpFileSystem by inner {
+        override var isOpen: Boolean = true
+            private set
+
+        override fun close() {
+            isOpen = false
+        }
     }
 
     /** A BEL in a tab that is not on stage: the smallest thing that lights the ring. */

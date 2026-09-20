@@ -14,6 +14,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -189,6 +190,34 @@ class SessionNotifierTest {
         val n = notifier.sessionsNotification(SessionsSummary(listOf(SessionLine("prod-web", SessionState.CONNECTING)), 0, 0))
         assertEquals("1 session live", n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
         assertEquals("1 session live\nprod-web connecting", n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString())
+        assertEquals("with nothing waiting the tap opens the app as it was left", context.packageManager.getLaunchIntentForPackage(context.packageName)?.component, shadowOf(n.contentIntent).savedIntent.component)
+    }
+
+    @Test
+    fun `a copy stopped on a question is counted apart, and the tap goes to the Files tab that answers it`() {
+        val one = listOf(SessionLine("prod-web", SessionState.LIVE))
+        fun text(transfers: Int, waiting: Int) =
+            notifier.sessionsNotification(SessionsSummary(one, 0, transfers, waiting, waitingSession = "s-a")).extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        assertEquals("1 session live \u00B7 1 transfer \u00B7 waiting on you", text(1, 1))
+        assertEquals("1 session live \u00B7 3 transfers \u00B7 1 waiting on you", text(3, 1))
+        assertEquals("1 session live \u00B7 3 transfers \u00B7 2 waiting on you", text(3, 2))
+        assertEquals("1 session live \u00B7 3 transfers", text(3, 0))
+
+        val waiting = notifier.sessionsNotification(SessionsSummary(one, 0, 1, 1, waitingSession = "s-a"))
+        val tap = shadowOf(waiting.contentIntent)
+        assertTrue(tap.isActivity)
+        assertEquals(SessionNotifier.ACTION_OPEN_FILES, tap.savedIntent.action)
+        assertEquals("the terminal whose transfer waits; the manager opens or creates its host's Files tab", "s-a", tap.savedIntent.getStringExtra(SessionNotifier.EXTRA_TAB_ID))
+        assertEquals(MainActivity::class.java.name, tap.savedIntent.component?.className)
+        assertFalse(
+            "its own data URI keeps it apart from the terminal's own deep link",
+            tap.savedIntent.filterEquals(shadowOf(notifier.attentionNotification(record("s-a"), 0L).contentIntent).savedIntent),
+        )
+        // Detach all stays on the notification whichever way its tap goes.
+        assertEquals("Detach all", waiting.actions.single().title.toString())
+        // A stale session with nothing waiting any more is ignored: the tap is the plain one again.
+        val settled = notifier.sessionsNotification(SessionsSummary(one, 0, 1, 0, waitingSession = "s-a"))
+        assertNotEquals(SessionNotifier.ACTION_OPEN_FILES, shadowOf(settled.contentIntent).savedIntent.action)
     }
 
     @Test

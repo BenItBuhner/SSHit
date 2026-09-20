@@ -161,6 +161,13 @@ class SessionManager @Inject constructor(
     /** Of [activeTransfers], how many wait for an answer only the Files pane can give; the notification says so. */
     val waitingTransfers = MutableStateFlow(0)
 
+    /**
+     * The terminal whose transfer has waited longest, null while none does; the notification's
+     * tap opens that host's Files tab (see [activateFilesFromNotification]), so the question can
+     * be answered even after the tab that asked it was closed.
+     */
+    val waitingTransferSession = MutableStateFlow<String?>(null)
+
     private val restoreLock = Mutex()
     private var didRestore = false
     private val _restored = MutableStateFlow(false)
@@ -178,8 +185,8 @@ class SessionManager @Inject constructor(
     /** A tab a notification put on stage; the shell pops back to the Stage so it is actually seen. */
     val stageRequests: SharedFlow<String> = _stageRequests.asSharedFlow()
 
-    /** A notification's tab asked for before the strip was restored; staged the moment it is. */
-    private var pendingActivation: String? = null
+    /** A notification's tap that arrived before the strip was restored; honoured the moment it is. */
+    private var pendingActivation: Activation? = null
     private val pendingLock = Any()
 
     /** Problems collectors, one per terminal tab, cancelled when the tab closes. */
@@ -228,15 +235,17 @@ class SessionManager @Inject constructor(
         scope.launch {
             // Only a terminal holds a socket; a Files tab mirrors its ride's state and never keeps the
             // service up on its own. The notification says what every terminal tab is doing, with the
-            // tunnels up, the transfers in flight and how many of those wait on the user; the service
-            // itself only starts and stops with the count of tabs holding a socket.
+            // tunnels up, the transfers in flight, how many of those wait on the user and whose Files
+            // tab its tap should open; the service itself only starts and stops with the count of
+            // tabs holding a socket.
             var lastActive = 0
-            combine(records, tunnelStatuses, activeTransfers, waitingTransfers) { list, statuses, transfers, waiting ->
+            combine(records, tunnelStatuses, activeTransfers, waitingTransfers, waitingTransferSession) { list, statuses, transfers, waiting, waitingSession ->
                 SessionsSummary(
                     lines = list.filter { it.kind == TabKind.Ssh && it.state != SessionState.CLOSED }.map { SessionLine(it.displayTitle, it.state) },
                     tunnels = statuses.count { it.value is TunnelStatus.Up },
                     transfers = transfers,
                     waiting = waiting,
+                    waitingSession = waitingSession,
                 )
             }.distinctUntilChanged().collect { summary ->
                 notifier.updateSessions(summary)
@@ -258,14 +267,14 @@ class SessionManager @Inject constructor(
             }
         }
         scope.launch {
-            // Each terminal record against its last emission: frames on the way out of Live, the
-            // first Live of the process, and attention lighting or clearing.
+            // Each record against its last emission: for a terminal, frames on the way out of Live
+            // and the first Live of the process; for every tab, attention lighting or clearing.
             val seen = HashMap<String, SessionRecord>()
             records.collect { list ->
                 seen.keys.retainAll(list.mapTo(HashSet()) { it.id })
                 for (record in list) {
                     val previous = seen.put(record.id, record)
-                    if (record.kind == TabKind.Ssh) onRecordChanged(previous, record)
+                    onRecordChanged(previous, record)
                 }
             }
         }
@@ -328,25 +337,32 @@ class SessionManager @Inject constructor(
     }
 
     private fun onRecordChanged(previous: SessionRecord?, record: SessionRecord) {
-        val session = _sessions.value[record.id] ?: return
-        val before = previous?.state
-        val now = record.state
-        if (before != null && before != now && now != SessionState.CLOSED) {
-            // Leaving Live (dropped, ended, detached) or giving up: keep what the screen showed.
-            if (before == SessionState.LIVE || (before.isActive && !now.isActive)) saveFrame(session)
-            // A tab connecting again has answered its problem notification itself.
-            if (now.isActive && !before.isActive) notifier.cancelProblem(record.id)
-        }
-        if (now == SessionState.LIVE && before != SessionState.LIVE && !firstLiveSeen) {
-            // The first successful connect of this process is the moment to ask for notifications (spec C1 note).
-            firstLiveSeen = true
-            notifier.onFirstLive()
+        val session = _sessions.value[record.id]
+        if (session == null && _filesTabs.value[record.id] == null) return
+        if (session != null) {
+            val before = previous?.state
+            val now = record.state
+            if (before != null && before != now && now != SessionState.CLOSED) {
+                // Leaving Live (dropped, ended, detached) or giving up: keep what the screen showed.
+                if (before == SessionState.LIVE || (before.isActive && !now.isActive)) saveFrame(session)
+                // A tab connecting again has answered its problem notification itself.
+                if (now.isActive && !before.isActive) notifier.cancelProblem(record.id)
+            }
+            if (now == SessionState.LIVE && before != SessionState.LIVE && !firstLiveSeen) {
+                // The first successful connect of this process is the moment to ask for notifications (spec C1 note).
+                firstLiveSeen = true
+                notifier.onFirstLive()
+            }
         }
         val hadAttention = previous?.needsAttention == true
         if (record.needsAttention && !hadAttention) {
-            // On screen the ring says it; away, the shade does (spec C21, Attention). A tab that lost its
-            // connection is lit too, but the Problems notification carries that one, with Retry and Detach.
-            if (!_foreground.value && session.attentionProblem == null) notifier.postAttention(record, session.attentionAt ?: System.currentTimeMillis())
+            // On screen the ring says it; away, the shade does (spec C21, Attention), for a Files tab
+            // whose copy stopped on a question as much as for a terminal's bell. A terminal that lost
+            // its connection is lit too, but the Problems notification carries that one, with Retry
+            // and Detach.
+            if (!_foreground.value && session?.attentionProblem == null) {
+                notifier.postAttention(record, session?.attentionAt ?: System.currentTimeMillis())
+            }
         } else if (!record.needsAttention && hadAttention) {
             notifier.cancelAttention(record.id)
         }
@@ -460,27 +476,50 @@ class SessionManager @Inject constructor(
             _restored.value = true
             pendingActivation.also { pendingActivation = null }
         }
-        pending?.let { stage(it) }
+        pending?.let { perform(it) }
     }
 
     /**
      * A notification's tab (spec C21: every notification opens the tab it is about). Staged now,
      * or the moment the strip is restored when the tap is what started the process.
      */
-    fun activateFromNotification(id: String) {
+    fun activateFromNotification(id: String) = activate(Activation.Tab(id))
+
+    /**
+     * The transfers notification's tap while a copy waits on the user: the Files tab of the
+     * terminal [sessionId] comes on stage, the host's if it has one, else a new one riding that
+     * terminal ([openFiles]), so the question is reachable even after the tab that asked it was
+     * closed. Same route as a tab's own notification, including the wait for the strip.
+     */
+    fun activateFilesFromNotification(sessionId: String) = activate(Activation.Files(sessionId))
+
+    private fun activate(target: Activation) {
         val now = synchronized(pendingLock) {
             if (_restored.value) true else {
-                pendingActivation = id
+                pendingActivation = target
                 false
             }
         }
-        if (now) stage(id)
+        if (now) perform(target)
+    }
+
+    private fun perform(target: Activation) {
+        when (target) {
+            is Activation.Tab -> stage(target.id)
+            is Activation.Files -> scope.launch { openFiles(target.sessionId)?.let { stage(it.id) } }
+        }
     }
 
     private fun stage(id: String) {
         if (tabNow(id) == null) return
         setActive(id)
         _stageRequests.tryEmit(id)
+    }
+
+    /** What a notification's tap asks the strip for: a tab by id, or the Files tab of a terminal whose transfer waits. */
+    private sealed interface Activation {
+        data class Tab(val id: String) : Activation
+        data class Files(val sessionId: String) : Activation
     }
 
     /** Every tab right now, from the maps rather than the (asynchronous) flows. */

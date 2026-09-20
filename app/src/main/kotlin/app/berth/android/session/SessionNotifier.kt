@@ -42,8 +42,20 @@ sealed interface NotificationPrompt {
 /** One terminal tab's line in the Sessions notification: `prod-web live`. */
 data class SessionLine(val title: String, val state: SessionState)
 
-/** Everything the Sessions notification says; the manager computes it, the service posts it. */
-data class SessionsSummary(val lines: List<SessionLine>, val tunnels: Int, val transfers: Int) {
+/**
+ * Everything the Sessions notification says; the manager computes it, the service posts it.
+ * [waiting] is how many of the [transfers] have stopped for an answer only a Files tab can give,
+ * and [waitingSession] the terminal whose transfer did so first: the notification's tap opens (or
+ * creates) that host's Files tab riding it, so the question is reachable even after its tab was
+ * closed, instead of the app wherever it was left.
+ */
+data class SessionsSummary(
+    val lines: List<SessionLine>,
+    val tunnels: Int,
+    val transfers: Int,
+    val waiting: Int = 0,
+    val waitingSession: String? = null,
+) {
     /** Tabs holding a socket: connecting, live or reconnecting. */
     val active: Int get() = lines.count { it.state.keepsService }
 
@@ -160,10 +172,16 @@ class SessionNotifier @Inject constructor(@ApplicationContext private val contex
         _summary.value = summary
     }
 
-    /** The ongoing notification: the count line, every tab with its state, Detach all (spec C21). */
+    /**
+     * The ongoing notification: the count line, every tab with its state, Detach all (spec C21).
+     * `1 session live · 1 tunnel · 2 transfers · 1 waiting on you`: a copy stopped on a question
+     * is counted apart from those that move, and while one waits the tap goes to the Files tab
+     * that answers it rather than to the app as it was left.
+     */
     fun sessionsNotification(summary: SessionsSummary): Notification {
         ensureChannels()
-        val open = PendingIntent.getActivity(
+        val waitingSession = summary.waitingSession?.takeIf { summary.waiting > 0 }
+        val open = if (waitingSession != null) openFiles(waitingSession) else PendingIntent.getActivity(
             context, RC_OPEN, SessionManager.openAppIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), FLAGS,
         )
         val detachAll = PendingIntent.getService(context, RC_DETACH_ALL, serviceIntent(ACTION_DETACH_ALL, null), FLAGS)
@@ -177,8 +195,15 @@ class SessionNotifier @Inject constructor(@ApplicationContext private val contex
             }
             when (summary.transfers) {
                 0 -> Unit
-                1 -> append(SEP).append(context.getString(R.string.notification_one_transfer))
-                else -> append(SEP).append(context.getString(R.string.notification_transfers, summary.transfers))
+                1 -> append(SEP).append(context.getString(if (summary.waiting > 0) R.string.notification_one_transfer_waiting else R.string.notification_one_transfer))
+                else -> {
+                    append(SEP).append(context.getString(R.string.notification_transfers, summary.transfers))
+                    when (summary.waiting) {
+                        0 -> Unit
+                        1 -> append(SEP).append(context.getString(R.string.notification_one_waiting))
+                        else -> append(SEP).append(context.getString(R.string.notification_waiting, summary.waiting))
+                    }
+                }
             }
         }
         val lines = summary.lines.joinToString(SEP) { "${it.title} ${stateWord(it.state)}" }
@@ -282,6 +307,19 @@ class SessionNotifier @Inject constructor(@ApplicationContext private val contex
 
     private fun openTab(tabId: String): PendingIntent = PendingIntent.getActivity(context, RC_TAB, openTabIntent(tabId), FLAGS)
 
+    /**
+     * Opens the app on the Files tab of the terminal [sessionId], the host's existing one or a new
+     * one riding that terminal ([SessionManager.openFiles]): the transfers notification's tap while
+     * a copy waits on the user. Its own data URI keeps it apart from the terminal's own deep link.
+     */
+    fun openFilesIntent(sessionId: String): Intent = Intent(context, MainActivity::class.java)
+        .setAction(ACTION_OPEN_FILES)
+        .setData(Uri.parse("berth://files/$sessionId"))
+        .putExtra(EXTRA_TAB_ID, sessionId)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    private fun openFiles(sessionId: String): PendingIntent = PendingIntent.getActivity(context, RC_TAB, openFilesIntent(sessionId), FLAGS)
+
     private fun serviceIntent(action: String, tabId: String?): Intent = Intent(context, SessionService::class.java)
         .setAction(action)
         .apply { if (tabId != null) setData(Uri.parse("berth://${action.substringAfterLast('.').lowercase()}/$tabId")).putExtra(EXTRA_TAB_ID, tabId) }
@@ -315,6 +353,9 @@ class SessionNotifier @Inject constructor(@ApplicationContext private val contex
         private val CHANNELS = listOf(CHANNEL_SESSIONS, CHANNEL_ATTENTION, CHANNEL_PROBLEMS)
 
         const val ACTION_OPEN_TAB = "app.berth.android.action.OPEN_TAB"
+
+        /** Open the Files tab of the terminal in [EXTRA_TAB_ID], the host's or a new one riding it. */
+        const val ACTION_OPEN_FILES = "app.berth.android.action.OPEN_FILES"
         const val ACTION_DETACH_ALL = "app.berth.android.action.DETACH_ALL"
         const val ACTION_RETRY = "app.berth.android.action.RETRY"
         const val ACTION_DETACH = "app.berth.android.action.DETACH"
