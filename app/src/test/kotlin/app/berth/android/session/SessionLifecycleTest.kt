@@ -349,7 +349,8 @@ class SessionLifecycleTest {
         // The manager restores itself on its own scope; asking before that has landed parks the request.
         graph.sessions.activateFromNotification("s-b")
         await("s-b on stage after restore") { graph.sessions.restored.value && graph.sessions.activeTabId.value == "s-b" }
-        assertEquals("s-b", runBlocking { graph.settings.lastActiveSessionId.first() })
+        // The remembered tab is written on the manager's scope after the stage moves, so it is awaited, not read.
+        await("s-b remembered for the next launch") { runBlocking { graph.settings.lastActiveSessionId.first() } == "s-b" }
     }
 
     // ---- the app lock (spec C20 with C21) --------------------------------------------------------
