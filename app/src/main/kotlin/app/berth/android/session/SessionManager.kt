@@ -787,13 +787,14 @@ class SessionManager @Inject constructor(
      * active tab (at the end of [workspaceId] when given). The browser rides whichever terminal to
      * the host is up, or offers to connect one.
      */
-    suspend fun openFilesForHost(host: Host, workspaceId: String? = null): FilesTab {
+    suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null): FilesTab {
         restore()
-        filesTabFor(host.id)?.let {
+        // The host's Files tab comes on stage, unless an `sftp://` link names a folder it is not showing: that is a tab of its own at the folder.
+        filesTabFor(host.id)?.takeIf { folder == null || it.folder == folder }?.let {
             setActive(it.id)
             return it
         }
-        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = null)
+        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder)
     }
 
     private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?): FilesTab {

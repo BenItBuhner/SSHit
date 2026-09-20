@@ -58,6 +58,8 @@ import app.berth.android.ui.stage.LocalHapticLevel
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.tabs.ReopenBar
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabSheets
@@ -69,13 +71,15 @@ import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.android.ui.themes.TerminalThemeEditorScreen
 import app.berth.android.ui.themes.ThemeScope
 import app.berth.android.ui.themes.ThemesScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 sealed interface Screen : NavKey {
     @Serializable data object Stage : Screen
     @Serializable data class Hosts(val picker: Boolean = false) : Screen
-    @Serializable data class HostEditor(val hostId: String?) : Screen
+    /** The editor for [hostId], or for a new host; [link] is the `ssh://` or `sftp://` link a new host starts from. */
+    @Serializable data class HostEditor(val hostId: String?, val link: String? = null) : Screen
     @Serializable data object Keys : Screen
     @Serializable data object Settings : Screen
     @Serializable data object KnownHosts : Screen
@@ -139,6 +143,29 @@ private fun Shell(vm: AppViewModel) {
             toStage()
             if (drawer.isOpen) drawer.close()
         }
+    }
+
+    // An ssh:// or sftp:// link (AppViewModel.openLink): a tab opened, so the Stage; no host, so the
+    // editor prefilled from the link; unreadable, so a notice saying what was wrong.
+    val linkOutcome by vm.linkOutcome.collectAsState()
+    var linkNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(linkOutcome) {
+        when (val outcome = linkOutcome) {
+            null -> return@LaunchedEffect
+            LinkOutcome.Staged -> {
+                sessionSheet = false
+                toStage()
+                if (drawer.isOpen) drawer.close()
+            }
+            is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
+            is LinkOutcome.Malformed -> linkNotice = outcome.reason
+        }
+        vm.clearLinkOutcome()
+    }
+    LaunchedEffect(linkNotice) {
+        if (linkNotice == null) return@LaunchedEffect
+        delay(NOTICE_BAR_MS)
+        linkNotice = null
     }
 
     val onStage = backStack.lastOrNull() == Screen.Stage
@@ -218,7 +245,7 @@ private fun Shell(vm: AppViewModel) {
                         )
                     }
                     is Screen.HostEditor -> NavEntry(key) {
-                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() })
+                        HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() }, link = key.link)
                     }
                     is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
                     is Screen.Settings -> NavEntry(key) {
@@ -279,6 +306,16 @@ private fun Shell(vm: AppViewModel) {
     TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
     Box(Modifier.fillMaxSize()) {
         ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
+        // The link notice is kept through the bar's exit, so the text does not blank as it slides away.
+        val shownNotice = remember { mutableStateOf(linkNotice) }
+        if (linkNotice != null) shownNotice.value = linkNotice
+        NoticeBar(
+            visible = linkNotice != null,
+            text = "Link not opened. ${shownNotice.value ?: ""}",
+            action = "OK",
+            onAction = { linkNotice = null },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
     PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)

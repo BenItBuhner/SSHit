@@ -60,32 +60,40 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TmuxMode
+import app.berth.ssh.SshLink
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import java.util.UUID
 
-/** Add or edit a host. Panels stacked with 12 dp gaps; Save waits for Address and User. */
+/**
+ * Add or edit a host. Panels stacked with 12 dp gaps; Save waits for Address and User. Opened for
+ * an `ssh://` or `sftp://` [link] no saved host answered to, the fields start from the link (its
+ * name, address, port and user, and Tunnels only when it asks for forwards alone) and Save also
+ * connects the way the link asked ([AppViewModel.saveHostFromLink]).
+ */
 @Composable
 fun HostEditorScreen(
     vm: AppViewModel,
     hostId: String?,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
+    link: String? = null,
 ) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
     val hosts by vm.hosts.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
+    val fromLink = remember(link) { link?.let { (SshLink.parse(it) as? SshLink.Result.Parsed)?.link } }
     var loaded by remember { mutableStateOf(hostId == null) }
     var original by remember { mutableStateOf<Host?>(null) }
 
-    var name by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(fromLink?.name ?: "") }
     var monogramEdited by remember { mutableStateOf(false) }
     var monogram by remember { mutableStateOf("") }
-    var color by remember { mutableStateOf(SwatchColor.COPPER) }
-    var address by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("22") }
-    var user by remember { mutableStateOf("") }
+    var color by remember { mutableStateOf(fromLink?.let { SwatchColor.forName(it.name ?: it.host) } ?: SwatchColor.COPPER) }
+    var address by remember { mutableStateOf(fromLink?.host ?: "") }
+    var port by remember { mutableStateOf(fromLink?.port?.toString() ?: "22") }
+    var user by remember { mutableStateOf(fromLink?.user ?: "") }
     var auth by remember { mutableStateOf<AuthMethod>(AuthMethod.AskEachTime) }
     var password by remember { mutableStateOf("") }
     var keepalive by remember { mutableStateOf(15) }
@@ -100,7 +108,7 @@ fun HostEditorScreen(
     var addressFamily by remember { mutableStateOf(AddressFamily.AUTO) }
     var remoteClipboard by remember { mutableStateOf(RemoteClipboardPolicy.INHERIT) }
     var jumpHostIds by remember { mutableStateOf<List<String>>(emptyList()) }
-    var tunnelsOnly by remember { mutableStateOf(false) }
+    var tunnelsOnly by remember { mutableStateOf(fromLink?.tunnelsOnly ?: false) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
@@ -165,7 +173,8 @@ fun HostEditorScreen(
             appearance = (base?.appearance ?: app.berth.domain.model.AppearanceOverride()).copy(terminalThemeId = themeId, fontSizeSp = fontSize),
             tunnelsOnly = tunnelsOnly,
         )
-        vm.saveHost(host, password.takeIf { it.isNotEmpty() })
+        val secret = password.takeIf { it.isNotEmpty() }
+        if (fromLink != null && base == null) vm.saveHostFromLink(host, secret, fromLink) else vm.saveHost(host, secret)
         // The override lives in the settings document, keyed by the host's id; it commits here with the rest.
         if (base != null) vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
         onDone()
@@ -183,7 +192,17 @@ fun HostEditorScreen(
             title = if (original == null) "New host" else original!!.name,
             onBack = onDone,
             actions = {
-                BerthButton("Save", onClick = ::save, kind = ButtonKind.TEXT, enabled = canSave)
+                BerthButton(
+                    when {
+                        fromLink == null || original != null -> "Save"
+                        fromLink.scheme == SshLink.Scheme.SFTP -> "Save and open files"
+                        fromLink.tunnelsOnly -> "Save and open tunnels"
+                        else -> "Save and connect"
+                    },
+                    onClick = ::save,
+                    kind = ButtonKind.TEXT,
+                    enabled = canSave,
+                )
             },
         )
         Column(
@@ -194,6 +213,15 @@ fun HostEditorScreen(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
         ) {
+            if (fromLink != null && original == null) {
+                Text(
+                    "From the link ${fromLink.target}: no saved host has this address, port and user." +
+                        if (fromLink.forwards.isNotEmpty()) " Its ${if (fromLink.forwards.size == 1) "forward is" else "${fromLink.forwards.size} forwards are"} saved as tunnels with the host." else "",
+                    style = BerthType.caption,
+                    color = c.text2,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Box {
                     Swatch(color, (if (monogramEdited) monogram else Host.monogramFor(name.ifBlank { address })).ifBlank { "??" }, 56.dp, modifier = Modifier.clickable { colorPicker = !colorPicker })

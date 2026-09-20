@@ -7,6 +7,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import app.berth.android.files.FilesCenter
+import app.berth.android.links.LinkInbox
 import app.berth.android.security.AppLockController
 import app.berth.android.security.BerthClipboard
 import app.berth.android.security.FakeAuthenticator
@@ -265,8 +266,10 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
+    /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
+    val links = LinkInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links)
     }
 
     private companion object {

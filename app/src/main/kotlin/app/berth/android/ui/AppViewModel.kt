@@ -3,6 +3,7 @@ package app.berth.android.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.files.FilesCenter
+import app.berth.android.links.LinkInbox
 import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
@@ -37,6 +38,7 @@ import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
@@ -46,16 +48,20 @@ import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
+import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshConfigParseResult
 import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
+import app.berth.ssh.SshLink
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -83,7 +89,20 @@ class AppViewModel @Inject constructor(
     val files: FilesCenter,
     /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
     val security: SecurityCenter,
+    /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
+    private val links: LinkInbox,
 ) : ViewModel() {
+    init {
+        viewModelScope.launch {
+            links.links.collect { raw ->
+                // Under the lock the user faces the lock screen; a link then would open a login behind
+                // it. It waits for the unlock, as a notification's tap and the key prompts do.
+                security.lock.awaitUnlocked()
+                openLink(raw)
+            }
+        }
+    }
+
     val hosts: StateFlow<List<Host>> = hostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val identities: StateFlow<List<Identity>> = identityRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val knownHosts: StateFlow<List<KnownHostKey>> = knownHostRepository.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -173,6 +192,94 @@ class AppViewModel @Inject constructor(
     /** A Tunnels tab on [host] (spec C14): its port forwards with no shell, whatever the host's toggle says. */
     fun openTunnels(host: Host, workspaceId: String? = null) {
         viewModelScope.launch { sessions.openTunnels(host, workspaceId) }
+    }
+
+    // ---- links -----------------------------------------------------------------------------------
+
+    private val _linkOutcome = MutableStateFlow<LinkOutcome?>(null)
+
+    /** What the last link came to, for the shell to act on and then [clearLinkOutcome]. */
+    val linkOutcome: StateFlow<LinkOutcome?> = _linkOutcome.asStateFlow()
+
+    fun clearLinkOutcome() {
+        _linkOutcome.value = null
+    }
+
+    /**
+     * An `ssh://` or `sftp://` link, or a bare `user@host:port` ([SshLink]). A saved host at the
+     * link's address, port and user opens straight away, as the link asks ([openFromLink]); no such
+     * host sends the shell to the editor, prefilled from the link, and saving there connects. A link
+     * that cannot be read ends in a notice naming what was wrong, never in a crash.
+     */
+    suspend fun openLink(raw: String) {
+        _linkOutcome.value = when (val result = SshLink.parse(raw)) {
+            is SshLink.Result.Malformed -> LinkOutcome.Malformed(result.reason)
+            is SshLink.Result.Parsed -> {
+                val host = hostFor(result.link)
+                if (host == null) {
+                    LinkOutcome.NewHost(raw)
+                } else {
+                    openFromLink(host, result.link)
+                    LinkOutcome.Staged
+                }
+            }
+        }
+    }
+
+    /**
+     * The saved host a link names: the same address (case aside) and port, and the link's user when
+     * it gives one. Of several, the one connected most recently, then the oldest saved.
+     */
+    suspend fun hostFor(link: SshLink): Host? = hostRepository.observeAll().first()
+        .filter { it.address.equals(link.host, ignoreCase = true) && it.port == link.port && (link.user == null || it.user == link.user) }
+        .maxWithOrNull(compareBy<Host> { it.lastConnectedAt ?: Long.MIN_VALUE }.thenByDescending { it.createdAt })
+
+    /**
+     * Opens what [link] asks for on [host]: Files at the link's folder for `sftp://`, the host's
+     * forwards alone for a tunnels-only link, otherwise a terminal (or the forwards, when the host
+     * itself is marked tunnels only). Forwards the link carries are saved on the host first, each
+     * once, so they start with the login and stay in the host's tunnels.
+     */
+    suspend fun openFromLink(host: Host, link: SshLink) {
+        saveForwards(host, link.forwards)
+        when {
+            link.scheme == SshLink.Scheme.SFTP -> sessions.openFilesForHost(host, folder = link.path)
+            link.tunnelsOnly -> sessions.openTunnels(host)
+            else -> sessions.connect(host)
+        }
+    }
+
+    /** Saves a host made in the editor from a link, then opens what the link asked for on it. */
+    fun saveHostFromLink(host: Host, password: String?, link: SshLink) {
+        viewModelScope.launch {
+            val saved = saveHostNow(host, password)
+            openFromLink(saved, link)
+            _linkOutcome.value = LinkOutcome.Staged
+        }
+    }
+
+    private suspend fun saveForwards(host: Host, forwards: List<SshConfigForward>) {
+        if (forwards.isEmpty()) return
+        val existing = tunnelRepository.observeAll().first().filter { it.hostId == host.id }
+        for (fwd in forwards) {
+            val same = existing.any {
+                it.type == fwd.type && it.bindAddress == fwd.bindAddress && it.bindPort == fwd.bindPort &&
+                    (fwd.type == TunnelType.DYNAMIC || (it.destinationHost == fwd.destinationHost && it.destinationPort == fwd.destinationPort))
+            }
+            if (same) continue
+            tunnelRepository.upsert(
+                Tunnel(
+                    id = UUID.randomUUID().toString(),
+                    hostId = host.id,
+                    type = fwd.type,
+                    bindAddress = fwd.bindAddress,
+                    bindPort = fwd.bindPort,
+                    destinationHost = fwd.destinationHost.ifEmpty { "localhost" },
+                    destinationPort = fwd.destinationPort,
+                    enabled = true,
+                ),
+            )
+        }
     }
 
     /** `user@host:port`, `host:port`, `ssh://user@host:port` or a bare address, connected as an unsaved host. */
@@ -293,21 +400,25 @@ class AppViewModel @Inject constructor(
 
     /** Saves the host; a non-null [password] is stored encrypted and referenced by the auth method. */
     fun saveHost(host: Host, password: String?) {
-        viewModelScope.launch {
-            var h = host
-            if (h.auth is AuthMethod.Password) {
-                val secretId = AuthResolver.passwordSecretId(h.id)
-                if (!password.isNullOrEmpty()) {
-                    secrets.put(secretId, password.toByteArray(Charsets.UTF_8))
-                    h = h.copy(auth = AuthMethod.Password(secretId))
-                } else if ((h.auth as AuthMethod.Password).secretId == null) {
-                    h = h.copy(auth = AuthMethod.Password(null))
-                }
-            } else {
-                secrets.delete(AuthResolver.passwordSecretId(h.id))
+        viewModelScope.launch { saveHostNow(host, password) }
+    }
+
+    /** [saveHost] in the caller's coroutine; returns the host as saved, its auth pointing at the stored password. */
+    suspend fun saveHostNow(host: Host, password: String?): Host {
+        var h = host
+        if (h.auth is AuthMethod.Password) {
+            val secretId = AuthResolver.passwordSecretId(h.id)
+            if (!password.isNullOrEmpty()) {
+                secrets.put(secretId, password.toByteArray(Charsets.UTF_8))
+                h = h.copy(auth = AuthMethod.Password(secretId))
+            } else if ((h.auth as AuthMethod.Password).secretId == null) {
+                h = h.copy(auth = AuthMethod.Password(null))
             }
-            hostRepository.upsert(h)
+        } else {
+            secrets.delete(AuthResolver.passwordSecretId(h.id))
         }
+        hostRepository.upsert(h)
+        return h
     }
 
     fun deleteHost(id: String) {
@@ -637,3 +748,15 @@ class AppViewModel @Inject constructor(
 }
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
+
+/** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
+sealed interface LinkOutcome {
+    /** A tab was opened or brought on stage; the shell pops back to the Stage. */
+    data object Staged : LinkOutcome
+
+    /** No saved host matched: the editor opens prefilled from [raw], and saving there connects. */
+    data class NewHost(val raw: String) : LinkOutcome
+
+    /** The link could not be read; [reason] is one sentence for the notice bar. */
+    data class Malformed(val reason: String) : LinkOutcome
+}
