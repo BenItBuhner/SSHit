@@ -273,11 +273,15 @@ private fun BarAction(label: String, onClick: () -> Unit) {
 /**
  * The search bar under the header (spec C17): the query field with the `Aa` and `.*` toggles
  * behind it, `3/12`, previous, next and close. Enter and the keyboard's search action step to the
- * next match; the view scrolls to the current match and never moves the input line.
+ * next match; the view scrolls to the current match and never moves the input line. The fill and
+ * the island geometry come from the tab strip's resolved style, as the selection bar's do, so the
+ * bar sits in the header's chrome under any direction.
  */
 @Composable
 private fun SearchBar(tools: StageTools, session: TerminalSession) {
     val c = Berth.colors
+    val style = LocalTabStripStyle.current
+    val resolved = rememberResolvedTabStyle(style)
     val search = tools.search
     val viewport = tools.viewport
     val focus = remember { FocusRequester() }
@@ -296,17 +300,37 @@ private fun SearchBar(tools: StageTools, session: TerminalSession) {
         val range = search.currentRange(session.emulator) ?: return@LaunchedEffect
         viewport.scrollOffset = synchronized(session.emulator.lock) { offsetShowing(session.emulator, range.start.row, viewport.scrollOffset) }
     }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(c.surface1)
-            .padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    val row: @Composable (Modifier) -> Unit = { m -> SearchBarRow(tools, field, { field = it }, focus, ::step, m) }
+    when (style.chrome) {
+        StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill))
+        StripChrome.ISLAND -> Box(
+            Modifier
+                .fillMaxWidth()
+                .background(resolved.headerFill)
+                .padding(start = style.islandInset, end = style.islandInset, bottom = style.islandInset),
+        ) {
+            row(Modifier.fillMaxWidth().clip(RoundedCornerShape(resolved.islandRadius)).background(resolved.islandFill))
+        }
+    }
+}
+
+/** The search bar's row: the field with its toggles, the count, previous, next and close. */
+@Composable
+private fun SearchBarRow(
+    tools: StageTools,
+    field: TextFieldValue,
+    onField: (TextFieldValue) -> Unit,
+    focus: FocusRequester,
+    step: (Int) -> Unit,
+    modifier: Modifier,
+) {
+    val c = Berth.colors
+    val search = tools.search
+    Row(modifier.padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         BerthField(
             value = field,
             onValueChange = {
-                field = it
+                onField(it)
                 if (search.query != it.text) {
                     search.query = it.text
                     search.invalidate()
