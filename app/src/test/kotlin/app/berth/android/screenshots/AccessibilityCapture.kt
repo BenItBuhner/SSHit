@@ -12,6 +12,7 @@ import com.github.takahirom.roborazzi.checkRoboAccessibility
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityViewCheckResult
 import com.google.android.apps.common.testing.accessibility.framework.checks.SpeakableTextPresentCheck
+import com.google.android.apps.common.testing.accessibility.framework.checks.TextContrastCheck
 import com.google.android.apps.common.testing.accessibility.framework.checks.TouchTargetSizeCheck
 import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
 import app.berth.android.ui.stage.DeckKeyTag
@@ -26,7 +27,9 @@ import java.io.File
  * contrast measured against the pixels just drawn, duplicate descriptions, traversal order) runs
  * over every Compose root on screen, so a sheet or a menu is audited along with the screen under
  * it, and a result at the ERROR level fails the test that took the picture. `BERTH_A11Y_LEVEL`
- * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list.
+ * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. Three findings
+ * are exempt by what they are, never by lowering the bar: a Deck key's width, a row cut at the
+ * window's edge on its way in or out of a list, and the contrast of a disabled control's text.
  */
 @OptIn(ExperimentalRoborazziApi::class)
 fun ComposeTestRule.captureAudited(file: File) {
@@ -50,14 +53,14 @@ private val Level = RoborazziATFAccessibilityChecker.CheckLevel.valueOf(System.g
 
 @OptIn(ExperimentalRoborazziApi::class)
 private val AuditOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge)),
+    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, DisabledControlContrast)),
     failureLevel = Level,
 )
 
 /** A sheet's or a menu's window: the same audit, and a row the half-open sheet has not yet shown is not a finding. */
 @OptIn(ExperimentalRoborazziApi::class)
 private val SheetAuditOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet)),
+    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, DisabledControlContrast)),
     failureLevel = Level,
 )
 
@@ -117,6 +120,30 @@ private object UnderTheHalfOpenSheet : TypeSafeMatcher<AccessibilityViewCheckRes
         if (!result.isClippingFinding()) return false
         val element = result.element ?: return false
         return element.boundsInScreen.bottom >= element.window.boundsInScreen.bottom - 1
+    }
+}
+
+/**
+ * And the contrast of a disabled control's text. The Deck's keys on a Stage that is not connected
+ * are disabled (`enabled = live`) and drawn at half alpha, so their `text.1` samples under the
+ * 4.5:1 the check asks of read text; WCAG 1.4.3, which the check implements, exempts the text of
+ * an inactive user interface component, and this exempts exactly that: a contrast finding on an
+ * element that is disabled, or inside one. The check's level is untouched, so the same text on a
+ * live Stage, or any read text anywhere else, still shows when it falls short.
+ */
+private object DisabledControlContrast : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+    override fun describeTo(description: Description) {
+        description.appendText("a contrast finding on a disabled control's text")
+    }
+
+    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
+        if (result.accessibilityHierarchyCheck != TextContrastCheck::class.java) return false
+        var element: ViewHierarchyElement? = result.element
+        while (element != null) {
+            if (element.isEnabled == false) return true
+            element = element.parentView
+        }
+        return false
     }
 }
 
