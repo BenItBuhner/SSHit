@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: JVM suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Dependencies, the wrapper and the build cache between runs; entries are written from every branch so the
+      # first pull request seeds them, and only when the build files change.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      # Robolectric fetches the android-all jar for each SDK level the suite runs on (a hundred megabytes each) into
+      # the local Maven repository, outside Gradle's caches.
+      - name: Cache Robolectric's android-all jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: robolectric-${{ runner.os }}-
+
+      # The live cases (sshj against a server, the SFTP client, the tunnels, the jump chain, the app's live screenshot
+      # flows) run against two sshds started in the job: the target on 2222 and the jump host on 2223 that the
+      # ProxyJump chain and the Tunnels cases go through (SSH_TEST_JUMP_PORT). The script exports SSH_TEST_* into
+      # this step's shell only, so the account's password is in the sshds' shadow entry and the test JVM's
+      # environment and nowhere else; every module's test task forwards those variables (see app/build.gradle.kts).
+      # Both variants' unit tests run: testDebugUnitTest and testReleaseUnitTest for the Android modules, test for
+      # the JVM ones.
+      - name: Run the suite against the live sshds
+        run: |
+          source .github/scripts/test-sshd.sh
+          ./gradlew test --continue --console=plain
+
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            **/build/reports/tests/**
+            **/build/test-results/**
+            app/build/outputs/roborazzi/**
+
+  release:
+    name: Release build and R8 proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      # The release APK, signed with a key made for this run alone (so the APK installs for a review, and so the
+      # BERTH_RELEASE_* route the real key takes is the one exercised), R8's records checked by
+      # verifyReleaseKeepRules, and each JVM module's suite run over R8's output (testR8) against the live sshd.
+      - name: Build the release APK and run the suites over R8's output
+        run: |
+          source .github/scripts/test-sshd.sh
+          store="$RUNNER_TEMP/ci-release.jks"
+          storepass="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
+          echo "::add-mask::$storepass"
+          keytool -genkeypair -keystore "$store" -storepass "$storepass" -keypass "$storepass" -alias berth-ci \
+            -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Berth CI throwaway key" >/dev/null
+          export BERTH_RELEASE_STORE_FILE="$store" BERTH_RELEASE_STORE_PASSWORD="$storepass"
+          export BERTH_RELEASE_KEY_ALIAS=berth-ci BERTH_RELEASE_KEY_PASSWORD="$storepass"
+          ./gradlew assembleRelease assembleDebug testR8 --continue --console=plain
+
+      - name: APK sizes
+        if: always()
+        run: |
+          analyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          {
+            echo "### APK sizes"
+            echo
+            echo '| APK | file size | download size (estimate) |'
+            echo '|---|---|---|'
+            for apk in app/build/outputs/apk/release/*.apk app/build/outputs/apk/debug/*.apk; do
+              [ -f "$apk" ] || continue
+              if [ -x "$analyzer" ]; then
+                echo "| \`$(basename "$apk")\` | $("$analyzer" --human-readable apk file-size "$apk") | $("$analyzer" --human-readable apk download-size "$apk") |"
+              else
+                echo "| \`$(basename "$apk")\` | $(stat -c %s "$apk") bytes | (apkanalyzer not on this runner) |"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # For a pull request; a version tag's mapping goes on its GitHub release instead (release.yml), for as long
+      # as the release exists, since a report from that APK reads through nothing else.
+      - name: Release APK and mapping
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/mapping/release/

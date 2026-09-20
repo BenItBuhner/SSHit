@@ -19,6 +19,13 @@ import java.net.URLDecoder
  * shell. A forward's bind address left out, or left empty (`:8080:host:80`), is loopback; every
  * interface has to be written (`*`). The fragment names the host when one is made from the link
  * (ConnectBot writes `#name`). Anything else in the query is left alone rather than refused.
+ *
+ * A link is another app's word, handed over by an exported intent, so what is read is bounded and
+ * what is kept is what a person could have written: a link past [MAX_LENGTH] characters is refused
+ * unread, one may ask for [MAX_FORWARDS] forwards at most, each with its ports in range and its
+ * addresses in the forms above; a user with whitespace or a control or format character in it is
+ * refused (no server has one); a name loses such characters and is cut to [MAX_NAME_LENGTH]; and a
+ * reason quotes at most [QUOTED_MAX] characters of the part it names, cleaned the same way.
  */
 data class SshLink(
     val scheme: Scheme,
@@ -30,9 +37,11 @@ data class SshLink(
     /** The `sftp://` folder to open, absolute, without a trailing slash; null for the home folder or on `ssh://`. */
     val path: String?,
     /**
-     * The `;fingerprint=` connection parameter as written. Parsed and carried, read by nothing yet:
-     * comparing it against the host key in the trust flow (a match as a line on the sheet, a
-     * mismatch leading it in danger) is the release-hardening work on the link surface.
+     * The `;fingerprint=` connection parameter as written, in whatever form `HostKeyFingerprints`
+     * reads (the draft's dashed hex, `SHA256:` base64, `MD5:` hex); null when the link has none or
+     * an empty one. The login the link opens takes it to the trust sheets, which say how it compares
+     * with the server's key (a match as a line, a mismatch leading the sheet in danger); it decides
+     * nothing, and it names the destination's key, never a jump host's.
      */
     val fingerprint: String?,
     val forwards: List<SshConfigForward>,
@@ -68,12 +77,30 @@ data class SshLink(
     }
 
     companion object {
+        /**
+         * The most characters a link may have. A link comes from another app through a `VIEW` intent,
+         * whose data can be hundreds of kilobytes; what parses is held as written in the shell's back
+         * stack (the editor is opened on the link) and so in the saved instance state, which has a
+         * budget of its own. No link anyone writes comes near this; one that does is refused unread.
+         */
+        const val MAX_LENGTH = 2048
+
+        /** The most forwards one link may ask for; each is a pending row in the editor and a listener at login. */
+        const val MAX_FORWARDS = 16
+
+        /** The most characters kept of `#name`, a display name the editor shows for editing. */
+        const val MAX_NAME_LENGTH = 64
+
+        /** The most characters of a link's part a reason quotes. */
+        const val QUOTED_MAX = 64
+
         private val SCHEME = Regex("""^([A-Za-z][A-Za-z0-9+.-]*)://""")
         private val HOST_NAME = Regex("""^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$""")
         private val IPV6 = Regex("""^[0-9A-Fa-f:.]+(?:%[A-Za-z0-9._-]+)?$""")
 
         /** Reads [text] as a link; a [Result.Malformed] names the first thing wrong with it and never throws. */
         fun parse(text: String): Result {
+            if (text.length > MAX_LENGTH) return Result.Malformed("The link is too long.")
             val raw = text.trim()
             if (raw.isEmpty()) return Result.Malformed("The link is empty.")
 
@@ -82,7 +109,7 @@ data class SshLink(
                 null -> Scheme.SSH
                 "ssh" -> Scheme.SSH
                 "sftp" -> Scheme.SFTP
-                else -> return Result.Malformed("Only ssh:// and sftp:// links open here, not ${schemeMatch.groupValues[1]}://.")
+                else -> return Result.Malformed("Only ssh:// and sftp:// links open here, not ${clip(schemeMatch.groupValues[1])}://.")
             }
             var rest = if (schemeMatch != null) raw.substring(schemeMatch.range.last + 1) else raw
 
@@ -96,17 +123,33 @@ data class SshLink(
             if (authority.any { it.isWhitespace() }) return Result.Malformed("The host part has a space in it.")
 
             val at = authority.lastIndexOf('@')
+            // Standard base64 has `/` in about half of all SHA-256 fingerprints, and an unencoded one ends
+            // the authority: the `@host` is in the path and what is left reads as a host that is not one.
+            // Named for what it is, since the fix (`%2F`) is the writer's, not a wrong host.
+            if (at < 0 && path != null && authority.contains(";fingerprint=", ignoreCase = true)) {
+                return Result.Malformed("The fingerprint has a / in it; write %2F in its place.")
+            }
             val userInfo = if (at >= 0) authority.substring(0, at) else null
             val hostPort = if (at >= 0) authority.substring(at + 1) else authority
             var user: String? = null
             var fingerprint: String? = null
             if (userInfo != null) {
-                val pieces = userInfo.split(';')
-                user = decode(pieces[0])
+                val semicolon = userInfo.indexOf(';')
+                user = decode(if (semicolon >= 0) userInfo.substring(0, semicolon) else userInfo)
                 if (user.isEmpty()) return Result.Malformed("The user before @ is empty.")
-                for (param in pieces.drop(1)) {
-                    val key = param.substringBefore('=')
-                    if (key.equals("fingerprint", ignoreCase = true) && '=' in param) fingerprint = decode(param.substringAfter('='))
+                // Percent-encoding is the one way whitespace or a control character reaches a user, and no
+                // server has such a user; `@` stays legal, since `user@REALM` logins are real.
+                if (user.any { it.isWhitespace() || it.isInvisible() }) return Result.Malformed("The user has a character that cannot be in a user name.")
+                if (semicolon >= 0) {
+                    // The draft's `;c-param,c-param`; `;` between parameters is taken too. No form of a
+                    // fingerprint has a `,` or `;` in it, so the split loses nothing.
+                    var fingerprintSeen = false
+                    for (param in userInfo.substring(semicolon + 1).split(',', ';')) {
+                        if (!param.substringBefore('=').equals("fingerprint", ignoreCase = true) || '=' !in param) continue
+                        if (fingerprintSeen) return Result.Malformed("The link names the fingerprint twice.")
+                        fingerprintSeen = true
+                        fingerprint = decode(param.substringAfter('=')).takeIf { it.isNotEmpty() }
+                    }
                 }
             }
 
@@ -129,12 +172,12 @@ data class SshLink(
                 host = hostPort.substringBefore(':')
                 portText = if (colons == 1) hostPort.substringAfter(':') else null
                 if (host.isEmpty()) return Result.Malformed("No host is named.")
-                if (!HOST_NAME.matches(host)) return Result.Malformed("\u201C$host\u201D isn't a host name or address.")
+                if (!HOST_NAME.matches(host)) return Result.Malformed("\u201C${clip(host)}\u201D isn't a host name or address.")
             }
             val port = when {
                 portText == null -> 22
                 portText.isEmpty() -> return Result.Malformed("The port after : is empty.")
-                else -> portText.toIntOrNull()?.takeIf { it in 1..65535 } ?: return Result.Malformed("\u201C$portText\u201D isn't a port from 1 to 65535.")
+                else -> portText.toIntOrNull()?.takeIf { it in 1..65535 } ?: return Result.Malformed("\u201C${clip(portText)}\u201D isn't a port from 1 to 65535.")
             }
 
             val forwards = ArrayList<SshConfigForward>()
@@ -144,17 +187,28 @@ data class SshLink(
                     if (pair.isEmpty()) continue
                     val key = decode(pair.substringBefore('='))
                     val value = if ('=' in pair) decode(pair.substringAfter('=')) else ""
-                    when {
-                        key == "L" || key.equals("local", ignoreCase = true) -> forwards += forward(TunnelType.LOCAL, value) ?: return Result.Malformed("The forward \u201C$value\u201D isn't [bind:]port:host:hostport.")
-                        key == "R" || key.equals("remote", ignoreCase = true) -> forwards += forward(TunnelType.REMOTE, value) ?: return Result.Malformed("The remote forward \u201C$value\u201D isn't [bind:]port:host:hostport.")
-                        key == "D" || key.equals("dynamic", ignoreCase = true) -> forwards += forward(TunnelType.DYNAMIC, value) ?: return Result.Malformed("The dynamic forward \u201C$value\u201D isn't [bind:]port.")
-                        key == "N" -> noShell = true
+                    val type = when {
+                        key == "L" || key.equals("local", ignoreCase = true) -> TunnelType.LOCAL
+                        key == "R" || key.equals("remote", ignoreCase = true) -> TunnelType.REMOTE
+                        key == "D" || key.equals("dynamic", ignoreCase = true) -> TunnelType.DYNAMIC
+                        key == "N" -> { noShell = true; continue }
+                        else -> continue
                     }
+                    // Each forward is a pending row in the editor and a listener at login; a link is not owed more than a person would write.
+                    if (forwards.size >= MAX_FORWARDS) return Result.Malformed("The link asks for more than $MAX_FORWARDS forwards.")
+                    val forward = forward(type, value)
+                        ?: return Result.Malformed("The ${type.linkWord()} \u201C${clip(value)}\u201D isn't ${if (type == TunnelType.DYNAMIC) "[bind:]port" else "[bind:]port:host:hostport"}.")
+                    if (forward.bindPort !in 1..65535 || (type != TunnelType.DYNAMIC && forward.destinationPort !in 1..65535)) {
+                        return Result.Malformed("The ${type.linkWord()} \u201C${clip(value)}\u201D has a port outside 1 to 65535.")
+                    }
+                    forwards += forward
                 }
             }
 
-            val folder = path?.let(::decode)?.trimEnd('/')?.takeIf { it.isNotEmpty() && scheme == Scheme.SFTP }
-            val name = fragment?.let(::decode)?.trim()?.takeIf { it.isNotEmpty() }
+            // The draft's sftp form ends the path in `;type=dir` or `;type=file`; a folder is what opens either way.
+            val folder = path?.let(::decode)?.replace(SFTP_TYPE, "")?.trimEnd('/')?.takeIf { it.isNotEmpty() && scheme == Scheme.SFTP }
+            // A name is decorative, so what cannot be in one is dropped rather than refused, and it is cut to what the editor's field shows.
+            val name = fragment?.let(::decode)?.filterNot { it.isInvisible() }?.trim()?.take(MAX_NAME_LENGTH)?.trimEnd()?.takeIf { it.isNotEmpty() }
             return Result.Parsed(
                 SshLink(
                     scheme = scheme,
@@ -173,9 +227,14 @@ data class SshLink(
         /**
          * `ssh -L`'s `[bind:]port:host:hostport` (or `-D`'s `[bind:]port`) put in the config file's
          * `[bind:]port host:hostport` shape and read by the config parser, so a link's forward and
-         * an imported one come out the same. Brackets keep an IPv6 address in one piece.
+         * an imported one come out the same. Brackets keep an IPv6 address in one piece. The bind
+         * and destination addresses have to be a host name, an address or `*`, as the tunnel editor
+         * would take them; the ports are the caller's to range-check, so it can say which. Null for
+         * a value that is not the shape, including one with whitespace or a quote, which the config
+         * tokenizer would otherwise read as the end of the forward or as quoting and drop.
          */
         private fun forward(type: TunnelType, value: String): SshConfigForward? {
+            if (value.any { it.isWhitespace() || it == '"' }) return null
             val parts = splitColons(value).toMutableList()
             var listenParts = if (type == TunnelType.DYNAMIC) parts.size else parts.size - 2
             if (listenParts !in 1..2) return null
@@ -189,8 +248,36 @@ data class SshLink(
             if (parts.any { it.isEmpty() }) return null
             val listen = parts.take(listenParts).joinToString(":")
             val spec = if (type == TunnelType.DYNAMIC) listen else "$listen ${parts[listenParts]}:${parts[listenParts + 1]}"
-            return SshConfigParser.parseForward(type, spec)
+            val forward = SshConfigParser.parseForward(type, spec) ?: return null
+            if (!forward.bindAddress.isAddress()) return null
+            if (type != TunnelType.DYNAMIC && !forward.destinationHost.isAddress()) return null
+            return forward
         }
+
+        /** A host name or an address, as the authority takes them; `0.0.0.0` is what `*` became. */
+        private fun String.isAddress(): Boolean = HOST_NAME.matches(this) || IPV6.matches(this)
+
+        private fun TunnelType.linkWord(): String = when (this) {
+            TunnelType.LOCAL -> "forward"
+            TunnelType.REMOTE -> "remote forward"
+            TunnelType.DYNAMIC -> "dynamic forward"
+        }
+
+        /**
+         * A character that cannot be seen and can change how what is around it reads: a control
+         * character, a format character (the bidi overrides and zero-width marks are here, and
+         * `isISOControl` alone misses them), or a line or paragraph separator.
+         */
+        private fun Char.isInvisible(): Boolean =
+            isISOControl() || category == CharCategory.FORMAT || category == CharCategory.LINE_SEPARATOR || category == CharCategory.PARAGRAPH_SEPARATOR
+
+        /** [part] as a reason quotes it: the invisible characters out, cut to [QUOTED_MAX] with an ellipsis. */
+        private fun clip(part: String): String {
+            val clean = part.filterNot { it.isInvisible() }
+            return if (clean.length > QUOTED_MAX) clean.take(QUOTED_MAX) + "\u2026" else clean
+        }
+
+        private val SFTP_TYPE = Regex(""";type=[A-Za-z]*$""")
 
         private fun splitColons(value: String): List<String> {
             val parts = ArrayList<String>()

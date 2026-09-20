@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.berth.android.diagnostics.ReportKind
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -61,8 +62,10 @@ fun SettingsScreen(
     onThemes: () -> Unit = {},
     onAppearance: () -> Unit = {},
     onDeckEditor: () -> Unit = {},
+    onDiagnostics: () -> Unit = {},
 ) {
     val c = Berth.colors
+    val reports by vm.reports.reports.collectAsState()
     val theme by vm.interfaceTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
@@ -172,6 +175,22 @@ fun SettingsScreen(
             Panel(label = "Data") {
                 ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
                 ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
+            }
+
+            Panel(label = "Diagnostics") {
+                val crashes = reports.count { it.kind == ReportKind.CRASH }
+                ListRow(
+                    "Crash and connection reports",
+                    subtitle = when {
+                        reports.isEmpty() -> "None yet \u00B7 written to this phone only, never sent"
+                        crashes == 0 -> "${reports.size} on this phone \u00B7 never sent by themselves"
+                        else -> "${reports.size} on this phone, $crashes ${if (crashes == 1) "crash" else "crashes"} \u00B7 never sent by themselves"
+                    },
+                    surface = Color.Transparent,
+                    minHeight = 44.dp,
+                    onClick = onDiagnostics,
+                    trailing = chevron,
+                )
             }
 
             Panel(label = "About") {

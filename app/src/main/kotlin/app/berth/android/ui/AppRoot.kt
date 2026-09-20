@@ -47,6 +47,8 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
+import app.berth.android.ui.diagnostics.CrashReportHost
+import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
@@ -104,6 +106,7 @@ sealed interface Screen : NavKey {
     @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
+    @Serializable data object Diagnostics : Screen
 }
 
 /** The drawer's width as a sheet over the Stage (spec C7). */
@@ -182,7 +185,7 @@ private fun Shell(vm: AppViewModel) {
     // pending; unreadable, so a notice saying what was wrong.
     val linkOutcome by vm.linkOutcome.collectAsState()
     var linkNotice by remember { mutableStateOf<String?>(null) }
-    var quickConnectSpec by remember { mutableStateOf<String?>(null) }
+    var quickConnectLink by remember { mutableStateOf<LinkOutcome.QuickConnect?>(null) }
     LaunchedEffect(linkOutcome) {
         when (val outcome = linkOutcome) {
             null -> return@LaunchedEffect
@@ -191,7 +194,7 @@ private fun Shell(vm: AppViewModel) {
                 toStage()
                 if (drawer.isOpen) drawer.close()
             }
-            is LinkOutcome.QuickConnect -> quickConnectSpec = outcome.spec
+            is LinkOutcome.QuickConnect -> quickConnectLink = outcome
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
             is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
@@ -308,8 +311,10 @@ private fun Shell(vm: AppViewModel) {
                             onThemes = { go(Screen.Themes) },
                             onAppearance = { go(Screen.Appearance) },
                             onDeckEditor = { go(Screen.DeckEditor) },
+                            onDiagnostics = { go(Screen.Diagnostics) },
                         )
                     }
+                    is Screen.Diagnostics -> NavEntry(key) { DiagnosticsScreen(vm.reports, onBack = { back() }) }
                     is Screen.KnownHosts -> NavEntry(key) { KnownHostsScreen(vm, onBack = { back() }) }
                     is Screen.Tunnels -> NavEntry(key) { TunnelsScreen(vm, hostId = key.hostId, onBack = { back() }) }
                     is Screen.Snippets -> NavEntry(key) { SnippetsScreen(vm, onBack = { back() }) }
@@ -390,13 +395,13 @@ private fun Shell(vm: AppViewModel) {
     }
     TabSheets(vm = vm, ui = tabUi, actions = tabActions, onAddHost = { go(Screen.HostEditor(null)) })
     // A plain link's landing (spec, Deep links): Quick connect over whatever is up, the link's address in its field.
-    quickConnectSpec?.let { spec ->
+    quickConnectLink?.let { link ->
         QuickConnectSheet(
             vm = vm,
-            initialSpec = spec,
-            onDismiss = { quickConnectSpec = null },
+            fromLink = link,
+            onDismiss = { quickConnectLink = null },
             onConnected = {
-                quickConnectSpec = null
+                quickConnectLink = null
                 sessionSheet = false
                 toStage()
                 if (drawer.isOpen) closeDrawer()
@@ -418,7 +423,12 @@ private fun Shell(vm: AppViewModel) {
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
-    PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
+    // On the launch after a crash the restore reconnects while the crash sheet is up, and a password,
+    // passphrase or unlock prompt would rise under it: two sheets, two scrims. The transport's prompts
+    // wait (they block on PromptCenter either way) until the crash sheet is closed, so there is one sheet.
+    val unreadCrash by vm.reports.unread.collectAsState()
+    if (unreadCrash == null) PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)
     RemoteClipboardNoticeSheet(vm.security.remoteClipboard)
+    CrashReportHost(vm.reports)
 }

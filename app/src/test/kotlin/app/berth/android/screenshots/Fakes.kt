@@ -6,6 +6,8 @@ import android.content.Context
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import app.berth.android.diagnostics.BerthLog
+import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
 import app.berth.android.links.LinkInbox
 import app.berth.android.security.AppLockController
@@ -58,6 +60,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import org.robolectric.Shadows.shadowOf
+import java.io.File
+import kotlin.io.path.createTempDirectory
 
 /** In-memory repositories so screens render against the real view model without Room or Keystore. */
 class InMemoryHosts : HostRepository {
@@ -261,15 +265,18 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val authResolver: AuthResolver by lazy { AuthResolver(identities, secrets, keyUnlocker, prompts) }
     val process = FakeLifecycleOwner()
     val notifier = SessionNotifier(context)
+    /** Reports in a directory of this graph's own, so no test sees another's crash; the ring is the process-wide one. */
+    val reportsDir: File = createTempDirectory("berth-reports").toFile()
+    val reports = CrashReporter(reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
     private val manager = lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports)
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
     val links = LinkInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports)
     }
 
     private companion object {

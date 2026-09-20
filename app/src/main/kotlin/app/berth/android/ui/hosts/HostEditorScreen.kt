@@ -157,7 +157,14 @@ fun HostEditorScreen(
 
     val portValue = port.toIntOrNull()
     val portError = port.isNotBlank() && (portValue == null || portValue !in 1..65535)
-    val canSave = address.isNotBlank() && user.isNotBlank() && !portError
+    // The link's forwards as the tunnels Save would make, each checked as the tunnel editor checks one: against
+    // the saved tunnels and against the other rows kept from the link, so two rows on one port are said here.
+    val pendingDrafts = pending.mapIndexed { index, fwd -> fwd.toTunnel(hostId = original?.id ?: "", id = "pending-$index") }
+    val keptDrafts = pendingDrafts.filterIndexed { index, _ -> pending[index] !in leftOut }
+    fun pendingProblem(index: Int): String? = pendingDrafts[index].validate(allTunnels + keptDrafts)
+    // A kept row with a problem holds Save, as the tunnel editor's own Save is held: switching the row off lets the rest through.
+    val pendingProblem = pending.indices.any { pending[it] !in leftOut && pendingProblem(it) != null }
+    val canSave = address.isNotBlank() && user.isNotBlank() && !portError && !pendingProblem
 
     fun save() {
         val base = original
@@ -328,13 +335,12 @@ fun HostEditorScreen(
                 // The link's forwards, seen here before anything is saved: the switch is what Save reads.
                 val pendingRows: @Composable () -> Unit = {
                     pending.forEachIndexed { index, fwd ->
-                        val draft = fwd.toTunnel(hostId = original?.id ?: "", id = "pending-$index")
                         PendingTunnelRow(
-                            tunnel = draft,
+                            tunnel = pendingDrafts[index],
                             kept = fwd !in leftOut,
                             onKeptChange = { keep -> leftOut = if (keep) leftOut - fwd else leftOut + fwd },
                             // The same check the tunnel editor runs, so a port a saved tunnel already listens on is said here, not found at login.
-                            problem = draft.validate(allTunnels),
+                            problem = pendingProblem(index),
                             surface = Color.Transparent,
                         )
                     }

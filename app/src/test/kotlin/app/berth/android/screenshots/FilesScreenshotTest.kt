@@ -22,7 +22,6 @@ import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.isToggleable
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -37,6 +36,8 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.files.FilesBrowser
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferKind
@@ -103,8 +104,11 @@ import kotlin.io.path.createTempDirectory
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class FilesScreenshotTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph

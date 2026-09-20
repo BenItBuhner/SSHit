@@ -8,9 +8,10 @@ import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.Workspace
@@ -36,8 +37,11 @@ import kotlin.math.abs
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class TabStripLayoutTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val style = TabStripStyle(tabMinWidth = 120.dp, tabMaxWidth = 120.dp)
     private val home = group(Workspace.DEFAULT_ID, "Home", 0)

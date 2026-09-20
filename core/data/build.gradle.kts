@@ -26,6 +26,10 @@ android {
 
 // Exported Room schemas double as unit test assets so migrations can be verified from version 1.
 androidComponents {
+    // Unit tests for the release variant too (the plugin builds them for debug alone), as in app/build.gradle.kts.
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
     onVariants { variant ->
         variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]
             ?.sources?.assets?.addStaticSourceDirectory("$projectDir/schemas")

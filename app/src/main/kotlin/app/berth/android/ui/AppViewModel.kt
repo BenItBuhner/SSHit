@@ -2,6 +2,7 @@ package app.berth.android.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
 import app.berth.android.links.LinkInbox
 import app.berth.android.security.SecurityCenter
@@ -93,6 +94,8 @@ class AppViewModel @Inject constructor(
     val security: SecurityCenter,
     /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
     private val links: LinkInbox,
+    /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
+    val reports: CrashReporter,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
@@ -231,7 +234,7 @@ class AppViewModel @Inject constructor(
                 val link = result.link
                 val host = hostFor(link)
                 when {
-                    host == null && link.plain -> LinkOutcome.QuickConnect(link.target)
+                    host == null && link.plain -> LinkOutcome.QuickConnect(link.target, link.fingerprint)
                     host == null -> LinkOutcome.NewHost(raw)
                     pendingForwards(link, tunnelsOf(host.id)).isNotEmpty() -> LinkOutcome.ConfirmForwards(host.id, raw)
                     else -> {
@@ -255,13 +258,15 @@ class AppViewModel @Inject constructor(
      * Opens what [link] asks for on [host]: Files at the link's folder for `sftp://`, the host's
      * forwards alone for a tunnels-only link, otherwise a terminal (or the forwards, when the host
      * itself is marked tunnels only). Saves nothing: forwards the link carries reach the host's
-     * tunnels only through the editor's Save ([saveHostFromLink]).
+     * tunnels only through the editor's Save ([saveHostFromLink]). The fingerprint the link carries
+     * for the server's key, if any, goes along, so the trust sheets can say how it compares
+     * ([LinkFingerprint]); it decides nothing.
      */
     suspend fun openFromLink(host: Host, link: SshLink) {
         when {
-            link.scheme == SshLink.Scheme.SFTP -> sessions.openFilesForHost(host, folder = link.path)
-            link.tunnelsOnly -> sessions.openTunnels(host)
-            else -> sessions.connect(host)
+            link.scheme == SshLink.Scheme.SFTP -> sessions.openFilesForHost(host, folder = link.path, linkFingerprint = link.fingerprint)
+            link.tunnelsOnly -> sessions.openTunnels(host, linkFingerprint = link.fingerprint)
+            else -> sessions.connect(host, linkFingerprint = link.fingerprint)
         }
     }
 
@@ -269,11 +274,21 @@ class AppViewModel @Inject constructor(
      * The editor's Save for a host opened from a link, new or saved: stores the host, adds
      * [forwards] (the link's pending rows the user kept, already seen on screen) to its tunnels,
      * enabled so they start with the login the link asks for, then opens what the link asked for.
+     * A forward the tunnel's own check refuses (a port out of range, a listener a saved tunnel or
+     * an earlier row already has) is left out rather than saved to fail at login: the editor held
+     * Save on such a row, and this is the last line, since a link is another app's word.
      */
     fun saveHostFromLink(host: Host, password: String?, link: SshLink, forwards: List<SshConfigForward>) {
         viewModelScope.launch {
             val saved = saveHostNow(host, password)
-            for (fwd in pendingForwards(forwards, tunnelsOf(saved.id))) tunnelRepository.upsert(fwd.toTunnel(saved.id))
+            val all = tunnelRepository.observeAll().first()
+            val added = ArrayList<Tunnel>()
+            for (fwd in pendingForwards(forwards, all.filter { it.hostId == saved.id })) {
+                val tunnel = fwd.toTunnel(saved.id)
+                if (tunnel.validate(all + added) != null) continue
+                tunnelRepository.upsert(tunnel)
+                added += tunnel
+            }
             openFromLink(saved, link)
             _linkOutcome.value = LinkOutcome.Staged
         }
@@ -288,13 +303,17 @@ class AppViewModel @Inject constructor(
      * read by the link parser ([parseQuickConnect]), so the field and an `ssh://` link agree on
      * every form. Null once the login is opening; otherwise one sentence on what stopped it, for
      * the field's helper line: the parser's reason, or that the spec asks for more than a shell.
+     * [fromLink] is the link landing that opened the sheet, when one did: its fingerprint reaches
+     * the trust sheet while the field still names the link's server.
      */
-    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null): String? {
+    fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null, fromLink: LinkOutcome.QuickConnect? = null): String? {
         val link = when (val result = SshLink.parse(spec)) {
             is SshLink.Result.Malformed -> return result.reason
             is SshLink.Result.Parsed -> result.link
         }
         if (!link.plain) return QUICK_CONNECT_IS_A_SHELL
+        // A fingerprint typed into the field counts as the link's would; one the link carried holds while the field still names its server.
+        val linkFingerprint = link.fingerprint ?: fromLink?.fingerprintFor(link)
         val (user, address, port) = link.quickTarget()
         val name = address
         val host = Host(
@@ -308,7 +327,7 @@ class AppViewModel @Inject constructor(
             auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
             createdAt = System.currentTimeMillis(),
         )
-        viewModelScope.launch { sessions.open(host, workspaceId) }
+        viewModelScope.launch { sessions.open(host, workspaceId, linkFingerprint = linkFingerprint) }
         return null
     }
 
@@ -814,8 +833,17 @@ sealed interface LinkOutcome {
     /**
      * No saved host matched a plain `ssh://[user@]host[:port]`: Quick connect opens with [spec]
      * (`user@host:port` as the link gave it) in its field, to connect as an unsaved host.
+     * [fingerprint] is what the link said the server's key would be (`;fingerprint=`), when it
+     * said; the login made from the sheet takes it to the trust sheet while the field still names
+     * the link's server ([AppViewModel.quickConnect]).
      */
-    data class QuickConnect(val spec: String) : LinkOutcome
+    data class QuickConnect(val spec: String, val fingerprint: String? = null) : LinkOutcome {
+        /** [fingerprint], when [parsed] (what the field holds now) still points at the link's server and port. */
+        fun fingerprintFor(parsed: SshLink): String? {
+            val own = (SshLink.parse(spec) as? SshLink.Result.Parsed)?.link ?: return null
+            return fingerprint?.takeIf { own.host.equals(parsed.host, ignoreCase = true) && own.port == parsed.port }
+        }
+    }
 
     /**
      * No saved host matched, and [raw] asks for what only a saved host can hold (forwards, `N`, an

@@ -14,7 +14,6 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
@@ -26,6 +25,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
@@ -79,8 +80,11 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class EditorScreenshotTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph

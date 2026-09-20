@@ -47,3 +47,6 @@ tasks.withType<Test>().configureEach {
         showStandardStreams = true
     }
 }
+
+// testR8: this module's tests over R8's output with the app's release rules; see gradle/r8-check.gradle.kts.
+apply(from = rootProject.file("gradle/r8-check.gradle.kts"))

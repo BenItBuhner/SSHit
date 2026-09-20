@@ -18,7 +18,6 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -27,6 +26,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.security.AuthOutcome
 import app.berth.android.security.FakeAuthenticator
 import app.berth.android.security.FakeKeystore
@@ -100,8 +101,11 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class SecurityScreenshotTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -253,11 +257,11 @@ class SecurityScreenshotTest {
         // The launch's prompt passes at once.
         graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
         shellUnderLockWindow()
-        // The overflow builds its rows from the tab on stage, which reaches the composition through
-        // activeTab, a combine on the manager's own dispatcher that settles a beat after activeTabId
-        // does; opened on the id alone, the menu once had the tabless rows and no "Host settings".
-        // So the wait is on the tab and the strip themselves, and an idle pass takes both into the
-        // composition, the cover down with them, before anything is tapped.
+        // The manager restores on its own dispatcher: the tap waits for the tab to be on stage and the
+        // strip full, and an idle pass takes both into the composition, the cover down with them. (The
+        // tabless menu this flow once opened with the tab active, and no "Host settings" in it, was the
+        // compose rule's race, fixed in createBerthComposeRule; the wait stays, since the tap has to
+        // follow the restore either way.)
         compose.waitUntil(10_000) {
             graph.appLock.state.value == LockState.UNLOCKED &&
                 graph.viewModel.activeTab.value?.id == "s-homelab" &&

@@ -19,7 +19,6 @@ import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -32,6 +31,8 @@ import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PaneSide
 import app.berth.android.session.Prompt
@@ -108,8 +109,11 @@ private const val TABLET_PORTRAIT = "w800dp-h1280dp-port-320dpi"
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = PHONE_PORTRAIT)
 class LargeScreenScreenshotTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph

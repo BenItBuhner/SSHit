@@ -8,6 +8,9 @@ import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import app.berth.android.diagnostics.BerthLog
+import app.berth.android.diagnostics.CrashReporter
+import app.berth.android.diagnostics.ReportKind
 import app.berth.android.di.ProcessLifecycle
 import app.berth.android.security.AppLockController
 import app.berth.android.security.LockState
@@ -39,6 +42,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -55,8 +59,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -97,6 +103,7 @@ class SessionManager @Inject constructor(
     private val lock: AppLockController,
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
+    private val reports: CrashReporter,
 ) : SessionCommands {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -144,28 +151,43 @@ class SessionManager @Inject constructor(
     /** The current group: the active tab's group, or the group last chosen in the drawer when no tab is active. */
     val currentWorkspaceId: StateFlow<String?> = _currentWorkspaceId.asStateFlow()
 
-    private val _activeTabId = MutableStateFlow<String?>(null)
-    val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
+    /**
+     * Where the Stage is: the active tab, and while the Stage is split (spec C23), who shares it
+     * and on which side. One value, since the two move together: a tab dropped on a pane becomes
+     * the active tab as the tab that was active becomes its companion, and staging the companion
+     * trades the roles. As two flows they were read as two, and [panes], derived on the manager's
+     * scope, could take the new split with the old active id between the writes: the same tab as
+     * active and as companion, one tab in both panes. The Stage keeps each tab's saveable state
+     * under its id, once, and composing that pair threw ("Key … was used multiple times"), in one
+     * of every few runs of the pane tests and on any device whose main thread read the flow in
+     * that moment. Written under [stageLock], once per move.
+     */
+    private data class Stage(val activeId: String?, val split: Split?)
+
+    private val _stage = MutableStateFlow(Stage(activeId = null, split = null))
+
+    /** The active tab's id, or null with nothing on stage. The value is [_stage]'s as it is read, so a caller reads its own write back. */
+    val activeTabId: StateFlow<String?> = _stage.view { it.activeId }
+
+    /** The Stage split in two (spec C23): who shares it with the active tab and on which side; null while one tab has it. */
+    val split: StateFlow<Split?> = _stage.view { it.split }
 
     /** The tab on stage, whatever it runs. */
-    val activeTab: StateFlow<ManagedTab?> = combine(_activeTabId, tabsById) { id, map -> id?.let { map[it] } }
+    val activeTab: StateFlow<ManagedTab?> = combine(_stage, tabsById) { stage, map -> stage.activeId?.let { map[it] } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
     /** The tab on stage when it is a terminal; null while a Files tab, a Tunnels tab, or nothing, is showing. */
     val activeSession: StateFlow<TerminalSession?> = activeTab.map { (it as? TerminalSession)?.takeIf { s -> !s.tunnelsOnly } }
         .stateIn(scope, SharingStarted.Eagerly, null)
 
-    private val _split = MutableStateFlow<Split?>(null)
-
-    /** The Stage split in two (spec C23): who shares it with the active tab and on which side; null while one tab has it. Written under [stageLock]. */
-    val split: StateFlow<Split?> = _split.asStateFlow()
-
     /**
      * The two tabs side by side, or null while the Stage shows one: the active tab on the split's
      * side, the companion on the other. It is up to the Stage to lay them out only on a width that
      * fits them; on a compact width the active tab alone shows and the split waits (see [setPanesShown]).
+     * Derived from [_stage] alone, so no pair it emits names one tab twice (the split never names
+     * the active tab as companion, and the two are one value).
      */
-    val panes: StateFlow<Panes?> = combine(_activeTabId, _split, tabsById) { active, split, map ->
+    val panes: StateFlow<Panes?> = combine(_stage, tabsById) { (active, split), map ->
         val focused = active?.let { map[it] }
         val companion = split?.let { map[it.companionId] }
         when {
@@ -248,7 +270,8 @@ class SessionManager @Inject constructor(
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
-        override fun hostKeyPolicyFor(host: Host, via: HopRole): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts, via = via)
+        override fun hostKeyPolicyFor(host: Host, via: HopRole?, linkFingerprint: String?): HostKeyPolicy =
+            KnownHostsPolicy(host, knownHosts, prompts, via = via, linkFingerprint = linkFingerprint)
         override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
         override val networkAvailable: Flow<Unit> = network.available
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
@@ -257,6 +280,17 @@ class SessionManager @Inject constructor(
             snippetRepository.observeAll().first()
                 .filter { it.runOnConnect && it.hostId == host.id && (it.workspaceId == null || it.workspaceId == workspaceId) }
                 .map { it.render() }
+
+        // The same capture as a crash, one report per failure, under Settings › Diagnostics; the host is
+        // named the way the strip names it, the address so the report says which server, never a credential.
+        override fun onTransportFailure(host: Host, phase: String, error: Throwable?, detail: String) {
+            reports.report(
+                ReportKind.TRANSPORT,
+                "$phase: ${host.name}",
+                error,
+                details = listOf("Host" to "${host.name} \u00B7 ${host.user}@${host.address}:${host.port}", "Phase" to phase, "Reason" to detail),
+            )
+        }
     }
 
     /**
@@ -300,6 +334,7 @@ class SessionManager @Inject constructor(
     }
 
     init {
+        reports.addCrashHook { saveAllFramesNow() }
         scope.launch { restore() }
         scope.launch {
             // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its
@@ -381,6 +416,7 @@ class SessionManager @Inject constructor(
         }
         backgroundSaver?.cancel()
         backgroundSaver = null
+        BerthLog.d(LOG_TAG, "app on screen")
         // The user may have flipped notifications in system settings while away.
         notifier.refresh()
     }
@@ -402,8 +438,8 @@ class SessionManager @Inject constructor(
      * is while the stage is dark.
      */
     private fun refreshStage() {
-        val active = _activeTabId.value
-        val companion = if (panesShown) _split.value?.companionId else null
+        val (active, split) = _stage.value
+        val companion = if (panesShown) split?.companionId else null
         tabsNow().forEach { it.onStage = !stageDark && (it.id == active || it.id == companion) }
     }
 
@@ -427,6 +463,7 @@ class SessionManager @Inject constructor(
             _foreground.value = false
             darkenStage()
         }
+        BerthLog.d(LOG_TAG, "app left the screen; saving ${_sessions.value.values.count { it.state != SessionState.CLOSED }} frames")
         saveAllFrames()
         backgroundSaver?.cancel()
         backgroundSaver = scope.launch {
@@ -448,6 +485,7 @@ class SessionManager @Inject constructor(
      */
     fun onTrimMemory(level: Int) {
         if (level < ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        BerthLog.d(LOG_TAG, "memory trim at level $level; saving changed frames")
         saveAllFrames(onlyChanged = true)
     }
 
@@ -596,6 +634,7 @@ class SessionManager @Inject constructor(
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
         map.values.filter { it.record.value.workspaceId in reconnectWorkspaces }.forEach { it.connect() }
+        BerthLog.i(LOG_TAG, "restored ${map.size} terminal tabs and ${files.size} Files tabs; ${reconnectWorkspaces.size} groups reconnect at launch")
         val pending = synchronized(pendingLock) {
             _restored.value = true
             pendingActivation.also { pendingActivation = null }
@@ -693,15 +732,18 @@ class SessionManager @Inject constructor(
      * Opens a new terminal tab for [host] and, unless [activate] is off, puts it on stage. It lands
      * directly after [afterId] (the active tab by default) in that tab's group, or at the end of
      * [workspaceId] when there is no anchor. With [kind] = [TabKind.Tunnels] the login opens no
-     * shell and carries the host's forwards instead ([openTunnels]).
+     * shell and carries the host's forwards instead ([openTunnels]). [linkFingerprint] is set when
+     * an `ssh://` link opened the tab and carried a fingerprint for the server's key: the trust
+     * sheets compare by it.
      */
     suspend fun open(
         host: Host,
         workspaceId: String? = null,
-        afterId: String? = _activeTabId.value,
+        afterId: String? = activeTabId.value,
         customTitle: String? = null,
         activate: Boolean = true,
         kind: TabKind = TabKind.Ssh,
+        linkFingerprint: String? = null,
     ): TerminalSession {
         restore()
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
@@ -718,7 +760,7 @@ class SessionManager @Inject constructor(
             customTitle = customTitle,
         )
         val changes = TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group)
-        return start(fresh, changes, activate)
+        return start(fresh, changes, activate, linkFingerprint)
     }
 
     /**
@@ -726,15 +768,21 @@ class SessionManager @Inject constructor(
      * and no shell, placed and staged like a terminal. A second one on the same host is allowed
      * but pointless; the forwards run on one carrier, and it shows them.
      */
-    suspend fun openTunnels(host: Host, workspaceId: String? = null, afterId: String? = _activeTabId.value, activate: Boolean = true): TerminalSession =
-        open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels)
+    suspend fun openTunnels(
+        host: Host,
+        workspaceId: String? = null,
+        afterId: String? = activeTabId.value,
+        activate: Boolean = true,
+        linkFingerprint: String? = null,
+    ): TerminalSession = open(host, workspaceId, afterId, activate = activate, kind = TabKind.Tunnels, linkFingerprint = linkFingerprint)
 
     /**
      * Connect from the host list, the New tab sheet or an `ssh://` link: a terminal, or the host's
-     * forwards alone when the host is marked tunnels only ([Host.tunnelsOnly]).
+     * forwards alone when the host is marked tunnels only ([Host.tunnelsOnly]). [linkFingerprint]
+     * is the fingerprint the link carried for the server's key, when a link with one opened this.
      */
-    suspend fun connect(host: Host, workspaceId: String? = null): TerminalSession =
-        if (host.tunnelsOnly) openTunnels(host, workspaceId) else open(host, workspaceId)
+    suspend fun connect(host: Host, workspaceId: String? = null, linkFingerprint: String? = null): TerminalSession =
+        if (host.tunnelsOnly) openTunnels(host, workspaceId, linkFingerprint = linkFingerprint) else open(host, workspaceId, linkFingerprint = linkFingerprint)
 
     /** The automatic title of a fresh tab of [kind] on [host]: the host's name, or `Tunnels · name` like a Files tab's `Files · name`. */
     private fun titleFor(kind: TabKind, host: Host): String = if (kind == TabKind.Tunnels) "Tunnels \u00B7 ${host.name}" else host.name
@@ -771,19 +819,28 @@ class SessionManager @Inject constructor(
         }
     }
 
-    /** Opens a second tab of the same kind on the same host directly after [id], in its group, and puts it on stage unless [activate] is off (spec C3, Duplicate). */
+    /**
+     * Opens a second tab on the same host directly after [id], in its group, and puts it on stage
+     * unless [activate] is off (spec C3, Duplicate): a terminal after a terminal, a browser at the
+     * same folder after a Files tab. After a Tunnels tab the second tab is a shell, the one its
+     * menu's Terminal row opens: a second Tunnels login on one host would bind the same local ports
+     * again (and the same remote ones for a remote forward), so the twin's forwards would fail with
+     * address-in-use by construction, and the host's shell is the tab worth having beside its
+     * forwards. The menu offers no Duplicate row on a Tunnels tab, since Terminal is that row; the
+     * plus tab's long-press and Split ([splitActive]) come here.
+     */
     suspend fun duplicate(id: String, activate: Boolean = true): ManagedTab? {
         val source = tabNow(id) ?: return null
         val record = source.record.value
         return when (record.kind) {
-            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, activate = activate, kind = record.kind)
+            TabKind.Ssh, TabKind.Tunnels -> open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, activate = activate)
             TabKind.Files -> startFiles(record.hostSnapshot, workspaceId = record.workspaceId, afterId = id, preferred = (source as? FilesTab)?.ride?.value?.id, folder = record.cwd, activate = activate)
         }
     }
 
-    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>, activate: Boolean): TerminalSession {
+    private suspend fun start(fresh: SessionRecord, changes: List<SessionRecord>, activate: Boolean, linkFingerprint: String? = null): TerminalSession {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
-        val session = TerminalSession(placed, scope, environment) { sessionRepository.upsert(it) }
+        val session = TerminalSession(placed, scope, environment, linkFingerprint) { sessionRepository.upsert(it) }
         _sessions.update { it + (placed.id to session) }
         track(session)
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
@@ -824,28 +881,31 @@ class SessionManager @Inject constructor(
     /**
      * Files from the host list or the New tab sheet: the host's Files tab, or a new one after the
      * active tab (at the end of [workspaceId] when given). The browser rides whichever terminal to
-     * the host is up, or offers to connect one.
+     * the host is up, or offers to connect one; a login it asks for takes [linkFingerprint] along
+     * when an `sftp://` link with a fingerprint opened the tab ([FilesTab.linkFingerprint]).
      */
-    suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null): FilesTab {
+    suspend fun openFilesForHost(host: Host, workspaceId: String? = null, folder: String? = null, linkFingerprint: String? = null): FilesTab {
         restore()
         // The host's Files tab comes on stage; an `sftp://` link naming a folder takes the tab showing it, or opens one of its own there.
         val showing = filesTabsFor(host.id)
         (if (folder == null) showing.firstOrNull() else showing.firstOrNull { it.folder == folder })?.let {
+            if (linkFingerprint != null) it.linkFingerprint = linkFingerprint
             setActive(it.id)
             return it
         }
-        return startFiles(host, workspaceId = workspaceId, afterId = _activeTabId.value, preferred = null, folder = folder)
+        return startFiles(host, workspaceId = workspaceId, afterId = activeTabId.value, preferred = null, folder = folder, linkFingerprint = linkFingerprint)
     }
 
-    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true): FilesTab {
+    private suspend fun startFiles(host: Host, workspaceId: String?, afterId: String?, preferred: String?, folder: String?, activate: Boolean = true, linkFingerprint: String? = null): FilesTab {
         val group = workspaceId ?: _currentWorkspaceId.value ?: workspaceRepository.ensureDefault().id
         val fresh = FilesTab.newRecord(UUID.randomUUID().toString(), host, group, System.currentTimeMillis(), folder)
-        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred, activate)
+        return placeFiles(fresh, TabOrder.insertAfter(stripNow(), fresh, anchorFor(afterId, workspaceId), group), preferred, activate, linkFingerprint)
     }
 
-    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?, activate: Boolean = true): FilesTab {
+    private suspend fun placeFiles(fresh: SessionRecord, changes: List<SessionRecord>, preferred: String?, activate: Boolean = true, linkFingerprint: String? = null): FilesTab {
         val placed = changes.firstOrNull { it.id == fresh.id } ?: fresh
         val tab = FilesTab(placed, scope) { sessionRepository.upsert(it) }
+        tab.linkFingerprint = linkFingerprint
         tab.prefer(preferred)
         _filesTabs.update { it + (placed.id to tab) }
         val shifted = changes.filter { it.id != fresh.id }.mapNotNull { change -> tabNow(change.id)?.place(change.workspaceId, change.sortOrder) }
@@ -860,7 +920,7 @@ class SessionManager @Inject constructor(
      * login to ride; the tab picks it up as it connects. The pane's Connect button.
      */
     fun connectFor(tab: FilesTab) {
-        scope.launch { open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, activate = false) }
+        scope.launch { open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, activate = false, linkFingerprint = tab.linkFingerprint) }
     }
 
     /**
@@ -879,7 +939,7 @@ class SessionManager @Inject constructor(
             setActive(it.id)
             return it
         }
-        val session = open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id)
+        val session = open(tab.host, workspaceId = tab.record.value.workspaceId, afterId = tab.id, linkFingerprint = tab.linkFingerprint)
         tab.prefer(session.id)
         refollow()
         return session
@@ -921,14 +981,15 @@ class SessionManager @Inject constructor(
      */
     private fun moveStage(id: String?, seen: Boolean) {
         synchronized(stageLock) {
-            val split = _split.value
-            if (split != null) {
-                // Staging the companion (its tab in the strip, Ctrl+Tab reaching it) hands it the keys:
-                // the two trade roles and keep their panes. Staging nothing leaves nothing to share with.
-                if (id == null) _split.value = null
-                else if (id == split.companionId) _split.value = _activeTabId.value?.let { Split(it, split.companionSide) }
+            val (active, split) = _stage.value
+            // Staging the companion (its tab in the strip, Ctrl+Tab reaching it) hands it the keys:
+            // the two trade roles and keep their panes. Staging nothing leaves nothing to share with.
+            val next = when {
+                split == null || id == null -> null
+                id == split.companionId -> active?.let { Split(it, split.companionSide) }
+                else -> split
             }
-            _activeTabId.value = id
+            _stage.value = Stage(id, next)
             refreshStage()
             if (seen && id != null) tabNow(id)?.markSeen()
         }
@@ -947,15 +1008,13 @@ class SessionManager @Inject constructor(
     fun placeInPane(id: String, side: PaneSide) {
         val tab = tabNow(id) ?: return
         synchronized(stageLock) {
-            val active = _activeTabId.value
-            val split = _split.value
+            val (active, split) = _stage.value
             if (id == active) {
-                if (split != null && split.activeSide != side) _split.value = Split(split.companionId, side)
+                if (split != null && split.activeSide != side) _stage.value = Stage(active, Split(split.companionId, side))
                 return
             }
             val companion = if (split != null && side == split.activeSide && id != split.companionId) split.companionId else active
-            _split.value = companion?.let { Split(it, side) }
-            _activeTabId.value = id
+            _stage.value = Stage(id, companion?.let { Split(it, side) })
             refreshStage()
             tab.markSeen()
         }
@@ -963,21 +1022,20 @@ class SessionManager @Inject constructor(
     }
 
     /** Long-press menu › Open beside: [id] takes the pane opposite the active tab, and the keys. */
-    fun openBeside(id: String) = placeInPane(id, _split.value?.companionSide ?: PaneSide.RIGHT)
+    fun openBeside(id: String) = placeInPane(id, split.value?.companionSide ?: PaneSide.RIGHT)
 
     /**
      * The Session sheet's Split (spec C6): a second tab on the active tab's host opens in the pane
-     * opposite it and takes the keys; the active tab keeps its pane. Beside a Tunnels tab it is a
-     * shell on that host, not a second carrier: a twin would bind the same ports and fail by
-     * construction, and the forwards are one row away in the pane that has them. Null with nothing
-     * on stage.
+     * opposite it and takes the keys; the active tab keeps its pane. The tab is what [duplicate]
+     * opens, so beside a Tunnels tab it is a shell on that host, not a second carrier: a twin would
+     * bind the same ports and fail by construction, and the forwards are one row away in the pane
+     * that has them. Null with nothing on stage.
      */
     suspend fun splitActive(): ManagedTab? {
-        val source = _activeTabId.value ?: return null
-        val side = _split.value?.companionSide ?: PaneSide.RIGHT
-        val record = tabNow(source)?.record?.value ?: return null
-        val fresh = if (record.kind == TabKind.Tunnels) open(record.hostSnapshot, workspaceId = record.workspaceId, afterId = source, activate = false)
-        else duplicate(source, activate = false) ?: return null
+        val (active, split) = _stage.value
+        val source = active ?: return null
+        val side = split?.companionSide ?: PaneSide.RIGHT
+        val fresh = duplicate(source, activate = false) ?: return null
         placeInPane(fresh.id, side)
         return fresh
     }
@@ -987,16 +1045,16 @@ class SessionManager @Inject constructor(
      * without losing anything. Closing the focused pane hands the keys to the other pane's tab.
      */
     fun closePane(side: PaneSide) {
-        val split = _split.value ?: return
+        val split = this.split.value ?: return
         synchronized(stageLock) {
-            _split.value = null
+            _stage.update { it.copy(split = null) }
             refreshStage()
         }
         if (side == split.activeSide) setActive(split.companionId)
     }
 
     /** One tab on the Stage again: the companion leaves its pane and stays in the strip. */
-    fun unsplit() = _split.value?.let { closePane(it.companionSide) } ?: Unit
+    fun unsplit() = split.value?.let { closePane(it.companionSide) } ?: Unit
 
     /**
      * Whether the Stage is laying both panes out. On a width that fits them (spec C23) the
@@ -1010,7 +1068,7 @@ class SessionManager @Inject constructor(
             if (panesShown == shown) return
             panesShown = shown
             refreshStage()
-            if (shown && !stageDark) _split.value?.companionId?.let { tabNow(it)?.markSeen() }
+            if (shown && !stageDark) _stage.value.split?.companionId?.let { tabNow(it)?.markSeen() }
         }
     }
 
@@ -1019,7 +1077,7 @@ class SessionManager @Inject constructor(
         val strip = stripNow()
         if (strip.isEmpty()) return
         val collapsed = workspaces.value.filter { it.collapsed }.map { it.id }.toSet()
-        val active = _activeTabId.value
+        val active = activeTabId.value
         val visible = strip.filter { it.workspaceId !in collapsed || it.id == active }.ifEmpty { strip }
         val current = visible.indexOfFirst { it.id == active }
         val next = if (current < 0) (if (delta >= 0) 0 else visible.lastIndex) else Math.floorMod(current + delta, visible.size)
@@ -1038,7 +1096,7 @@ class SessionManager @Inject constructor(
      * which clears it; ties (nothing timed) fall to strip order. False when no other tab needs the user.
      */
     fun jumpToUnread(): Boolean {
-        val active = _activeTabId.value
+        val active = activeTabId.value
         val target = stripNow()
             .filter { it.needsAttention && it.id != active }
             .maxByOrNull { _sessions.value[it.id]?.attentionAt ?: 0L } ?: return false
@@ -1054,7 +1112,7 @@ class SessionManager @Inject constructor(
         _currentWorkspaceId.value = id
         scope.launch { settings.setCurrentWorkspaceId(id) }
         if (!activate) return
-        val activeGroup = _activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
+        val activeGroup = activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
         if (activeGroup == id) return
         stripNow().firstOrNull { it.workspaceId == id }?.let { setActive(it.id) }
     }
@@ -1067,7 +1125,7 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Move to group: re-homes the tab at the end of [groupId]. */
     fun moveToGroup(id: String, groupId: String) {
         applyPlacements(TabOrder.moveToGroup(stripNow(), id, groupId))
-        if (_activeTabId.value == id) setCurrentWorkspace(groupId, activate = false)
+        if (activeTabId.value == id) setCurrentWorkspace(groupId, activate = false)
     }
 
     fun rename(id: String, title: String?) = tabNow(id)?.rename(title)
@@ -1133,6 +1191,7 @@ class SessionManager @Inject constructor(
     /** Disconnects a terminal tab and keeps its frame. A Files tab has no connection of its own, so this does nothing to it. */
     override fun detach(id: String) {
         val session = _sessions.value[id] ?: return
+        BerthLog.i(LOG_TAG, "[${session.host.name}] detached by the user")
         session.detach()
         saveFrame(session)
     }
@@ -1147,16 +1206,17 @@ class SessionManager @Inject constructor(
         val strip = stripNow()
         val closed = ClosedTab(tab.record.value)
         val next = TabOrder.nextActiveAfterClose(strip, id)
-        val split = _split.value
+        val (active, split) = _stage.value
+        BerthLog.i(LOG_TAG, "[${tab.host.name}] ${if (tab.kind == TabKind.Ssh) "terminal" else "Files"} tab closed")
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
         trackers.remove(id)?.cancel()
         savedVersions.remove(id)
         notifier.cancelFor(id)
-        val wasActive = _activeTabId.value == id
+        val wasActive = active == id
         if (split != null && (wasActive || split.companionId == id)) {
-            synchronized(stageLock) { _split.value = null }
+            synchronized(stageLock) { _stage.update { it.copy(split = null) } }
             if (wasActive) setActive(split.companionId)
         } else if (wasActive) setActive(next)
         scope.launch { sessionRepository.delete(id) }
@@ -1166,7 +1226,7 @@ class SessionManager @Inject constructor(
     /** Long-press menu › Close others: every tab in the strip except [id]. */
     fun closeOthers(id: String) {
         stripNow().filter { it.id != id }.forEach { close(it.id) }
-        if (_activeTabId.value != id) setActive(id)
+        if (activeTabId.value != id) setActive(id)
     }
 
     /**
@@ -1196,9 +1256,30 @@ class SessionManager @Inject constructor(
         scope.launch { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
     }
 
+    /**
+     * The crash path's save ([CrashReporter.addCrashHook]): every open terminal's frame
+     * snapshotted and written here, on the calling thread, so the relaunch shows what each tab
+     * showed at the crash rather than at the last background save. Bounded, since the process
+     * ends right after; a write not through by then is lost, which is no worse than before.
+     */
+    internal fun saveAllFramesNow(timeoutMs: Long = CrashReporter.HOOK_TIMEOUT_MS) {
+        val open = _sessions.value.values.filter { it.state != SessionState.CLOSED }
+        if (open.isEmpty()) return
+        BerthLog.i(LOG_TAG, "saving ${open.size} frames before the process ends")
+        runBlocking {
+            withTimeoutOrNull(timeoutMs) {
+                for (session in open) {
+                    runCatching { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
+                }
+            }
+        }
+    }
+
     override fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }
 
     companion object {
+        private const val LOG_TAG = "Sessions"
+
         /** How often frames are re-saved while live sessions run in the background. */
         const val BACKGROUND_SAVE_MS = 30_000L
 
@@ -1209,3 +1290,30 @@ class SessionManager @Inject constructor(
             context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()
     }
 }
+
+/**
+ * A read-only [StateFlow] of [transform] over this flow: its value is the source's, transformed,
+ * at the moment it is read, so a caller that has just written the source reads its own write back
+ * as it would from the source itself; collectors get the current result and then each distinct
+ * one as the source moves. `map` + `stateIn` would give a value a step behind the write, on the
+ * scope's dispatcher, and the strip, the panes and the tests all read the active id right after
+ * staging a tab.
+ */
+private fun <T, R> StateFlow<T>.view(transform: (T) -> R): StateFlow<R> = object : StateFlow<R> {
+    override val value: R get() = transform(this@view.value)
+    override val replayCache: List<R> get() = listOf(value)
+
+    override suspend fun collect(collector: FlowCollector<R>): Nothing {
+        var last: Any? = Unread
+        this@view.collect { source ->
+            val next = transform(source)
+            if (last === Unread || next != last) {
+                last = next
+                collector.emit(next)
+            }
+        }
+    }
+}
+
+/** What a [view]'s collector has emitted before its first value: distinct from any value, null included. */
+private object Unread

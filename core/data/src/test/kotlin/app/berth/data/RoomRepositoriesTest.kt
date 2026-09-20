@@ -188,11 +188,17 @@ class RoomRepositoriesTest {
         val sessions = RoomSessionRepository(db)
         val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", user = "demo", createdAt = 1)
         val a = SessionRecord(id = "a", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 0, createdAt = 1, customTitle = "deploy")
-        val b = SessionRecord(id = "b", workspaceId = home.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 1, createdAt = 2)
+        // A Tunnels tab on a tunnels-only host behind a jump host: the kind is its own column, the host's schema-4 fields ride the snapshot's JSON.
+        val carrier = host.copy(tunnelsOnly = true, jumpHostIds = listOf("bastion"))
+        val b = SessionRecord(id = "b", workspaceId = home.id, hostId = "h1", hostSnapshot = carrier, state = SessionState.DETACHED, sortOrder = 1, createdAt = 2, kind = TabKind.Tunnels)
         sessions.upsertAll(listOf(a, b))
         assertEquals(listOf(a, b), sessions.getAll())
         assertEquals("deploy", assertNotNull(sessions.getAll().first()).displayTitle)
         assertEquals(TabKind.Ssh, sessions.getAll().first().kind)
+        val restored = sessions.getAll().last()
+        assertEquals(TabKind.Tunnels, restored.kind)
+        assertTrue(restored.hostSnapshot.tunnelsOnly)
+        assertEquals(listOf("bastion"), restored.hostSnapshot.jumpHostIds)
 
         sessions.upsertAll(listOf(a.copy(sortOrder = 1, workspaceId = "w2"), b.copy(sortOrder = 0)))
         assertEquals(listOf("b", "a"), sessions.getAll().map { it.id })
@@ -211,7 +217,8 @@ class RoomRepositoriesTest {
         assertEquals(1, workspaces.observeAll().first().size)
 
         val sessions = RoomSessionRepository(db)
-        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", port = 2222, user = "demo", createdAt = 1)
+        // The snapshot is stored as JSON, so the chain rides the record as a list, not a column.
+        val host = Host(id = "h1", name = "box", color = SwatchColor.OCHRE, monogram = "BO", address = "10.0.2.2", port = 2222, user = "demo", jumpHostIds = listOf("bastion", "edge"), createdAt = 1)
         val record = SessionRecord(
             id = "s1", workspaceId = first.id, hostId = "h1", hostSnapshot = host, state = SessionState.DETACHED,
             layer = PersistenceLayer.LOCAL_FRAME, title = "demo@box: ~", cwd = "/home/demo", createdAt = 2, lastLiveAt = 3,

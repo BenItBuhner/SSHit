@@ -119,7 +119,7 @@ class SshLinkTest {
     fun `a plain link is one Quick connect can open as an unsaved host`() {
         assertTrue(parsed("ssh://ben@bastion:2200").plain)
         assertTrue(parsed("bastion").plain)
-        assertTrue(parsed("ssh://ben;fingerprint=SHA256:abc@bastion/").plain, "the fingerprint is read by nothing yet, so it is no reason to save a host")
+        assertTrue(parsed("ssh://ben;fingerprint=SHA256:abc@bastion/").plain, "a fingerprint goes with the login, not the host, so it is no reason to save one")
         assertTrue(parsed("ssh://h?theme=dark").plain, "unknown query keys ask for nothing")
         assertFalse(parsed("ssh://ben@bastion?L=8080:localhost:80").plain, "forwards need a saved host")
         assertFalse(parsed("ssh://ben@bastion?N").plain, "no shell is a Tunnels tab, which needs a saved host")
@@ -159,5 +159,90 @@ class SshLinkTest {
         val bare = parsed("ben@host.example.org:2200")
         val schemed = parsed("ssh://ben@host.example.org:2200")
         assertEquals(bare, schemed)
+    }
+
+    @Test
+    fun `a link is bounded in length, in forwards and in its name, and a reason quotes only so much`() {
+        // A VIEW intent's data can be hundreds of kilobytes; what parses rides into the back stack, so the bound is at the door.
+        val longHost = "h".repeat(SshLink.MAX_LENGTH - "ssh://".length)
+        assertEquals(longHost, parsed("ssh://$longHost").host, "a link of exactly the bound is read")
+        assertEquals("The link is too long.", malformed("ssh://${longHost}h"))
+        assertEquals("The link is too long.", malformed(" ".repeat(SshLink.MAX_LENGTH + 1)), "before it is trimmed, since the trim itself is work on the whole of it")
+
+        val sixteen = (1..SshLink.MAX_FORWARDS).joinToString("&") { "L=${8000 + it}:h:80" }
+        assertEquals(SshLink.MAX_FORWARDS, parsed("ssh://h?$sixteen").forwards.size)
+        assertEquals("The link asks for more than 16 forwards.", malformed("ssh://h?$sixteen&D=1080"))
+        assertEquals(1, parsed("ssh://h?L=8080:h:80&L=8080:h:80&N").forwards.distinct().size, "the same forward twice is the pending rows' business, not the parser's")
+
+        assertEquals("n".repeat(SshLink.MAX_NAME_LENGTH), parsed("ssh://h#" + "n".repeat(500)).name, "a name is cut, not refused: it is decorative")
+        assertEquals("prod", parsed("ssh://h#" + "%20".repeat(SshLink.MAX_NAME_LENGTH) + "prod").name, "trimmed before it is cut, so the spaces do not eat the name")
+
+        // What a reason quotes is cut with an ellipsis, so a notice is one line whatever the link was.
+        val reason = malformed("ssh://" + "!".repeat(300))
+        assertEquals("\u201C${"!".repeat(SshLink.QUOTED_MAX)}\u2026\u201D isn't a host name or address.", reason)
+        assertEquals("\u201C${"9".repeat(SshLink.QUOTED_MAX)}\u2026\u201D isn't a port from 1 to 65535.", malformed("ssh://h:" + "9".repeat(200)))
+        assertEquals("Only ssh:// and sftp:// links open here, not ${"x".repeat(SshLink.QUOTED_MAX)}\u2026://.", malformed("x".repeat(100) + "://h"))
+    }
+
+    @Test
+    fun `characters that cannot be seen are refused in a user, dropped from a name and kept out of a reason`() {
+        // Percent-encoding is the one way they get in; no server has such a user, and a newline in one is a second line in a one-line row.
+        for (user in listOf("root%0a", "%1b%5b31mroot", "ro%20ot", "ops%e2%80%aeprod", "a%c2%a0b", "%e2%80%8bx", "x%00")) {
+            assertEquals("The user has a character that cannot be in a user name.", malformed("ssh://$user@host"), user)
+        }
+        assertEquals("a@b", parsed("ssh://a%40b@host").user, "@ stays legal, since user@REALM logins are real")
+        assertEquals("jos\u00e9", parsed("ssh://jos%c3%a9@host").user, "letters outside ASCII are letters")
+
+        // A bidi override in a name would reverse the tab title around it; a name is decorative, so it loses the character and keeps the rest.
+        assertEquals("eman tsoh", parsed("ssh://host#%e2%80%aeeman%20tsoh").name)
+        assertEquals("onetwo", parsed("ssh://host#one%0atwo").name, "a newline is dropped, not turned into a space")
+        assertNull(parsed("ssh://host#%e2%80%ae%00").name, "a name that was nothing but such characters is no name")
+
+        // A reason shows in the notice bar, so the part it quotes is cleaned the same way.
+        assertEquals("\u201Cbad!host\u201D isn't a host name or address.", malformed("ssh://bad!host\u202e"), "the override is in the host, refused with it, and not quoted")
+        assertEquals("\u201Cbad!host%e2%80%ae\u201D isn't a host name or address.", malformed("ssh://bad!host%e2%80%ae"), "a host is never percent-decoded (the zone id of an IPv6 address is written %25), so encoded it is text")
+    }
+
+    @Test
+    fun `a forward has to be one the tunnel editor could have made`() {
+        // The tunnel editor refuses these; a link saved them unchecked, to fail at login with Java's message.
+        assertEquals("The forward \u201C99999:h:80\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=99999:h:80"))
+        assertEquals("The forward \u201C0:h:80\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=0:h:80"))
+        assertEquals("The forward \u201C8080:h:0\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=8080:h:0"))
+        assertEquals("The remote forward \u201C8080:h:70000\u201D has a port outside 1 to 65535.", malformed("ssh://h?R=8080:h:70000"))
+        assertEquals("The dynamic forward \u201C-5\u201D has a port outside 1 to 65535.", malformed("ssh://h?D=-5"))
+        // Whitespace in a forward: the config tokenizer would read it as the end of the forward and drop the rest.
+        assertEquals("The forward \u201C8080:h:80 extra\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:h:80%20extra"))
+        assertEquals("The forward \u201C8080 :h:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080%20:h:80"))
+        // Brackets keep an IPv6 address whole; they do not make `host:80` an address, nor `-1` a port.
+        assertEquals("The forward \u201C8080:[host:80]:-1\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:[host:80]:-1"))
+        assertEquals("The forward \u201C1:8080:h:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=%011:8080:h:80"), "a bind address is a host name or an address, and the reason does not carry the control character")
+        assertEquals("The forward \u201C8080:h!:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:h!:80"))
+        assertEquals(SshConfigForward(TunnelType.LOCAL, "0.0.0.0", 8080, "db.internal", 5432), parsed("ssh://h?L=*:8080:db.internal:5432").forwards.single())
+    }
+
+    @Test
+    fun `the fingerprint parameter is read as the draft writes it, and a slash in one is named`() {
+        // Standard base64 has / in about half of all SHA-256 fingerprints; unencoded it ends the authority.
+        assertEquals("The fingerprint has a / in it; write %2F in its place.", malformed("ssh://ben;fingerprint=SHA256:abc+/def@host.example.org"))
+        assertEquals("The fingerprint has a / in it; write %2F in its place.", malformed("sftp://ben;fingerprint=SHA256:a/b@host/srv"))
+        assertEquals("SHA256:abc+/def", parsed("ssh://ben;fingerprint=SHA256:abc+%2Fdef@host.example.org").fingerprint)
+        assertEquals("ssh-ed25519-c1-b1-30-29", parsed("ssh://ben;fingerprint=ssh-ed25519-c1-b1-30-29@host").fingerprint, "the draft's own dashed form needs no encoding")
+        // The draft's c-param list: the first after `;`, the rest after `,`; `;` between them is taken too.
+        parsed("ssh://ben;fingerprint=abc,type=d@host").let {
+            assertEquals("abc", it.fingerprint)
+            assertEquals("ben", it.user)
+        }
+        assertEquals("abc", parsed("ssh://ben;type=d;fingerprint=abc@host").fingerprint)
+        assertEquals("abc", parsed("ssh://ben;FINGERPRINT=abc@host").fingerprint)
+        assertEquals("The link names the fingerprint twice.", malformed("ssh://ben;fingerprint=a,fingerprint=b@host"))
+        assertEquals("The link names the fingerprint twice.", malformed("ssh://ben;fingerprint=a;fingerprint=a@host"), "even the same one, since the draft says one")
+        assertNull(parsed("ssh://ben;fingerprint=@host").fingerprint, "an empty one is none")
+        assertNull(parsed("ssh://ben;fingerprint@host").fingerprint)
+        assertEquals("ben", parsed("ssh://ben;fingerprint@host").user)
+        // The draft's sftp form ends the path in ;type=dir or ;type=file.
+        assertEquals("/srv/data", parsed("sftp://host/srv/data/;type=dir").path)
+        assertEquals("/srv/data", parsed("sftp://host/srv/data;type=d").path)
+        assertNull(parsed("sftp://host/;type=dir").path, "the home folder either way")
     }
 }

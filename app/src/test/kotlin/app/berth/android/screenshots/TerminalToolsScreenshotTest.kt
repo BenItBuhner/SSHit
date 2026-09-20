@@ -29,7 +29,6 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -40,6 +39,8 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.security.BerthClipboard
 import app.berth.android.security.FakeAuthenticator
 import app.berth.android.security.LockState
@@ -126,8 +127,11 @@ import java.util.concurrent.TimeUnit
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
 class TerminalToolsScreenshotTest {
-    @get:Rule
-    val compose = createComposeRule()
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
@@ -975,13 +979,15 @@ class TerminalToolsScreenshotTest {
         session.sendText("echo re-run from history\n")
         settle(1_200)
         compose.waitUntil(5_000) { session.commands.value.any { it.text == "echo re-run from history" } }
-        assertTrue(session.emulator.screenText().any { it.contains(" demo ") })
+        // The owner column of the listing is the test user, whatever the sshd calls it.
+        val owner = " $sshUser "
+        assertTrue(session.emulator.screenText().any { it.contains(owner) })
 
         // Long-press on the owner column: the word, then two more rows of the listing by dragging. On a
         // Live tab the bar offers Paste.
-        val (row, col) = cellOf(session, " demo ")
+        val (row, col) = cellOf(session, owner)
         longPress(cellCenter(row, col + 2), barShown)
-        waitForText("4 chars")
+        waitForText("${sshUser.length} chars")
         compose.onNodeWithText("Paste").assertIsDisplayed()
         canvas.performTouchInput { moveTo(cellCenter(row + 2, col + 2)) }
         canvas.performTouchInput { up() }
@@ -993,7 +999,7 @@ class TerminalToolsScreenshotTest {
         val copied = clipboardText()!!
         assertBerthsClip(copied)
         assertEquals(3, copied.lines().size)
-        assertTrue(copied.lines().all { it.contains("demo") })
+        assertTrue(copied.lines().all { it.contains(sshUser) })
         assertTrue(copied.lines().none { it.endsWith(" ") })
         capture("terminal-live-copied")
         waitForNoText("Copy")
@@ -1001,7 +1007,7 @@ class TerminalToolsScreenshotTest {
         // Select a word and search for it: the bar opens with the word, every owner cell lights up.
         longPress(cellCenter(row, col + 2), barShown)
         canvas.performTouchInput { up() }
-        waitForText("4 chars")
+        waitForText("${sshUser.length} chars")
         compose.onNodeWithText("Search").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Matches ", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Matches none")).fetchSemanticsNodes().isEmpty() }

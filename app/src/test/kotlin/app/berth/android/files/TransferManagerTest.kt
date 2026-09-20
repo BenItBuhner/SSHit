@@ -123,6 +123,8 @@ class TransferManagerTest {
         }
         hold.complete(Unit)
         val t = awaitFinished(id)
+        // The watcher is a collector on its own dispatcher: the finished row reaches it a step after the flow holds it.
+        await("the watcher to see the row finish") { synchronized(seen) { seen.lastOrNull()?.state?.isActive == false } }
         watcher.cancel()
 
         assertEquals(TransferState.DONE, t.state)
@@ -176,7 +178,7 @@ class TransferManagerTest {
         assertEquals("delta\n", File(root, "b/d.txt").readText())
         assertEquals(3L * 1024 * 1024, File(root, "b/c.bin").length())
         assertTrue(File(root, "empty").isDirectory)
-        assertEquals(0, graph.sessions.activeTransfers.value)
+        assertSoon("no transfer active once the folder is over", 0) { graph.sessions.activeTransfers.value }
     }
 
     // ---- lanes -------------------------------------------------------------------------------------
@@ -204,7 +206,19 @@ class TransferManagerTest {
         listOf(first, second, other).forEach { assertEquals(TransferState.DONE, transfer(it).state) }
         assertTrue("the second started after the first finished", transfer(second).startedAt >= transfer(first).finishedAt)
         assertEquals("zulu\n", File(tmp, "z.txt").readText())
-        assertEquals(0, graph.sessions.activeTransfers.value)
+        assertSoon("no transfer active once all three are over", 0) { graph.sessions.activeTransfers.value }
+    }
+
+    @Test
+    fun `a burst of transfers on one lane runs in the order queued, whichever coroutine is dispatched first`() {
+        val session = session("s1")
+        val paths = (0 until 40).map { i -> "/srv/burst/f%02d.txt".format(i).also { server.file(it, "$i\n", 0) } }
+        // Queued in one go, the way a multi-selection is: the place in the lane is taken as each is queued, not as each coroutine starts.
+        val ids = manager.downloadInto(session, paths.map { server.entry(it) }, Uri.fromFile(tmp))
+        assertEquals(paths.size, ids.size)
+        ids.forEach { assertEquals(TransferState.DONE, awaitFinished(it).state) }
+        assertEquals("the files moved in the order queued", paths, moved.toList())
+        assertTrue("each started once the one before it was over", ids.zipWithNext().all { (a, b) -> transfer(b).startedAt >= transfer(a).finishedAt })
     }
 
     // ---- a file in the way -----------------------------------------------------------------------
@@ -236,8 +250,8 @@ class TransferManagerTest {
         assertEquals("a.txt already exists \u00B7 2 more", transferCaption(t, showHost = false, others = 2, compact = true))
         // The notification counts a copy stopped on a question apart from those that move, and its tap opens the Files tab of the terminal it names.
         assertEquals(1, graph.sessions.activeTransfers.value)
-        assertEquals(1, graph.sessions.waitingTransfers.value)
-        assertEquals("s1", graph.sessions.waitingTransferSession.value)
+        assertSoon("one copy waiting on the user", 1) { graph.sessions.waitingTransfers.value }
+        assertSoon("the waiting copy's session", "s1") { graph.sessions.waitingTransferSession.value }
         // An answer for a transfer that is not waiting goes nowhere.
         manager.resolveConflict("not-a-transfer", ConflictChoice.OVERWRITE, applyToAll = true)
 
@@ -365,7 +379,7 @@ class TransferManagerTest {
         assertEquals("zulu\n", File(root, "z.txt").readText())
         assertFalse("the half-written file is gone", File(root, "b/c.bin").exists())
         assertFalse("nothing after it started", File(root, "b/d.txt").exists())
-        assertEquals(0, graph.sessions.activeTransfers.value)
+        assertSoon("no transfer active once the cancel is through", 0) { graph.sessions.activeTransfers.value }
     }
 
     // ---- a mixed selection -------------------------------------------------------------------------
@@ -400,7 +414,7 @@ class TransferManagerTest {
         assertEquals("prod-web \u00B7 a.txt already exists", transferCaption(file))
         assertEquals("a.txt already exists", transferCaption(file, showHost = false, compact = true))
         assertEquals(TransferState.QUEUED, transfer(folderId).state)
-        assertEquals(1, graph.sessions.waitingTransfers.value)
+        assertSoon("one copy waiting on the user", 1) { graph.sessions.waitingTransfers.value }
 
         // Keep both: the row is named after what is saved before a byte moves, and once done says what was there and what became of it.
         manager.resolveConflict(fileId, ConflictChoice.KEEP_BOTH, applyToAll = false)
@@ -500,6 +514,8 @@ class TransferManagerTest {
 
         val id = manager.uploadFolder(session, Uri.fromFile(photos), "/home/demo")
         val t = awaitFinished(id)
+        // The change is emitted before the row is finished, but the watcher collects it on its own dispatcher, a step later.
+        await("the watcher to see the folder change") { synchronized(changed) { changed.isNotEmpty() } }
         watcher.cancel()
         assertEquals(TransferState.DONE, t.state)
         assertEquals(TransferKind.UPLOAD, t.kind)
@@ -544,6 +560,18 @@ class TransferManagerTest {
             delay(10)
         }
         assertTrue("timed out waiting for $what", condition())
+    }
+
+    /**
+     * The notifier's counts ([SessionManager.activeTransfers], [SessionManager.waitingTransfers] and
+     * the session they name) are published a step after the row they are counted from, so a read
+     * right after a row was seen to change may still find the count from before it. Awaited, then
+     * asserted, so a miss says what the value was.
+     */
+    private fun <T> assertSoon(what: String, expected: T, actual: () -> T) {
+        val deadline = System.currentTimeMillis() + 30_000
+        while (System.currentTimeMillis() < deadline && actual() != expected) Thread.sleep(10)
+        assertEquals(what, expected, actual())
     }
 
     private fun assertMonotonic(what: String, values: List<Long>) {

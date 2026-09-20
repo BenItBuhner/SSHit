@@ -1,0 +1,130 @@
+name: Release
+
+# Where a release's mapping.txt lives. A crash report from a release APK reads only through the mapping R8 wrote
+# for that build (every frame is yp3.Q(r8-map-id-<id>:57); see app/proguard-rules.pro), and ci.yml keeps the
+# mapping for 14 days as an artifact, which is right for a pull request and nothing for a phone that crashes in
+# month three. So a version tag builds the release APK and attaches it, with its mapping, to the GitHub release
+# for that tag: the mapping lives as long as the release does, which is as long as anyone can hold a report from
+# it. The release is created here as a draft when there is none yet, so its notes are written by a person before
+# anyone sees it, or found when the release came first. A re-run replaces a draft's files; a published release's
+# files are not replaced (the attach step says why and what to do instead).
+#
+# The tag names the version in gradle.properties: v<app.versionName>, or v<app.versionName>-<app.versionBuild>
+# for a re-release of one name (app/build.gradle.kts has the scheme). A tag that does not is a failed job before
+# anything is built, since the APK would carry a version other than the one the release says.
+#
+# Signing takes the repository secrets BERTH_RELEASE_STORE_BASE64 (the keystore file, base64), BERTH_RELEASE_STORE_PASSWORD,
+# BERTH_RELEASE_KEY_ALIAS and BERTH_RELEASE_KEY_PASSWORD, the same route a workstation takes through the
+# BERTH_RELEASE_* variables. With none set the APK is app-release-unsigned.apk and is attached under that name;
+# with some set and some not the build stops, as it does anywhere (app/build.gradle.kts).
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-[0-9]+'
+
+permissions:
+  contents: write
+
+# One run per tag at a time: the same tag pushed twice (moved, or a re-run) builds and attaches in order, so the
+# later run replaces a draft's files whole instead of two uploads interleaving; different tags are different groups
+# and run side by side, as two releases should. Not cancelled: a run part-way through an upload is left to finish.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release APK and mapping
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Reads the cache main's runs write; a tag build adds nothing to it.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: The tag names the version in gradle.properties
+        run: |
+          name="$(sed -n 's/^app\.versionName=//p' gradle.properties)"
+          build="$(sed -n 's/^app\.versionBuild=//p' gradle.properties)"
+          expected="v$name"
+          if [ -n "$build" ] && [ "$build" != 0 ]; then expected="v$name-$build"; fi
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::the tag is $GITHUB_REF_NAME but gradle.properties names $expected (app.versionName=$name, app.versionBuild=${build:-0}); the release is built from what the tag names"
+            exit 1
+          fi
+
+      # The release APK with the release key when the secrets are set, R8's records checked by verifyReleaseKeepRules
+      # (after every assembleRelease), and each JVM module's suite run over R8's output against the live sshds, the
+      # same proof ci.yml makes of a pull request, made once more of the bytes that ship.
+      - name: Build the release APK and run the suites over R8's output
+        env:
+          BERTH_RELEASE_STORE_BASE64: ${{ secrets.BERTH_RELEASE_STORE_BASE64 }}
+          BERTH_RELEASE_STORE_PASSWORD: ${{ secrets.BERTH_RELEASE_STORE_PASSWORD }}
+          BERTH_RELEASE_KEY_ALIAS: ${{ secrets.BERTH_RELEASE_KEY_ALIAS }}
+          BERTH_RELEASE_KEY_PASSWORD: ${{ secrets.BERTH_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$BERTH_RELEASE_STORE_BASE64" ]; then
+            store="$RUNNER_TEMP/release.jks"
+            printf '%s' "$BERTH_RELEASE_STORE_BASE64" | base64 -d > "$store"
+            export BERTH_RELEASE_STORE_FILE="$store"
+          fi
+          unset BERTH_RELEASE_STORE_BASE64
+          source .github/scripts/test-sshd.sh
+          ./gradlew assembleRelease testR8 --continue --console=plain
+
+      # The decoded keystore lives for the one step that signs with it. A hosted runner dies with the job and takes
+      # the file along; a self-hosted one would not, so it goes here, whatever the build did and whether it got as
+      # far as writing it.
+      - name: Remove the decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      # The files, named for the release so two releases' downloads do not read alike, on the tag's release.
+      - name: Attach the APK and the mapping to the tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          mapping=app/build/outputs/mapping/release/mapping.txt
+          test -s "$mapping"
+          apk="$(ls app/build/outputs/apk/release/*.apk)"
+          out="$RUNNER_TEMP/release-files"
+          mkdir -p "$out"
+          cp "$mapping" "$out/berth-$tag-mapping.txt"
+          case "$apk" in
+            *unsigned*) cp "$apk" "$out/berth-$tag-unsigned.apk" ;;
+            *) cp "$apk" "$out/berth-$tag.apk" ;;
+          esac
+          # A draft's files are replaced whole by a re-run (nobody has seen them); a published release's are what
+          # people downloaded, so a file already on one stops the job here, and a changed build is the next
+          # v<name>-<build> (app/build.gradle.kts has the scheme), or the person removes the file first.
+          if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            gh release create "$tag" --draft --title "Berth ${tag#v}" --generate-notes
+          elif [ "$draft" = false ]; then
+            gh release view "$tag" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/published-files"
+            for f in "$out"/*; do
+              if grep -qxF "$(basename "$f")" "$RUNNER_TEMP/published-files"; then
+                echo "::error::$(basename "$f") is already on the published release $tag, whose files stay as people downloaded them; a changed build is tagged v<name>-<build>, or remove the file from the release first"
+                exit 1
+              fi
+            done
+          fi
+          gh release upload "$tag" "$out"/* --clobber
+          {
+            echo "### Release $tag"
+            echo
+            echo "| file | bytes |"
+            echo "|---|---|"
+            for f in "$out"/*; do echo "| \`$(basename "$f")\` | $(stat -c %s "$f") |"; done
+            echo
+            echo "Mapping id (\`pg_map_id\`, the \`r8-map-id-…\` every frame of a report from this APK carries): \`$(sed -n 's/^# pg_map_id: //p' "$mapping")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
