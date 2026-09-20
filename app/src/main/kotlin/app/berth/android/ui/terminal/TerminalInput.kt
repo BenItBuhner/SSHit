@@ -8,6 +8,7 @@ import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusEventModifierNode
 import androidx.compose.ui.focus.FocusState
@@ -37,15 +38,35 @@ interface TerminalInputSink {
 }
 
 /**
+ * A sink that also hears which soft-keyboard connection feeds it, so a key of its own (a Deck key,
+ * a hardware chord) can send a word the keyboard is still composing ahead of itself.
+ */
+interface ImeAwareSink : TerminalInputSink {
+    var imeConnection: TerminalInputConnection?
+}
+
+/** Sends any text the soft keyboard is still composing, so what the caller sends next lands after it. */
+fun TerminalInputSink.flushComposing() {
+    (this as? ImeAwareSink)?.imeConnection?.flushComposing()
+}
+
+/**
  * The soft keyboard talks to the terminal through this connection. There is no editable text: every
- * committed character is sent to the host immediately, deletes become Backspace, and Enter is a key.
- * Composing text (predictive keyboards) is held until the keyboard finishes it, so words are not
- * sent letter by letter and then re-sent.
+ * committed character is sent to the host immediately, deletes become Backspace and Delete, and
+ * Enter is a key. Composing text (a predictive keyboard's underlined word; CJK input) is held until
+ * the keyboard commits or finishes it, so a word is sent once rather than letter by letter and
+ * then again whole. The text before the cursor reads as empty on purpose: a keyboard that could
+ * see what it committed would try to re-compose it (a backspace into a word, a long-press for an
+ * accent) and send it a second time.
  */
 class TerminalInputConnection(private val targetView: View, private val sink: TerminalInputSink) : BaseInputConnection(targetView, false) {
     private var composing: String = ""
 
+    /** Whether the keyboard holds a word it has not committed. */
+    val isComposing: Boolean get() = composing.isNotEmpty()
+
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+        // The commit replaces the composing word, which was never sent.
         composing = ""
         val s = text?.toString() ?: return true
         sendTextWithEnter(s)
@@ -58,18 +79,33 @@ class TerminalInputConnection(private val targetView: View, private val sink: Te
     }
 
     override fun finishComposingText(): Boolean {
-        if (composing.isNotEmpty()) sendTextWithEnter(composing)
+        val word = composing
         composing = ""
+        if (word.isNotEmpty()) sendTextWithEnter(word)
         return true
+    }
+
+    /**
+     * A Deck key or a hardware chord is about to send: the word the keyboard is still composing goes
+     * first, so `ls` then Enter reaches the host as `ls`, Enter and not the other way round. The
+     * keyboard still holds the word, so the input is restarted and it starts afresh; otherwise its
+     * eventual commit would send the word a second time.
+     */
+    fun flushComposing() {
+        val word = composing
+        composing = ""
+        if (word.isEmpty()) return
+        sendTextWithEnter(word)
+        targetView.context.getSystemService(InputMethodManager::class.java)?.restartInput(targetView)
     }
 
     override fun setComposingRegion(start: Int, end: Int): Boolean = true
 
+    /**
+     * Deletes are keys: the text before the cursor is the host's, and a keyboard that has a composing
+     * word shortens it with [setComposingText], so this always means the characters before the word.
+     */
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-        if (composing.isNotEmpty()) {
-            composing = composing.dropLast(beforeLength.coerceAtMost(composing.length))
-            return true
-        }
         repeat(beforeLength.coerceAtLeast(0)) { sink.onKey(TerminalKey.BACKSPACE) }
         repeat(afterLength.coerceAtLeast(0)) { sink.onKey(TerminalKey.DELETE) }
         return true
@@ -78,13 +114,20 @@ class TerminalInputConnection(private val targetView: View, private val sink: Te
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean = deleteSurroundingText(beforeLength, afterLength)
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
-        if (event.action != KeyEvent.ACTION_DOWN) return true
-        val handled = handleKeyDown(event.keyCode, event.unicodeChar, modifiersOf(event), sink)
-        if (!handled) super.sendKeyEvent(event)
+        when (event.action) {
+            // A string with no key of its own (an emoji, a character off the keyboard's map) arrives as one multi-key event.
+            KeyEvent.ACTION_MULTIPLE -> if (event.keyCode == KeyEvent.KEYCODE_UNKNOWN) event.characters?.let { flushComposing(); sendTextWithEnter(it) }
+            KeyEvent.ACTION_DOWN -> {
+                flushComposing()
+                val handled = handleKeyDown(event.keyCode, event.unicodeChar, modifiersOf(event), sink)
+                if (!handled) super.sendKeyEvent(event)
+            }
+        }
         return true
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
+        flushComposing()
         sink.onKey(TerminalKey.ENTER)
         return true
     }
@@ -201,6 +244,8 @@ fun handleComposeKeyEvent(event: androidx.compose.ui.input.key.KeyEvent, sink: T
     when (event.key) {
         Key.ShiftLeft, Key.ShiftRight, Key.CtrlLeft, Key.CtrlRight, Key.AltLeft, Key.AltRight, Key.MetaLeft, Key.MetaRight, Key.CapsLock, Key.Function -> return false
     }
+    // A word the soft keyboard is still composing goes before the hardware key.
+    sink.flushComposing()
     val unicode = if (mods and (Mod.CTRL or Mod.ALT) != 0) {
         // unicodeChar with Ctrl held is 0 on Android; recover the base character.
         val base = native.getUnicodeChar(native.metaState and KeyEvent.META_SHIFT_MASK)
@@ -219,8 +264,29 @@ private data class TerminalInputElement(val sink: TerminalInputSink) : ModifierN
     }
 }
 
+/**
+ * What the terminal tells the keyboard about itself: plain text with no suggestions, no autocorrect
+ * and no capitalisation (the visible-password variation is the one flag every keyboard, Samsung's
+ * included, honours as "do not correct this"), nothing learned from what is typed here, no
+ * full-screen or extracted editor, and Enter as a key rather than an action.
+ */
+fun configureTerminalEditorInfo(outAttributes: EditorInfo) {
+    outAttributes.inputType = InputType.TYPE_CLASS_TEXT or
+        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    outAttributes.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
+        EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+        EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
+        EditorInfo.IME_ACTION_NONE or
+        EditorInfo.IME_FLAG_NO_ENTER_ACTION
+    outAttributes.initialSelStart = 0
+    outAttributes.initialSelEnd = 0
+    outAttributes.initialCapsMode = 0
+}
+
 private class TerminalInputNode(var sink: TerminalInputSink) : Modifier.Node(), PlatformTextInputModifierNode, FocusEventModifierNode {
     private var session: Job? = null
+    private var connection: TerminalInputConnection? = null
 
     override fun onFocusEvent(focusState: FocusState) {
         if (focusState.isFocused) {
@@ -229,17 +295,13 @@ private class TerminalInputNode(var sink: TerminalInputSink) : Modifier.Node(), 
                     establishTextInputSession {
                         startInputMethod(
                             object : PlatformTextInputMethodRequest {
+                                // Called again on every restart of the input, so the connection is always the live one.
                                 override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
-                                    outAttributes.inputType = InputType.TYPE_CLASS_TEXT or
-                                        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
-                                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-                                    outAttributes.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
-                                        EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-                                        EditorInfo.IME_ACTION_NONE or
-                                        EditorInfo.IME_FLAG_NO_ENTER_ACTION
-                                    outAttributes.initialSelStart = 0
-                                    outAttributes.initialSelEnd = 0
-                                    return TerminalInputConnection(view, sink)
+                                    configureTerminalEditorInfo(outAttributes)
+                                    val c = TerminalInputConnection(view, sink)
+                                    connection = c
+                                    (sink as? ImeAwareSink)?.imeConnection = c
+                                    return c
                                 }
                             },
                         )
@@ -247,13 +309,17 @@ private class TerminalInputNode(var sink: TerminalInputSink) : Modifier.Node(), 
                 }
             }
         } else {
-            session?.cancel()
-            session = null
+            endSession()
         }
     }
 
-    override fun onDetach() {
+    override fun onDetach() = endSession()
+
+    private fun endSession() {
         session?.cancel()
         session = null
+        val c = connection ?: return
+        connection = null
+        (sink as? ImeAwareSink)?.let { if (it.imeConnection === c) it.imeConnection = null }
     }
 }
