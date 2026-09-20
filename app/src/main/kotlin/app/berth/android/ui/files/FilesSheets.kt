@@ -26,7 +26,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -63,12 +62,12 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.ToggleRow
@@ -97,13 +96,7 @@ private fun FilesSheet(onDismiss: () -> Unit, expanded: Boolean = false, fillHei
     val c = Berth.colors
     val skipHalf = remember { expanded }
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = skipHalf)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss, sheetState = state) {
         Column(
             Modifier
                 .fillMaxWidth()

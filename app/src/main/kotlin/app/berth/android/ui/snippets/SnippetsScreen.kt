@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,6 +48,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.EmptyState
@@ -59,7 +59,6 @@ import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
@@ -311,12 +310,7 @@ fun SnippetEditorSheet(vm: AppViewModel, existing: Snippet?, onDismiss: () -> Un
     val placeholders = draft.placeholders()
     val canSave = draft.name.isNotEmpty() && body.isNotBlank()
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -391,12 +385,7 @@ fun SnippetRunSheet(vm: AppViewModel, session: TerminalSession, pending: Pending
         onDismiss()
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -450,12 +439,7 @@ fun SnippetPickerSheet(vm: AppViewModel, session: TerminalSession, onDismiss: ()
         if (snippet.hasPlaceholders) pending = PendingSnippet(snippet, action) else { vm.runSnippet(session, snippet, action = action); onDismiss() }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()

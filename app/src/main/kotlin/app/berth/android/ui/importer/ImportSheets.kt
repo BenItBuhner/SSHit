@@ -17,11 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -41,13 +39,12 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -135,12 +132,7 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
         }
     }.joinToString(" \u00B7 ")
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -355,12 +347,7 @@ fun ImportKeySheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Identit
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()

@@ -40,12 +40,16 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -116,19 +120,27 @@ import kotlin.math.abs
  * Hardware tab shortcuts are taken here, before the terminal. Each tab's body keeps its own
  * saveable state across switches (a Files tab's selection, sheet, viewer and per-folder scroll),
  * dropped when the tab closes; the Deck's visibility and layer are the Stage's, shared by every tab.
+ * A [layer] lays the bodies out itself on a window that fits two (spec C23), composing each tab
+ * through [StageBodies.TabBody]; without one the active tab's body fills the Stage.
  */
 @Composable
 fun StageScreen(
     vm: AppViewModel,
     tab: ManagedTab?,
     actions: TabActions,
-    onOpenDrawer: () -> Unit,
+    /** Opens the drawer; null when the drawer stands as a rail (spec C7) and the overflow has no Library to offer. */
+    onOpenDrawer: (() -> Unit)?,
     onOpenSessionSheet: () -> Unit,
     onEditHost: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
     /** The terminal tab's selection, search and paste state (spec C16 to C18); a test hands in its own to drive them. */
     tools: StageTools = rememberStageTools((tab as? TerminalSession)?.id),
+    /** Overflow › Split and Unsplit (spec C3, C23), offered when the window fits two panes; one at a time. */
+    onSplit: (() -> Unit)? = null,
+    onUnsplit: (() -> Unit)? = null,
+    /** Lays out the body area for the active [tab] under the header, with the modifier that fills it. */
+    layer: (@Composable StageBodies.(tab: ManagedTab, modifier: Modifier) -> Unit)? = null,
 ) {
     val c = Berth.colors
     val slots by vm.stripSlots.collectAsState()
@@ -215,32 +227,28 @@ fun StageScreen(
                         extra = if (tab is FilesTab) lentRows else null,
                         onFind = { tools.openSearch() },
                         onHistory = { tools.historyOpen = true },
+                        onSplit = onSplit,
+                        onUnsplit = onUnsplit,
                     )
                 },
             )
         }
         val body = Modifier.weight(1f).fillMaxWidth()
+        val bodies = StageBodies(
+            vm = vm,
+            holder = holder,
+            deckVisible = deckVisible,
+            onDeckVisibleChange = { deckVisible = it },
+            layerIndex = layerIndex,
+            onLayerIndexChange = { layerIndex = it },
+            onLendOverflow = { lentRows = it },
+            onOpenSessionSheet = onOpenSessionSheet,
+            onEditHost = onEditHost,
+            onOpenDeckEditor = onOpenDeckEditor,
+            actions = actions,
+        )
         when {
-            tab != null -> holder.SaveableStateProvider(tab.id) {
-                when (tab) {
-                    // A Tunnels tab is a login with no shell: its stage is the forwards, over the same pill, with no Deck.
-                    is TerminalSession -> if (tab.tunnelsOnly) TunnelsTabBody(vm = vm, session = tab, onEditHost = onEditHost, modifier = body) else StageBody(
-                        vm = vm,
-                        session = tab,
-                        tools = tools,
-                        deckVisible = deckVisible,
-                        onDeckVisibleChange = { deckVisible = it },
-                        layerIndex = layerIndex,
-                        onLayerIndexChange = { layerIndex = it },
-                        onOpenSessionSheet = onOpenSessionSheet,
-                        onEditHost = onEditHost,
-                        onOpenDeckEditor = onOpenDeckEditor,
-                        modifier = body,
-                    )
-                    is FilesTab -> FilesTabBody(vm = vm, tab = tab, onLendOverflow = { lentRows = it }, modifier = body)
-                    else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
-                }
-            }
+            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, body)
             // The tab flows run a frame behind the manager: while an active id is set but its tab has not
             // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
             // that has them (spec C3, Persistence: restore is instant).
@@ -254,6 +262,88 @@ fun StageScreen(
             else -> EmptyStage(onNewTab = actions::newTab, modifier = body)
         }
     }
+}
+
+/**
+ * The one place a tab's kind picks its body (spec C3, tab kinds): a terminal's Stage body with the
+ * Deck, a Tunnels tab's forwards (a login with no shell, over the same pill, with no Deck), a Files
+ * tab's browser, or the empty Stage for a kind with no body. The Stage composes the active tab
+ * through it and a pane layer (spec C23) composes each pane through it, so a new kind is added here
+ * once and every layout has it. Each body keeps its saveable state under the tab's id in the
+ * Stage's [holder]; the Deck's visibility and layer are the Stage's and reach every terminal body.
+ */
+@Stable
+class StageBodies internal constructor(
+    private val vm: AppViewModel,
+    private val holder: SaveableStateHolder,
+    internal val deckVisible: Boolean,
+    internal val onDeckVisibleChange: (Boolean) -> Unit,
+    internal val layerIndex: Int,
+    internal val onLayerIndexChange: (Int) -> Unit,
+    private val onLendOverflow: (OverflowRows?) -> Unit,
+    private val onOpenSessionSheet: () -> Unit,
+    private val onEditHost: (String) -> Unit,
+    private val onOpenDeckEditor: () -> Unit,
+    private val actions: TabActions,
+) {
+    /**
+     * [tab]'s body filling [modifier], with [tools] for a terminal's selection and search. A body
+     * in a pane hands its bottom chrome (the Deck and its strip) to [chrome] instead of laying it
+     * out itself, so one Deck can span both panes and the pane, not the body, pays the window's
+     * bottom insets; [focusRequester] is the terminal's, so the pane can hand it the keys. Only the
+     * body that [lendsOverflow] hands its rows to the strip's ⋮: the active tab's, the one the menu
+     * is about. Nothing reaches the tab's kind but this dispatch.
+     */
+    @Composable
+    fun TabBody(
+        tab: ManagedTab,
+        tools: StageTools,
+        modifier: Modifier,
+        chrome: StageChromeHost? = null,
+        focusRequester: FocusRequester? = null,
+        lendsOverflow: Boolean = true,
+    ) {
+        val onLendOverflow = if (lendsOverflow) onLendOverflow else NoLend
+        holder.SaveableStateProvider(tab.id) {
+            when {
+                // A Tunnels tab is a login with no shell (spec C14): its body has no Deck to hand to a pane and no keys to take.
+                tab is TerminalSession && tab.tunnelsOnly -> TunnelsTabBody(vm = vm, session = tab, onEditHost = onEditHost, modifier = modifier)
+                tab is TerminalSession -> StageBody(
+                    vm = vm,
+                    session = tab,
+                    tools = tools,
+                    deckVisible = deckVisible,
+                    onDeckVisibleChange = onDeckVisibleChange,
+                    layerIndex = layerIndex,
+                    onLayerIndexChange = onLayerIndexChange,
+                    onOpenSessionSheet = onOpenSessionSheet,
+                    onEditHost = onEditHost,
+                    onOpenDeckEditor = onOpenDeckEditor,
+                    modifier = modifier,
+                    chrome = chrome,
+                    focusRequester = focusRequester,
+                )
+                tab is FilesTab -> FilesTabBody(vm = vm, tab = tab, onLendOverflow = onLendOverflow, modifier = modifier)
+                else -> EmptyStage(onNewTab = actions::newTab, modifier = modifier)
+            }
+        }
+    }
+
+    private companion object {
+        /** One instance, so a body that stops lending sees its host change once and withdraws. */
+        val NoLend: (OverflowRows?) -> Unit = {}
+    }
+}
+
+/**
+ * Where a terminal body in a pane puts its bottom chrome (spec C23): the pane hosting the body
+ * sets [content] to the pill and the Deck the body would have laid out, and lays it out itself
+ * under both panes. Null content means the body has nothing below the terminal right now.
+ */
+@Stable
+class StageChromeHost {
+    var content: (@Composable () -> Unit)? by mutableStateOf(null)
+        internal set
 }
 
 /** "No tabs" with the primary way forward (spec C3, Closing); focusable so Ctrl+T works with nothing on stage. */
@@ -296,11 +386,13 @@ private fun StageOverflow(
     onToggleDeck: () -> Unit,
     onOpenSessionSheet: () -> Unit,
     onEditHost: (String) -> Unit,
-    onOpenDrawer: () -> Unit,
+    onOpenDrawer: (() -> Unit)?,
     actions: TabActions,
     extra: OverflowRows? = null,
     onFind: () -> Unit = {},
     onHistory: () -> Unit = {},
+    onSplit: (() -> Unit)? = null,
+    onUnsplit: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
@@ -342,20 +434,28 @@ private fun StageOverflow(
                         item("History", action = onHistory)
                     }
                 }
+                // Split (spec C3 overflow, landscape and larger): a second tab on this host beside this one; Unsplit while two are up.
+                if (onSplit != null) item("Split", action = onSplit)
+                if (onUnsplit != null) item("Unsplit", action = onUnsplit)
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
                 item("Tabs", action = actions::openSwitcher)
-                item("Library", action = onOpenDrawer)
+                // With the drawer standing as a rail (spec C7) the library is already in view.
+                if (onOpenDrawer != null) item("Library", action = onOpenDrawer)
                 item("Close", destructive = true) { actions.close(tab.id) }
             } else {
                 item("New tab", action = actions::newTab)
-                item("Library", action = onOpenDrawer)
+                if (onOpenDrawer != null) item("Library", action = onOpenDrawer)
             }
         }
     }
 }
 
-/** Everything below the header for one terminal tab; the caller keys it on the session's id. */
+/**
+ * Everything below the header for one terminal tab; the caller keys it on the session's id. In a
+ * pane (spec C23) the bottom chrome goes to [chrome] for the pane to lay out under both panes,
+ * and the terminal takes the pane's [focusRequester] so the pane can hand it the keys.
+ */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun StageBody(
@@ -370,12 +470,15 @@ private fun StageBody(
     onEditHost: (String) -> Unit,
     onOpenDeckEditor: () -> Unit,
     modifier: Modifier = Modifier,
+    chrome: StageChromeHost? = null,
+    focusRequester: FocusRequester? = null,
 ) {
     val c = Berth.colors
     val record by session.record.collectAsState()
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
-    val deckLayout by vm.deckLayout.collectAsState()
+    // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
+    val deckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
     val fontSetting by vm.terminalFont.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
@@ -395,7 +498,7 @@ private fun StageBody(
     val patterns = rememberDeckHaptics()
     val latch = remember(session.id) { ModifierLatch() }
     val viewport = tools.viewport
-    val focusRequester = remember { FocusRequester() }
+    val focusRequester = focusRequester ?: remember { FocusRequester() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
     val input = remember(session.id) {
@@ -510,36 +613,45 @@ private fun StageBody(
 
         // The bottom chrome takes the larger of the keyboard and navigation-bar insets, so the Deck
         // sits on the keyboard when it is up and its surface runs under the bar when it is not.
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(if (deckStateOk) c.surface1 else c.surface0)
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
-        ) {
-            AnimatedVisibility(visible = deckAllowed) {
-                Deck(
-                    layout = deckLayout,
-                    layerIndex = layerIndex,
-                    onLayerIndexChange = onLayerIndexChange,
-                    input = input,
-                    enabled = live,
-                    onGripTap = onOpenSessionSheet,
-                    onGripSwipeDown = {
-                        keyboard?.hide()
-                        onDeckVisibleChange(false)
-                    },
-                    onGripLongPress = { if (vm.jumpToUnread()) patterns.hold() },
-                    snippets = pinnedSnippets,
-                    onOpenDeckEditor = onOpenDeckEditor,
-                )
+        val bottomChrome: @Composable () -> Unit = {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(if (deckStateOk) c.surface1 else c.surface0)
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
+            ) {
+                AnimatedVisibility(visible = deckAllowed) {
+                    Deck(
+                        layout = deckLayout,
+                        layerIndex = layerIndex,
+                        onLayerIndexChange = onLayerIndexChange,
+                        input = input,
+                        enabled = live,
+                        onGripTap = onOpenSessionSheet,
+                        onGripSwipeDown = {
+                            keyboard?.hide()
+                            onDeckVisibleChange(false)
+                        },
+                        onGripLongPress = { if (vm.jumpToUnread()) patterns.hold() },
+                        snippets = pinnedSnippets,
+                        onOpenDeckEditor = onOpenDeckEditor,
+                    )
+                }
+                if (!deckVisible && deckStateOk) {
+                    DeckStrip(
+                        layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
+                        latch = latch,
+                        onExpand = { onDeckVisibleChange(true) },
+                    )
+                }
             }
-            if (!deckVisible && deckStateOk) {
-                DeckStrip(
-                    layerName = deckLayout.usableLayers(pinnedSnippets.isNotEmpty()).getOrNull(layerIndex)?.name ?: "Base",
-                    latch = latch,
-                    onExpand = { onDeckVisibleChange(true) },
-                )
-            }
+        }
+        if (chrome == null) {
+            bottomChrome()
+        } else {
+            // In a pane the chrome is the pane's to place: handed over after every composition, withdrawn when the body leaves.
+            SideEffect { chrome.content = bottomChrome }
+            DisposableEffect(chrome) { onDispose { chrome.content = null } }
         }
     }
 

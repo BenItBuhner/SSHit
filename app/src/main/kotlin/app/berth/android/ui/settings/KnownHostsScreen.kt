@@ -14,10 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -38,18 +36,17 @@ import androidx.compose.ui.unit.sp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.prompts.Fingerprint
 import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
@@ -168,12 +165,7 @@ internal fun shortFingerprint(fingerprint: String, prefixLength: Int): String {
 fun KnownHostSheet(vm: AppViewModel, key: KnownHostKey, hostNames: List<String>, onDismiss: () -> Unit) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()

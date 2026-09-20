@@ -23,7 +23,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -47,6 +46,7 @@ import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.Glyph
@@ -55,7 +55,6 @@ import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.Swatch
@@ -341,12 +340,7 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
     val problem = if (chosenHost == null) "Add a host first." else if (touched) draft.validate(all) else null
     val canSave = touched && problem == null
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()

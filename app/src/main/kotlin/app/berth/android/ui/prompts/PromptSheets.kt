@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -40,8 +39,8 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.PromptCenter
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.theme.Berth
@@ -90,13 +89,7 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
 internal fun PromptSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     val c = Berth.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss, sheetState = state) {
         Column(
             Modifier
                 .fillMaxWidth()

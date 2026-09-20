@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,6 +46,7 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.IconAction
@@ -55,7 +55,6 @@ import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
@@ -388,13 +387,7 @@ private fun ColourSheet(
         else -> "low"
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        scrimColor = c.scrim,
-        dragHandle = { SheetHandle() },
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-    ) {
+    BerthSheet(onDismiss = onDismiss, scrimColor = c.scrim) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -519,13 +512,7 @@ internal fun RenameSheet(
 ) {
     val c = Berth.colors
     var name by remember { mutableStateOf(current) }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = c.surface1,
-        scrimColor = c.scrim,
-        dragHandle = { SheetHandle() },
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-    ) {
+    BerthSheet(onDismiss = onDismiss, scrimColor = c.scrim) {
         Column(
             Modifier
                 .fillMaxWidth()

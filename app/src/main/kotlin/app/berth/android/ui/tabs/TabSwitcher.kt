@@ -27,7 +27,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -61,9 +60,9 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
-import app.berth.android.ui.components.SheetHandle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
@@ -102,13 +101,7 @@ fun TabSwitcher(
     // The last tab closing from here leaves nothing to switch between.
     LaunchedEffect(slots.isEmpty()) { if (slots.isEmpty()) onDismiss() }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = c.surface1,
-        shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
-        dragHandle = { SheetHandle() },
-    ) {
+    BerthSheet(onDismiss = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().fillMaxHeight()) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 4.dp),
