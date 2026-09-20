@@ -262,7 +262,7 @@ fun TabHeader(
     modifier: Modifier = Modifier,
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
-    firstTab: FocusRequester? = null,
+    entry: FocusRequester? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
     val resolved = rememberResolvedTabStyle(style)
@@ -271,7 +271,7 @@ fun TabHeader(
     val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
-            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, firstTab = firstTab)
+            TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, entry = entry)
             Spacer(Modifier.width(style.trailingGap))
             // The fixed slots take the same reach the tabs do: the row is the full height and the
             // controls in it read the reach as target above their visual (IconAction, CountTile).
@@ -302,7 +302,8 @@ fun TabHeader(
  * behaviour goes through [actions]. Each tab observes its own record, so the strip itself
  * recomposes only when tabs open, close, move or the active tab changes. [topReach] is extra
  * height above the visual row that the items take as touch target (the header lends the inset).
- * [firstTab] is put on the first tab, the control a keyboard's chord into the strip lands on.
+ * [entry] is the control a keyboard's chord into the strip lands on: put on the active tab, where
+ * the user already is, while the strip shows it, else on the first tab in view.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -315,7 +316,7 @@ fun TabStrip(
     state: TabStripState = rememberTabStripState(),
     style: TabStripStyle = LocalTabStripStyle.current,
     topReach: Dp = 0.dp,
-    firstTab: FocusRequester? = null,
+    entry: FocusRequester? = null,
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId) }
@@ -331,7 +332,27 @@ fun TabStrip(
     // Every neighbour already gets [gap]; a chip after the first adds the rest of [groupGap] ahead of itself.
     val chipLead = (style.groupGap - style.gap).coerceAtLeast(0.dp)
     val tabCount = slots.size
-    val firstTabIndex = remember(entries) { entries.indexOfFirst { it is StripEntry.Tab } }
+    // The tab [entry] is put on: the active tab while any of it is laid out, so a chord into the
+    // strip lands where the user already is rather than eight tabs back (the focus brings a tab cut
+    // by an edge back into view); once a hand has scrolled the active one off, the first tab wholly
+    // in view, else the first laid out; the first tab of all before the first layout. Derived from
+    // the layout, so the strip recomposes when the answer changes and not on every scrolled frame.
+    val entryRequester = entry
+    val tabKeys = remember(entries) { entries.filterIsInstance<StripEntry.Tab>().map { it.key }.toSet() }
+    val activeKey = remember(entries, activeId) { entries.firstOrNull { it is StripEntry.Tab && it.slot.id == activeId }?.key }
+    val entryKey by remember(state, tabKeys, activeKey) {
+        derivedStateOf {
+            val info = state.listState.layoutInfo
+            val shown = info.visibleItemsInfo
+            val tabOf = { item: LazyListItemInfo -> (item.key as? String)?.takeIf(tabKeys::contains) }
+            when {
+                activeKey != null && shown.any { it.key == activeKey } -> activeKey
+                else -> shown.firstNotNullOfOrNull { item -> tabOf(item)?.takeIf { item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset } }
+                    ?: shown.firstNotNullOfOrNull(tabOf)
+                    ?: tabKeys.firstOrNull()
+            }
+        }
+    }
     val scope = rememberCoroutineScope()
 
     val controller = remember(state, scope) { DragController(state, latestEntries, latestActions, haptics, scope) }
@@ -438,7 +459,7 @@ fun TabStrip(
                     actions = actions,
                     groups = orderedGroups,
                     topReach = topReach,
-                    modifier = Modifier.liftable(entry.key, state).then(if (firstTab != null && index == firstTabIndex) Modifier.focusRequester(firstTab) else Modifier),
+                    modifier = Modifier.liftable(entry.key, state).then(if (entryRequester != null && entry.key == entryKey) Modifier.focusRequester(entryRequester) else Modifier),
                 )
                 is StripEntry.Chip -> GroupChip(
                     entry = entry,

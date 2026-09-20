@@ -176,9 +176,10 @@ class HardwareKeyboardScreenshotTest {
         awaitFocused(hasTestTag(TerminalTag), "the terminal still, after the Deck opened")
         capture("stage-hardware-keyboard-compact-deck")
 
-        // Ctrl+Shift+S: the strip's first tab has the focus, and out of touch mode shows it.
+        // Ctrl+Shift+S: the active tab has the focus, and out of touch mode shows it: the tone, the
+        // title in accent, and the 2 dp accent bar at its foot, a shape as well as a colour (nit 1).
         chord(KEYCODE_S, META_CTRL_ON or META_SHIFT_ON)
-        awaitFocused(role(Role.Tab), "a tab of the strip after Ctrl+Shift+S")
+        awaitFocused(role(Role.Tab) and hasContentDescription("homelab", substring = true), "the active tab, homelab's, after Ctrl+Shift+S")
         capture("stage-hardware-keyboard-focus-strip")
 
         // Ctrl+Shift+K: the Deck at its grip; Tab is its first key, Ctrl.

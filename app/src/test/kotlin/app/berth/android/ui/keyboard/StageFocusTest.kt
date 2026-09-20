@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.res.Configuration
 import android.view.KeyEvent.ACTION_DOWN
 import android.view.KeyEvent.ACTION_UP
+import android.view.KeyEvent.KEYCODE_DPAD_LEFT
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_ENTER
 import android.view.KeyEvent.KEYCODE_ESCAPE
@@ -34,6 +35,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -179,11 +181,15 @@ class StageFocusTest {
         assertFalse(compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty())
         awaitFocused(hasTestTag(TerminalTag), "the live terminal, on coming on stage")
 
-        // Ctrl+Shift+S: the strip, entered at its first tab, homelab's; Enter there switches to it,
-        // and the focus stays on the tab it pressed, since the strip stayed.
+        // Ctrl+Shift+S: the strip, entered at the active tab, the live one's, where the user already is
+        // and not the first, homelab's (design review, nit 2); Left walks to homelab's, and Enter there
+        // switches to it, the focus staying on the tab it pressed, since the strip stayed.
         chord(KEYCODE_S, META_CTRL_ON or META_SHIFT_ON)
         awaitFocused(tab(), "a tab of the strip after Ctrl+Shift+S")
-        compose.onNode(isFocused()).assert(hasContentDescription("homelab", substring = true))
+        // The selected tab is the active one; its title is the shell's, so the state says which it is.
+        compose.onNode(isFocused()).assert(isSelected() and hasContentDescription(", live, tab 2 of 2", substring = true))
+        press(KEYCODE_DPAD_LEFT)
+        awaitFocused(tab() and hasContentDescription("homelab", substring = true), "homelab's tab, the first, after Left from the live tab")
         press(KEYCODE_ENTER)
         compose.waitUntil(5_000) { graph.sessions.activeTabId.value == "s-homelab" }
         awaitFocused(tab(), "the tab pressed, homelab now on stage")
