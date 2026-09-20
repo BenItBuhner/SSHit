@@ -174,8 +174,9 @@ class StageFocusTest {
             }
         }
         compose.waitUntil(45_000) { live.state == SessionState.LIVE }
-        compose.waitUntil(10_000) { compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty() }
-        // A keyboard attached, a shell tab on stage: the terminal is focused without a touch.
+        // A keyboard attached, a shell tab on stage: the Deck folds to its strip (C4), and the terminal is focused without a touch.
+        awaitDeckStrip()
+        assertFalse(compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty())
         awaitFocused(hasTestTag(TerminalTag), "the live terminal, on coming on stage")
 
         // Ctrl+Shift+S: the strip, entered at its first tab, homelab's; Enter there switches to it,
@@ -199,7 +200,11 @@ class StageFocusTest {
         chord(KEYCODE_TAB, META_CTRL_ON)
         compose.waitUntil(5_000) { graph.sessions.activeTabId.value == live.id }
         awaitFocused(hasTestTag(TerminalTag), "the live terminal after Ctrl+Tab")
+        // The strip stands still folded, the fold being the Stage's; Ctrl+Shift+E opens the Deck, and the terminal keeps the focus.
+        awaitDeckStrip()
+        chord(KEYCODE_E, META_CTRL_ON or META_SHIFT_ON)
         compose.waitUntil(10_000) { compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty() }
+        awaitFocused(hasTestTag(TerminalTag), "the terminal after Ctrl+Shift+E opened the Deck")
 
         // Ctrl+Shift+K: the Deck, entered at its grip; Enter on the grip is its tap, the session sheet.
         chord(KEYCODE_K, META_CTRL_ON or META_SHIFT_ON)
@@ -255,6 +260,15 @@ class StageFocusTest {
     private fun tab() = role(Role.Tab)
 
     private fun role(role: Role) = SemanticsMatcher.expectValue(SemanticsProperties.Role, role)
+
+    /** The 20 dp strip a folded Deck leaves (C4), the one button that says so. */
+    private fun awaitDeckStrip() {
+        try {
+            compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Deck collapsed", substring = true) and role(Role.Button)).fetchSemanticsNodes().isNotEmpty() }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("the Deck's strip never stood", e)
+        }
+    }
 
     /** Waits for the one focused control to be [what], failing with [where] the focus was expected and where it is. */
     private fun awaitFocused(what: SemanticsMatcher, where: String): SemanticsNodeInteraction {

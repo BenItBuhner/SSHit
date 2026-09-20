@@ -10,7 +10,7 @@ import app.berth.domain.model.DeckModifier
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The one-row Deck a hardware keyboard leaves standing (spec C4, Settings › Hardware keyboard › Compact Deck). */
+/** The one-row Deck a hardware keyboard's user opens from the folded strip (spec C4, Settings › Hardware keyboard › Compact Deck when expanded). */
 class HardwareKeyboardDeckTest {
     private fun modifier(m: DeckModifier) = DeckAction.Modifier(m)
     private fun app(a: DeckAppAction) = DeckAction.App(a)

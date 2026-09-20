@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.view.KeyEvent.ACTION_DOWN
 import android.view.KeyEvent.ACTION_UP
 import android.view.KeyEvent.KEYCODE_D
+import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_K
 import android.view.KeyEvent.KEYCODE_S
 import android.view.KeyEvent.KEYCODE_SLASH
@@ -102,11 +103,12 @@ import java.util.concurrent.TimeUnit
 /**
  * The screens a hardware keyboard brings (spec C22, C4 "Hardware keyboard attached", A11), written
  * to `build/outputs/roborazzi` with the accessibility audit on each: the Stage with a keyboard
- * attached and the Deck down to its one row of modifiers and actions, the same Stage with that
- * setting off, the focus a keyboard shows on a tab of the strip, on a Deck key and on a Settings
- * row, the shortcut sheet Ctrl+Shift+/ opens, Settings › Hardware keyboard with its Alt key menu, a host's own Alt
- * key in its editor; and on a tablet, two panes under one compact Deck with the sheet as a dialog
- * naming the pane chords. The phone's Stage rides a live session with nowhere to send (the way
+ * attached and the Deck folded to its 20 dp strip, that strip opened to the one row of modifiers
+ * and actions, the same with the compact setting off and the whole Deck standing, the focus a
+ * keyboard shows on a tab of the strip, on a Deck key and on a Settings row, the shortcut sheet
+ * Ctrl+Shift+/ opens, Settings › Hardware keyboard with its Alt key menu, a host's own Alt key in
+ * its editor; and on a tablet, two panes under one compact Deck with the sheet as a dialog naming
+ * the pane chords. The phone's Stage rides a live session with nowhere to send (the way
  * `TerminalToolsScreenshotTest` does), so those frames need no sshd; the tablet's two panes are two
  * shells on the local sshd, skipped unless `SSH_TEST_*` is set.
  */
@@ -149,16 +151,25 @@ class HardwareKeyboardScreenshotTest {
     // ---- the Stage on a phone, a keyboard attached ------------------------------------------------
 
     @Test
-    fun `the Deck compact under a keyboard, the focus shown on the strip and on a key, and the shortcut sheet`() {
+    fun `the Deck folded to its strip under a keyboard, opened to its compact row, the focus shown on the strip and on a key, and the shortcut sheet`() {
         val session = liveHomelab()
         mount(keyboardMode = true) { Stage(session) }
+        // A keyboard attached folds the Deck to its strip (C4): the Keyboard layer's name on it, no key on the Stage, the terminal focused.
+        awaitDeckStrip()
+        assertTrue("no Deck key stands under a keyboard", compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isEmpty())
+        assertEquals("the strip is 20 dp", 20f, compose.onNode(deckStrip()).fetchSemanticsNode().size.height / compose.density.density, 0.5f)
+        awaitFocused(hasTestTag(TerminalTag), "the terminal, with a keyboard attached and a shell tab on stage")
+        capture("stage-hardware-keyboard")
+
+        // Ctrl+Shift+E opens the strip to the compact Deck: one row, the Keyboard layer, the layout's
+        // modifiers, then Paste since no key of it pastes; the letters and Esc are the keyboard's.
+        chord(KEYCODE_E, META_CTRL_ON or META_SHIFT_ON)
         awaitDeck()
-        // One row, the Keyboard layer: the layout's modifiers, then Paste since no key of it pastes; the letters and Esc are the keyboard's.
         assertTrue("Ctrl stays", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNodes().isNotEmpty())
         assertTrue("Paste is added", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Paste", substring = true)).fetchSemanticsNodes().isNotEmpty())
         assertTrue("Esc goes", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Esc", substring = true)).fetchSemanticsNodes().isEmpty())
-        awaitFocused(hasTestTag(TerminalTag), "the terminal, with a keyboard attached and a shell tab on stage")
-        capture("stage-hardware-keyboard")
+        awaitFocused(hasTestTag(TerminalTag), "the terminal still, after the Deck opened")
+        capture("stage-hardware-keyboard-compact-deck")
 
         // Ctrl+Shift+S: the strip's first tab has the focus, and out of touch mode shows it.
         chord(KEYCODE_S, META_CTRL_ON or META_SHIFT_ON)
@@ -180,11 +191,14 @@ class HardwareKeyboardScreenshotTest {
     }
 
     @Test
-    fun `Compact Deck off, the whole Deck stands under a keyboard`() {
+    fun `Compact Deck off, the strip still stands under a keyboard and opens to the whole Deck`() {
         // The tab's record first: the view model's first use restores the tabs, and the strip shows what it found.
         val session = liveHomelab()
         graph.viewModel.updateHardwareKeyboard { it.copy(compactDeck = false) }
         mount(keyboardMode = false) { Stage(session) }
+        // The fold is the keyboard's, not the setting's (C4); the strip's tap is the touch way to open it.
+        awaitDeckStrip()
+        compose.onNode(deckStrip()).performClick()
         awaitDeck()
         assertTrue("Esc stays", compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Esc", substring = true)).fetchSemanticsNodes().isNotEmpty())
         capture("stage-hardware-keyboard-full-deck")
@@ -267,6 +281,10 @@ class HardwareKeyboardScreenshotTest {
         compose.waitUntil(20_000) { compose.onAllNodesWithTag(TerminalTag).fetchSemanticsNodes().size == 2 }
         compose.waitUntil(20_000) { graph.sessions.panes.value?.right?.let { (it as? TerminalSession)?.state == SessionState.LIVE } == true }
         awaitFocused(hasTestTag(TerminalTag) and hasAnyAncestor(hasContentDescription(", right pane", substring = true)), "the new pane's terminal")
+        // The one strip stands folded under both panes (C4); Ctrl+Shift+E opens it to the one compact Deck.
+        awaitDeckStrip()
+        compose.onAllNodes(deckStrip()).assertCountEquals(1)
+        chord(KEYCODE_E, META_CTRL_ON or META_SHIFT_ON)
         awaitDeck()
         assertEquals(1, compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Paste", substring = true)).fetchSemanticsNodes().size)
         compose.onAllNodes(hasContentDescription("Close pane")).assertCountEquals(1)
@@ -368,6 +386,17 @@ class HardwareKeyboardScreenshotTest {
     }
 
     private fun awaitDeck() = compose.waitUntil(10_000) { compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isNotEmpty() }
+
+    /** The 20 dp strip a folded Deck leaves (C4): the one button that says so, naming the layer it opens to. */
+    private fun deckStrip() = hasContentDescription("Deck collapsed", substring = true) and role(Role.Button)
+
+    private fun awaitDeckStrip() {
+        try {
+            compose.waitUntil(10_000) { compose.onAllNodes(deckStrip()).fetchSemanticsNodes().isNotEmpty() }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("the Deck's strip never stood", e)
+        }
+    }
 
     private fun role(role: Role) = SemanticsMatcher.expectValue(SemanticsProperties.Role, role)
 

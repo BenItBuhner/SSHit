@@ -97,6 +97,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
+import app.berth.android.ui.keyboard.FoldDeckOnHardwareKeyboard
 import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.KeepStageFocus
 import app.berth.android.ui.keyboard.ShortcutSheet
@@ -242,10 +243,14 @@ fun StageScreen(
         HardwareShortcuts(tabs, stage)
     }
     if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, panes = panes.available, onDismiss = { shortcutSheet = false })
+    // A hardware keyboard folds the Deck to its strip (spec C4), once on attach and back on removal;
+    // the Stage's visibility, so every tab's Deck folds and the user's own choice holds between.
+    val hardwareKeyboardAttached = rememberHardwareKeyboardAttached()
+    FoldDeckOnHardwareKeyboard(hardwareKeyboardAttached) { deckVisible = it }
     // With a keyboard attached the focus stays on the Stage across tab switches and the Deck's coming
     // and going; not while the body is a placeholder waiting on the manager, whose control is a frame away.
     val bodyWaiting = tab == null && (activeId != null || !restored || slots.isNotEmpty())
-    KeepStageFocus(focus, enabled = rememberHardwareKeyboardAttached() && !bodyWaiting)
+    KeepStageFocus(focus, enabled = hardwareKeyboardAttached && !bodyWaiting)
 
     // Each tab's saveable state lives under its id; a closed tab's is dropped so nothing accumulates.
     val holder = rememberSaveableStateHolder()
@@ -557,8 +562,9 @@ private fun StageBody(
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
     // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
     val fittedDeckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
-    // With a hardware keyboard attached the Deck shrinks to its modifier and action row (spec C4,
-    // Settings › Hardware keyboard › Compact Deck); the strip still stands in for a hidden Deck.
+    // With a hardware keyboard attached the Deck stands folded to its strip (spec C4, the Stage's
+    // FoldDeckOnHardwareKeyboard); what the strip expands to is one row of modifiers and actions
+    // (Settings › Hardware keyboard › Compact Deck when expanded), or the whole Deck with that off.
     val hardwareKeyboard by vm.hardwareKeyboard.collectAsState()
     val compactDeck = rememberHardwareKeyboardAttached() && hardwareKeyboard.compactDeck
     val deckLayout = remember(fittedDeckLayout, compactDeck) { if (compactDeck) fittedDeckLayout.compactForHardwareKeyboard() else fittedDeckLayout }

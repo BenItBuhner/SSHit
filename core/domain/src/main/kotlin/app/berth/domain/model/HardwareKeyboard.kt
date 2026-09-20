@@ -21,9 +21,10 @@ data class HardwareKeyboardSettings(
     /** Hosts whose Alt behaviour differs from [altKey]; a host that inherits is absent. */
     val altKeyByHost: Map<String, AltKeyMode> = emptyMap(),
     /**
-     * While a hardware keyboard is attached the Deck shrinks to one row of its modifiers and app
-     * actions (spec C4, "Hardware keyboard attached"): the letters have a keyboard, Ctrl and Alt
-     * latches and Paste still earn their place. Off leaves the Deck as it is.
+     * A hardware keyboard folds the Deck to its strip (spec C4, "Hardware keyboard attached"); this
+     * is what the strip opens to while one is attached: one row of the Deck's modifiers and app
+     * actions, since the letters have a keyboard and Ctrl and Alt latches and Paste still earn their
+     * place. Off, the strip opens to the whole Deck.
      */
     val compactDeck: Boolean = true,
 ) {
