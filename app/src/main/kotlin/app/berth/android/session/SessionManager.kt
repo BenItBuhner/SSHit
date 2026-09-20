@@ -8,6 +8,9 @@ import android.os.Handler
 import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import app.berth.android.diagnostics.BerthLog
+import app.berth.android.diagnostics.CrashReporter
+import app.berth.android.diagnostics.ReportKind
 import app.berth.android.di.ProcessLifecycle
 import app.berth.android.security.AppLockController
 import app.berth.android.security.LockState
@@ -55,8 +58,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -97,6 +102,7 @@ class SessionManager @Inject constructor(
     private val lock: AppLockController,
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
+    private val reports: CrashReporter,
 ) : SessionCommands {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -257,6 +263,17 @@ class SessionManager @Inject constructor(
             snippetRepository.observeAll().first()
                 .filter { it.runOnConnect && it.hostId == host.id && (it.workspaceId == null || it.workspaceId == workspaceId) }
                 .map { it.render() }
+
+        // The same capture as a crash, one report per failure, under Settings › Diagnostics; the host is
+        // named the way the strip names it, the address so the report says which server, never a credential.
+        override fun onTransportFailure(host: Host, phase: String, error: Throwable?, detail: String) {
+            reports.report(
+                ReportKind.TRANSPORT,
+                "$phase: ${host.name}",
+                error,
+                details = listOf("Host" to "${host.name} \u00B7 ${host.user}@${host.address}:${host.port}", "Phase" to phase, "Reason" to detail),
+            )
+        }
     }
 
     /**
@@ -300,6 +317,7 @@ class SessionManager @Inject constructor(
     }
 
     init {
+        reports.addCrashHook { saveAllFramesNow() }
         scope.launch { restore() }
         scope.launch {
             // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its
@@ -381,6 +399,7 @@ class SessionManager @Inject constructor(
         }
         backgroundSaver?.cancel()
         backgroundSaver = null
+        BerthLog.d(LOG_TAG, "app on screen")
         // The user may have flipped notifications in system settings while away.
         notifier.refresh()
     }
@@ -427,6 +446,7 @@ class SessionManager @Inject constructor(
             _foreground.value = false
             darkenStage()
         }
+        BerthLog.d(LOG_TAG, "app left the screen; saving ${_sessions.value.values.count { it.state != SessionState.CLOSED }} frames")
         saveAllFrames()
         backgroundSaver?.cancel()
         backgroundSaver = scope.launch {
@@ -448,6 +468,7 @@ class SessionManager @Inject constructor(
      */
     fun onTrimMemory(level: Int) {
         if (level < ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        BerthLog.d(LOG_TAG, "memory trim at level $level; saving changed frames")
         saveAllFrames(onlyChanged = true)
     }
 
@@ -596,6 +617,7 @@ class SessionManager @Inject constructor(
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
         map.values.filter { it.record.value.workspaceId in reconnectWorkspaces }.forEach { it.connect() }
+        BerthLog.i(LOG_TAG, "restored ${map.size} terminal tabs and ${files.size} Files tabs; ${reconnectWorkspaces.size} groups reconnect at launch")
         val pending = synchronized(pendingLock) {
             _restored.value = true
             pendingActivation.also { pendingActivation = null }
@@ -1133,6 +1155,7 @@ class SessionManager @Inject constructor(
     /** Disconnects a terminal tab and keeps its frame. A Files tab has no connection of its own, so this does nothing to it. */
     override fun detach(id: String) {
         val session = _sessions.value[id] ?: return
+        BerthLog.i(LOG_TAG, "[${session.host.name}] detached by the user")
         session.detach()
         saveFrame(session)
     }
@@ -1148,6 +1171,7 @@ class SessionManager @Inject constructor(
         val closed = ClosedTab(tab.record.value)
         val next = TabOrder.nextActiveAfterClose(strip, id)
         val split = _split.value
+        BerthLog.i(LOG_TAG, "[${tab.host.name}] ${if (tab.kind == TabKind.Ssh) "terminal" else "Files"} tab closed")
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
@@ -1196,9 +1220,30 @@ class SessionManager @Inject constructor(
         scope.launch { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
     }
 
+    /**
+     * The crash path's save ([CrashReporter.addCrashHook]): every open terminal's frame
+     * snapshotted and written here, on the calling thread, so the relaunch shows what each tab
+     * showed at the crash rather than at the last background save. Bounded, since the process
+     * ends right after; a write not through by then is lost, which is no worse than before.
+     */
+    internal fun saveAllFramesNow(timeoutMs: Long = CrashReporter.HOOK_TIMEOUT_MS) {
+        val open = _sessions.value.values.filter { it.state != SessionState.CLOSED }
+        if (open.isEmpty()) return
+        BerthLog.i(LOG_TAG, "saving ${open.size} frames before the process ends")
+        runBlocking {
+            withTimeoutOrNull(timeoutMs) {
+                for (session in open) {
+                    runCatching { sessionRepository.saveFrame(session.id, session.snapshotFrame()) }
+                }
+            }
+        }
+    }
+
     override fun detachAll() = _sessions.value.keys.toList().forEach { detach(it) }
 
     companion object {
+        private const val LOG_TAG = "Sessions"
+
         /** How often frames are re-saved while live sessions run in the background. */
         const val BACKGROUND_SAVE_MS = 30_000L
 

@@ -234,7 +234,8 @@ class CrashReporter(
     companion object {
         const val DIR = "reports"
         const val MAX_REPORTS = 30
-        const val HOOK_TIMEOUT_MS = 2_000L
+        /** The hooks' budget: a frame written through Room for every open tab has to fit, on a phone that is slow and dying. */
+        const val HOOK_TIMEOUT_MS = 5_000L
         private const val UNREAD = "unread"
 
         private val FILE_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS").withZone(ZoneOffset.UTC)

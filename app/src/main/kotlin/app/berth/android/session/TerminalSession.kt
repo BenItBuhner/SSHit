@@ -1,5 +1,6 @@
 package app.berth.android.session
 
+import app.berth.android.diagnostics.BerthLog
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
@@ -95,6 +96,14 @@ interface SessionEnvironment {
 
     /** Whether sessions keep the commands they run (spec C16, the Settings toggle). */
     fun commandHistoryEnabled(): Boolean = true
+
+    /**
+     * The transport failed on [host]: a connect attempt refused for good, a live connection that
+     * fell over, or the retries given up on. [phase] says which; [error] is what the transport
+     * threw, when it threw. The app writes these as connection reports ([app.berth.android.diagnostics.CrashReporter]),
+     * beside the marker the terminal shows; a stand-in keeps nothing.
+     */
+    fun onTransportFailure(host: Host, phase: String, error: Throwable?, detail: String) = Unit
 }
 
 /** A failure worth telling the user about away from the Stage (spec C21, Problems channel). */
@@ -563,6 +572,8 @@ class TerminalSession(
         var attempt = 0
         var since = env.now()
         var isReconnect = reconnecting
+        // What the last attempt in this window threw, for the report written when the window closes.
+        var lastError: Throwable? = null
         while (true) {
             transition(if (isReconnect) SessionState.RECONNECTING else SessionState.CONNECTING, PersistenceLayer.IN_APP)
             _retryIn.value = null
@@ -576,6 +587,7 @@ class TerminalSession(
             when (outcome) {
                 Outcome.Ended -> {
                     marker("session ended")
+                    BerthLog.i(LOG_TAG, "[${host.name}] session ended: the shell exited")
                     transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
                     return
                 }
@@ -584,7 +596,10 @@ class TerminalSession(
                     attempt = 0
                     since = env.now()
                     isReconnect = true
+                    lastError = outcome.cause
                     marker("connection lost: ${outcome.reason}")
+                    BerthLog.w(LOG_TAG, "[${host.name}] connection lost: ${outcome.reason}", outcome.cause)
+                    env.onTransportFailure(host, "Connection lost", outcome.cause, outcome.reason)
                 }
                 is Outcome.Failed -> {
                     val e = outcome.error
@@ -592,15 +607,20 @@ class TerminalSession(
                         fail(e)
                         return
                     }
+                    lastError = e
                     isReconnect = everLive
+                    BerthLog.w(LOG_TAG, "[${host.name}] attempt ${attempt + 1} failed, will retry: ${e.message ?: e.javaClass.simpleName}")
                 }
             }
             teardownConnection()
             if (!ReconnectBackoff.shouldRetry(env.now() - since, host.persistence)) {
                 marker("gave up reconnecting")
                 transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
+                val waited = env.now() - since
+                BerthLog.w(LOG_TAG, "[${host.name}] gave up reconnecting after ${waited / 1_000} s and $attempt retries", lastError)
+                env.onTransportFailure(host, "Gave up reconnecting", lastError, "after ${waited / 1_000} s and $attempt ${if (attempt == 1) "retry" else "retries"}")
                 // Losing the server is news like a bell is (vision §4.5): off stage the ring and the count tile carry it.
-                val problem = SessionProblem.GaveUp(env.now() - since)
+                val problem = SessionProblem.GaveUp(waited)
                 attention("Couldn't reconnect", problem)
                 _problems.tryEmit(problem)
                 return
@@ -612,7 +632,9 @@ class TerminalSession(
 
     private sealed interface Outcome {
         data object Ended : Outcome
-        data class Dropped(val reason: String) : Outcome
+
+        /** A live connection fell over; [cause] is what the transport threw, when it threw rather than merely closed. */
+        data class Dropped(val reason: String, val cause: Throwable?) : Outcome
         data class Failed(val error: Throwable) : Outcome
     }
 
@@ -656,8 +678,8 @@ class TerminalSession(
         patch { copy(lastLiveAt = env.now(), needsAttention = false, attentionReason = null) }
         if (firstShell) runOnConnect(sh, h)
 
-        val dropped = MutableStateFlow<String?>(null)
-        conn.onDisconnected = { dropped.value = it.message ?: "disconnected" }
+        val dropped = MutableStateFlow<SshError.Disconnected?>(null)
+        conn.onDisconnected = { dropped.value = it }
 
         try {
             withContext(Dispatchers.IO) {
@@ -666,10 +688,12 @@ class TerminalSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            return Outcome.Dropped(dropped.value ?: e.message ?: "connection lost")
+            val disconnect = dropped.value
+            return Outcome.Dropped(disconnect?.message ?: e.message ?: "connection lost", disconnect ?: e)
         }
         // EOF: either the remote shell exited or the transport died underneath it.
-        return if (dropped.value != null || !conn.isConnected) Outcome.Dropped(dropped.value ?: "connection lost") else Outcome.Ended
+        val disconnect = dropped.value
+        return if (disconnect != null || !conn.isConnected) Outcome.Dropped(disconnect?.message ?: "connection lost", disconnect) else Outcome.Ended
     }
 
     /**
@@ -683,7 +707,7 @@ class TerminalSession(
         transition(SessionState.LIVE, PersistenceLayer.IN_APP)
         patch { copy(lastLiveAt = env.now(), needsAttention = false, attentionReason = null) }
         val end = conn.state.first { it is SshConnectionState.Disconnected } as SshConnectionState.Disconnected
-        return Outcome.Dropped(end.reason.ifBlank { "connection lost" })
+        return Outcome.Dropped(end.reason.ifBlank { "connection lost" }, end.error)
     }
 
     private fun endpointFor(h: Host, auth: List<SshAuth>) = SshEndpoint(
@@ -738,6 +762,8 @@ class TerminalSession(
         _failure.value = SessionFailure(plain, e.message ?: e.javaClass.simpleName, hop)
         teardownConnection()
         transition(SessionState.FAILED, PersistenceLayer.LOCAL_FRAME)
+        BerthLog.w(LOG_TAG, "[${host.name}] couldn't connect: $plain", e)
+        env.onTransportFailure(host, "Couldn't connect", e, plain)
         val problem = SessionProblem.Failed(plain, authentication = e.rootSshError() is SshError.AuthenticationFailed)
         attention(plain, problem)
         _problems.tryEmit(problem)
@@ -890,7 +916,11 @@ class TerminalSession(
         }
     }
 
-    private fun transition(state: SessionState, layer: PersistenceLayer) = patch { copy(state = state, layer = layer) }
+    private fun transition(state: SessionState, layer: PersistenceLayer) {
+        val before = _record.value.state
+        patch { copy(state = state, layer = layer) }
+        if (before != state) BerthLog.i(LOG_TAG, "[${host.name}] ${before.name.lowercase()} \u2192 ${state.name.lowercase()}")
+    }
 
     private fun patch(change: SessionRecord.() -> SessionRecord) {
         val updated = _record.updateAndGet { it.change() }
@@ -977,6 +1007,7 @@ class TerminalSession(
     companion object {
         /** How long an OSC 133 command must have run before its finishing off stage counts as attention (vision §4.5). */
         const val ATTENTION_COMMAND_MS = 10_000L
+        private const val LOG_TAG = "Session"
         private const val CONNECT_TIMEOUT_MS = 45_000L
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
         private const val BIND_RETRIES = 2
