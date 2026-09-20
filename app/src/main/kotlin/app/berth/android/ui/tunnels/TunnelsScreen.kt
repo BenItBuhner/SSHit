@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
@@ -164,8 +165,21 @@ fun TunnelsScreen(vm: AppViewModel, hostId: String?, onBack: () -> Unit, modifie
 class TunnelEditorTarget(val hostId: String?, val tunnel: Tunnel?)
 
 /**
- * One tunnel as a [ListRow]: state dot leading, the spec in Mono, type and status in one Caption
- * line, then Open for local web ports, Retry after a failure, and the switch.
+ * The spec as a row's Mono title: [Tunnel.spec] with the arrow bound to the destination
+ * (`→ localhost:80` is one word), so a spec too long for its line breaks before the arrow, the bind
+ * on the first line and `→ destination` on the second, and the destination, the half that says
+ * where the forward goes, is never the half an ellipsis takes. Two lines in the row
+ * (`titleMaxLines`); a spec that fits stays on one.
+ */
+internal val Tunnel.rowSpec: String get() = spec.replaceFirst(" \u2192 ", " \u2192\u00A0")
+
+/** The Mono title style a spec row uses: Mono at Body's size and line height, so two lines of it sit like a Body line pair. */
+internal val specTitleStyle: TextStyle @Composable get() = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight)
+
+/**
+ * One tunnel as a [ListRow]: state dot leading, the spec in Mono (two lines when it must break at
+ * the arrow), type and status in one Caption line, then Open for local web ports, Retry after a
+ * failure, and the switch.
  */
 @Composable
 fun TunnelRow(
@@ -199,8 +213,9 @@ fun TunnelRow(
     val failed = status is TunnelStatus.Failed
     Box(modifier) {
         ListRow(
-            title = tunnel.spec,
-            titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+            title = tunnel.rowSpec,
+            titleStyle = specTitleStyle,
+            titleMaxLines = 2,
             titleColor = if (tunnel.enabled) c.text1 else c.text2,
             subtitle = buildAnnotatedString {
                 append(tunnel.type.label)
@@ -255,9 +270,10 @@ fun PendingTunnelRow(
 ) {
     val c = Berth.colors
     ListRow(
-        title = tunnel.spec,
+        title = tunnel.rowSpec,
         modifier = modifier,
-        titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+        titleStyle = specTitleStyle,
+        titleMaxLines = 2,
         titleColor = if (kept) c.text1 else c.text2,
         subtitle = buildAnnotatedString {
             append(tunnel.type.label)
@@ -382,7 +398,7 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
                 }
             }
             if (touched) {
-                Text(problem ?: draft.spec, style = if (problem != null) BerthType.caption else BerthType.mono, color = if (problem != null) c.danger else c.text2, modifier = Modifier.padding(horizontal = 4.dp))
+                Text(problem ?: draft.rowSpec, style = if (problem != null) BerthType.caption else BerthType.mono, color = if (problem != null) c.danger else c.text2, modifier = Modifier.padding(horizontal = 4.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 BerthButton(

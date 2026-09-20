@@ -122,6 +122,9 @@ class ConnectionsScreenshotTest {
         captureScreenRoboImage(File(outDir, "$name.png").path)
     }
 
+    /** A forward's spec as its rows show it ([app.berth.android.ui.tunnels.rowSpec]): the arrow bound to the destination, so the pair breaks before the arrow and never loses the destination. */
+    private fun onRow(spec: String): String = spec.replaceFirst(" \u2192 ", " \u2192\u00A0")
+
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
@@ -173,7 +176,7 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("Add tunnel").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Tunnels only").assertExists()
-        compose.onNodeWithText("127.0.0.1:5433 \u2192 localhost:5432").assertExists()
+        compose.onNodeWithText(onRow("127.0.0.1:5433 \u2192 localhost:5432")).assertExists()
         capture("host-editor-tunnels-only")
 
         // Back up to the chain, its first hop at the top edge, so the menu opens under Add jump host with the hops above it.
@@ -253,7 +256,7 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("From the link: Save keeps what is switched on, and nothing starts before then.").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Tunnels only").assertExists()
-        compose.onNodeWithText("127.0.0.1:8443 \u2192 localhost:443").assertExists()
+        compose.onNodeWithText(onRow("127.0.0.1:8443 \u2192 localhost:443")).assertExists()
         compose.onNodeWithText("SOCKS5 on 127.0.0.1:1080").assertExists()
         compose.onNodeWithText("Local \u00B7 from the link").assertExists()
         compose.onNodeWithText("Dynamic \u00B7 from the link").assertExists()
@@ -282,14 +285,14 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("The link carries 2 forwards prod-db does not have yet. Nothing is saved or started until Save.").assertExists()
         compose.onNodeWithText("From the link: Save keeps what is switched on, and nothing starts before then.").performScrollTo()
         compose.waitForIdle()
-        compose.onNodeWithText("0.0.0.0:15432 \u2192 localhost:5432").assertExists()
-        compose.onNodeWithText("remote:9000 \u2192 localhost:3000").assertExists()
-        compose.onAllNodesWithText("127.0.0.1:8080 \u2192 localhost:80").assertCountEquals(1) // the saved row alone; the link's copy of it is nothing to confirm
+        compose.onNodeWithText(onRow("0.0.0.0:15432 \u2192 localhost:5432")).assertExists()
+        compose.onNodeWithText(onRow("remote:9000 \u2192 localhost:3000")).assertExists()
+        compose.onAllNodesWithText(onRow("127.0.0.1:8080 \u2192 localhost:80")).assertCountEquals(1) // the saved row alone; the link's copy of it is nothing to confirm
         compose.onNodeWithText("Local \u00B7 from the link \u00B7 all interfaces").assertExists()
         compose.onNodeWithText("Remote \u00B7 from the link").assertExists()
         capture("host-editor-link-forwards")
 
-        compose.onNodeWithText("remote:9000 \u2192 localhost:3000").performClick()
+        compose.onNodeWithText(onRow("remote:9000 \u2192 localhost:3000")).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Remote \u00B7 left out")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Save and open tunnels").performClick()
         awaitOnMain("the kept forward is saved and the tunnels open") { graph.viewModel.linkOutcome.value == LinkOutcome.Staged }
@@ -362,7 +365,7 @@ class ConnectionsScreenshotTest {
             Stage(graph.viewModel.activeTab.collectAsState().value)
             if (switcher.value) TabSwitcher(graph.viewModel, tabActions(), onDismiss = {})
         }
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText("127.0.0.1:5433 \u2192 localhost:5432")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText(onRow("127.0.0.1:5433 \u2192 localhost:5432"))).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Detached \u00B7 7 min ago").assertExists()
         compose.onAllNodes(hasText("Not connected", substring = true)).assertCountEquals(2)
         compose.onAllNodes(hasText("Dynamic \u00B7 Off", substring = true)).assertCountEquals(1)

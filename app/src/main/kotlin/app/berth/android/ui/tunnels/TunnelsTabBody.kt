@@ -144,9 +144,12 @@ fun TunnelsTabBody(vm: AppViewModel, session: TerminalSession, onEditHost: (Stri
 }
 
 /**
- * One forward on the Tunnels stage: state dot leading, the spec in Mono, then the type and state
+ * One forward on the Tunnels stage: state dot leading, the spec in Mono (two lines when it must
+ * break at the arrow, so the destination is never what an ellipsis takes), then the type and state
  * on one Caption line and, while it is up, its traffic on a second (`2 open · 14 served · 1.2 MB up
- * · 48 KB down`). Open for a local web port, Retry after a failure; tapping the row edits it.
+ * · 48 KB down`). The second line is held open from the moment the login is active, so a row does
+ * not grow when `Starting` becomes `Up` and the list settles once. Open for a local web port, Retry
+ * after a failure; tapping the row edits it.
  */
 @Composable
 internal fun TunnelStateRow(
@@ -181,9 +184,10 @@ internal fun TunnelStateRow(
     // to read them again, so it is remembered against the tick rather than the traffic object.
     val traffic = (status as? TunnelStatus.Up)?.traffic?.let { t -> remember(t, clock) { trafficLine(t) } }
     ListRow(
-        title = tunnel.spec,
+        title = tunnel.rowSpec,
         modifier = modifier,
-        titleStyle = BerthType.mono.copy(fontSize = BerthType.body.fontSize, lineHeight = BerthType.body.lineHeight),
+        titleStyle = specTitleStyle,
+        titleMaxLines = 2,
         titleColor = if (tunnel.enabled) c.text1 else c.text2,
         subtitle = buildAnnotatedString {
             append(tunnel.type.label)
@@ -196,6 +200,7 @@ internal fun TunnelStateRow(
             }
         },
         subtitleMaxLines = 2,
+        subtitleMinLines = if (loginActive) 2 else 1,
         onClick = onEdit,
         leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(dot) } },
         trailing = {

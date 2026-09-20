@@ -258,9 +258,13 @@ const val DisabledAlpha = 0.5f
 /**
  * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
  * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
- * The subtitle takes a plain String or an [AnnotatedString] (mixed Mono and Caption, accent spans),
- * on one line unless [subtitleMaxLines] gives it more, for a caption that is a sentence. A row
- * that is not [enabled] takes no tap, does not press, and draws its text at [DisabledAlpha].
+ * The title is one line unless [titleMaxLines] gives it more, for a title whose end matters as
+ * much as its start (a forward's `bind → destination` breaks at the arrow rather than losing the
+ * destination to the ellipsis). The subtitle takes a plain String or an [AnnotatedString] (mixed
+ * Mono and Caption, accent spans), on one line unless [subtitleMaxLines] gives it more, for a
+ * caption that is a sentence; [subtitleMinLines] holds lines open before they have text, so a row
+ * whose second line arrives later (a forward's traffic once it is up) does not grow when it does.
+ * A row that is not [enabled] takes no tap, does not press, and draws its text at [DisabledAlpha].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -277,8 +281,10 @@ fun ListRow(
     trailing: (@Composable RowScope.() -> Unit)? = null,
     titleColor: Color = Berth.colors.text1,
     titleStyle: TextStyle = BerthType.bodyMedium,
+    titleMaxLines: Int = 1,
     subtitleStyle: TextStyle = BerthType.caption,
     subtitleMaxLines: Int = 1,
+    subtitleMinLines: Int = 1,
     enabled: Boolean = true,
 ) {
     val c = Berth.colors
@@ -322,12 +328,12 @@ fun ListRow(
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = titleStyle, color = titleColor.copy(alpha = titleColor.alpha * textAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = titleStyle, color = titleColor.copy(alpha = titleColor.alpha * textAlpha), maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
             val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
             when (subtitle) {
                 null -> Unit
-                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
-                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
+                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleMaxLines, overflow = TextOverflow.Ellipsis)
             }
         }
         if (trailing != null) {
