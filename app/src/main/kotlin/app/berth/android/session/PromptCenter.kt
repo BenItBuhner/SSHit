@@ -6,6 +6,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.FingerprintCheck
 import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
+import app.berth.ssh.SshKeys
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,12 +34,26 @@ data class HopRole(val index: Int, val count: Int, val target: Host) {
  * the link came from, and a link and a server that agree can both be someone else's. So the trust
  * sheets show the comparison beside the fingerprint and leave the choice where it was, and a
  * fingerprint in no form Berth reads ([FingerprintCheck.UNREADABLE]) is said to be that, not a mismatch.
+ *
+ * On the changed-key sheet there are two keys, and the link is compared with both ([check] with
+ * the offered, [savedCheck] with the saved): a link written while the saved key was current and
+ * opened after the server rotated carries the saved key's fingerprint exactly, which is what a
+ * rotation looks like and is said so, not as a fingerprint that is neither key's.
  */
 data class LinkFingerprint(
     /** As the link wrote it, trimmed. */
     val expected: String,
+    /** Against the key the server offered. */
     val check: FingerprintCheck,
+    /**
+     * Against the key saved for the endpoint, on the changed-key sheet; null on first contact,
+     * where there is no saved key, and for an MD5 link when the saved key's blob will not read back.
+     */
+    val savedCheck: FingerprintCheck? = null,
 ) {
+    /** The link carried the saved key's fingerprint. */
+    val matchesSaved: Boolean get() = savedCheck == FingerprintCheck.MATCH
+
     /** [expected] in the form the sheets show fingerprints, when it is readable. */
     val shown: String get() = HostKeyFingerprints.normalize(expected) ?: expected
 
@@ -61,9 +76,27 @@ data class LinkFingerprint(
     companion object {
         const val QUOTED_MAX = 40
 
-        /** The comparison for [expected] against [key]; null when the login was not opened by a link with a fingerprint. */
-        fun of(expected: String?, key: PublicKey): LinkFingerprint? =
-            expected?.trim()?.takeIf { it.isNotEmpty() }?.let { LinkFingerprint(it, HostKeyFingerprints.check(it, key)) }
+        /**
+         * The comparison for [expected] against the offered [key], and against [saved] when the sheet is
+         * the changed-key one; null when the login was not opened by a link with a fingerprint.
+         */
+        fun of(expected: String?, key: PublicKey, saved: KnownHostKey? = null): LinkFingerprint? {
+            val text = expected?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return LinkFingerprint(text, HostKeyFingerprints.check(text, key), saved?.let { checkSaved(text, it) })
+        }
+
+        /**
+         * The saved key is stored as its public key blob, so a SHA-256 or an MD5 link compares with it the
+         * way it does with the offered key. A blob that will not read back (a row from before the blob was
+         * stored, or one damaged) compares by the stored SHA-256 alone, and an MD5 link then has nothing
+         * to compare with: null, and the sheet says only that the fingerprint is not the offered key's.
+         */
+        private fun checkSaved(text: String, saved: KnownHostKey): FingerprintCheck? {
+            runCatching { SshKeys.parsePublicKeyBlob(saved.publicKeyBase64) }.getOrNull()?.let { return HostKeyFingerprints.check(text, it) }
+            val normalized = HostKeyFingerprints.normalize(text) ?: return FingerprintCheck.UNREADABLE
+            if (!normalized.startsWith("SHA256:")) return null
+            return if (normalized == saved.fingerprintSha256) FingerprintCheck.MATCH else FingerprintCheck.MISMATCH
+        }
     }
 }
 

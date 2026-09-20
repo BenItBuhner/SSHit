@@ -264,7 +264,13 @@ private fun LinkUnreadableLine(link: LinkFingerprint) {
     )
 }
 
-/** The one alarming sheet in the app: the saved key changed. Danger colour on the title, no primary. */
+/**
+ * The one alarming sheet in the app: the saved key changed. Danger colour on the title, no primary.
+ * A link's fingerprint is compared with both keys ([LinkFingerprint.check] with the offered,
+ * [LinkFingerprint.savedCheck] with the saved): the offered key's, the saved key's (what a link
+ * written before a rotation carries, said in text.2 like the rest), or neither, which is the one
+ * that alarms, with the link's fingerprint as a third row so the three can be compared by eye.
+ */
 @Composable
 private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
     val c = Berth.colors
@@ -280,12 +286,18 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
         Fingerprint(p.saved.keyType, p.saved.fingerprintSha256, label = "Saved")
         Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")
         p.link?.let { link ->
-            when (link.check) {
-                FingerprintCheck.UNREADABLE -> LinkUnreadableLine(link)
-                FingerprintCheck.MATCH -> Text("The link that opened this connection carried the offered key's fingerprint.", style = BerthType.body, color = c.text2)
-                FingerprintCheck.MISMATCH -> {
+            when {
+                link.check == FingerprintCheck.UNREADABLE -> LinkUnreadableLine(link)
+                link.check == FingerprintCheck.MATCH -> Text("The link that opened this connection carried the offered key's fingerprint.", style = BerthType.body, color = c.text2)
+                link.matchesSaved -> Text("The link that opened this connection carried the saved key's fingerprint.", style = BerthType.body, color = c.text2)
+                else -> {
                     LinkFingerprintRow(link)
-                    Text("The link that opened this connection carried a fingerprint that is neither key's.", style = BerthType.body, color = c.danger)
+                    Text(
+                        if (link.savedCheck == null) "The link that opened this connection carried a fingerprint that is not the offered key's."
+                        else "The link that opened this connection carried a fingerprint that is neither key's.",
+                        style = BerthType.body,
+                        color = c.danger,
+                    )
                 }
             }
         }

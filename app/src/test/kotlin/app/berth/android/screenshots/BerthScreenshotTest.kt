@@ -96,6 +96,7 @@ import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
+import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
@@ -624,8 +625,9 @@ class BerthScreenshotTest {
      * line under the fingerprint and the sheet is otherwise the first-connection sheet; a mismatch
      * leads the sheet in danger, said once, with the offered key and the link's fingerprint as two
      * labelled rows of one size and no primary action; a value Berth cannot read is said to be that,
-     * quoted clean; and the changed-key sheet says whose fingerprint the link carried. The comparison
-     * decides nothing: the actions are the same.
+     * quoted clean; and the changed-key sheet says whose fingerprint the link carried, the offered
+     * key's, the saved key's (a link from before a rotation) or neither's, with the link's as a third
+     * row for that one. The comparison decides nothing: the actions are the same.
      */
     @Test
     fun `trust sheets with the fingerprint a link carried`() {
@@ -685,11 +687,37 @@ class BerthScreenshotTest {
 
         // The saved key changed and the link carried the offered key's fingerprint: said in the changed-key sheet, which stays as alarming as it is.
         val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(40), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
-        bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key)) }
+        bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key, saved)) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
         compose.onNodeWithText("Host key changed").assertExists()
         compose.onNodeWithText("The link that opened this connection carried the offered key's fingerprint.").assertExists()
+        compose.onAllNodes(hasText("LINK", substring = true)).assertCountEquals(0)
         capture("prompt-host-key-changed-link-offered")
+        (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
+        // The link carried the saved key's fingerprint, written as MD5 hex: a link from before the rotation, which is
+        // what a rotation looks like and is said so, in the sheet's own tone, not as a fingerprint that is neither key's.
+        val savedMd5 = HostKeyFingerprints.md5(other).removePrefix("MD5:")
+        bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(savedMd5, key, saved)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
+        compose.onNodeWithText("The link that opened this connection carried the saved key's fingerprint.").assertExists()
+        compose.onAllNodes(hasText("neither key's", substring = true)).assertCountEquals(0)
+        compose.onAllNodes(hasText("LINK", substring = true)).assertCountEquals(0)
+        capture("prompt-host-key-changed-link-saved")
+        (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
+        // The link carried a third key's fingerprint: neither key's, said in danger, with the link's as a third row.
+        val third = SshKeys.generate(KeyAlgorithm.ED25519).public
+        bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(third), key, saved)) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
+        compose.onNodeWithText("The link that opened this connection carried a fingerprint that is neither key's.").assertExists()
+        compose.onAllNodes(hasText("SAVED   ssh-ed25519 \u00B7 SHA256")).assertCountEquals(1)
+        compose.onAllNodes(hasText("OFFERED   ssh-ed25519 \u00B7 SHA256")).assertCountEquals(1)
+        compose.onAllNodes(hasText("LINK   SHA256")).assertCountEquals(1)
+        compose.onNodeWithText(SshKeys.groupedFingerprint(SshKeys.fingerprintSha256(third))).assertExists()
+        capture("prompt-host-key-changed-link-neither")
         (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
         compose.waitUntil(5_000) { graph.prompts.current.value == null }
     }

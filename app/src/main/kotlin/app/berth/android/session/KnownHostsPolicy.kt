@@ -21,8 +21,9 @@ import java.util.UUID
  * that, so the sheet names the hop's role and the target rather than reading as the target's.
  *
  * [linkFingerprint] is the fingerprint the link that opened this login carried (`;fingerprint=`),
- * when one did: the first-connection and changed-key sheets show how it compares with the key the
- * server presents ([LinkFingerprint]). It changes what the sheets say, never what the policy does.
+ * when one did: the first-connection sheet shows how it compares with the key the server presents,
+ * the changed-key sheet with that key and with the saved one ([LinkFingerprint]). It changes what
+ * the sheets say, never what the policy does.
  */
 class KnownHostsPolicy(
     private val host: Host,
@@ -55,7 +56,7 @@ class KnownHostsPolicy(
             prompts.pinnedKeyRefused(host, request, pinned, via)
             return@runBlocking false
         }
-        when (prompts.hostKeyChanged(host, request, saved, via, LinkFingerprint.of(linkFingerprint, request.publicKey))) {
+        when (prompts.hostKeyChanged(host, request, saved, via, LinkFingerprint.of(linkFingerprint, request.publicKey, saved))) {
             HostKeyChangedDecision.DISCONNECT -> false
             HostKeyChangedDecision.TRUST_ONCE -> true
             HostKeyChangedDecision.REPLACE_SAVED -> {
