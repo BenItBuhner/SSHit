@@ -11,6 +11,8 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -33,6 +35,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +78,7 @@ import app.berth.android.ui.terminal.offsetShowing
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.domain.model.SessionState
 import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
 import kotlinx.coroutines.delay
@@ -96,8 +100,15 @@ class StageTools {
     /**
      * Sends [text] to the session as a paste, or holds it for the preview sheet when it is more
      * than one line, longer than [PasteClassifier.PREVIEW_CHARS] or carries control characters.
+     * Every route a paste can take (the bar, the two-finger tap, the Deck, the keyboard's paste)
+     * comes through here, so this is where a session that is not Live turns it down: a paste
+     * into a detached or failed tab has no shell to land in, and says so instead of vanishing.
      */
     fun paste(session: TerminalSession, text: String, haptics: DeckHaptics?) {
+        if (session.state != SessionState.LIVE) {
+            notice = NOT_CONNECTED
+            return
+        }
         val analysis = PasteClassifier.analyze(text)
         if (analysis.needsPreview) {
             pendingPaste = analysis
@@ -115,6 +126,11 @@ class StageTools {
     /** Closes the search bar and puts the view back where it was when it opened. */
     fun closeSearch() {
         search.close()?.let { viewport.scrollOffset = it }
+    }
+
+    companion object {
+        /** The notice for a paste into a session without a shell. */
+        const val NOT_CONNECTED = "Not connected"
     }
 }
 
@@ -140,7 +156,9 @@ fun StageToolbar(tools: StageTools, session: TerminalSession?, header: @Composab
 /**
  * `24 chars · Copy · Paste · Search · Share · ⋮ · ×` where the tab strip was (spec C18). Copy
  * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all and, when the
- * selection is a link, Open. Same height and fill as the header so nothing below moves.
+ * selection is a link, Open. Paste is there only while the session is Live: on a frozen frame there
+ * is nothing to paste into, and its absence says so. Same height and fill as the header so nothing
+ * below moves.
  */
 @Composable
 private fun SelectionBar(tools: StageTools, session: TerminalSession) {
@@ -151,6 +169,8 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
     val context = LocalContext.current
     val haptics = rememberDeckHaptics()
     val selection = tools.selection
+    val record by session.record.collectAsState()
+    val live = record.state == SessionState.LIVE
     var menu by remember { mutableStateOf(false) }
     fun text(): String = selection.text(session.emulator)
     fun copy() {
@@ -174,9 +194,11 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
             )
             Spacer(Modifier.weight(1f))
             BarAction("Copy", onClick = ::copy)
-            BarAction("Paste") {
-                clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
-                selection.clear()
+            if (live) {
+                BarAction("Paste") {
+                    clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
+                    selection.clear()
+                }
             }
             BarAction("Search") {
                 val t = text()
@@ -347,25 +369,36 @@ private fun Toggle(glyph: String, on: Boolean, description: String, onChange: (B
 
 /**
  * The look before a paste that is more than one line, long, or carries control characters (spec
- * C18, as a sheet): the text, how many lines, a warning for control characters and, with
- * bracketed paste off on the remote, how many commands the shell will run as the lines land.
- * Paste sends the text as it is; Paste as one line folds it, control characters dropped.
+ * C18, as a sheet): the text with control characters shown by their caret names, how many lines,
+ * and, with bracketed paste off on the remote, how many commands the shell will run as the lines
+ * land. Two shapes. Plain text: Paste, filled, sends it as it is; Paste as one line folds it. With
+ * control characters the sheet is a warning, and the weight goes to the safe answer: the filled
+ * button is Paste without control characters (they are dropped, the lines kept), Paste as is
+ * stands beside it plain, Paste as one line third when there are lines to fold, and the warning
+ * with the count and the names is the title's caption. Should the session stop being Live while
+ * the sheet is open, the sending buttons disable and the caption says Not connected.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics: DeckHaptics, onDismiss: () -> Unit) {
     val c = Berth.colors
+    val record by session.record.collectAsState()
+    val live = record.state == SessionState.LIVE
     val bracketed = session.emulator.bracketedPaste
     val title = when {
         analysis.lines > 1 -> "Paste ${analysis.lines} lines"
         else -> "Paste ${"%,d".format(analysis.chars)} characters"
     }
-    val caption = when {
+    val warning = if (analysis.hasControlChars) controlWarning(analysis) else null
+    val status = when {
+        !live -> StageTools.NOT_CONNECTED
         bracketed -> "The shell has bracketed paste on, so the text lands as one block."
         analysis.lineBreaks > 0 -> "Bracketed paste is off: the shell will run ${analysis.lineBreaks} ${if (analysis.lineBreaks == 1) "command" else "commands"} as the lines land."
         else -> null
     }
+    val statusColor = if (live) c.text2 else c.danger
     fun send(text: String) {
+        if (session.state != SessionState.LIVE) return
         session.paste(text)
         haptics.paste()
         onDismiss()
@@ -384,9 +417,11 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetTitle(title, caption)
-            if (analysis.hasControlChars) {
-                Text("Contains control characters the shell would act on.", style = BerthType.caption, color = c.danger)
+            if (warning != null) {
+                SheetTitle(title, warning, captionColor = c.danger)
+                if (status != null) Text(status, style = BerthType.caption, color = statusColor)
+            } else {
+                SheetTitle(title, status, captionColor = statusColor)
             }
             Panel {
                 Text(
@@ -396,14 +431,31 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
                     modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BerthButton("Paste", kind = ButtonKind.PRIMARY, onClick = { send(analysis.text) })
-                BerthButton("Paste as one line", onClick = { send(PasteClassifier.asOneLine(PasteClassifier.stripControl(analysis.text))) })
-                Spacer(Modifier.weight(1f))
-                BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+            if (warning != null) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Paste without control characters", kind = ButtonKind.PRIMARY, enabled = live, onClick = { send(PasteClassifier.stripControl(analysis.text)) })
+                    BerthButton("Paste as is", enabled = live, onClick = { send(analysis.text) })
+                    if (analysis.isMultiLine) {
+                        BerthButton("Paste as one line", enabled = live, onClick = { send(PasteClassifier.asOneLine(PasteClassifier.stripControl(analysis.text))) })
+                    }
+                    BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Paste", kind = ButtonKind.PRIMARY, enabled = live, onClick = { send(analysis.text) })
+                    BerthButton("Paste as one line", enabled = live, onClick = { send(PasteClassifier.asOneLine(analysis.text)) })
+                    Spacer(Modifier.weight(1f))
+                    BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                }
             }
         }
     }
+}
+
+/** `Has 2 control characters (^[, ^C) the shell would act on.`: the count and the first names, for the sheet's caption. */
+fun controlWarning(analysis: PasteAnalysis): String {
+    val n = analysis.controlChars
+    return "Has $n control ${if (n == 1) "character" else "characters"} (${analysis.controlNames.joinToString(", ")}) the shell would act on."
 }
 
 /** The passing confirmation over the terminal ("Copied"): the existing pill, gone after a moment. */
@@ -423,7 +475,7 @@ fun NoticePill(tools: StageTools, modifier: Modifier = Modifier) {
 private const val NOTICE_MS = 1_400L
 private const val PREVIEW_LINES = 12
 
-/** The first lines of a paste for the sheet, control characters shown as their caret names. */
+/** The first lines of a paste for the sheet, control characters shown as their caret names, the same names the warning uses. */
 private fun previewOf(text: String): String {
     val lines = text.split("\r\n", "\n", "\r")
     val shown = lines.take(PREVIEW_LINES).joinToString("\n") { line ->
@@ -431,7 +483,7 @@ private fun previewOf(text: String): String {
             var i = 0
             while (i < line.length) {
                 val cp = line.codePointAt(i)
-                if (PasteClassifier.isControl(cp) && cp != '\t'.code) append('^').append(((cp + 0x40) and 0x7F).toChar()) else appendCodePoint(cp)
+                if (PasteClassifier.isControl(cp)) append(PasteClassifier.caretName(cp)) else appendCodePoint(cp)
                 i += Character.charCount(cp)
             }
         }
