@@ -139,7 +139,7 @@ class DiagnosticsScreenshotTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Berth crashed last time").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Share report").assertIsDisplayed()
         compose.onNodeWithText("Copy report").assertIsDisplayed()
-        compose.onNodeWithText("Not now").assertIsDisplayed()
+        compose.onNodeWithText("Keep for later").assertIsDisplayed()
         compose.onAllNodes(hasText("Berth crash report", substring = true)).assertCountEquals(1)
         compose.onAllNodes(hasText("java.lang.IllegalStateException: Frame 1 of 1 has no cells for row 24", substring = true)).assertCountEquals(1)
         // What the report holds is said once, on the sheet and not inside the file, and says what in it names the
@@ -155,8 +155,8 @@ class DiagnosticsScreenshotTest {
         compose.onNodeWithText("Copy report").performClick()
         compose.waitUntil(5_000) { clipText == text }
 
-        // Not now: seen, kept under Diagnostics, not shown again.
-        compose.onNodeWithText("Not now").performClick()
+        // Keep for later: seen, kept under Diagnostics, not shown again.
+        compose.onNodeWithText("Keep for later").performClick()
         compose.waitUntil(5_000) { graph.reports.unread.value == null }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Berth crashed last time").fetchSemanticsNodes().isEmpty() }
         assertFalse(File(graph.reportsDir, "unread").exists())

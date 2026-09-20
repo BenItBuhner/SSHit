@@ -43,8 +43,9 @@ import java.util.Date
  * The sheet for the crash of the previous run, shown once on the next launch (the gap audit's
  * crash handling): what was written, in full, so the user can read what would leave the phone,
  * and the two ways it can leave, Share and Copy, both theirs to take. Nothing is sent by itself;
- * the report stays under Settings \u203A Diagnostics whichever button is tapped. Swiping the sheet
- * away is the same as Not now: seen, kept, not asked again.
+ * the report stays under Settings \u203A Diagnostics whichever button is tapped. Keep for later (not
+ * Close, which is what a tab's pill behind the scrim says, and means the tab), or swiping the sheet
+ * away, is the end of the asking: seen, kept, not shown again.
  */
 @Composable
 fun CrashReportHost(reports: CrashReporter) {
@@ -55,14 +56,14 @@ fun CrashReportHost(reports: CrashReporter) {
         title = "Berth crashed last time",
         caption = "The report below was written as it happened. Nothing has been sent anywhere.",
         onDismiss = { reports.markRead() },
-        last = { BerthButton("Not now", onClick = { reports.markRead() }, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth()) },
+        last = { BerthButton("Keep for later", onClick = { reports.markRead() }, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth()) },
     )
 }
 
 /**
  * One report in full, from the sheet on launch or from the Diagnostics list: the text in Mono
  * so it reads as what it is, one paragraph saying what it holds, including what in it would
- * name the user's own hosts, then Share, Copy and [last] (Not now on launch, Delete from the list).
+ * name the user's own hosts, then Share, Copy and [last] (Keep for later on launch, Delete from the list).
  */
 @Composable
 fun ReportSheet(report: Report, title: String, caption: String, onDismiss: () -> Unit, last: @Composable () -> Unit) {
