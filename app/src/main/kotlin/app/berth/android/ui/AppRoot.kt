@@ -423,7 +423,11 @@ private fun Shell(vm: AppViewModel) {
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
-    PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
+    // On the launch after a crash the restore reconnects while the crash sheet is up, and a password,
+    // passphrase or unlock prompt would rise under it: two sheets, two scrims. The transport's prompts
+    // wait (they block on PromptCenter either way) until the crash sheet is closed, so there is one sheet.
+    val unreadCrash by vm.reports.unread.collectAsState()
+    if (unreadCrash == null) PromptHost(vm.prompts, onOpenKnownHosts = { sessionSheet = false; go(Screen.KnownHosts) })
     NotificationPermissionHost(vm.notifier)
     RemoteClipboardNoticeSheet(vm.security.remoteClipboard)
     CrashReportHost(vm.reports)

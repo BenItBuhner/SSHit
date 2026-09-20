@@ -20,6 +20,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.ReportKind
+import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.diagnostics.formatDateTime
@@ -34,6 +35,9 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.Workspace
 import com.github.takahirom.roborazzi.captureScreenRoboImage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -152,14 +156,27 @@ class DiagnosticsScreenshotTest {
         settle(300)
         capture("crash-sheet")
 
+        // A prompt the restore raises while the sheet is up (a password for a reconnecting tab) waits behind it:
+        // one sheet at a time, the crash sheet first, the prompt when it is closed.
+        val homelab = graph.hosts.items.value.first { it.id == "homelab" }
+        val asking = CoroutineScope(Dispatchers.IO).launch { graph.prompts.password(homelab) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.Password }
+        settle(200)
+        compose.onAllNodes(hasText("Password for ", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("Berth crashed last time").assertIsDisplayed()
+
         // Copy puts the whole report on the clipboard, through the app's own clipboard path; nothing was sent anywhere.
         compose.onNodeWithText("Copy report").performClick()
         compose.waitUntil(5_000) { clipText == text }
 
-        // Keep for later: seen, kept under Diagnostics, not shown again.
+        // Keep for later: seen, kept under Diagnostics, not shown again; the waiting prompt rises now.
         compose.onNodeWithText("Keep for later").performClick()
         compose.waitUntil(5_000) { graph.reports.unread.value == null }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Berth crashed last time").fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Password for ", substring = true)).fetchSemanticsNodes().size == 1 }
+        (graph.prompts.current.value as Prompt.Password).cancel()
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+        asking.cancel()
         assertFalse(File(graph.reportsDir, "unread").exists())
         assertEquals(1, graph.reports.reports.value.size)
         graph.reports.reload()
