@@ -74,6 +74,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.FailedHop
@@ -89,6 +90,9 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
+import app.berth.android.ui.keyboard.HardwareShortcuts
+import app.berth.android.ui.keyboard.ShortcutSheet
+import app.berth.android.ui.keyboard.StageShortcutActions
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
@@ -151,8 +155,11 @@ fun StageScreen(
     val strip = rememberTabStripState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
-    val shortcuts = remember(vm, actions) {
-        TabShortcuts(
+    var shortcutSheet by rememberSaveable { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val haptics = rememberDeckHaptics()
+    val shortcuts = remember(vm, actions, tab, tools) {
+        val tabs = TabShortcuts(
             step = vm::stepTab,
             jump = { index ->
                 val list = vm.stripSlots.value
@@ -163,7 +170,33 @@ fun StageScreen(
             switcher = actions::openSwitcher,
             jumpToUnread = { vm.jumpToUnread() },
         )
+        // The chords beyond the strip's act on the terminal tab on stage (spec C22); with a Files tab or
+        // nothing there they are still taken, since none of them means anything typed anywhere else.
+        val session = tab as? TerminalSession
+        val stage = object : StageShortcutActions {
+            override fun find() { if (session != null) tools.openSearch() }
+            override fun copy() {
+                session ?: return
+                val text = tools.selection.text(session.emulator)
+                if (text.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(text))
+                    haptics.copy()
+                    tools.notice = "Copied"
+                }
+                tools.selection.clear()
+            }
+            override fun paste() { if (session != null) clipboard.getText()?.text?.let { tools.paste(session, it, haptics) } }
+            override fun toggleDeck() { deckVisible = !deckVisible }
+            override fun fontStep(step: Int) {
+                val size = session?.record?.value?.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
+                haptics.fontStep()
+                vm.setFontSize(size + step)
+            }
+            override fun shortcutSheet() { shortcutSheet = true }
+        }
+        HardwareShortcuts(tabs, stage)
     }
+    if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, onDismiss = { shortcutSheet = false })
 
     // A hardware keyboard collapses the Deck to its strip (C4); attaching or removing one flips it once,
     // and the user's own choice survives otherwise. Remembered by the Stage, not the tab, so a tab
