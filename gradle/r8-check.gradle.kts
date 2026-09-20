@@ -17,10 +17,14 @@ buildscript {
 }
 
 /*
- * testR8: a JVM module's own JUnit suite run over R8's output instead of the compiled classes, with the app's
- * release rules (app/proguard-rules.pro) and the rules the libraries bundle, the way the release APK's
- * minifyReleaseWithR8 applies them, through the R8 inside the Android Gradle plugin (com.android.tools.build:builder,
- * so it is the same R8 build). The program R8 sees is the module's main and test classes and its whole test runtime
+ * testR8: a JVM module's own JUnit suite run over R8's output instead of the compiled classes, with the rules the
+ * release APK is built with (the Android Gradle plugin's proguard-android-optimize.txt, then app/proguard-rules.pro,
+ * then the rules the libraries bundle, in the order minifyReleaseWithR8 applies them), through the R8 inside the
+ * plugin (com.android.tools.build:builder, so it is the same R8 build). The plugin's file is the one it writes for
+ * the app (:app:extractProguardFiles), not a copy: it carries the keepattributes, -allowaccessmodification and
+ * the enum values()/valueOf() rule, which EnumSet and EnumMap reach by reflection, so a proof without it fails
+ * on code the APK runs (sshj's EnumSet.of(OpenMode.READ) did, :core:sftp, before the file was in).
+ * The program R8 sees is the module's main and test classes and its whole test runtime
  * classpath, so the tests and the code under test go through one shrinking and one renaming; the test runtime
  * (JUnit, kotlin-test) is kept whole by gradle/r8-harness.pro so it can drive the tests, and nothing else is added
  * to the app's rules. A library class the code reaches only by name, and no rule keeps, fails here as it would on
@@ -122,29 +126,44 @@ val r8BundledRules = tasks.register("r8BundledRules") {
     }
 }
 
+/**
+ * The Android Gradle plugin's default rules as the app's release build gets them: getDefaultProguardFile writes
+ * proguard-android-optimize.txt-<plugin version> under the app's intermediates from :app:extractProguardFiles,
+ * and app/build.gradle.kts names it first in the release proguardFiles.
+ */
+val defaultRules = rootProject.layout.projectDirectory
+    .file("app/build/intermediates/default_proguard_files/global/proguard-android-optimize.txt-${libs.findVersion("agp").get().requiredVersion}")
+    .asFile
+
 val r8Classes = tasks.register<JavaExec>("r8Classes") {
-    description = "R8 over the module, its tests and their runtime, with the app's release rules; classfile output."
+    description = "R8 over the module, its tests and their runtime, with the release APK's rules; classfile output."
     group = "verification"
+    dependsOn(":app:extractProguardFiles")
     classpath = r8Tool
     mainClass.set("com.android.tools.r8.R8")
     jvmArgs("-Xmx2g")
     val jars = programJars
     val bundled = r8BundledRules.map { it.outputs.files.singleFile }
+    val pluginRules = defaultRules
     val appRules = rootProject.layout.projectDirectory.file("app/proguard-rules.pro").asFile
     val harnessRules = rootProject.layout.projectDirectory.file("gradle/r8-harness.pro").asFile
     val out = r8Dir.map { it.file("classes.jar") }
     val mapping = r8Dir.map { it.file("mapping.txt") }
     val configuration = r8Dir.map { it.file("configuration.txt") }
     val javaHome = providers.systemProperty("java.home").get()
-    inputs.files(jars, appRules, harnessRules)
+    inputs.files(jars, pluginRules, appRules, harnessRules)
     inputs.dir(bundled)
     outputs.files(out, mapping, configuration)
+    doFirst {
+        check(pluginRules.isFile) { "r8Classes: the plugin's default rules are not at $pluginRules; :app:extractProguardFiles writes them there" }
+        check("-keepclassmembers enum *" in pluginRules.readText()) { "r8Classes: $pluginRules is not the plugin's proguard-android-optimize.txt (no enum rule in it)" }
+    }
     argumentProviders += CommandLineArgumentProvider {
         val bundledRules = bundled.get().listFiles().orEmpty().filter { it.name.endsWith(".pro") }.sorted()
         // No data resources: BouncyCastle's jar is signed, and its signature files over the shrunk classes would
         // stop the JVM loading them; the services the tests need come through r8Resources instead.
         listOf("--classfile", "--release", "--no-data-resources", "--lib", javaHome) +
-            listOf("--pg-conf", appRules.absolutePath, "--pg-conf", harnessRules.absolutePath) +
+            listOf("--pg-conf", pluginRules.absolutePath, "--pg-conf", appRules.absolutePath, "--pg-conf", harnessRules.absolutePath) +
             bundledRules.flatMap { listOf("--pg-conf", it.absolutePath) } +
             listOf("--pg-map-output", mapping.get().asFile.absolutePath, "--pg-conf-output", configuration.get().asFile.absolutePath) +
             listOf("--output", out.get().asFile.absolutePath) +
