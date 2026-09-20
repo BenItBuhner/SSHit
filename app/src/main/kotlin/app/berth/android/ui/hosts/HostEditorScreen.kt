@@ -326,7 +326,7 @@ fun HostEditorScreen(
                     )
                 }
                 if (identities.isEmpty()) {
-                    Text("No keys yet. Create one under Keys in the rail.", style = BerthType.caption, color = c.text3, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                    PanelNote("No keys yet. Create one under Keys in the rail.")
                 }
             }
 

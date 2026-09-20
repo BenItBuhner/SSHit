@@ -1,11 +1,8 @@
 package app.berth.android.ui.settings
 
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -14,8 +11,8 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthType
 
 /**
  * Settings › Notifications (spec C21): one row to the system page for this app, its subtitle
@@ -36,11 +33,6 @@ fun NotificationsSection(notifier: SessionNotifier) {
             onClick = { context.startActivity(notifier.systemSettingsIntent()) },
             trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
         )
-        Text(
-            "Sessions is silent and shows what is connected. Attention is a tab that needs you while Berth is away. Problems is a reconnect that gave up or a sign-in the server refused.",
-            style = BerthType.caption,
-            color = c.text3,
-            modifier = Modifier.padding(start = 12.dp, top = 4.dp),
-        )
+        PanelNote("Sessions is silent and shows what is connected. Attention is a tab that needs you while Berth is away. Problems is a reconnect that gave up or a sign-in the server refused.")
     }
 }
