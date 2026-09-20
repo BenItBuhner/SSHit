@@ -301,12 +301,15 @@ class SecurityScreenshotTest {
         compose.waitUntil(5_000) { graph.settings.security.value.appLock }
         assertEquals(listOf("Turn on app lock"), graph.authenticator.requests.map { it.title })
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Lock after leaving").fetchSemanticsNodes().isNotEmpty() }
+        // The timeout starts at 1 minute (Immediately stays on the menu).
+        assertEquals(LockTimeout.ONE_MINUTE, graph.settings.security.value.lockTimeout)
+        compose.onNodeWithText("1 minute").assertIsDisplayed()
 
         compose.onNodeWithText("Lock after leaving").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("5 minutes").fetchSemanticsNodes().isNotEmpty() }
         capture("settings-security-timeout-menu")
-        compose.onNodeWithText("1 minute").performClick()
-        compose.waitUntil(5_000) { graph.settings.security.value.lockTimeout == LockTimeout.ONE_MINUTE }
+        compose.onNodeWithText("5 minutes").performClick()
+        compose.waitUntil(5_000) { graph.settings.security.value.lockTimeout == LockTimeout.FIVE_MINUTES }
 
         compose.onNodeWithText("Block screenshots").performClick()
         compose.waitUntil(5_000) { graph.settings.security.value.blockScreenshots }
