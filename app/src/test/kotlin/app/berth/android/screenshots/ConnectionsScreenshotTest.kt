@@ -54,7 +54,6 @@ import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -122,10 +121,7 @@ class ConnectionsScreenshotTest {
         graph.close()
     }
 
-    private fun capture(name: String) {
-        compose.waitForIdle()
-        captureScreenRoboImage(File(outDir, "$name.png").path)
-    }
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     /** A forward's spec as its rows show it ([app.berth.android.ui.tunnels.rowSpec]): the arrow bound to the destination, so the pair breaks before the arrow and never loses the destination. */
     private fun onRow(spec: String): String = spec.replaceFirst(" \u2192 ", " \u2192\u00A0")

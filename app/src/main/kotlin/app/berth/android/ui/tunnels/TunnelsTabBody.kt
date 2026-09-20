@@ -150,7 +150,9 @@ fun TunnelsTabBody(vm: AppViewModel, session: TerminalSession, onEditHost: (Stri
  * on one Caption line and, while it is up, its traffic on a second (`2 open · 14 served · 1.2 MB up
  * · 48 KB down`). The second line is held open from the moment the login is active, so a row does
  * not grow when `Starting` becomes `Up` and the list settles once. Open for a local web port, Retry
- * after a failure; tapping the row edits it.
+ * after a failure; tapping the row edits it. The dot carries the state a reader hears after the
+ * row's text (`Up`, `Waiting for the login`, `Failed: address already in use`) and announces when
+ * it changes.
  */
 @Composable
 internal fun TunnelStateRow(
@@ -203,13 +205,17 @@ internal fun TunnelStateRow(
         subtitleMaxLines = 2,
         subtitleMinLines = if (loginActive) 2 else 1,
         onClick = onEdit,
-        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(dot) } },
+        leading = {
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                StatusDot(dot, description = if (failed) "Failed: $stateText" else stateText)
+            }
+        },
         trailing = {
             val url = tunnel.openUrl
             if (status is TunnelStatus.Up && url != null) {
-                BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, modifier = Modifier.height(36.dp))
+                BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, fillHeight = 36.dp)
             }
-            if (failed) BerthButton("Retry", kind = ButtonKind.TEXT, onClick = onRetry, modifier = Modifier.height(36.dp))
+            if (failed) BerthButton("Retry", kind = ButtonKind.TEXT, onClick = onRetry, fillHeight = 36.dp)
         },
     )
 }

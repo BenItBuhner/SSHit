@@ -1,6 +1,7 @@
 package app.berth.android.ui.tunnels
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
@@ -36,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -225,14 +229,18 @@ fun TunnelRow(
             surface = surface,
             onClick = onEdit,
             onLongClick = { menu = true },
-            leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(dot) } },
+            leading = {
+                Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                    StatusDot(dot, description = if (failed) "Failed: $stateText" else stateText)
+                }
+            },
             trailing = {
                 val url = tunnel.openUrl
                 if (status is TunnelStatus.Up && url != null) {
-                    BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, modifier = Modifier.height(36.dp))
+                    BerthButton("Open", kind = ButtonKind.TEXT, onClick = { uris.openUri(url) }, fillHeight = 36.dp)
                 }
                 if (failed) {
-                    BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, modifier = Modifier.height(36.dp))
+                    BerthButton("Retry", kind = ButtonKind.TEXT, onClick = { vm.retryTunnel(tunnel.id) }, fillHeight = 36.dp)
                 }
                 TunnelSwitch(checked = tunnel.enabled, onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) })
             },
@@ -256,7 +264,10 @@ fun TunnelRow(
  * so the two read alike, with the dot grey since nothing runs yet, `from the link` where a saved
  * row has its state (or the [problem] the tunnel editor would raise, in danger), `all interfaces`
  * in the attention colour the tunnel editor warns in, and the switch deciding whether Save keeps
- * it. Nothing here is saved or started until the editor's Save.
+ * it. Nothing here is saved or started until the editor's Save. Since the tap and the switch do the
+ * same one thing, the row is the switch to a reader (spec, tunnel rows carry a switch): one node
+ * with the spec, the caption and on or off, the switch itself silent, as
+ * [app.berth.android.ui.components.ToggleRow] does it.
  */
 @Composable
 fun PendingTunnelRow(
@@ -268,9 +279,11 @@ fun PendingTunnelRow(
     surface: Color = Berth.colors.surface2,
 ) {
     val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
     ListRow(
         title = tunnel.rowSpec,
-        modifier = modifier,
+        modifier = modifier.toggleable(value = kept, role = Role.Switch, interactionSource = interaction, indication = null, onValueChange = onKeptChange),
+        interactionSource = interaction,
         titleStyle = specTitleStyle,
         titleMaxLines = 2,
         titleColor = if (kept) c.text1 else c.text2,
@@ -285,19 +298,20 @@ fun PendingTunnelRow(
             if (kept && tunnel.exposed) withStyle(SpanStyle(color = c.attention)) { append(" \u00B7 all interfaces") }
         },
         surface = surface,
-        onClick = { onKeptChange(!kept) },
-        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.DETACHED) } },
-        trailing = { TunnelSwitch(checked = kept, onCheckedChange = onKeptChange) },
+        // The dot is grey because nothing runs yet, not for a state; the row's state is the switch's.
+        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { StatusDot(SessionState.DETACHED, description = null) } },
+        trailing = { TunnelSwitch(checked = kept, onCheckedChange = onKeptChange, modifier = Modifier.clearAndSetSemantics { }) },
     )
 }
 
 /** The switch at the end of a tunnel row, in the app's colours. */
 @Composable
-private fun TunnelSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun TunnelSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val c = Berth.colors
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
+        modifier = modifier,
         colors = SwitchDefaults.colors(
             checkedThumbColor = c.onAccent,
             checkedTrackColor = c.accent,

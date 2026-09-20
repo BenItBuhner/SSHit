@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -70,8 +71,11 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,6 +86,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.TerminalAnnouncer
+import app.berth.android.ui.a11y.reachingClickable
 import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
@@ -860,6 +865,8 @@ private fun PillAction(label: String, onClick: () -> Unit) {
  * behind Details. When the login failed at a jump host ([hop]), the credentials or key that failed
  * are that host's, so the action beside Retry opens its editor, named for it (`Edit old bastion`,
  * or `Edit jump host` when the name is long); the target's editor stays a text action behind it.
+ * To a reader and a keyboard the panel is one group read top to bottom: the heading, the reason,
+ * Details (a button that says whether it is open), then Retry, the hop's editor, the host's.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -879,17 +886,21 @@ internal fun FailedPanel(
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.panel))
             .background(c.surface2)
-            .padding(20.dp),
+            .padding(20.dp)
+            .focusGroup()
+            .semantics { isTraversalGroup = true },
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Couldn't connect", style = BerthType.headline, color = c.text1)
+        Text("Couldn't connect", style = BerthType.headline, color = c.text1, modifier = Modifier.semantics { heading() })
         Text(plain, style = BerthType.body, color = c.text2)
         if (raw != null) {
             Text(
                 if (details) raw else "Details",
                 style = if (details) BerthType.mono else BerthType.label,
                 color = if (details) c.text3 else c.accent,
-                modifier = Modifier.clickable { details = !details },
+                modifier = Modifier
+                    .reachingClickable(onClick = { details = !details }, onClickLabel = if (details) "hide the details" else "show the details")
+                    .semantics { stateDescription = if (details) "Expanded" else "Collapsed" },
             )
         }
         // A flow, so a third action or a long hop name wraps under the first two rather than leaving the panel.
