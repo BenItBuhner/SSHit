@@ -254,9 +254,11 @@ fun TerminalCanvas(
             }
         }
     }
+    val currentSelection by rememberUpdatedState(selection)
     // Frames: every change of the screen or of the view's offset is captured into the back buffer
     // on a worker, then swapped in and the draw invalidated. Conflation folds a burst of output into
-    // as many captures as the UI thread can draw.
+    // as many captures as the UI thread can draw. A selection the buffer no longer holds (the grid
+    // changed width, the screen switched) ends here, so the bar never stands over nothing.
     LaunchedEffect(session.id) {
         combine(session.screenVersion, snapshotFlow { viewport.scrollOffset }) { v, o -> v to o }
             .conflate()
@@ -264,6 +266,7 @@ fun TerminalCanvas(
                 val used = withContext(Dispatchers.Default) { frames.back.capture(emulator, wanted, version) }
                 frames.swap()
                 if (used != wanted) viewport.scrollOffset = used
+                currentSelection?.dropIfStale(emulator)
                 frameTick++
             }
     }
@@ -288,7 +291,6 @@ fun TerminalCanvas(
     val currentSelectionStarted by rememberUpdatedState(onSelectionStarted)
     val currentOnTap by rememberUpdatedState(onTap)
     val currentFontStep by rememberUpdatedState(onFontSizeStep)
-    val currentSelection by rememberUpdatedState(selection)
 
     Canvas(
         modifier

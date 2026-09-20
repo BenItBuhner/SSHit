@@ -20,16 +20,26 @@ enum class SelectionHandle { START, END }
  * Where a selection or a search match sits: in the rows of the buffer as it was when [dropped]
  * lines had left the top of history, on the main or the [alternate] screen of a grid [cols] by
  * [rows]. Output scrolling the screen appends to history and leaves buffer rows where they are; a
- * line evicted from the top moves them all up by one, which [dropped] accounts for; a resize
- * re-wraps history and a switch of screens shows other text, so either invalidates the anchor.
+ * line evicted from the top moves them all up by one, which [dropped] accounts for. A change of
+ * height alone (the keyboard, the Deck) moves rows between the screen and history without
+ * re-wrapping them, so the anchor holds through it on the main screen; a change of width re-wraps
+ * history, a switch of screens shows other text, and the alternate screen drops rows on any
+ * resize, so each of those invalidates the anchor.
  */
 data class BufferAnchor(val dropped: Long, val alternate: Boolean, val cols: Int, val rows: Int) {
-    /** [range], made under this anchor, in the rows of a buffer that has now dropped [linesDropped] lines; null once invalid. */
+    /**
+     * [range], made under this anchor, in the rows of a buffer that has now dropped [linesDropped]
+     * lines; null once invalid. A start that has left the top of history is clamped to the first
+     * row, so what remains of the range is still the range.
+     */
     fun translate(range: CellRange, linesDropped: Long, alternate: Boolean, cols: Int, rows: Int): CellRange? {
-        if (alternate != this.alternate || cols != this.cols || rows != this.rows) return null
+        if (alternate != this.alternate || cols != this.cols) return null
+        if (alternate && rows != this.rows) return null
         val shift = (dropped - linesDropped).toInt()
         if (range.end.row + shift < 0) return null
-        return if (shift == 0) range else range.shiftRows(shift)
+        if (shift == 0) return range
+        val shifted = range.shiftRows(shift)
+        return if (shifted.start.row < 0) CellRange(CellPos(0, 0), shifted.end) else shifted
     }
 
     companion object {
@@ -141,12 +151,25 @@ class TerminalSelection {
         summary = ""
     }
 
-    /** The range in the rows of the emulator's buffer now, or null when it was invalidated; the caller holds the lock. */
+    /**
+     * The range in the rows of the emulator's buffer now, or null when it was invalidated; the
+     * caller holds the lock. An end past the buffer (blank rows the keyboard took) is clamped to
+     * the last row, since nothing selectable was on them.
+     */
     fun current(emulator: TerminalEmulator): CellRange? {
         val r = range ?: return null
         val a = anchor ?: return null
         val now = a.translate(r, emulator.linesDropped, emulator.isAlternateScreen, emulator.cols, emulator.rows) ?: return null
-        return if (now.end.row < emulator.bufferRows) now else null
+        val last = emulator.bufferRows - 1
+        if (last < 0 || now.start.row > last) return null
+        return if (now.end.row <= last) now else CellRange(now.start, CellPos(last, (emulator.cols - 1).coerceAtLeast(0)))
+    }
+
+    /** Ends the selection when the buffer no longer holds it (a change of width, a switch of screens); called after each capture. */
+    fun dropIfStale(emulator: TerminalEmulator) {
+        if (!active) return
+        val stale = synchronized(emulator.lock) { current(emulator) == null }
+        if (stale) clear()
     }
 
     /** The selected text, wrapped rows rejoined and trailing blanks trimmed; empty once the selection is stale. */
@@ -219,7 +242,9 @@ class TerminalSearch {
 
     /**
      * Runs the search over the emulator's buffer, holding its lock for the pass. The current match
-     * stays on the same text when it is still among the results, else on the nearest after it.
+     * stays on the same text when it is still among the results, else on the nearest after it. When
+     * a change of the grid has invalidated the anchor, the match keeps its index: a re-wrap moves
+     * cells, not logical lines, so match `3/12` is the same text at `3/12` after it.
      */
     fun run(emulator: TerminalEmulator) {
         val q = query
@@ -229,16 +254,20 @@ class TerminalSearch {
             current = -1
             return
         }
+        val had = current
         val previous = currentRange(emulator)
         val (found, at) = synchronized(emulator.lock) {
             ScrollbackSearch.find(emulator.grid, q, caseSensitive, regex) to BufferAnchor.of(emulator)
         }
+        val before = matches.size
         matches = found
         anchor = at
         current = when {
             found.isEmpty() -> -1
-            previous == null -> found.lastIndex
-            else -> found.indexOfFirst { it.start >= previous.start }.let { if (it < 0) found.lastIndex else it }
+            previous != null -> found.indexOfFirst { it.start >= previous.start }.let { if (it < 0) found.lastIndex else it }
+            had >= 0 && found.size == before -> had
+            had >= 0 -> had.coerceIn(0, found.lastIndex)
+            else -> found.lastIndex
         }
     }
 
