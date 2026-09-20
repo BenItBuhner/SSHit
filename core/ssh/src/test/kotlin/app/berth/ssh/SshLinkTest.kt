@@ -95,7 +95,11 @@ class SshLinkTest {
         assertFalse(link.shell)
         assertTrue(link.tunnelsOnly)
 
-        assertEquals(SshConfigForward(TunnelType.LOCAL, "0.0.0.0", 8080, "localhost", 80), parsed("ssh://h?L=:8080:localhost:80").forwards.single(), "an empty bind is every interface")
+        // ssh -L would read the empty bind as every interface; from a link that has to be written out.
+        assertEquals(SshConfigForward(TunnelType.LOCAL, "127.0.0.1", 8080, "localhost", 80), parsed("ssh://h?L=:8080:localhost:80").forwards.single(), "an empty bind is loopback, never every interface")
+        assertEquals(SshConfigForward(TunnelType.REMOTE, "127.0.0.1", 9000, "localhost", 3000), parsed("ssh://h?R=:9000:localhost:3000").forwards.single())
+        assertEquals(SshConfigForward(TunnelType.DYNAMIC, "127.0.0.1", 1080, "", 0), parsed("ssh://h?D=:1080").forwards.single())
+        assertEquals(SshConfigForward(TunnelType.LOCAL, "0.0.0.0", 8080, "localhost", 80), parsed("ssh://h?L=*:8080:localhost:80").forwards.single(), "written out, every interface is asked for")
         assertEquals(SshConfigForward(TunnelType.LOCAL, "127.0.0.1", 8080, "fe80::1", 80), parsed("ssh://h?L=8080:[fe80::1]:80").forwards.single())
     }
 

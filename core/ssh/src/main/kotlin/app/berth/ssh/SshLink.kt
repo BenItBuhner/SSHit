@@ -16,8 +16,9 @@ import java.net.URLDecoder
  * forward flags, each repeatable: `L=[bind:]port:host:hostport`, `R=[bind:]port:host:hostport` and
  * `D=[bind:]port` (long forms `local`, `remote`, `dynamic`), and `N` for no shell, as `ssh -N`. A
  * link that only asks for forwards, or says `N`, is a login that carries the forwards and opens no
- * shell. The fragment names the host when one is made from the link (ConnectBot writes `#name`).
- * Anything else in the query is left alone rather than refused.
+ * shell. A forward's bind address left out, or left empty (`:8080:host:80`), is loopback; every
+ * interface has to be written (`*`). The fragment names the host when one is made from the link
+ * (ConnectBot writes `#name`). Anything else in the query is left alone rather than refused.
  */
 data class SshLink(
     val scheme: Scheme,
@@ -166,10 +167,15 @@ data class SshLink(
          */
         private fun forward(type: TunnelType, value: String): SshConfigForward? {
             val parts = splitColons(value).toMutableList()
-            val listenParts = if (type == TunnelType.DYNAMIC) parts.size else parts.size - 2
+            var listenParts = if (type == TunnelType.DYNAMIC) parts.size else parts.size - 2
             if (listenParts !in 1..2) return null
-            // `:8080:host:80`: an empty bind address is every interface, as `ssh -L` reads it.
-            if (listenParts == 2 && parts[0].isEmpty()) parts[0] = "*"
+            // `:8080:host:80`: `ssh -L` reads an empty bind address as every interface. A link is
+            // not trusted that far: here it is no bind address, so loopback, and a listener on
+            // every interface has to be written out (`*:8080:host:80`) to be asked for.
+            if (listenParts == 2 && parts[0].isEmpty()) {
+                parts.removeAt(0)
+                listenParts = 1
+            }
             if (parts.any { it.isEmpty() }) return null
             val listen = parts.take(listenParts).joinToString(":")
             val spec = if (type == TunnelType.DYNAMIC) listen else "$listen ${parts[listenParts]}:${parts[listenParts + 1]}"
