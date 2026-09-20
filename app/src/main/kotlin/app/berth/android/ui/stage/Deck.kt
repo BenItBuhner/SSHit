@@ -70,7 +70,10 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import app.berth.android.ui.a11y.alwaysFocusable
@@ -250,6 +253,22 @@ private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
     return copy(display = name.take(12))
 }
 
+/**
+ * A key's text sized from the key rather than from the system's font size (spec A11 at the
+ * interface's 1.3× cap): the key stands 44 dp whatever the font size, so a label in sp outgrows it,
+ * and at the cap the alternate's hint at the top right ran into the label under it (`S-Tab` into
+ * `Tab`, `^C` into `Ctrl`). Font size and line height are read as dp, the way a terminal's cell text
+ * is sized, so the two texts sit where they sit at 1×; what a reader hears is not affected, and the
+ * key height setting is where a larger Deck comes from.
+ */
+@Composable
+private fun TextStyle.keySized(): TextStyle = with(LocalDensity.current) {
+    copy(
+        fontSize = fontSize.value.dp.toSp(),
+        lineHeight = if (lineHeight.isSpecified) lineHeight.value.dp.toSp() else lineHeight,
+    )
+}
+
 /** Gap between Deck keys and between the keys and the strip's edges (A11). */
 private val DeckGap = 4.dp
 
@@ -320,7 +339,7 @@ private fun DeckRow(
                     snippets = snippets,
                 )
                 if (editing != null && key.isEmpty) {
-                    Text("empty", style = BerthType.caption, color = c.text3)
+                    Text("empty", style = BerthType.caption.keySized(), color = c.text3)
                 }
                 if (selected) {
                     Box(
@@ -748,7 +767,7 @@ fun DeckKeyView(
             val shown = if (previewing) secondary!! else key.label
             Text(
                 text = shown,
-                style = if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label,
+                style = (if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
                 color = labelColor,
                 maxLines = 1,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
@@ -757,7 +776,7 @@ fun DeckKeyView(
                 // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
                 Text(
                     text = secondary,
-                    style = if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp),
+                    style = (if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
                     color = secondaryColor,
                     maxLines = 1,
                     modifier = Modifier
@@ -1030,7 +1049,8 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption, color = if (focused) c.accent else c.text3)
+        // Sized from the 20 dp strip like a key's text from its key, so the line holds at the interface's font cap.
+        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption.keySized(), color = if (focused) c.accent else c.text3)
         Spacer(Modifier.weight(1f))
     }
 }

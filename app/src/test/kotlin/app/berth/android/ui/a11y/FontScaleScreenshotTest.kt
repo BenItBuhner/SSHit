@@ -11,9 +11,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -27,6 +29,7 @@ import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
@@ -50,8 +53,9 @@ import java.io.File
 /**
  * Font scaling (spec A11): with the system's font size at its largest, 2×, interface text is set
  * at 1.3× and the terminal at 1×, and follows the system only when the font asks to. The Stage,
- * the settings and the hosts are captured at that size, with the audit's checks on each, and no
- * text on the Settings screen is cut at the cap (a title ellipsized, a caption stopped short).
+ * the settings and the hosts are captured at that size, with the audit's checks on each, and two
+ * things that clipped at the cap are held: a Deck key's alternate hint stays clear of its label,
+ * and no text on the Settings screen is cut (a title ellipsized, a caption stopped at one line).
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -95,6 +99,8 @@ class FontScaleScreenshotTest {
     fun `stage at 2x, interface text at 1,3x and the terminal at 1x unless it follows`() {
         StageFixture.seed(graph)
         graph.sessions.setActive("s-homelab")
+        // Homelab's tab reading Live, so the Stage stands its Deck under the terminal.
+        val live = StageFixture.liveHomelab()
         var interfaceScale = 0f
         var systemScale = 0f
         var independent = 0f
@@ -104,16 +110,17 @@ class FontScaleScreenshotTest {
             systemScale = LocalSystemFontScale.current
             independent = terminalFontScale(TerminalFont())
             following = terminalFontScale(TerminalFont(followSystemScale = true))
-            val tab by graph.viewModel.activeTab.collectAsState()
             val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
-            StageScreen(graph.viewModel, tab, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
         assertEquals("the system's scale, as set", 2f, systemScale)
         assertEquals("interface text stops at the cap", MAX_INTERFACE_FONT_SCALE, interfaceScale)
         assertEquals("the terminal's size is its own", 1f, independent)
         assertEquals("a font that follows takes the system's scale, uncapped", 2f, following)
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(DeckKeyTag)).fetchSemanticsNodes().isNotEmpty() }
         capture("stage-font-scale-2x")
+        assertDeckHintsClearOfLabels()
     }
 
     @Test
@@ -127,6 +134,35 @@ class FontScaleScreenshotTest {
         capture("settings-font-scale-2x")
         val cut = overflowingTexts()
         assertTrue("text cut at the interface's font cap: $cut", cut.isEmpty())
+    }
+
+    /**
+     * A Deck key's texts are sized from the key, not the system, so its swipe alternate at the top
+     * right never runs into the label under it: the hint's baseline stays above the label's tallest
+     * ink by at least a dp, at this scale as at 1×. The label's ink top is taken as 0.76 of its font
+     * size above its baseline, an ascender's height in Inter, Roboto and JetBrains Mono (a capital
+     * stops lower, at about 0.73). Each text's pixels come from the density its layout was made
+     * with, the interface's at its cap, not the system's.
+     */
+    private fun assertDeckHintsClearOfLabels() {
+        val keys = compose.onAllNodes(hasTestTag(DeckKeyTag), useUnmergedTree = true).fetchSemanticsNodes()
+        var checked = 0
+        for (key in keys) {
+            val texts = key.textDescendants().mapNotNull { node -> node.textLayout()?.let { node to it } }
+            if (texts.size < 2) continue
+            val (hintNode, hint) = texts.minBy { it.first.boundsInRoot.top }
+            val (labelNode, label) = texts.maxBy { it.first.boundsInRoot.top }
+            val hintBaseline = hintNode.boundsInRoot.top + hint.lastBaseline
+            val labelFontPx = with(label.layoutInput.density) { label.layoutInput.style.fontSize.toPx() }
+            val labelInkTop = labelNode.boundsInRoot.top + label.firstBaseline - 0.76f * labelFontPx
+            val gapDp = (labelInkTop - hintBaseline) / label.layoutInput.density.density
+            assertTrue(
+                "'${hint.layoutInput.text}' over '${label.layoutInput.text}': the hint's baseline is ${"%.1f".format(gapDp)} dp above the label's ink, less than the 1 dp it keeps",
+                gapDp >= 1f,
+            )
+            checked++
+        }
+        assertTrue("keys with a hint over a label were on the Deck", checked > 0)
     }
 
     /**
@@ -146,6 +182,13 @@ class FontScaleScreenshotTest {
         val results = ArrayList<TextLayoutResult>()
         val action = config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action ?: return null
         return if (action(results)) results.firstOrNull() else null
+    }
+
+    private fun SemanticsNode.textDescendants(): List<SemanticsNode> = buildList {
+        for (child in children) {
+            if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)
+            addAll(child.textDescendants())
+        }
     }
 
     @Test
