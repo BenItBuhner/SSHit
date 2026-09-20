@@ -22,7 +22,8 @@ import java.net.URLDecoder
  *
  * A link is another app's word, handed over by an exported intent, so what is read is bounded and
  * what is kept is what a person could have written: a link past [MAX_LENGTH] characters is refused
- * unread, one may ask for [MAX_FORWARDS] forwards at most; a user with whitespace or a control or format character in it is
+ * unread, one may ask for [MAX_FORWARDS] forwards at most, each with its ports in range and its
+ * addresses in the forms above; a user with whitespace or a control or format character in it is
  * refused (no server has one); a name loses such characters and is cut to [MAX_NAME_LENGTH]; and a
  * reason quotes at most [QUOTED_MAX] characters of the part it names, cleaned the same way.
  */
@@ -195,8 +196,12 @@ data class SshLink(
                     }
                     // Each forward is a pending row in the editor and a listener at login; a link is not owed more than a person would write.
                     if (forwards.size >= MAX_FORWARDS) return Result.Malformed("The link asks for more than $MAX_FORWARDS forwards.")
-                    forwards += forward(type, value)
+                    val forward = forward(type, value)
                         ?: return Result.Malformed("The ${type.linkWord()} \u201C${clip(value)}\u201D isn't ${if (type == TunnelType.DYNAMIC) "[bind:]port" else "[bind:]port:host:hostport"}.")
+                    if (forward.bindPort !in 1..65535 || (type != TunnelType.DYNAMIC && forward.destinationPort !in 1..65535)) {
+                        return Result.Malformed("The ${type.linkWord()} \u201C${clip(value)}\u201D has a port outside 1 to 65535.")
+                    }
+                    forwards += forward
                 }
             }
 
@@ -222,9 +227,14 @@ data class SshLink(
         /**
          * `ssh -L`'s `[bind:]port:host:hostport` (or `-D`'s `[bind:]port`) put in the config file's
          * `[bind:]port host:hostport` shape and read by the config parser, so a link's forward and
-         * an imported one come out the same. Brackets keep an IPv6 address in one piece.
+         * an imported one come out the same. Brackets keep an IPv6 address in one piece. The bind
+         * and destination addresses have to be a host name, an address or `*`, as the tunnel editor
+         * would take them; the ports are the caller's to range-check, so it can say which. Null for
+         * a value that is not the shape, including one with whitespace or a quote, which the config
+         * tokenizer would otherwise read as the end of the forward or as quoting and drop.
          */
         private fun forward(type: TunnelType, value: String): SshConfigForward? {
+            if (value.any { it.isWhitespace() || it == '"' }) return null
             val parts = splitColons(value).toMutableList()
             var listenParts = if (type == TunnelType.DYNAMIC) parts.size else parts.size - 2
             if (listenParts !in 1..2) return null
@@ -238,8 +248,14 @@ data class SshLink(
             if (parts.any { it.isEmpty() }) return null
             val listen = parts.take(listenParts).joinToString(":")
             val spec = if (type == TunnelType.DYNAMIC) listen else "$listen ${parts[listenParts]}:${parts[listenParts + 1]}"
-            return SshConfigParser.parseForward(type, spec)
+            val forward = SshConfigParser.parseForward(type, spec) ?: return null
+            if (!forward.bindAddress.isAddress()) return null
+            if (type != TunnelType.DYNAMIC && !forward.destinationHost.isAddress()) return null
+            return forward
         }
+
+        /** A host name or an address, as the authority takes them; `0.0.0.0` is what `*` became. */
+        private fun String.isAddress(): Boolean = HOST_NAME.matches(this) || IPV6.matches(this)
 
         private fun TunnelType.linkWord(): String = when (this) {
             TunnelType.LOCAL -> "forward"

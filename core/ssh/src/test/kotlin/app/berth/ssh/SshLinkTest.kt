@@ -204,6 +204,24 @@ class SshLinkTest {
     }
 
     @Test
+    fun `a forward has to be one the tunnel editor could have made`() {
+        // The tunnel editor refuses these; a link saved them unchecked, to fail at login with Java's message.
+        assertEquals("The forward \u201C99999:h:80\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=99999:h:80"))
+        assertEquals("The forward \u201C0:h:80\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=0:h:80"))
+        assertEquals("The forward \u201C8080:h:0\u201D has a port outside 1 to 65535.", malformed("ssh://h?L=8080:h:0"))
+        assertEquals("The remote forward \u201C8080:h:70000\u201D has a port outside 1 to 65535.", malformed("ssh://h?R=8080:h:70000"))
+        assertEquals("The dynamic forward \u201C-5\u201D has a port outside 1 to 65535.", malformed("ssh://h?D=-5"))
+        // Whitespace in a forward: the config tokenizer would read it as the end of the forward and drop the rest.
+        assertEquals("The forward \u201C8080:h:80 extra\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:h:80%20extra"))
+        assertEquals("The forward \u201C8080 :h:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080%20:h:80"))
+        // Brackets keep an IPv6 address whole; they do not make `host:80` an address, nor `-1` a port.
+        assertEquals("The forward \u201C8080:[host:80]:-1\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:[host:80]:-1"))
+        assertEquals("The forward \u201C1:8080:h:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=%011:8080:h:80"), "a bind address is a host name or an address, and the reason does not carry the control character")
+        assertEquals("The forward \u201C8080:h!:80\u201D isn't [bind:]port:host:hostport.", malformed("ssh://h?L=8080:h!:80"))
+        assertEquals(SshConfigForward(TunnelType.LOCAL, "0.0.0.0", 8080, "db.internal", 5432), parsed("ssh://h?L=*:8080:db.internal:5432").forwards.single())
+    }
+
+    @Test
     fun `the fingerprint parameter is read as the draft writes it, and a slash in one is named`() {
         // Standard base64 has / in about half of all SHA-256 fingerprints; unencoded it ends the authority.
         assertEquals("The fingerprint has a / in it; write %2F in its place.", malformed("ssh://ben;fingerprint=SHA256:abc+/def@host.example.org"))

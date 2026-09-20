@@ -274,11 +274,21 @@ class AppViewModel @Inject constructor(
      * The editor's Save for a host opened from a link, new or saved: stores the host, adds
      * [forwards] (the link's pending rows the user kept, already seen on screen) to its tunnels,
      * enabled so they start with the login the link asks for, then opens what the link asked for.
+     * A forward the tunnel's own check refuses (a port out of range, a listener a saved tunnel or
+     * an earlier row already has) is left out rather than saved to fail at login: the editor held
+     * Save on such a row, and this is the last line, since a link is another app's word.
      */
     fun saveHostFromLink(host: Host, password: String?, link: SshLink, forwards: List<SshConfigForward>) {
         viewModelScope.launch {
             val saved = saveHostNow(host, password)
-            for (fwd in pendingForwards(forwards, tunnelsOf(saved.id))) tunnelRepository.upsert(fwd.toTunnel(saved.id))
+            val all = tunnelRepository.observeAll().first()
+            val added = ArrayList<Tunnel>()
+            for (fwd in pendingForwards(forwards, all.filter { it.hostId == saved.id })) {
+                val tunnel = fwd.toTunnel(saved.id)
+                if (tunnel.validate(all + added) != null) continue
+                tunnelRepository.upsert(tunnel)
+                added += tunnel
+            }
             openFromLink(saved, link)
             _linkOutcome.value = LinkOutcome.Staged
         }
