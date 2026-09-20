@@ -9,8 +9,24 @@ plugins {
 
 val appName: String = providers.gradleProperty("app.name").get()
 val appApplicationId: String = providers.gradleProperty("app.applicationId").get()
+
+// The version is written once, in gradle.properties: app.versionName is MAJOR.MINOR.PATCH and app.versionBuild
+// counts re-releases of that name (0 to 99, normally 0). versionCode follows from the two, so it can never be
+// forgotten or go backwards while the name goes forwards: MAJOR * 1_000_000 + MINOR * 10_000 + PATCH * 100 +
+// BUILD, so 0.1.0 is 10000, 0.1.1 is 10100, 1.0.0 is 1000000, and the second upload of 1.0.0 is 1000001.
 val appVersionName: String = providers.gradleProperty("app.versionName").get()
-val appVersionCode: Int = providers.gradleProperty("app.versionCode").get().toInt()
+val appVersionBuild: Int = providers.gradleProperty("app.versionBuild").map { it.toInt() }.getOrElse(0)
+val appVersionCode: Int = run {
+    val match = Regex("""(\d+)\.(\d+)\.(\d+)""").matchEntire(appVersionName)
+        ?: error("app.versionName must be MAJOR.MINOR.PATCH, not '$appVersionName'")
+    val (major, minor, patch) = match.destructured.toList().map { it.toInt() }
+    require(major in 0..2000 && minor in 0..99 && patch in 0..99 && appVersionBuild in 0..99) {
+        "app.versionName $appVersionName / app.versionBuild $appVersionBuild are outside the version scheme (see app/build.gradle.kts)"
+    }
+    val code = major * 1_000_000 + minor * 10_000 + patch * 100 + appVersionBuild
+    require(code >= 1) { "versionCode must be at least 1; 0.0.0 with build 0 is not a version" }
+    code
+}
 
 android {
     namespace = "app.berth.android"
