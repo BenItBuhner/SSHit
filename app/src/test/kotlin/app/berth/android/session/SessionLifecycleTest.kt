@@ -36,6 +36,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -461,11 +462,16 @@ class SessionLifecycleTest {
         await("the shell asked for the Stage") { staged == listOf(files.id) }
         assertFalse("in front of the user, so not lit", files.record.value.needsAttention)
 
-        // Tapped again with the tab open: the same tab, not a second one.
+        // Tapped again with the tab open: the same tab, not a second one. The stage request names
+        // the tab openFiles returned, and the host's first Files tab in strip order is still this one
+        // (a second would land directly after the terminal, ahead of it); the strip's flow, which
+        // follows the maps asynchronously, is awaited rather than read.
         graph.sessions.setActive("s-a")
         graph.sessions.activateFilesFromNotification("s-a")
         await("staged again") { staged == listOf(files.id, files.id) }
-        assertEquals(1, graph.sessions.records.value.count { it.kind == TabKind.Files })
+        assertSame(files, graph.sessions.filesTabFor("homelab"))
+        assertEquals(files.id, graph.sessions.activeTabId.value)
+        await("one Files tab on the strip") { graph.sessions.records.value.count { it.kind == TabKind.Files } == 1 }
 
         // The answer settles the count and takes the link with it; the tap is the plain one again.
         queue.resolveConflict(id, ConflictChoice.SKIP, applyToAll = true)
