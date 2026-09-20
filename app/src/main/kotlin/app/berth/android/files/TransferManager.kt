@@ -132,6 +132,7 @@ class TransferManager(
      * dispatched in either order under load, so a folder queued behind a file could take the lane first.
      */
     private val lanes = HashMap<String, CompletableDeferred<Unit>>()
+    private val countLock = Any()
     private val conflicts = HashMap<String, CompletableDeferred<ConflictResolution>>()
     /** Answers that arrived in the moment between a conflict showing and the copy asking for it. */
     private val answers = HashMap<String, ConflictResolution>()
@@ -404,7 +405,6 @@ class TransferManager(
         val job = scope.launch {
             previous.await()
             patch(id) { it.copy(state = TransferState.RUNNING, startedAt = System.currentTimeMillis()) }
-            publishCount()
             val meter = SpeedMeter()
             var lastPublish = 0L
             val bytes: (Long, Long) -> Unit = { copied, size ->
@@ -470,20 +470,25 @@ class TransferManager(
 
     private fun patch(id: String, change: (Transfer) -> Transfer) {
         _transfers.update { list -> list.map { if (it.id == id) change(it) else it } }
-        // A conflict comes and goes through here; the notification says when a copy waits on the user.
-        publishWaiting(_transfers.value)
+        // A state or a conflict comes and goes through here; the notification's counts follow.
+        publishCount()
     }
 
+    /**
+     * The notification's counts, from one reading of the list: how many rows are active, how many
+     * wait on the user, and whose Files tab the tap should open (the copy that has waited longest,
+     * in queue order). Under one lock, since publishers run on several threads: without it, an
+     * enqueue on the caller's thread that had read the list before a copy started waiting could
+     * write its zero after the copy's thread had written one, and the notification would say
+     * nothing waited until the next change.
+     */
     private fun publishCount() {
-        val list = _transfers.value
-        sessions.activeTransfers.value = list.count { it.state.isActive }
-        publishWaiting(list)
-    }
-
-    /** How many copies wait on the user, and whose Files tab the notification's tap should open: the one that has waited longest, in queue order. */
-    private fun publishWaiting(list: List<Transfer>) {
-        sessions.waitingTransfers.value = list.count { it.waiting }
-        sessions.waitingTransferSession.value = list.firstOrNull { it.waiting }?.sessionId
+        synchronized(countLock) {
+            val list = _transfers.value
+            sessions.activeTransfers.value = list.count { it.state.isActive }
+            sessions.waitingTransfers.value = list.count { it.waiting }
+            sessions.waitingTransferSession.value = list.firstOrNull { it.waiting }?.sessionId
+        }
     }
 
     /** Display name and size of a picked document: the name null when nothing usable is known, the size -1 when the provider does not say. */
