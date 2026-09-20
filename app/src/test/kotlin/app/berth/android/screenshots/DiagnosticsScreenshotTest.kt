@@ -10,13 +10,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.ReportKind
@@ -66,7 +66,7 @@ class DiagnosticsScreenshotTest {
     val host = ComposeHostRule()
 
     @get:Rule(order = 1)
-    val compose = createComposeRule()
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private val context: Context = ApplicationProvider.getApplicationContext()

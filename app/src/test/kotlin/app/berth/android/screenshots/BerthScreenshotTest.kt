@@ -26,13 +26,13 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import app.berth.android.ComposeHostRule
 import app.berth.android.R
+import app.berth.android.createBerthComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -136,7 +136,7 @@ class BerthScreenshotTest {
     val host = ComposeHostRule()
 
     @get:Rule(order = 1)
-    val compose = createComposeRule()
+    val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
