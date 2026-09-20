@@ -216,6 +216,31 @@ class PaneFocusTest {
         awaitFocused(hasTestTag(TerminalTag), "the one terminal after the Stage became one again")
     }
 
+    @Test
+    fun `a focus moved onto the rail stays there, and Tab from the rail's last row is back on the strip`() {
+        val live = runBlocking { graph.sessions.open(box) }
+        mount(keyboardMode = true)
+        compose.waitUntil(45_000) { live.state == SessionState.LIVE }
+        awaitFocused(hasTestTag(TerminalTag), "the live terminal, on coming on stage")
+
+        // The focus onto Settings, the rail's last row: the Stage does not take it back, frame after frame.
+        val settings = compose.onNode(hasText("Settings") and hasClickAction())
+        settings.requestFocus()
+        compose.waitForIdle()
+        settings.assertIsFocused()
+        repeat(3) { compose.mainClock.advanceTimeByFrame() }
+        compose.waitForIdle()
+        settings.assertIsFocused()
+        assertEquals(1, compose.onAllNodes(isFocused()).fetchSemanticsNodes().size)
+
+        // Tab from the rail's last row: the strip, the Stage's first controls; Shift+Tab is the rail's last row again.
+        press(KEYCODE_TAB)
+        awaitFocused(inStrip(), "the strip after Tab from the rail")
+        press(KEYCODE_TAB, META_SHIFT_ON)
+        compose.waitForIdle()
+        settings.assertIsFocused()
+    }
+
     /** The shell on the tablet, with a hardware keyboard in the configuration, in touch mode or out of it. */
     private fun mount(keyboardMode: Boolean) {
         compose.setContent {
