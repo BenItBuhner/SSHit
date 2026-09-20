@@ -58,9 +58,12 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 
 /**
- * The host library. Tap opens a tab on the host in the current group (spec C3); long-press offers
- * Files (the host's Files tab, opened or brought on stage, when [onFiles] is given), Edit and Delete.
- * [picker] mode titles the screen "New tab"; back returns to the Stage.
+ * The host library (spec C9). Tap opens a tab on the host in the current group (spec C3); the row's
+ * second line is `user@address:port`, then `via bastion` for a host that jumps, the chain as
+ * `bastion › edge`. Long-press offers Files (the host's Files tab, opened or brought on stage, when
+ * [onFiles] is given), Connect as tunnel only (a Tunnels tab on the host, whatever its toggle says,
+ * when [onTunnels] is given), Edit and Delete. [picker] mode titles the screen "New tab"; back
+ * returns to the Stage.
  */
 @Composable
 fun HostsScreen(
@@ -73,10 +76,12 @@ fun HostsScreen(
     onKnownHosts: () -> Unit,
     picker: Boolean = false,
     onFiles: ((Host) -> Unit)? = null,
+    onTunnels: ((Host) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
     val hosts by vm.hosts.collectAsState()
+    val byId = remember(hosts) { hosts.associateBy { it.id } }
     var quickConnect by remember { mutableStateOf(false) }
     var importConfig by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -126,16 +131,24 @@ fun HostsScreen(
                 contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                val row: @Composable (Host) -> Unit = { host ->
+                    HostRow(
+                        host,
+                        subtitle = host.rowSubtitle(byId),
+                        now = now,
+                        onTap = { onConnect(host) },
+                        onFiles = onFiles?.let { open -> { open(host) } },
+                        onTunnels = onTunnels?.let { open -> { open(host) } },
+                        onEdit = { onEditHost(host.id) },
+                        onDelete = { vm.deleteHost(host.id) },
+                    )
+                }
                 if (recent.isNotEmpty()) {
                     item { SectionLabel("Recent", Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp)) }
-                    items(recent, key = { "recent-" + it.id }) { host ->
-                        HostRow(host, now, onTap = { onConnect(host) }, onFiles = onFiles?.let { open -> { open(host) } }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
-                    }
+                    items(recent, key = { "recent-" + it.id }) { host -> row(host) }
                     item { SectionLabel("All", Modifier.padding(start = 4.dp, top = 20.dp, bottom = 6.dp)) }
                 }
-                items(all, key = { it.id }) { host ->
-                    HostRow(host, now, onTap = { onConnect(host) }, onFiles = onFiles?.let { open -> { open(host) } }, onEdit = { onEditHost(host.id) }, onDelete = { vm.deleteHost(host.id) })
-                }
+                items(all, key = { it.id }) { host -> row(host) }
             }
         }
     }
@@ -148,14 +161,34 @@ fun HostsScreen(
     }
 }
 
+/**
+ * A host row's second line (spec C9): `ben@10.0.0.15`, the port when it is not 22, then
+ * `· via bastion` for a host that logs in through a chain, the hops in order as `bastion › edge`.
+ * A hop whose host has been deleted is named as such, since the login will stop there.
+ */
+internal fun Host.rowSubtitle(byId: Map<String, Host>): String = buildString {
+    append(userAtHost)
+    if (port != 22) append(':').append(port)
+    if (jumpHostIds.isNotEmpty()) append(" \u00B7 via ").append(jumpHostIds.joinToString(" \u203A ") { byId[it]?.name ?: "a deleted host" })
+}
+
 @Composable
-private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onFiles: (() -> Unit)?, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun HostRow(
+    host: Host,
+    subtitle: String,
+    now: Long,
+    onTap: () -> Unit,
+    onFiles: (() -> Unit)?,
+    onTunnels: (() -> Unit)?,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
     Box {
         ListRow(
             title = host.name,
-            subtitle = host.userAtHost + if (host.port != 22) ":${host.port}" else "",
+            subtitle = subtitle,
             onClick = onTap,
             onLongClick = { menu = true },
             leading = { Swatch(host.color, host.monogram, 36.dp) },
@@ -165,6 +198,7 @@ private fun HostRow(host: Host, now: Long, onTap: () -> Unit, onFiles: (() -> Un
         )
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
             if (onFiles != null) DropdownMenuItem(text = { Text("Files", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onFiles() })
+            if (onTunnels != null) DropdownMenuItem(text = { Text("Connect as tunnel only", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onTunnels() })
             DropdownMenuItem(text = { Text("Edit", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onEdit() })
             DropdownMenuItem(text = { Text("Delete", style = BerthType.body, color = c.danger) }, onClick = { menu = false; onDelete() })
         }

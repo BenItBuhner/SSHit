@@ -16,11 +16,13 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.session.AuthResolver
@@ -31,6 +33,7 @@ import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.LinkOutcome
 import app.berth.android.ui.hosts.HostEditorScreen
+import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
@@ -183,6 +186,35 @@ class ConnectionsScreenshotTest {
         compose.onAllNodesWithText("bastion").assertCountEquals(1) // its row only; a hop is offered once
         settle(300)
         capture("host-editor-jump-add-menu")
+    }
+
+    /**
+     * The Hosts screen over the seed (spec C9): relay's second line says `via bastion` and prod-db's
+     * the chain, `via bastion › relay`, so which hosts jump is read without opening an editor. A
+     * long-press on prod-db offers Files, Connect as tunnel only, Edit and Delete, and the tunnels
+     * row opens a Tunnels tab on the host, whatever its toggle says.
+     */
+    @Test
+    fun `hosts rows name the chain, and the row menu offers Connect as tunnel only`() {
+        seed()
+        val tunnels = ArrayList<String>()
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}, onFiles = {}, onTunnels = { tunnels += it.id })
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("prod-db")).fetchSemanticsNodes().isNotEmpty() }
+        // Every seed host connected once, so three sit under Recent as well as under All; the lines are on the row wherever it is.
+        assertTrue(compose.onAllNodesWithText("ops@10.0.0.2 \u00B7 via bastion").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodesWithText("deploy@10.0.4.12 \u00B7 via bastion \u203A relay").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodesWithText("ops@bastion.example.net:2200").fetchSemanticsNodes().isNotEmpty())
+        compose.onAllNodesWithText("prod-db")[0].performTouchInput { longClick() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Connect as tunnel only")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Files").assertExists()
+        compose.onNodeWithText("Edit").assertExists()
+        compose.onNodeWithText("Delete").assertExists()
+        settle(300)
+        capture("hosts-row-menu")
+        compose.onNodeWithText("Connect as tunnel only").performClick()
+        assertEquals(listOf("prod-db"), tunnels)
     }
 
     /** Editing bastion: relay and prod-db both reach here through their own chains, so neither is offered; homelab is. */

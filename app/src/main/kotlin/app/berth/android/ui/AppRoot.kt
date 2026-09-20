@@ -242,6 +242,10 @@ private fun Shell(vm: AppViewModel) {
                                 vm.openFilesForHost(host)
                                 toStage()
                             },
+                            onTunnels = { host ->
+                                vm.openTunnels(host)
+                                toStage()
+                            },
                             onAddHost = { go(Screen.HostEditor(null)) },
                             onEditHost = { go(Screen.HostEditor(it)) },
                             onBack = { back() },
