@@ -176,6 +176,7 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("Add tunnel").performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("Tunnels only").assertExists()
+        compose.onNodeWithText("Connect opens a Tunnels tab, no shell.").assertExists()
         compose.onNodeWithText(onRow("127.0.0.1:5433 \u2192 localhost:5432")).assertExists()
         capture("host-editor-tunnels-only")
 
@@ -347,10 +348,10 @@ class ConnectionsScreenshotTest {
 
     /**
      * The Tunnels tab after the process came back: its forwards as rows that say Not connected (Off
-     * for the disabled one), the caption saying the tunnels run while the login is up and that this
-     * login opens no shell, and the same Detached pill a terminal has. Its overflow offers Terminal
-     * and Files where a terminal's has the Deck, Find and History. In the switcher it is a card with the link
-     * glyph, next to homelab's frame.
+     * for the disabled one), the status alone under them (the tunnels run while the login is up),
+     * and the same Detached pill a terminal has. Its overflow offers Terminal and Files where a
+     * terminal's has the Deck, Find and History. In the switcher it is a card with the link glyph
+     * whose caption says what the tab carries beside its age, next to homelab's frame.
      */
     @Test
     fun `tunnels tab detached, its overflow, and the switcher`() {
@@ -369,7 +370,8 @@ class ConnectionsScreenshotTest {
         compose.onNodeWithText("Detached \u00B7 7 min ago").assertExists()
         compose.onAllNodes(hasText("Not connected", substring = true)).assertCountEquals(2)
         compose.onAllNodes(hasText("Dynamic \u00B7 Off", substring = true)).assertCountEquals(1)
-        compose.onNodeWithText("Tunnels run while this login is up \u00B7 this login opens no shell; Terminal and Files are in the menu.").assertExists()
+        compose.onNodeWithText("Tunnels run while this login is up").assertExists()
+        compose.onAllNodes(hasText("opens no shell", substring = true)).assertCountEquals(0) // said by the empty state and the editor, not under every list
         compose.onNodeWithContentDescription("Tunnels \u00B7 prod-db, detached", substring = true).assertExists()
         capture("tunnels-tab-detached")
 
@@ -389,6 +391,8 @@ class ConnectionsScreenshotTest {
         switcher.value = true
         compose.waitForIdle()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
+        // The card's caption is the counterpart of the path a Files card shows: the age, then what the tab carries.
+        compose.onNodeWithContentDescription("Tunnels \u00B7 prod-db, 7 min ago \u00B7 3 tunnels", substring = true).assertExists()
         settle(400)
         capture("tab-switcher-tunnels")
     }
@@ -460,7 +464,7 @@ class ConnectionsScreenshotTest {
             compose.waitUntil(10_000) { held.via.value == "via gateway" }
             waitForText("Connecting via gateway\u2026", 5_000, held)
             compose.onAllNodes(hasText("Waiting for the login", substring = true)).assertCountEquals(2)
-            compose.onNodeWithText("Tunnels start when the login is up \u00B7 this login opens no shell; Terminal and Files are in the menu.").assertExists()
+            compose.onNodeWithText("Tunnels start when the login is up").assertExists()
             settle(500)
             capture("stage-connecting-via")
             runBlocking { graph.sessions.close(held.id) }
@@ -490,7 +494,7 @@ class ConnectionsScreenshotTest {
             settle(1_600)
             compose.waitUntil(5_000) { compose.onAllNodes(hasText("3 served", substring = true)).fetchSemanticsNodes().isNotEmpty() }
             if (webLike) compose.onNodeWithText("Open").assertExists()
-            compose.onNodeWithText("2 of 2 up \u00B7 this login opens no shell; Terminal and Files are in the menu.").assertExists()
+            compose.onNodeWithText("2 of 2 up").assertExists()
             compose.onNodeWithContentDescription("Tunnels \u00B7 prod-db, live", substring = true).assertExists()
             capture("tunnels-tab-live")
 

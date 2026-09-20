@@ -54,10 +54,11 @@ import kotlinx.coroutines.delay
 
 /**
  * A Tunnels tab's body under the tab strip (spec C3, tab kinds; C14): the host's forwards as rows
- * carrying their live state and traffic, over the same state pill a terminal has, with no Deck. The
- * login behind the tab opens no shell, so this is the whole stage; Terminal and Files are a menu
- * away. The counters move with every packet rather than through state, so while the tab is Live
- * they are read once a second ([trafficClock]) and the rows redraw from that clock alone.
+ * carrying their live state and traffic, the status alone under them (`2 of 2 up`), over the same
+ * state pill a terminal has, with no Deck. The login behind the tab opens no shell, so this is the
+ * whole stage; Terminal and Files are a menu away, and the empty state is where that is said. The
+ * counters move with every packet rather than through state, so while the tab is Live they are
+ * read once a second ([trafficClock]) and the rows redraw from that clock alone.
  */
 @Composable
 fun TunnelsTabBody(vm: AppViewModel, session: TerminalSession, onEditHost: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -226,17 +227,23 @@ internal fun trafficLine(traffic: ForwardTraffic): String {
     ).joinToString(" \u00B7 ")
 }
 
-/** The caption under the rows: `3 of 4 up · this login opens no shell`, or what the forwards wait for. */
-internal fun tunnelsSummary(tunnels: List<Tunnel>, statuses: Map<String, TunnelStatus>, state: SessionState): String {
+/** What the forwards are doing while the login is Live: `3 of 4 up`, or `Every tunnel is off`. */
+internal fun tunnelsUpLine(tunnels: List<Tunnel>, statuses: Map<String, TunnelStatus>): String {
     val enabled = tunnels.count { it.enabled }
+    if (enabled == 0) return "Every tunnel is off"
     val up = tunnels.count { statuses[it.id] is TunnelStatus.Up }
-    val head = when {
-        state == SessionState.LIVE && enabled == 0 -> "Every tunnel is off"
-        state == SessionState.LIVE -> "$up of $enabled up"
-        state.isActive -> "Tunnels start when the login is up"
-        else -> "Tunnels run while this login is up"
-    }
-    return "$head \u00B7 this login opens no shell; Terminal and Files are in the menu."
+    return "$up of $enabled up"
+}
+
+/**
+ * The status alone under the rows: [tunnelsUpLine] while Live, else what the forwards wait for.
+ * That this login opens no shell is said once, by the empty state and the editor's caption, not
+ * under every list.
+ */
+internal fun tunnelsSummary(tunnels: List<Tunnel>, statuses: Map<String, TunnelStatus>, state: SessionState): String = when {
+    state == SessionState.LIVE -> tunnelsUpLine(tunnels, statuses)
+    state.isActive -> "Tunnels start when the login is up"
+    else -> "Tunnels run while this login is up"
 }
 
 /** A 1 Hz tick while [running], so byte counters redraw without the state changing; frozen otherwise. */

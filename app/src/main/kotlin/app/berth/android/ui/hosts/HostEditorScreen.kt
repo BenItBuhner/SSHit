@@ -323,13 +323,8 @@ fun HostEditorScreen(
             }
 
             Panel(label = "Tunnels") {
-                ToggleRow(
-                    "Tunnels only",
-                    tunnelsOnly,
-                    { tunnelsOnly = it },
-                    caption = "Connect opens this host's port forwards with no shell, as a Tunnels tab. Terminal and Files stay a menu away.",
-                    captionLines = 2,
-                )
+                // One sentence that fits its line beside the switch; the Tunnels tab's own empty state says where Terminal and Files went.
+                ToggleRow("Tunnels only", tunnelsOnly, { tunnelsOnly = it }, caption = "Connect opens a Tunnels tab, no shell.")
                 // The link's forwards, seen here before anything is saved: the switch is what Save reads.
                 val pendingRows: @Composable () -> Unit = {
                     pending.forEachIndexed { index, fwd ->
