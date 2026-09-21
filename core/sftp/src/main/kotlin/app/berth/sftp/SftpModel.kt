@@ -217,6 +217,12 @@ interface SftpFileSystem : Closeable {
     suspend fun stat(path: String): SftpEntry
 
     /**
+     * `lstat`: the entry at [path] itself, a symlink as a symlink with nothing behind it resolved,
+     * for a caller that has to know what stands at a name before trusting it.
+     */
+    suspend fun lstat(path: String): SftpEntry
+
+    /**
      * Makes the folder at [path] with [permissions], the mode sent with the create so it never
      * stands open between two round trips; [SftpPermissions.DIRECTORY] by default, or
      * [SftpPermissions.PRIVATE_DIRECTORY] for one that is the login's alone. Throws

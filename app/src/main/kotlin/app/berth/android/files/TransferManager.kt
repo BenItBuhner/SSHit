@@ -20,6 +20,7 @@ import app.berth.sftp.LocalTree
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
+import app.berth.sftp.SftpFileType
 import app.berth.sftp.SftpPaths
 import app.berth.sftp.SftpPermissions
 import kotlinx.coroutines.CancellationException
@@ -313,7 +314,8 @@ class TransferManager(
      * `/tmp` is every user's, so nothing lands in it directly: the first drop on a session makes
      * `/tmp/berth-<8 hex>/` for the login alone (0700, the mode sent with the create, the name
      * from `SecureRandom`, another drawn when the name is taken), every drop after it goes into the
-     * same folder, and each file is made new there at 0600 ([SftpPermissions.PRIVATE_FILE]), never
+     * same folder for as long as what stands at its name is that folder ([isOwnDropFolder]), and
+     * each file is made new there at 0600 ([SftpPermissions.PRIVATE_FILE]), never
      * opened over something already at its name, so a link another user planted is neither followed
      * nor written to. A second file of a name already dropped is kept beside the first as
      * `report (1).pdf`, the way a folder transfer keeps both, since the first path was handed over already.
@@ -351,18 +353,22 @@ class TransferManager(
         return ids
     }
 
+    /** A session's drop folder as made: its path, and the owner the server reported for it then (−1 when the server reports none). */
+    private class DropFolder(val path: String, val uid: Int)
+
     /** The drop folder of each session that has had a drop, by session id; made on the first drop, kept for the tab's life. */
-    private val dropFolders = HashMap<String, String>()
+    private val dropFolders = HashMap<String, DropFolder>()
 
     /**
      * The private folder [session]'s drops go to, made on the first call: `mkdir` is the server's
      * own atomic check that the name is free, so a taken name (or one something else made between
      * two attempts) is drawn again rather than reused. A folder remembered but gone since (a
-     * reboot, a `tmp` cleaner) is made again under a new name.
+     * reboot, a `tmp` cleaner) is made again under a new name, and so is one whose name something
+     * else stands at now ([isOwnDropFolder]): the name alone is not the folder.
      */
     private suspend fun dropFolder(session: TerminalSession, fs: SftpFileSystem): String {
         synchronized(dropFolders) { dropFolders[session.id] }?.let { known ->
-            if (runCatching { fs.stat(known).isDirectory }.getOrDefault(false)) return known
+            if (isOwnDropFolder(fs, known)) return known.path
             synchronized(dropFolders) { dropFolders.remove(session.id) }
         }
         var attempts = 0
@@ -374,9 +380,26 @@ class TransferManager(
                 if (++attempts >= DROP_FOLDER_ATTEMPTS) throw e
                 continue
             }
-            synchronized(dropFolders) { dropFolders[session.id] = candidate }
+            // The owner the server reports for a folder just made is the login; remembered, it tells the folder from a stranger's later.
+            val uid = runCatching { fs.lstat(candidate).uid }.getOrDefault(-1)
+            synchronized(dropFolders) { dropFolders[session.id] = DropFolder(candidate, uid) }
             return candidate
         }
+    }
+
+    /**
+     * Whether what stands at a remembered folder's name is still the folder the login made there:
+     * a directory itself, not a link to one (`lstat`), at exactly the 0700 it was made with, and the
+     * login's own where the server says who owns it. `/tmp` is every user's: once the folder is
+     * gone, anyone who saw its name in a listing can put a directory or a link there, and a drop
+     * that trusted the name would land the login's files where that user can rename them out from
+     * under the pasted path. Anything but the folder as made is not reused.
+     */
+    private suspend fun isOwnDropFolder(fs: SftpFileSystem, known: DropFolder): Boolean {
+        val entry = runCatching { fs.lstat(known.path) }.getOrNull() ?: return false
+        return entry.type == SftpFileType.DIRECTORY &&
+            entry.permissions == SftpPermissions.PRIVATE_DIRECTORY &&
+            (known.uid < 0 || entry.uid < 0 || entry.uid == known.uid)
     }
 
     /**

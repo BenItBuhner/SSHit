@@ -615,6 +615,51 @@ class TransferManagerTest {
         assertEquals("$remadeDir/notes.txt", remade.remotePath)
     }
 
+    /**
+     * A remembered folder is reused by what stands at its name, not by the name: `/tmp` is every
+     * user's, and once the folder is gone anyone who saw the name can put something there. A link
+     * to a directory (even one of the login's own), a directory at another mode, and a directory of
+     * another user's at 0700 are each left as they are and a new folder made; the folder as made is
+     * reused, and one the server reports no owner for is reused on its type and mode alone.
+     */
+    @Test
+    fun `a remembered drop folder is reused only while it is the login's own directory at 0700, and anything else at its name gets a new folder`() {
+        server.dir("/tmp", 0, permissions = 0b111_111_111_111)
+        val session = session("s1")
+        val notes = File(tmp, "notes.txt").apply { writeText("shared\n") }
+        fun drop(): String = SftpPaths.parent(awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single()).also { assertEquals(TransferState.DONE, it.state) }.remotePath)
+
+        val first = drop()
+        assertEquals("the folder as made is reused", first, drop())
+
+        // Gone, and a link planted at its name, pointing at a directory the login can write: not followed.
+        runBlocking { server.delete(first) }
+        server.link(first, SftpFileType.DIRECTORY, 0)
+        val second = drop()
+        assertNotEquals(first, second)
+        assertEquals("the planted link is as it was", SftpFileType.SYMLINK, server.nodes[first]?.type)
+        assertTrue("nothing landed under the link's name", server.nodes.keys.none { it.startsWith("$first/") })
+
+        // Gone, and a directory of the login's own at another mode (a stranger's chmod, a server that lost the mode): not reused.
+        runBlocking { server.delete(second) }
+        server.dir(second, 0, permissions = 0b111_101_101)
+        val third = drop()
+        assertNotEquals(second, third)
+        assertTrue("nothing landed in the open directory", server.nodes.keys.none { it.startsWith("$second/") })
+
+        // Gone, and another user's directory at 0700 at its name: theirs, not reused.
+        runBlocking { server.delete(third) }
+        server.dir(third, 0, permissions = 0b111_000_000, uid = FakeSftpFileSystem.LOGIN_UID + 1)
+        val fourth = drop()
+        assertNotEquals(third, fourth)
+        assertTrue("nothing landed in the stranger's directory", server.nodes.keys.none { it.startsWith("$third/") })
+
+        // A server that reports no owner: the folder is reused on its type and mode, which is what there is to go on.
+        server.nodes.getValue(fourth).uid = -1
+        assertEquals(fourth, drop())
+        assertEquals("one folder made each time the name was not the folder, none otherwise", listOf(first, second, third, fourth), mkdirs.toList())
+    }
+
     @Test
     fun `a drop folder's name already taken is drawn again, and a run of taken names is the drop failing`() {
         server.dir("/tmp", 0, permissions = 0b111_111_111_111)

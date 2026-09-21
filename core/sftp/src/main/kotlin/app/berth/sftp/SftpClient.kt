@@ -50,6 +50,10 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
         attrs.toEntry(name = SftpPaths.name(path), path = SftpPaths.normalize(path))
     }
 
+    override suspend fun lstat(path: String): SftpEntry = io(path, "reading attributes") {
+        raw.lstat(path).toEntry(name = SftpPaths.name(path), path = SftpPaths.normalize(path))
+    }
+
     override suspend fun mkdir(path: String, permissions: Int) = io(path, "creating a folder") {
         try {
             raw.sftpEngine.makeDir(path, attributes(permissions))

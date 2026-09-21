@@ -23,6 +23,8 @@ class FakeNode(
     var permissions: Int = 0b110_100_100,
     var content: ByteArray = ByteArray(0),
     val linkTarget: SftpFileType? = null,
+    /** The owner the server reports; the login's, [FakeSftpFileSystem.LOGIN_UID], unless a test says another user made it. */
+    var uid: Int = FakeSftpFileSystem.LOGIN_UID,
 )
 
 /**
@@ -45,9 +47,9 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         nodes[SftpPaths.ROOT] = FakeNode(SftpFileType.DIRECTORY, permissions = 0b111_101_101)
     }
 
-    fun dir(path: String, modifiedAt: Long, permissions: Int = 0b111_101_101): FakeSftpFileSystem {
+    fun dir(path: String, modifiedAt: Long, permissions: Int = 0b111_101_101, uid: Int = LOGIN_UID): FakeSftpFileSystem {
         ensureParents(path)
-        nodes[path] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = modifiedAt, permissions = permissions)
+        nodes[path] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = modifiedAt, permissions = permissions, uid = uid)
         return this
     }
 
@@ -95,8 +97,8 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         size = node.size,
         modifiedAt = node.modifiedAt,
         permissions = node.permissions,
-        uid = 1000,
-        gid = 1000,
+        uid = node.uid,
+        gid = LOGIN_UID,
         linkTarget = node.linkTarget,
     )
 
@@ -120,6 +122,9 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         val n = SftpPaths.normalize(path)
         return entry(n, node(n))
     }
+
+    // The tree keeps a link as a link with its target's type beside it, so both reads are the one entry.
+    override suspend fun lstat(path: String): SftpEntry = stat(path)
 
     override suspend fun mkdir(path: String, permissions: Int) {
         val n = SftpPaths.normalize(path)
@@ -189,6 +194,9 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
     }
 
     companion object {
+        /** The uid the fake reports for the login, and for every entry a test does not give another owner. */
+        const val LOGIN_UID = 1000
+
         /** A home folder as a developer's box has it, with times spread over today, this year and before. */
         fun demoTree(now: Long): FakeSftpFileSystem {
             val h = TimeUnit.HOURS.toMillis(1)
