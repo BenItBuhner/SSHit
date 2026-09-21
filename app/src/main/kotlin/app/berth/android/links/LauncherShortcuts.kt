@@ -48,12 +48,16 @@ class LauncherShortcuts @Inject constructor(
     fun recent(all: List<Host>): List<Host> =
         all.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(MAX_RECENT)
 
-    /** Replaces the dynamic shortcuts with [recent]; the static Quick connect is the manifest's and stays. */
+    /**
+     * Replaces the dynamic shortcuts with [recent]; the static Quick connect is the manifest's and
+     * stays. Both labels are the host's name, the user's own word for it: an address never goes to
+     * the launcher, whose long-press menu shows whoever holds the phone what Berth's lock would not.
+     */
     fun publish(recent: List<Host>) {
         val shortcuts = recent.mapIndexed { rank, host ->
             ShortcutInfoCompat.Builder(context, hostShortcutId(host.id))
                 .setShortLabel(host.name)
-                .setLongLabel("${host.user}@${host.address}")
+                .setLongLabel(host.name)
                 .setIcon(IconCompat.createWithAdaptiveBitmap(swatch(host)))
                 .setRank(rank)
                 .setIntent(openHost(context, host.id))

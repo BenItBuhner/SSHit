@@ -119,7 +119,7 @@ class LauncherShortcutsTest {
         assertEquals(listOf("host:web", "host:db"), published.map { it.id })
         val web = published.first()
         assertEquals("prod-web", web.shortLabel)
-        assertEquals("deploy@web.example.net", web.longLabel)
+        assertEquals("the long label is the name too; the launcher never learns the address", "prod-web", web.longLabel)
         assertEquals(0, web.rank)
         assertEquals(LauncherShortcuts.ACTION_OPEN_HOST, web.intent.action)
         assertEquals("web", web.intent.getStringExtra(LauncherShortcuts.EXTRA_HOST_ID))
