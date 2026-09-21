@@ -31,17 +31,17 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    // Integration tests against a live sshd are opt-in; see SshIntegrationTest.
-    environment("SSH_TEST_HOST", System.getenv("SSH_TEST_HOST") ?: "")
-    environment("SSH_TEST_PORT", System.getenv("SSH_TEST_PORT") ?: "")
-    environment("SSH_TEST_USER", System.getenv("SSH_TEST_USER") ?: "")
-    environment("SSH_TEST_PASSWORD", System.getenv("SSH_TEST_PASSWORD") ?: "")
-    environment("SSH_TEST_KEY_FILE", System.getenv("SSH_TEST_KEY_FILE") ?: "")
-    // A second sshd (same user and password, its own host keys) for the jump chain tests.
-    environment("SSH_TEST_JUMP_PORT", System.getenv("SSH_TEST_JUMP_PORT") ?: "")
-    // The headless terminal demo writes PNG frames here when set; see TerminalDemoHarness.
-    environment("BERTH_DEMO_OUT", System.getenv("BERTH_DEMO_OUT") ?: "")
-    environment("BERTH_DEMO_FONT", System.getenv("BERTH_DEMO_FONT") ?: "")
+    // Integration tests against a live sshd are opt-in; see SshIntegrationTest. SSH_TEST_JUMP_PORT is a
+    // second sshd (same user and password, its own host keys) for the jump chain tests; BERTH_DEMO_OUT
+    // is where the headless terminal demo writes PNG frames when set (see TerminalDemoHarness). Each
+    // variable is an input of the task as well as its environment, so a cached run made without them
+    // (every live test skipped) is never restored for a run made with them; the password's presence is
+    // the input, not its value.
+    for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD", "SSH_TEST_KEY_FILE", "SSH_TEST_JUMP_PORT", "BERTH_DEMO_OUT", "BERTH_DEMO_FONT")) {
+        val value = System.getenv(name) ?: ""
+        environment(name, value)
+        inputs.property("env.$name", if (name == "SSH_TEST_PASSWORD") value.isNotEmpty().toString() else value)
+    }
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true

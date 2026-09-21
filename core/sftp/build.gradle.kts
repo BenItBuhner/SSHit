@@ -28,8 +28,13 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     // Integration tests against a live sshd with an sftp subsystem are opt-in; see SftpIntegrationTest.
+    // Each variable is an input of the task as well as its environment, so a cached run made without
+    // them (every live test skipped) is never restored for a run made with them; the password's
+    // presence is the input, not its value.
     for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD")) {
-        environment(name, System.getenv(name) ?: "")
+        val value = System.getenv(name) ?: ""
+        environment(name, value)
+        inputs.property("env.$name", if (name == "SSH_TEST_PASSWORD") value.isNotEmpty().toString() else value)
     }
     testLogging {
         events("passed", "skipped", "failed")
