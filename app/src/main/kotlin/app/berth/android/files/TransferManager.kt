@@ -20,7 +20,9 @@ import app.berth.sftp.LocalTree
 import app.berth.sftp.SftpEntry
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
+import app.berth.sftp.SftpFileType
 import app.berth.sftp.SftpPaths
+import app.berth.sftp.SftpPermissions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -33,11 +35,13 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.security.SecureRandom
 import java.util.UUID
 
 enum class TransferKind {
@@ -287,7 +291,7 @@ class TransferManager(
         enqueue(session, TransferKind.UPLOAD, name, remote, size) { h ->
             val fs = channelFor(session)
             try {
-                context.contentResolver.openInputStream(uri)?.use { input -> fs.upload(input, size, remote, h.bytes) }
+                context.contentResolver.openInputStream(uri)?.use { input -> fs.upload(input, size, remote, onProgress = h.bytes) }
                     ?: throw IOException("Couldn't read $name.")
             } finally {
                 fs.close()
@@ -295,6 +299,117 @@ class TransferManager(
             _changedFolders.tryEmit(session.id to dir)
         }
     }
+
+    /**
+     * The share sheet's quick file drop (spec C24): [uris] land under `/tmp` on [session]'s host
+     * through the same queue as any upload, so the transfers sheet and the notification see them,
+     * and as each copy lands its path is handed to [onLanded] as the terminal should get it, quoted
+     * where the shell would need it (`'/tmp/berth-3fa9c2d1/my report.pdf'`), in the order the files
+     * were shared, a space ahead of every path after the first so several land as several words
+     * ([landedText]). Whether that text is pasted at once or held is the caller's to decide from
+     * what is on stage when the copy lands ([app.berth.android.ui.AppViewModel.landDroppedPath]);
+     * the copy took time. A copy that fails or is cancelled hands over nothing; its row says what
+     * happened. Returns the transfer ids.
+     *
+     * `/tmp` is every user's, so nothing lands in it directly: the first drop on a session makes
+     * `/tmp/berth-<8 hex>/` for the login alone (0700, the mode sent with the create, the name
+     * from `SecureRandom`, another drawn when the name is taken), every drop after it goes into the
+     * same folder for as long as what stands at its name is that folder ([isOwnDropFolder]), and
+     * each file is made new there at 0600 ([SftpPermissions.PRIVATE_FILE]), never
+     * opened over something already at its name, so a link another user planted is neither followed
+     * nor written to. A second file of a name already dropped is kept beside the first as
+     * `report (1).pdf`, the way a folder transfer keeps both, since the first path was handed over already.
+     */
+    fun dropIntoTmp(session: TerminalSession, uris: List<Uri>, onLanded: (TerminalSession, String) -> Unit): List<String> {
+        val ids = uris.map { uri ->
+            val (described, size) = describe(uri)
+            val name = described ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { SftpPaths.isValidName(it) } ?: "upload"
+            // The row's path names the folder the drop goes to, which is only known once the lane reaches it.
+            enqueue(session, TransferKind.UPLOAD, name, SftpPaths.join(DROP_DIR, name), size) { h ->
+                val fs = channelFor(session)
+                try {
+                    val dir = dropFolder(session, fs)
+                    val taken = fs.list(dir).map { it.name }.toSet()
+                    val final = if (name in taken) SftpPaths.keepBothName(name, taken) else name
+                    val remote = SftpPaths.join(dir, final)
+                    patch(h.id) { it.copy(name = final, remotePath = remote, note = if (final != name) "$name was there \u00B7 saved as $final" else null) }
+                    context.contentResolver.openInputStream(uri)?.use { input -> fs.upload(input, size, remote, SftpPermissions.PRIVATE_FILE, h.bytes) }
+                        ?: throw IOException("Couldn't read $name.")
+                    _changedFolders.tryEmit(session.id to dir)
+                } finally {
+                    fs.close()
+                }
+            }
+        }
+        scope.launch {
+            var landed = 0
+            for (id in ids) {
+                // Wait for this copy to end; a row cleared from the sheet meanwhile ends the wait with nothing to hand over.
+                val ended = transfers.first { list -> list.firstOrNull { it.id == id }?.state?.isActive != true }.firstOrNull { it.id == id }
+                if (ended?.state != TransferState.DONE) continue
+                onLanded(session, landedText(ended.remotePath, first = landed++ == 0))
+            }
+        }
+        return ids
+    }
+
+    /** A session's drop folder as made: its path, and the owner the server reported for it then (−1 when the server reports none). */
+    private class DropFolder(val path: String, val uid: Int)
+
+    /** The drop folder of each session that has had a drop, by session id; made on the first drop, kept for the tab's life. */
+    private val dropFolders = HashMap<String, DropFolder>()
+
+    /**
+     * The private folder [session]'s drops go to, made on the first call: `mkdir` is the server's
+     * own atomic check that the name is free, so a taken name (or one something else made between
+     * two attempts) is drawn again rather than reused. A folder remembered but gone since (a
+     * reboot, a `tmp` cleaner) is made again under a new name, and so is one whose name something
+     * else stands at now ([isOwnDropFolder]): the name alone is not the folder.
+     */
+    private suspend fun dropFolder(session: TerminalSession, fs: SftpFileSystem): String {
+        synchronized(dropFolders) { dropFolders[session.id] }?.let { known ->
+            if (isOwnDropFolder(fs, known)) return known.path
+            synchronized(dropFolders) { dropFolders.remove(session.id) }
+        }
+        var attempts = 0
+        while (true) {
+            val candidate = SftpPaths.join(DROP_DIR, "$DROP_FOLDER_PREFIX${dropFolderSuffix()}")
+            try {
+                fs.mkdir(candidate, SftpPermissions.PRIVATE_DIRECTORY)
+            } catch (e: SftpError.AlreadyExists) {
+                if (++attempts >= DROP_FOLDER_ATTEMPTS) throw e
+                continue
+            }
+            // The owner the server reports for a folder just made is the login; remembered, it tells the folder from a stranger's later.
+            val uid = runCatching { fs.lstat(candidate).uid }.getOrDefault(-1)
+            synchronized(dropFolders) { dropFolders[session.id] = DropFolder(candidate, uid) }
+            return candidate
+        }
+    }
+
+    /**
+     * Whether what stands at a remembered folder's name is still the folder the login made there:
+     * a directory itself, not a link to one (`lstat`), at exactly the 0700 it was made with, and the
+     * login's own where the server says who owns it. `/tmp` is every user's: once the folder is
+     * gone, anyone who saw its name in a listing can put a directory or a link there, and a drop
+     * that trusted the name would land the login's files where that user can rename them out from
+     * under the pasted path. Anything but the folder as made is not reused.
+     */
+    private suspend fun isOwnDropFolder(fs: SftpFileSystem, known: DropFolder): Boolean {
+        val entry = runCatching { fs.lstat(known.path) }.getOrNull() ?: return false
+        return entry.type == SftpFileType.DIRECTORY &&
+            entry.permissions == SftpPermissions.PRIVATE_DIRECTORY &&
+            (known.uid < 0 || entry.uid < 0 || entry.uid == known.uid)
+    }
+
+    /**
+     * The one shape a landed path reaches the terminal in: [path] quoted for the shell
+     * ([shellQuote]), a space ahead of it when it follows another so several land as several words,
+     * and no newline ever, so nothing a drop pastes runs. A path is one line by construction
+     * ([SftpPaths.isValidName] admits no control character), so it needs no preview; shared text
+     * takes the Stage's gate instead ([app.berth.android.ui.AppViewModel.sharedPaste]).
+     */
+    private fun landedText(path: String, first: Boolean): String = (if (first) "" else " ") + shellQuote(path)
 
     /** Answers the conflict a transfer waits on, a folder's or a single file's; nothing happens when it is not waiting. */
     fun resolveConflict(id: String, choice: ConflictChoice, applyToAll: Boolean) {
@@ -535,10 +650,30 @@ class TransferManager(
         private const val PUBLISH_INTERVAL_NANOS = 120_000_000L
         private const val SAMPLE_NANOS = 250_000_000L
 
+        /** Where a shared file lands (spec C24): under the host's `/tmp`, which every login can write and nothing keeps, in a folder of the login's own. */
+        const val DROP_DIR = "/tmp"
+
+        /** The drop folder's name, `berth-` and eight hex digits from `SecureRandom`. */
+        const val DROP_FOLDER_PREFIX = "berth-"
+        private const val DROP_FOLDER_ATTEMPTS = 8
+        private val dropRandom = SecureRandom()
+
+        /** Eight hex digits, 32 bits of randomness: enough that a name is never guessed ahead in a shared `/tmp`. */
+        internal fun dropFolderSuffix(): String = "%08x".format(dropRandom.nextInt())
+
         fun mimeFor(name: String): String {
             val ext = name.substringAfterLast('.', "").lowercase()
             return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
         }
+
+        /**
+         * [path] as a POSIX shell reads it back as one word: as it is when every character is one
+         * the shell leaves alone, else in single quotes, a quote inside written as `'\''`. What the
+         * drop pastes, so `/tmp/my report (1).pdf` lands as one argument.
+         */
+        fun shellQuote(path: String): String =
+            if (path.isNotEmpty() && path.all { it.isLetterOrDigit() && it.code < 128 || it in "/._-+@:,=%" }) path
+            else "'" + path.replace("'", "'\\''") + "'"
 
         /** The one line a finished folder with failures carries: how many, and of what. */
         fun folderOutcome(p: FolderProgress): String {

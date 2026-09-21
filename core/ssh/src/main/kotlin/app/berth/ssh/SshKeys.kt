@@ -280,6 +280,28 @@ object SshKeys {
         }.getOrDefault(false)
     }
 
+    /**
+     * The public key an `openssh-key-v1` file carries in the clear, ahead of its private section
+     * and whether or not that section is encrypted, so a stored key's public half and fingerprint
+     * can be checked against its own bytes without its passphrase. Null when [privateKeyText] is
+     * not such a file, or not a well-formed one.
+     */
+    fun publicKeyOfOpenSshPrivate(privateKeyText: String): PublicKey? {
+        if (!privateKeyText.contains("BEGIN OPENSSH PRIVATE KEY")) return null
+        val body = privateKeyText.lines().filter { !it.startsWith("-----") }.joinToString("").trim()
+        return runCatching {
+            SshSecurity.ensureProviders()
+            val buf = Buffer.PlainBuffer(Base64.getDecoder().decode(body))
+            val magic = ByteArray(15).also { buf.readRawBytes(it) }
+            require(magic.contentEquals("openssh-key-v1\u0000".toByteArray(Charsets.US_ASCII))) { "not an openssh-key-v1 file" }
+            buf.readString() // cipher name
+            buf.readString() // kdf name
+            buf.readBytes() // kdf options
+            require(buf.readUInt32AsInt() == 1) { "one key a file" }
+            Buffer.PlainBuffer(buf.readBytes()).readPublicKey()
+        }.getOrNull()
+    }
+
     /** True when [text] looks like a private key in any format [load] understands. */
     fun looksLikePrivateKey(text: String): Boolean =
         text.contains("PRIVATE KEY-----") || text.contains("PuTTY-User-Key-File")

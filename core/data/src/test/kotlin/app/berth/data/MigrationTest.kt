@@ -11,6 +11,7 @@ import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
 import app.berth.data.db.BerthDatabase_Impl
 import app.berth.data.repo.EncryptedSecretStore
+import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
 import app.berth.data.repo.RoomKnownHostRepository
@@ -21,6 +22,7 @@ import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
 import app.berth.domain.model.AppearanceOverride
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckKey
@@ -97,6 +99,9 @@ class MigrationTest {
 
     @Test
     fun `a version 3 database migrates to the current version keeping every row`() = migrateAndCheck(from = 3)
+
+    @Test
+    fun `a version 4 database migrates to the current version keeping every row`() = migrateAndCheck(from = 4)
 
     private fun migrateAndCheck(from: Int) {
         val file = File.createTempFile("berth-v$from", ".db").also { it.delete(); it.deleteOnExit() }
@@ -311,6 +316,11 @@ class MigrationTest {
             execSQL("UPDATE sessions SET customTitle = 'web box' WHERE id = 's1'")
             execSQL("UPDATE workspaces SET collapsed = 1 WHERE id = 'w2'")
         }
+
+        if (version >= 4) {
+            // Version 4's column: the bastion marked tunnels only, as a phone on that build could have set it.
+            execSQL("UPDATE hosts SET tunnelsOnly = 1 WHERE id = 'bastion'")
+        }
     }
 
     // ---- after the migration -----------------------------------------------------------------------
@@ -321,11 +331,21 @@ class MigrationTest {
         val counts = mapOf(
             "hosts" to 2, "identities" to 2, "secrets" to 1, "known_hosts" to 2, "workspaces" to 2, "sessions" to 2,
             "session_frames" to 1, "tunnels" to 2, "snippets" to 2, "preferences" to if (from >= 2) 8 else 7,
+            // Version 5: the history table arrives empty; the commands an older build kept in each tab's frame reach it as the frames are restored.
+            "command_history" to 0,
         )
         for ((table, rows) in counts) assertEquals(rows.toLong(), long("SELECT COUNT(*) FROM $table"), "$table keeps its rows")
 
-        // Version 4: every old host opens a terminal on Connect; the tunnels-only toggle is off until set.
-        assertEquals(2L, long("SELECT COUNT(*) FROM hosts WHERE tunnelsOnly = 0"))
+        // Version 5: the table takes a row keyed by host and its index is there to be used.
+        execSQL("INSERT INTO command_history (hostId, text, at) VALUES ('h1', 'ls', 7)")
+        assertEquals(1L, long("SELECT COUNT(*) FROM command_history WHERE hostId = 'h1' AND at = 7"))
+        assertEquals(1L, long("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'index_command_history_hostId_at'"))
+        execSQL("DELETE FROM command_history")
+
+        // Version 4: every old host opens a terminal on Connect; the tunnels-only toggle is off until set, and stays set where a version 4 phone set it.
+        assertEquals(if (from >= 4) 1L else 2L, long("SELECT COUNT(*) FROM hosts WHERE tunnelsOnly = 0"))
+        assertEquals(0L, long("SELECT tunnelsOnly FROM hosts WHERE id = 'h1'"))
+        assertEquals(if (from >= 4) 1L else 0L, long("SELECT tunnelsOnly FROM hosts WHERE id = 'bastion'"))
 
         // Version 3: every old tab is an SSH tab; the rename and the collapsed group a version 3 phone set survive.
         assertEquals(2L, long("SELECT COUNT(*) FROM sessions WHERE kind = 'ssh'"))
@@ -347,7 +367,7 @@ class MigrationTest {
     private suspend fun checkRows(db: BerthDatabase, from: Int) {
         val hosts = RoomHostRepository(db)
         assertEquals(prodWeb, hosts.get("h1"))
-        assertEquals(bastion, hosts.get("bastion"))
+        assertEquals(bastion.copy(tunnelsOnly = from >= 4), hosts.get("bastion"))
         assertEquals(listOf("bastion", "h1"), hosts.observeAll().first().map { it.id })
 
         val identities = RoomIdentityRepository(db, EncryptedSecretStore(db, crypto), HardwareKeys(RuntimeEnvironment.getApplication()))
@@ -374,9 +394,21 @@ class MigrationTest {
         assertEquals(listOf(renamed, quickSession), records)
         assertTrue(records.all { it.kind == TabKind.Ssh })
         assertEquals(if (from >= 3) "web box" else "deploy@web: ~", records.first().displayTitle)
-        assertFalse(hosts.observeAll().first().any { it.tunnelsOnly }, "no host from an older build opens tunnels only")
+        assertEquals(if (from >= 4) listOf("bastion") else emptyList(), hosts.observeAll().first().filter { it.tunnelsOnly }.map { it.id }, "only a host a version 4 phone marked opens tunnels only")
         assertContentEquals(frame, sessions.loadFrame("s1"))
         assertNull(sessions.loadFrame("s2"))
+
+        // Version 5: the migrated database takes and hands back a host's commands through the repository, empty until then.
+        val history = RoomCommandHistoryRepository(db)
+        assertEquals(emptyList(), history.observeForHost("h1").first())
+        assertEquals(emptyList(), history.observeAll().first())
+        assertTrue(history.record("h1", "ls -la", 100))
+        assertTrue(history.record("bastion", "uptime", 101))
+        assertFalse(history.record("h1", "ls -la", 102), "a repeat of the host's latest is one entry")
+        assertEquals(listOf("ls -la"), history.observeForHost("h1").first().map { it.text })
+        assertEquals(listOf("ls -la", "uptime"), history.observeAll().first().map { it.text })
+        history.clearAll()
+        assertEquals(emptyList(), history.observeAll().first())
 
         val tunnels = RoomTunnelRepository(db)
         assertEquals(listOf(webTunnel), tunnels.observeForHost("h1").first())
@@ -398,6 +430,11 @@ class MigrationTest {
         // The tab settings this build added are not in the older document and read as their defaults.
         assertEquals(TabSwipeGesture.TWO_FINGER, settings.tabSwipeGesture.first())
         assertFalse(settings.ctrlTabKeysReachTerminal.first())
+        // Version 5's Stage documents: no older build wrote a split or moved the divider, so one tab has the Stage at half.
+        assertNull(settings.stageSplit.first())
+        assertEquals(0.5f, settings.paneDividerFraction.first())
+        // Settings › Connection is new with this build too: idle sessions are kept, and neither one-time notice has been shown.
+        assertEquals(ConnectionSettings(), settings.connectionSettings.first())
     }
 
     // ---- SQL helpers -------------------------------------------------------------------------------
@@ -426,6 +463,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 4
+        const val CURRENT_VERSION = 5
     }
 }

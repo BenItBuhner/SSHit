@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -65,6 +66,8 @@ import app.berth.android.ui.rail.MediumRail
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
+import app.berth.android.ui.settings.BackgroundSheet
+import app.berth.android.ui.settings.BatteryOptimization
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
@@ -75,15 +78,18 @@ import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.ShortDeckFit
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.TwoRowDeckFit
+import app.berth.android.ui.tabs.BottomEdge
 import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.LocalBottomEdge
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
-import app.berth.android.ui.tabs.NoticeBar
-import app.berth.android.ui.tabs.ReopenBar
+import app.berth.android.ui.tabs.Notice
+import app.berth.android.ui.tabs.NoticeSlot
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabSheets
 import app.berth.android.ui.tabs.TabStripStyle
 import app.berth.android.ui.tabs.rememberTabUiState
+import app.berth.android.ui.tabs.reopenNotice
 import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
@@ -124,6 +130,12 @@ private val RailWidth = 280.dp
 /** The Stage's gutter on its rail side (spec A, the gap between panels), narrow rail or wide: the terminal's first column is not against the rail's tonal edge. */
 private val RailGutter = 12.dp
 
+/** What Back says, once, the first time it would leave the app with a login up (spec Part B). */
+const val BACKGROUND_NOTICE = "Sessions keep running. Detach all from the notification."
+
+/** The four sources of the shell's notice slot, the keys their notices go up under. */
+private enum class ShellNotice { REOPEN, LINK, BACK, LANDED }
+
 /**
  * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
  * of padding, so the terminal keeps the rows the row would have taken. Only the sizes change; the
@@ -140,8 +152,10 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     // Whether the keyboard's focus is anywhere in this window: the Stage keeps its own while a keyboard
     // is attached, and this tells it a focus moved to the rail from one that was lost (spec A11).
     val windowFocus = remember { WindowFocus() }
+    // What the notice bars and the Stage's bottom chrome hold at the window's bottom edge, so the state pill stands clear of a bar by construction.
+    val bottomEdge = remember { BottomEdge() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus) {
+        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus, LocalBottomEdge provides bottomEdge) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
@@ -209,6 +223,7 @@ private fun Shell(vm: AppViewModel) {
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
             is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
+            is LinkOutcome.Notice -> linkNotice = outcome.text
         }
         vm.clearLinkOutcome()
     }
@@ -224,6 +239,38 @@ private fun Shell(vm: AppViewModel) {
     val rail = layout.rail
     val securitySettings by vm.security.settings.collectAsState()
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
+
+    // Back on the Stage leaves for the launcher with the logins running on in the service (spec
+    // Part B). The first time it would do that with a session or a tunnel up, the line "Sessions
+    // keep running. Detach all from the notification." is shown instead and the leave waits for
+    // the next Back; the line is never shown again. The keyboard's own Back (the Stage's handler,
+    // composed after this one) still comes first, so the order is keyboard, then the line, then out.
+    val connection by vm.connectionSettings.collectAsState()
+    val running by vm.notifier.summary.collectAsState()
+    var backNotice by remember { mutableStateOf(false) }
+    val backNoticeDue = onStage && !drawer.isOpen && !connection.backgroundNoticeShown && (running.active > 0 || running.tunnels > 0)
+    BackHandler(enabled = backNoticeDue && !backNotice) {
+        backNotice = true
+        vm.markBackgroundNoticeShown()
+    }
+    LaunchedEffect(backNotice) {
+        if (!backNotice) return@LaunchedEffect
+        delay(NOTICE_BAR_MS)
+        backNotice = false
+    }
+
+    // The battery-optimisation explainer, once, on its own (vision §4.4): a connection was lost
+    // while the app was away, so on this return Settings › Connection › Background opens over the
+    // Stage, unless the exemption is already granted, in which case there is nothing to explain and
+    // the one showing is spent quietly. Raised or spent, it is marked, and never raises itself again.
+    val context = LocalContext.current
+    val batteryDue by vm.batteryExplainerDue.collectAsState()
+    var batterySheet by remember { mutableStateOf(false) }
+    LaunchedEffect(batteryDue) {
+        if (!batteryDue) return@LaunchedEffect
+        vm.batteryExplainerRaised()
+        if (!BatteryOptimization.isExempt(context)) batterySheet = true
+    }
 
     // What the drawer's rows do, in whichever form the drawer takes (spec C7): a group's tap goes to
     // its last active tab on the Stage, New group opens the editor into the New tab sheet, Groups
@@ -471,21 +518,36 @@ private fun Shell(vm: AppViewModel) {
             },
         )
     }
+    // Everything that shares the Stage's bottom edge, in the one slot (NoticeSlot): of what is up
+    // the notice raised last shows, and the one under it is back when it goes. Reopen, for six
+    // seconds after a tab closes; a link's line, which is the parser's reason alone (`The IPv6
+    // address is missing its closing bracket.`), since the bar has one line and the reason says it
+    // was the link; Back's line, read whole on two; and a dropped file's path that landed while its
+    // terminal was off stage or in the alternate screen, for as long as that terminal is on stage
+    // with it unpasted: the line says it landed, Paste puts it on the shell's line
+    // (AppViewModel.landDroppedPath). Landed is held down while Reopen is up: closing the tab on
+    // stage moves the stage to its neighbour, and if that one holds paths its Landed rises with
+    // Reopen, in the same frame or a dispatch after, and would sit over the six-second offer for as
+    // long as the paths are held. So Reopen shows, and Landed is there when Reopen goes.
+    val reopen = reopenNotice(tabUi, vm)
+    val heldPaths by vm.heldPaths.collectAsState()
+    val landed = active?.takeIf { onStage }?.let { tab ->
+        heldPaths[tab.id]?.let { held ->
+            Notice(AppViewModel.landedNotice(held.count), if (held.count == 1) AppViewModel.PASTE_PATH else AppViewModel.PASTE_PATHS) { vm.pasteHeld(tab.id) }
+        }
+    }
     Box(Modifier.fillMaxSize()) {
-        ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
-        // The link notice is kept through the bar's exit, so the text does not blank as it slides away.
-        // It is the parser's reason alone (`The IPv6 address is missing its closing bracket.`): the
-        // bar has one line, and the reason says it was the link.
-        val shownNotice = remember { mutableStateOf(linkNotice) }
-        if (linkNotice != null) shownNotice.value = linkNotice
-        NoticeBar(
-            visible = linkNotice != null,
-            text = shownNotice.value ?: "",
-            action = "OK",
-            onAction = { linkNotice = null },
+        NoticeSlot(
+            notices = mapOf(
+                ShellNotice.REOPEN to reopen,
+                ShellNotice.LINK to linkNotice?.let { reason -> Notice(reason, "OK") { linkNotice = null } },
+                ShellNotice.BACK to if (backNotice) Notice(BACKGROUND_NOTICE, "OK", maxLines = 2) { backNotice = false } else null,
+                ShellNotice.LANDED to landed?.takeIf { reopen == null },
+            ),
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
+    if (batterySheet) BackgroundSheet(vm, onDismiss = { batterySheet = false })
     // On the launch after a crash the restore reconnects while the crash sheet is up, and a password,
     // passphrase or unlock prompt would rise under it: two sheets, two scrims. The transport's prompts
     // wait (they block on PromptCenter either way) until the crash sheet is closed, so there is one sheet.

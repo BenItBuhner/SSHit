@@ -5,6 +5,7 @@ import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
 import app.berth.sftp.SftpFileType
 import app.berth.sftp.SftpPaths
+import app.berth.sftp.SftpPermissions
 import app.berth.sftp.TextRead
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -22,6 +23,8 @@ class FakeNode(
     var permissions: Int = 0b110_100_100,
     var content: ByteArray = ByteArray(0),
     val linkTarget: SftpFileType? = null,
+    /** The owner the server reports; the login's, [FakeSftpFileSystem.LOGIN_UID], unless a test says another user made it. */
+    var uid: Int = FakeSftpFileSystem.LOGIN_UID,
 )
 
 /**
@@ -44,9 +47,9 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         nodes[SftpPaths.ROOT] = FakeNode(SftpFileType.DIRECTORY, permissions = 0b111_101_101)
     }
 
-    fun dir(path: String, modifiedAt: Long, permissions: Int = 0b111_101_101): FakeSftpFileSystem {
+    fun dir(path: String, modifiedAt: Long, permissions: Int = 0b111_101_101, uid: Int = LOGIN_UID): FakeSftpFileSystem {
         ensureParents(path)
-        nodes[path] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = modifiedAt, permissions = permissions)
+        nodes[path] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = modifiedAt, permissions = permissions, uid = uid)
         return this
     }
 
@@ -94,8 +97,8 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         size = node.size,
         modifiedAt = node.modifiedAt,
         permissions = node.permissions,
-        uid = 1000,
-        gid = 1000,
+        uid = node.uid,
+        gid = LOGIN_UID,
         linkTarget = node.linkTarget,
     )
 
@@ -120,11 +123,14 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         return entry(n, node(n))
     }
 
-    override suspend fun mkdir(path: String) {
+    // The tree keeps a link as a link with its target's type beside it, so both reads are the one entry.
+    override suspend fun lstat(path: String): SftpEntry = stat(path)
+
+    override suspend fun mkdir(path: String, permissions: Int) {
         val n = SftpPaths.normalize(path)
         node(SftpPaths.parent(n))
         if (n in nodes) throw SftpError.AlreadyExists(n)
-        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = System.currentTimeMillis(), permissions = 0b111_101_101)
+        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF)
     }
 
     override suspend fun rename(from: String, to: String) {
@@ -164,11 +170,13 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         onProgress(sent, total)
     }
 
-    override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (bytes: Long, total: Long) -> Unit) {
+    override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (bytes: Long, total: Long) -> Unit) {
         val n = SftpPaths.normalize(path)
         node(SftpPaths.parent(n))
+        // A private file is made new, as the client's exclusive create is: anything at the name, a link included, is a refusal.
+        if (permissions != SftpPermissions.FILE && n in nodes) throw SftpError.AlreadyExists(n)
         val bytes = source.readBytes()
-        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = System.currentTimeMillis(), content = bytes)
+        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF, content = bytes)
         onProgress(bytes.size.toLong(), bytes.size.toLong())
     }
 
@@ -186,6 +194,9 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
     }
 
     companion object {
+        /** The uid the fake reports for the login, and for every entry a test does not give another owner. */
+        const val LOGIN_UID = 1000
+
         /** A home folder as a developer's box has it, with times spread over today, this year and before. */
         fun demoTree(now: Long): FakeSftpFileSystem {
             val h = TimeUnit.HOURS.toMillis(1)

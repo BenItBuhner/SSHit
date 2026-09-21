@@ -16,6 +16,7 @@ import app.berth.android.security.AppLockController
 import app.berth.android.security.LockState
 import app.berth.android.security.RemoteClipboardGate
 import app.berth.domain.model.AltKeyMode
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
@@ -26,6 +27,7 @@ import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabOrder
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.KnownHostRepository
 import app.berth.domain.repository.SessionRepository
@@ -42,6 +44,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
@@ -57,6 +60,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -106,6 +110,7 @@ class SessionManager @Inject constructor(
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
     private val reports: CrashReporter,
+    private val commandHistory: CommandHistoryRepository,
 ) : SessionCommands {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -239,6 +244,15 @@ class SessionManager @Inject constructor(
     /** A tab a notification put on stage; the shell pops back to the Stage so it is actually seen. */
     val stageRequests: SharedFlow<String> = _stageRequests.asSharedFlow()
 
+    private val _closedTabs = MutableSharedFlow<String>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The id of each tab as it closes ([close]), once [get] and [tab] no longer answer to it: for
+     * what is kept by tab id outside the manager and goes with the tab. An event, not a state, so
+     * a tab opened and closed between two looks at [tabs] is not missed the way a conflated list is.
+     */
+    val closedTabs: SharedFlow<String> = _closedTabs.asSharedFlow()
+
     /** A notification's tap that arrived before the strip was restored; honoured the moment it is. */
     private var pendingActivation: Activation? = null
 
@@ -269,8 +283,48 @@ class SessionManager @Inject constructor(
     private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
     private val hardwareKeyboard = settings.hardwareKeyboardSettings.stateIn(scope, SharingStarted.Eagerly, HardwareKeyboardSettings())
 
+    /** Settings › Connection (spec C20): the idle-detach policy and whether the battery explainer has had its one showing. */
+    private val connectionSettings: StateFlow<ConnectionSettings> = settings.connectionSettings.stateIn(scope, SharingStarted.Eagerly, ConnectionSettings())
+
+    /** Settings › Connection › Detach idle sessions, as the span in milliseconds or null for Never; one read for every session. */
+    private val idleDetachAfter: StateFlow<Long?> = connectionSettings.map { it.idleDetach.millis }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    private val _batteryExplainerDue = MutableStateFlow(false)
+
+    /**
+     * Whether the battery-optimisation explainer is owed its one showing (vision §4.4): a live
+     * connection was lost while the app was away, for a reason a network change does not account
+     * for, and the explainer has never been raised. The shell raises Settings › Connection ›
+     * Background over whatever is up on the next return and calls [batteryExplainerRaised]; the
+     * setting it marks then keeps this from ever going true again.
+     */
+    val batteryExplainerDue: StateFlow<Boolean> = _batteryExplainerDue.asStateFlow()
+
+    fun batteryExplainerRaised() {
+        _batteryExplainerDue.value = false
+    }
+
+    /**
+     * The network's changes once for every session rather than a callback each (the system caps
+     * an app's callbacks), registered while a tab listens and let go when the last one closes.
+     */
+    private val networkChanges: SharedFlow<Unit> = network.changes.shareIn(scope, SharingStarted.WhileSubscribed())
+
+    /**
+     * History writes in the order the sessions made them (spec C16): one consumer, so two commands
+     * a moment apart land as they ran and a repeat of the host's latest is seen as one, which two
+     * coroutines racing to the table could not promise.
+     */
+    private val historyWrites = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
     private val environment = object : SessionEnvironment {
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
+        override fun recordCommand(hostId: String, text: String, at: Long) {
+            historyWrites.trySend { commandHistory.record(hostId, text, at) }
+        }
+        override fun importCommands(hostId: String, entries: List<Pair<String, Long>>) {
+            historyWrites.trySend { commandHistory.importEntries(hostId, entries) }
+        }
         override fun altKeyFor(hostId: String?): AltKeyMode = hardwareKeyboard.value.altKeyFor(hostId)
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
@@ -278,6 +332,8 @@ class SessionManager @Inject constructor(
             KnownHostsPolicy(host, knownHosts, prompts, via = via, linkFingerprint = linkFingerprint)
         override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
         override val networkAvailable: Flow<Unit> = network.available
+        override val networkChanges: Flow<Unit> = this@SessionManager.networkChanges
+        override val idleDetachAfter: Flow<Long?> = this@SessionManager.idleDetachAfter
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
         override suspend fun connectCommands(host: Host, workspaceId: String): List<String> =
@@ -339,7 +395,16 @@ class SessionManager @Inject constructor(
 
     init {
         reports.addCrashHook { saveAllFramesNow() }
+        scope.launch { for (write in historyWrites) runCatching { write() }.onFailure { BerthLog.w(LOG_TAG, "command history write failed", it) } }
         scope.launch { restore() }
+        scope.launch {
+            // The split beside the last active tab (spec C23 with C3's Persistence), written as it
+            // changes, once the strip is restored: before that the Stage is empty, and a write would
+            // erase the split the last process left for this one to rebuild. The first value written
+            // is the restored split itself, or null for a saved companion no open tab answered to.
+            restored.first { it }
+            split.collect { settings.setStageSplit(it?.stored) }
+        }
         scope.launch {
             // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its
             // ride's state and never keeps the service up on its own. The notification says what every
@@ -533,8 +598,19 @@ class SessionManager @Inject constructor(
     private fun track(session: TerminalSession) {
         trackers.remove(session.id)?.cancel()
         trackers[session.id] = scope.launch {
-            session.problems.collect { problem ->
-                if (!onScreen()) notifier.postProblem(session.record.value, problem)
+            launch {
+                session.problems.collect { problem ->
+                    if (!onScreen()) notifier.postProblem(session.record.value, problem)
+                }
+            }
+            launch {
+                // The first connection lost with the app away, unless the network moved under it
+                // (the probe's own reason), is the cue for the battery explainer, once (vision §4.4).
+                session.drops.collect { reason ->
+                    if (!_foreground.value && reason != TerminalSession.PROBE_LOST_REASON && !connectionSettings.value.batteryExplained) {
+                        _batteryExplainerDue.value = true
+                    }
+                }
             }
         }
     }
@@ -633,7 +709,14 @@ class SessionManager @Inject constructor(
         // tabs" over a strip that has them (spec C3, Launch and Persistence): the current group's first
         // tab, else the strip's first.
         val last = persisted ?: finalRecords.firstOrNull { it.workspaceId == currentGroup }?.id ?: finalRecords.firstOrNull()?.id
-        moveStage(last, seen = false)
+        // The split comes back with the active tab (spec C23 with C3's Persistence), when the companion
+        // it names is still open and is not the active tab itself (a document from before the active
+        // id moved under it); otherwise the Stage opens on the one tab, and the collector in init
+        // writes the split as it now stands, clearing what no tab answers to.
+        val savedSplit = settings.stageSplit.first()
+            ?.takeIf { last != null && it.companionId != last && (map.containsKey(it.companionId) || files.containsKey(it.companionId)) }
+            ?.let { Split.of(it) }
+        restoreStage(last, savedSplit)
         _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId } ?: currentGroup
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
@@ -999,6 +1082,19 @@ class SessionManager @Inject constructor(
         }
     }
 
+    /**
+     * The Stage as the last process left it ([restore]): the active tab with the split it had, in
+     * the one write [moveStage] makes, so the panes flow never sees the active tab without its
+     * companion or the reverse. Nothing is marked seen: the tabs are back detached, and what they
+     * raised before the process died is theirs to raise again.
+     */
+    private fun restoreStage(id: String?, split: Split?) {
+        synchronized(stageLock) {
+            _stage.value = Stage(id, split)
+            refreshStage()
+        }
+    }
+
     // ---- panes (spec C23) --------------------------------------------------------------------------
 
     /**
@@ -1215,6 +1311,7 @@ class SessionManager @Inject constructor(
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
+        _closedTabs.tryEmit(id)
         trackers.remove(id)?.cancel()
         savedVersions.remove(id)
         notifier.cancelFor(id)

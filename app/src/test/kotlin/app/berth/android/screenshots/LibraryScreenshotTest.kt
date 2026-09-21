@@ -533,6 +533,12 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     @Test
     fun `quick connect saves the address as a host`() {
         seedLibrary()
+        // The login was quick-connected before: its commands are kept under the login (spec C16) and move to the host it is saved as.
+        val quickKey = Host.quickCommandHistoryKey("deploy", "203.0.113.99", 2200)
+        runBlocking {
+            graph.commandHistory.record(quickKey, "uptime", now - TimeUnit.HOURS.toMillis(2))
+            graph.commandHistory.record(quickKey, "df -h", now - TimeUnit.HOURS.toMillis(1))
+        }
         val edited = ArrayList<String>()
         themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = { edited += it }, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
         waitForText("homelab")
@@ -556,6 +562,11 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertEquals(AuthMethod.AskEachTime, saved.auth)
         assertEquals(listOf(saved.id), edited)
         assertTrue("nothing connected", graph.sessions.sessions.value.isEmpty())
+        // The saved host's id is its history key, and the login's two commands are under it now, oldest first, none left under the login.
+        assertEquals(saved.id, saved.commandHistoryKey)
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.any { it.hostId == saved.id } }
+        assertEquals(listOf("uptime", "df -h"), graph.commandHistory.items.value.filter { it.hostId == saved.id }.map { it.text })
+        assertTrue(graph.commandHistory.items.value.none { it.hostId == quickKey })
         waitForNoText("Quick connect")
 
         // A spec that does not parse says why under the field and saves nothing.

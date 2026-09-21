@@ -379,6 +379,46 @@ class SshConnection(
         c.newSFTPClient()
     }
 
+    /**
+     * Asks the server for a reply over the live transport and waits up to [timeoutMillis] for it:
+     * a `keepalive@openssh.com` global request with want-reply set, the packet OpenSSH's own
+     * `ServerAliveInterval` sends. OpenSSH answers it with a failure and other servers with either,
+     * and any answer proves the socket still carries both ways. Returns whether the server
+     * answered in time; false with nothing to ask. Decides nothing itself: the caller knows what
+     * else came over the socket while it waited, and drops the connection with [dropAsLost] if
+     * nothing did (vision §4.4).
+     */
+    suspend fun probe(timeoutMillis: Long): Boolean = withContext(Dispatchers.IO) {
+        val c = client?.takeIf { it.isConnected } ?: return@withContext false
+        try {
+            val promise = c.connection.sendGlobalRequest(PROBE_REQUEST, true, ByteArray(0))
+            try {
+                promise.retrieve(timeoutMillis, TimeUnit.MILLISECONDS)
+                true
+            } catch (_: ConnectionException) {
+                // A refusal (REQUEST_FAILURE) lands as an error on the promise, and so does a transport
+                // that dies while it waits; a timeout leaves it unfulfilled. An answered promise over a
+                // transport still up is the server's word; the dying transport tells its readers itself.
+                promise.isFulfilled && c.isConnected
+            }
+        } catch (_: TransportException) {
+            false
+        } catch (_: IOException) {
+            false
+        }
+    }
+
+    /**
+     * Holds the connection lost, [reason] said: the transport is disconnected as
+     * `CONNECTION_LOST`, which reaches [onDisconnected] and every open channel the way any drop
+     * does, so the reconnect loop starts now rather than once the keepalive count runs out. For a
+     * [probe] the network change left unanswered; nothing to do on a connection already gone.
+     */
+    fun dropAsLost(reason: String) {
+        val c = client?.takeIf { it.isConnected } ?: return
+        runCatching { c.transport.disconnect(DisconnectReason.CONNECTION_LOST, reason) }
+    }
+
     /** Runs [command] without a PTY and returns its stdout; for "install on host" and probes. */
     suspend fun exec(command: String, timeoutMillis: Long = 30_000): String = withContext(Dispatchers.IO) {
         val c = client ?: throw SshError.Disconnected("not connected")
@@ -468,6 +508,11 @@ class SshConnection(
         connecting = null
         hops.asReversed().forEach { runCatching { it.disconnect() } }
         hops.clear()
+    }
+
+    companion object {
+        /** The global request [probe] sends: what OpenSSH's client sends for `ServerAliveInterval`, answered by every server. */
+        const val PROBE_REQUEST = "keepalive@openssh.com"
     }
 }
 

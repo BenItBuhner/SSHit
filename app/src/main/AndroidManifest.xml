@@ -39,6 +39,21 @@
                 <data android:scheme="ssh" />
                 <data android:scheme="sftp" />
             </intent-filter>
+            <!-- Share to Berth (spec C24): a file, or several, dropped into the active session's /tmp
+                 through the transfer queue, each path pasted as its copy lands; shared text with no
+                 file behind it is pasted as typed. Read in onResume like a link, acted on once the
+                 lock allows (IntentInbox, AppViewModel.arrive). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <!-- The launcher's shortcuts (spec Part B, App shortcuts): Quick connect is static, here; the
+                 four recent hosts are published by LauncherShortcuts as the host list changes. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- The lock screen's window, over MainActivity in the same task while the app is locked: a

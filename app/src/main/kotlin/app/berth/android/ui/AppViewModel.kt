@@ -4,7 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
-import app.berth.android.links.LinkInbox
+import app.berth.android.links.Arrival
+import app.berth.android.links.IntentInbox
 import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
@@ -18,10 +19,17 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
+import android.net.Uri
 import android.os.Build
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.BerthBundle
+import app.berth.domain.model.BundleImportOptions
+import app.berth.domain.model.BundleImportPlan
+import app.berth.domain.model.BundleImportReport
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
@@ -29,13 +37,17 @@ import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
+import app.berth.domain.model.IdleDetach
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.SessionRecord
+import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
@@ -46,6 +58,7 @@ import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -99,18 +112,22 @@ class AppViewModel @Inject constructor(
     val files: FilesCenter,
     /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
     val security: SecurityCenter,
-    /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
-    private val links: LinkInbox,
+    /** What other apps and the launcher hand the activity (links, shortcuts, shares); read here once the lock allows. */
+    private val inbox: IntentInbox,
     /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
     val reports: CrashReporter,
+    private val commandHistory: CommandHistoryRepository,
+    /** The `.berth` bundle (spec C20, Data): Settings › Data's export and import talk to this through [exportBundle], [openBundle] and [importBundle]. */
+    private val bundles: BerthBundles,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
-            links.links.collect { raw ->
-                // Under the lock the user faces the lock screen; a link then would open a login behind
-                // it. It waits for the unlock, as a notification's tap and the key prompts do.
+            inbox.arrivals.collect { arrival ->
+                // Under the lock the user faces the lock screen; a link or a shortcut then would open
+                // a login behind it, and a share would paste into one. Each waits for the unlock, as
+                // a notification's tap and the key prompts do.
                 security.lock.awaitUnlocked()
-                openLink(raw)
+                arrive(arrival)
             }
         }
     }
@@ -151,6 +168,9 @@ class AppViewModel @Inject constructor(
     /** Two tabs side by side (spec C23), or null while one tab has the Stage; only a width that fits them lays them out. */
     val panes: StateFlow<Panes?> = sessions.panes
 
+    /** Where the divider between the panes rests, as the left pane's share of the width; kept across splits and processes. */
+    val paneDividerFraction: StateFlow<Float> = settings.paneDividerFraction.stateIn(viewModelScope, SharingStarted.Eagerly, 0.5f)
+
     /** Every tab in strip order, terminals and Files tabs alike. */
     val tabs: StateFlow<List<ManagedTab>> = sessions.tabs
 
@@ -187,6 +207,24 @@ class AppViewModel @Inject constructor(
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val commandHistoryEnabled: StateFlow<Boolean> = settings.commandHistoryEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** Settings › Connection (spec C20): the idle-detach policy and the two one-time notices about the background. */
+    val connectionSettings: StateFlow<ConnectionSettings> = settings.connectionSettings.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionSettings())
+
+    /** The commands the host under [key] ran (spec C16), oldest first; [key] is a [Host.commandHistoryKey]. */
+    fun commandHistoryOf(key: String): Flow<List<HostCommand>> = commandHistory.observeForHost(key)
+
+    /** The newest commands across every host, oldest first, for the History sheet's All hosts view. */
+    val allCommandHistory: Flow<List<HostCommand>> = commandHistory.observeAll()
+
+    fun deleteCommand(id: Long) {
+        viewModelScope.launch { commandHistory.delete(id) }
+    }
+
+    /** Clears one host's history, or every host's with [key] null (Settings › Data). */
+    fun clearCommandHistory(key: String?) {
+        viewModelScope.launch { if (key == null) commandHistory.clearAll() else commandHistory.clear(key) }
+    }
 
     /** Alt key behaviour, its per-host overrides and the compact Deck (spec C22); Settings › Hardware keyboard and the host editor write it. */
     val hardwareKeyboard: StateFlow<HardwareKeyboardSettings> =
@@ -232,15 +270,139 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { sessions.openTunnels(host, workspaceId) }
     }
 
-    // ---- links -----------------------------------------------------------------------------------
+    // ---- links, shortcuts and shares -------------------------------------------------------------
 
     private val _linkOutcome = MutableStateFlow<LinkOutcome?>(null)
 
-    /** What the last link came to, for the shell to act on and then [clearLinkOutcome]. */
+    /** What the last arrival (a link, a shortcut, a share) came to, for the shell to act on and then [clearLinkOutcome]. */
     val linkOutcome: StateFlow<LinkOutcome?> = _linkOutcome.asStateFlow()
 
     fun clearLinkOutcome() {
         _linkOutcome.value = null
+    }
+
+    /** One arrival from the activity's intent, the lock already past. */
+    suspend fun arrive(arrival: Arrival) {
+        when (arrival) {
+            is Arrival.Link -> openLink(arrival.raw)
+            is Arrival.OpenHost -> openHostShortcut(arrival.hostId)
+            Arrival.QuickConnect -> _linkOutcome.value = LinkOutcome.QuickConnect("")
+            is Arrival.Files -> dropFiles(arrival.uris)
+            is Arrival.Text -> dropText(arrival.text)
+        }
+    }
+
+    /**
+     * A launcher shortcut's host (spec Part B, App shortcuts): connects as the host list's Connect
+     * would and lands on the Stage. The launcher may hold a shortcut for a host deleted since the
+     * four were last published; that one ends in a notice, not a login to nowhere.
+     */
+    private suspend fun openHostShortcut(hostId: String) {
+        val host = hostRepository.get(hostId)
+        if (host == null) {
+            _linkOutcome.value = LinkOutcome.Notice("That host is no longer saved.")
+            return
+        }
+        sessions.connect(host)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    /**
+     * The share sheet's file drop (spec C24): the files land in `/tmp` on the host of the terminal on
+     * stage, through the transfer queue, and each path comes back to [landDroppedPath] as its copy
+     * lands (`TransferManager.dropIntoTmp`). The tab on stage has to be a live terminal: a frozen
+     * frame, a Files or Tunnels tab, or an empty Stage has nowhere to put the file and no prompt to
+     * paste into, so the drop ends in a notice and the share can be made again once one is up.
+     */
+    private fun dropFiles(uris: List<Uri>) {
+        val session = liveSessionOnStage() ?: return
+        files.transfers.dropIntoTmp(session, uris, ::landDroppedPath)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    private val _heldPaths = MutableStateFlow<Map<String, HeldPaths>>(emptyMap())
+
+    init {
+        // Paths held for a tab go with the tab: a closed terminal has no line for them and no notice to offer.
+        // On the close itself rather than on the strip's list, which conflates: a tab opened and closed
+        // between two of the list's deliveries is never seen here, and its paths would be held for good.
+        // Every entry whose tab is gone goes, not the one closed alone, so a burst of closes past the
+        // buffer still leaves nothing behind.
+        viewModelScope.launch {
+            sessions.closedTabs.collect { forgetHeldPathsOfClosedTabs() }
+        }
+    }
+
+    private fun forgetHeldPathsOfClosedTabs() {
+        _heldPaths.update { held -> if (held.keys.all { sessions.get(it) != null }) held else held.filterKeys { sessions.get(it) != null } }
+    }
+
+    /**
+     * A drop's paths held back from the terminal, by the session's id ([landDroppedPath]): the shell
+     * shows a session's entry as a notice with Paste while that session is on stage, and [pasteHeld]
+     * sends it. An entry goes when its paths are pasted or its tab closes.
+     */
+    val heldPaths: StateFlow<Map<String, HeldPaths>> = _heldPaths.asStateFlow()
+
+    /**
+     * A dropped file's path as its copy lands, in the shape the terminal should get it (quoted, a
+     * space ahead when it follows another). The copy took time, and [session], the terminal that
+     * took the drop, may not be the one to paste into any more: another tab may be on stage, or
+     * `vim` may be up (the alternate screen), where a pasted path is keystrokes. So the path is
+     * pasted only while [session] is the live terminal on stage, out of the alternate screen, with
+     * nothing of an earlier landing held for it; otherwise it is held for the notice's Paste
+     * ([heldPaths], [pasteHeld]), every later path joining what is held so one tap pastes them all,
+     * in the order they landed. Called off the main thread, from the transfer queue's scope.
+     */
+    internal fun landDroppedPath(session: TerminalSession, text: String) {
+        val landsOnStage = session.id !in _heldPaths.value &&
+            sessions.activeSession.value === session && session.state == SessionState.LIVE && !session.emulator.isAlternateScreen
+        if (landsOnStage) {
+            session.paste(text)
+            return
+        }
+        _heldPaths.update { held -> held + (session.id to (held[session.id]?.plus(text) ?: HeldPaths(text.trimStart(), 1))) }
+        // The tab may have closed as the path landed: its close either came after this write, and
+        // takes the entry, or before it, and this look after the write finds the tab gone.
+        if (sessions.get(session.id) == null) forgetHeldPathsOfClosedTabs()
+    }
+
+    /**
+     * The notice's Paste: the paths held for [sessionId] go to its terminal as one paste, if it is
+     * still live to take them; either way nothing is held for it after.
+     */
+    fun pasteHeld(sessionId: String) {
+        val held = _heldPaths.value[sessionId] ?: return
+        _heldPaths.update { it - sessionId }
+        sessions.get(sessionId)?.takeIf { it.state == SessionState.LIVE }?.paste(held.text)
+    }
+
+    /**
+     * Text shared with no file behind it: handed to the Stage as a paste into the live terminal on
+     * stage, through the same gate as one from the clipboard (spec C18, `StageTools.paste`), so a
+     * shared note of several lines or with control characters meets the preview and pastes nothing
+     * until it is confirmed. The Stage takes it from [sharedPaste] once it is composed for the session.
+     */
+    private fun dropText(text: String) {
+        val session = liveSessionOnStage() ?: return
+        _sharedPaste.value = SharedPaste(session.id, text)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    private val _sharedPaste = MutableStateFlow<SharedPaste?>(null)
+
+    /** A share's text waiting for the Stage of the session it is for; the Stage pastes it through its gate and clears it. */
+    val sharedPaste: StateFlow<SharedPaste?> = _sharedPaste.asStateFlow()
+
+    /** The Stage has taken [paste] to its gate; nothing else will. */
+    fun sharedPasteTaken(paste: SharedPaste) {
+        _sharedPaste.compareAndSet(paste, null)
+    }
+
+    private fun liveSessionOnStage(): TerminalSession? {
+        val session = sessions.activeSession.value?.takeIf { it.state == SessionState.LIVE }
+        if (session == null) _linkOutcome.value = LinkOutcome.Notice(NO_LIVE_SESSION_FOR_SHARE)
+        return session
     }
 
     /**
@@ -350,20 +512,26 @@ class AppViewModel @Inject constructor(
      * Quick connect's Save as host (spec C11): the spec read as [quickConnect] reads it, saved as a
      * host named after its address under an id of its own, with the identity the sheet picked;
      * [onSaved] gets the saved host, for the editor to open on so it can be named. Null once saved;
-     * otherwise the sentence for the field's helper line, as [quickConnect] would give it.
+     * otherwise the sentence for the field's helper line, as [quickConnect] would give it. The
+     * commands the login ran as a quick connect (spec C16, kept under [Host.quickCommandHistoryKey])
+     * go on under the saved host, so its History sheet shows what was run before it had a name.
      */
     fun saveQuickConnectAsHost(spec: String, identityId: String?, onSaved: (Host) -> Unit): String? {
         val (link, problem) = quickLink(spec)
         if (link == null) return problem
-        viewModelScope.launch { onSaved(saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)) }
+        viewModelScope.launch {
+            val saved = saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)
+            commandHistory.rekey(Host.quickCommandHistoryKey(saved.user, saved.address, saved.port), saved.id)
+            onSaved(saved)
+        }
         return null
     }
 
     /**
      * The Session sheet's Save as host (spec C11) for a tab opened by Quick connect: the tab's host,
      * as the login was made with it, saved under the id the tab already carries, so the tab is that
-     * host's from here on (its Host button, its reconnects, its place in the library). [onSaved] gets
-     * the host, for the editor to open on.
+     * host's from here on (its Host button, its reconnects, its place in the library, and its
+     * history, whose key the kept id keeps). [onSaved] gets the host, for the editor to open on.
      */
     fun saveSnapshotAsHost(host: Host, onSaved: (Host) -> Unit = {}) {
         viewModelScope.launch { onSaved(saveHostNow(host.copy(createdAt = System.currentTimeMillis()), null)) }
@@ -431,6 +599,11 @@ class AppViewModel @Inject constructor(
 
     /** Told by the Stage whether it is laying both panes out, so the companion counts as in view only when it is. */
     fun setPanesShown(shown: Boolean) = sessions.setPanesShown(shown)
+
+    /** The divider came to rest (a drag ended, a keyboard step): where it rests is where the panes come back. */
+    fun setPaneDividerFraction(fraction: Float) {
+        viewModelScope.launch { settings.setPaneDividerFraction(fraction) }
+    }
 
     // ---- files tabs ------------------------------------------------------------------------------
 
@@ -519,6 +692,29 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { settings.setCommandHistoryEnabled(enabled) }
     }
 
+    /** Settings › Connection › Detach idle sessions (spec C20, vision §4.4). */
+    fun setIdleDetach(policy: IdleDetach) {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(idleDetach = policy) } }
+    }
+
+    /**
+     * The explainer is owed its one showing (vision §4.4): a connection was lost while the app was
+     * away and it has never been raised. The shell raises it on the return and says so with
+     * [batteryExplainerRaised]. Opening it from Settings › Connection › Background counts too.
+     */
+    val batteryExplainerDue: StateFlow<Boolean> = sessions.batteryExplainerDue
+
+    /** The battery-optimisation explainer was raised, on its own or from Settings; it never raises itself again (vision §4.4). */
+    fun batteryExplainerRaised() {
+        sessions.batteryExplainerRaised()
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(batteryExplained = true) } }
+    }
+
+    /** Back has said once that sessions keep running in the background (spec Part B); it never says it again. */
+    fun markBackgroundNoticeShown() {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(backgroundNoticeShown = true) } }
+    }
+
     // ---- hosts --------------------------------------------------------------------------------------
 
     suspend fun host(id: String): Host? = hostRepository.get(id)
@@ -605,7 +801,7 @@ class AppViewModel @Inject constructor(
      * A pasted or picked `known_hosts` read for import (spec A16): every line [KnownHostsFile]
      * reads, hashed names tried against the saved hosts' and the known hosts' addresses. Each entry
      * comes with where it stands against what Berth already trusts for its address
-     * ([KnownHostsCandidate.Standing]), which is the decision the live policy makes when a server
+     * ([KnownHostStanding]), which is the decision the live policy makes when a server
      * presents a key ([app.berth.android.session.KnownHostsPolicy]): the very key is already
      * trusted; a different key of a type already trusted is the changed-key case, which the sheet
      * starts unticked and takes as Replace; and an endpoint with a pinned key takes no key it does
@@ -639,13 +835,13 @@ class AppViewModel @Inject constructor(
         for (entry in entries) {
             val here = knownHostRepository.observeAll().first().forEndpoint(entry.host, entry.port)
             val host = when (val standing = standingOf(entry, here)) {
-                KnownHostsCandidate.Standing.EXISTING, is KnownHostsCandidate.Standing.Pinned -> continue
-                is KnownHostsCandidate.Standing.Conflicting -> {
+                KnownHostStanding.EXISTING, is KnownHostStanding.Pinned -> continue
+                is KnownHostStanding.Conflicting -> {
                     knownHostRepository.delete(standing.saved.id)
                     replaced++
                     standing.saved.host
                 }
-                KnownHostsCandidate.Standing.NEW -> {
+                KnownHostStanding.NEW -> {
                     added++
                     entry.host
                 }
@@ -675,15 +871,12 @@ class AppViewModel @Inject constructor(
     private fun List<KnownHostKey>.forEndpoint(host: String, port: Int): List<KnownHostKey> =
         filter { it.port == port && it.host.equals(host, ignoreCase = true) }
 
-    /** Where [entry] stands against the keys Berth holds for its endpoint ([here]), as the live policy would judge the same key from the server. */
-    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostsCandidate.Standing {
-        if (here.any { it.publicKeyBase64 == entry.publicKeyBase64 }) return KnownHostsCandidate.Standing.EXISTING
-        val pinned = here.firstOrNull { it.pinned && it.keyType == entry.keyType } ?: here.firstOrNull { it.pinned }
-        if (pinned != null) return KnownHostsCandidate.Standing.Pinned(pinned)
-        val sameType = here.firstOrNull { it.keyType == entry.keyType }
-        if (sameType != null) return KnownHostsCandidate.Standing.Conflicting(sameType)
-        return KnownHostsCandidate.Standing.NEW
-    }
+    /**
+     * Where [entry] stands against the keys Berth holds for its endpoint ([here]): the one rule the
+     * live policy, this import and the bundle import share ([KnownHostStanding.of]).
+     */
+    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostStanding =
+        KnownHostStanding.of(entry.keyType, entry.publicKeyBase64, here)
 
     /**
      * Share as `ssh://` link (spec C9): `ssh://user@address[:port]#name`, the form the spec's deep
@@ -927,6 +1120,24 @@ class AppViewModel @Inject constructor(
         KeyImportResult.Done(identity)
     }
 
+    // ---- the .berth bundle (spec C20, Data) ----------------------------------------------------------------
+
+    /** Everything the bundle covers, sealed under [passphrase]; a second or two of key derivation, off the main thread. */
+    suspend fun exportBundle(passphrase: CharArray, appVersion: String): ByteArray = withContext(Dispatchers.Default) {
+        bundles.export(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
+    }
+
+    /** The document [blob] seals, read with [passphrase]; throws [app.berth.data.bundle.BundleException] or [app.berth.domain.model.BundleFormatException]. */
+    suspend fun openBundle(blob: ByteArray, passphrase: CharArray): BerthBundle = withContext(Dispatchers.Default) {
+        bundles.open(blob, passphrase)
+    }
+
+    /** What importing [bundle] would do here beyond writing its records, for the sheet to say before it does. */
+    suspend fun planBundle(bundle: BerthBundle): BundleImportPlan = bundles.plan(bundle)
+
+    /** Writes [bundle] into the library, the Deck and the interface theme as [options] say, and says what it did. */
+    suspend fun importBundle(bundle: BerthBundle, options: BundleImportOptions = BundleImportOptions()): BundleImportReport = bundles.apply(bundle, options)
+
     // ---- settings -------------------------------------------------------------------------------------
 
     fun setFontSize(sizeSp: Int) {
@@ -1101,6 +1312,20 @@ class AppViewModel @Inject constructor(
         const val QUICK_CONNECT_IS_A_SHELL = "Quick connect takes user@host:port alone; save a host to carry forwards, a folder or a name."
 
         /**
+         * The notice when a share arrives with no live terminal on stage to drop it into (spec C24):
+         * one sentence short enough for the notice bar's one line at the interface's font cap.
+         */
+        const val NO_LIVE_SESSION_FOR_SHARE = "Nothing live on stage to share into."
+
+        /** The notice for a dropped file whose path was held rather than pasted ([heldPaths]), and its one action. */
+        const val LANDED_IN_TMP = "Landed in /tmp"
+        const val PASTE_PATH = "Paste path"
+        const val PASTE_PATHS = "Paste paths"
+
+        /** The held notice's line: one path landed, or [count] files did. */
+        fun landedNotice(count: Int): String = if (count == 1) LANDED_IN_TMP else "$count files landed in /tmp"
+
+        /**
          * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
          * not a plain address. [SshLink.parse] reads it, the same parser an `ssh://` link goes
          * through, so the field and a link agree on every form; a user left out is
@@ -1115,29 +1340,24 @@ class AppViewModel @Inject constructor(
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
 
-/** One `known_hosts` entry as the import sheet lists it; [existing] when Berth already trusts this key for this address. */
-data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: Standing) {
+/**
+ * One `known_hosts` entry as the import sheet lists it, with where it stands against what Berth
+ * holds for its endpoint ([KnownHostStanding]: the live policy's three answers plus the plain new key).
+ */
+data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: KnownHostStanding) {
     val key: String get() = "${entry.host}:${entry.port}:${entry.publicKeyBase64}"
 
     /** The very key is already trusted for the address: nothing to import, the row starts unticked and says so. */
-    val existing: Boolean get() = standing == Standing.EXISTING
+    val existing: Boolean get() = standing == KnownHostStanding.EXISTING
 
     /** A different key of a type already trusted for the address: ticking it is the Replace decision of the changed-key sheet. */
-    val conflicting: Boolean get() = standing is Standing.Conflicting
+    val conflicting: Boolean get() = standing is KnownHostStanding.Conflicting
 
     /** The address has a pinned key and this is not it: not offered, since a pin means no other key is taken. */
-    val pinned: Boolean get() = standing is Standing.Pinned
+    val pinned: Boolean get() = standing is KnownHostStanding.Pinned
 
     /** Whether the sheet ticks the row on arrival: only a key that is plainly new. */
-    val tickedByDefault: Boolean get() = standing == Standing.NEW
-
-    /** How the entry stands against what Berth holds for its endpoint; the live policy's three answers plus the plain new key. */
-    sealed interface Standing {
-        data object NEW : Standing
-        data object EXISTING : Standing
-        data class Conflicting(val saved: KnownHostKey) : Standing
-        data class Pinned(val saved: KnownHostKey) : Standing
-    }
+    val tickedByDefault: Boolean get() = standing == KnownHostStanding.NEW
 }
 
 /** A `known_hosts` text as read for the import sheet ([AppViewModel.parseKnownHosts]). */
@@ -1148,7 +1368,19 @@ data class KnownHostsImported(val added: Int, val replaced: Int) {
     val total: Int get() = added + replaced
 }
 
-/** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
+/** Text shared to Berth, for the Stage of [sessionId] to paste through its preview gate ([AppViewModel.sharedPaste]). */
+data class SharedPaste(val sessionId: String, val text: String)
+
+/**
+ * The paths of [count] dropped files held back from one terminal ([AppViewModel.heldPaths]): [text]
+ * is what one paste of them all is, each path quoted for the shell, a space between one and the next.
+ */
+data class HeldPaths(val text: String, val count: Int) {
+    /** With one more path's [landed] text after these, in the shape the drop hands it over (a space ahead when it followed another). */
+    operator fun plus(landed: String): HeldPaths = HeldPaths("$text ${landed.trimStart()}", count + 1)
+}
+
+/** What an arrival (a link, a launcher shortcut, a share) came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {
     /** A tab was opened or brought on stage; the shell pops back to the Stage. */
     data object Staged : LinkOutcome
@@ -1182,4 +1414,7 @@ sealed interface LinkOutcome {
 
     /** The link could not be read; [reason] is one sentence for the notice bar. */
     data class Malformed(val reason: String) : LinkOutcome
+
+    /** A shortcut or a share that could not land (its host gone, no live terminal on stage); [text] is one sentence for the notice bar. */
+    data class Notice(val text: String) : LinkOutcome
 }

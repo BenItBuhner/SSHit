@@ -120,7 +120,10 @@ class TunnelLifecycleTest {
         // Disabling closes the listener; enabling binds it again on the same connection.
         graph.tunnels.setEnabled(tunnel.id, false)
         await(10_000, "tunnel stopped") { tunnel.id !in graph.sessions.tunnelStatuses.value }
-        assertTrue("port should be closed", refused(port))
+        // The row goes after the handle's close has returned, and still one connect attempt straight
+        // after it was once answered (the release variant, once): closed is what the port settles to
+        // within a moment, so the check polls for it rather than reading one attempt.
+        await(2_000, "port closed") { refused(port) }
         graph.tunnels.setEnabled(tunnel.id, true)
         await(15_000, "tunnel back") { graph.sessions.tunnelStatuses.value[tunnel.id] is TunnelStatus.Up }
         assertEquals(body, get("http://127.0.0.1:$port/"))

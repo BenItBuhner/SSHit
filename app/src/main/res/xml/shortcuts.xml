@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's static shortcut (spec Part B, App shortcuts): Quick connect, there before any
+     host is. The four recent hosts are dynamic, published by LauncherShortcuts from the host list.
+     The target package is the applicationId from gradle.properties (app.applicationId). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="quick-connect"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_quick_connect"
+        android:shortcutShortLabel="@string/shortcut_quick_connect"
+        android:shortcutLongLabel="@string/shortcut_quick_connect_long">
+        <intent
+            android:action="app.berth.android.action.QUICK_CONNECT"
+            android:targetPackage="app.berth.android"
+            android:targetClass="app.berth.android.MainActivity" />
+    </shortcut>
+</shortcuts>

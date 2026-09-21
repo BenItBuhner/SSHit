@@ -62,13 +62,20 @@ class SftpModelTest {
     }
 
     @Test
-    fun `names with separators or the dot entries are refused`() {
+    fun `names with separators, control characters or the dot entries are refused`() {
         assertTrue(SftpPaths.isValidName("notes.txt"))
         assertTrue(SftpPaths.isValidName(".hidden"))
+        assertTrue(SftpPaths.isValidName("my report (1).pdf"))
+        assertTrue(SftpPaths.isValidName("caf\u00e9 \u2014 \u5B89\u5168.txt"), "anything a user can type is a name")
         assertFalse(SftpPaths.isValidName(""))
         assertFalse(SftpPaths.isValidName("."))
         assertFalse(SftpPaths.isValidName(".."))
         assertFalse(SftpPaths.isValidName("a/b"))
+        assertFalse(SftpPaths.isValidName("a\u0000b"))
+        assertFalse(SftpPaths.isValidName("a\nb.txt"), "a newline inside quotes drops the shell to its continuation prompt")
+        assertFalse(SftpPaths.isValidName("a\tb"))
+        assertFalse(SftpPaths.isValidName("a\u001b[2Jb"), "an escape moves the shell's cursor")
+        assertFalse(SftpPaths.isValidName("a\u007fb"))
     }
 
     @Test

@@ -1,12 +1,14 @@
 package app.berth.data.di
 
 import android.content.Context
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreCrypto
 import app.berth.data.crypto.KeystoreSigning
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
 import app.berth.data.repo.EncryptedSecretStore
+import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
 import app.berth.data.repo.RoomKnownHostRepository
@@ -15,6 +17,7 @@ import app.berth.data.repo.RoomSettingsRepository
 import app.berth.data.repo.RoomSnippetRepository
 import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -73,4 +76,19 @@ object DataModule {
 
     @Provides @Singleton
     fun settings(db: BerthDatabase): SettingsRepository = RoomSettingsRepository(db)
+
+    @Provides @Singleton
+    fun commandHistory(db: BerthDatabase): CommandHistoryRepository = RoomCommandHistoryRepository(db)
+
+    @Provides @Singleton
+    fun bundles(
+        hosts: HostRepository,
+        identities: IdentityRepository,
+        workspaces: WorkspaceRepository,
+        snippets: SnippetRepository,
+        tunnels: TunnelRepository,
+        knownHosts: KnownHostRepository,
+        settings: SettingsRepository,
+        secrets: SecretStore,
+    ): BerthBundles = BerthBundles(hosts, identities, workspaces, snippets, tunnels, knownHosts, settings, secrets)
 }

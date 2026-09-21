@@ -1046,9 +1046,9 @@ class FilesScreenshotTest {
             inner.download(path, sink) { bytes, total -> onProgress(bytes, total); Thread.sleep(perChunkMs) }
         }
 
-        override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (Long, Long) -> Unit) {
+        override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (Long, Long) -> Unit) {
             delay(perFileMs)
-            inner.upload(source, size, path) { bytes, total -> onProgress(bytes, total); Thread.sleep(perChunkMs) }
+            inner.upload(source, size, path, permissions) { bytes, total -> onProgress(bytes, total); Thread.sleep(perChunkMs) }
         }
     }
 }

@@ -20,8 +20,10 @@ import app.berth.sftp.FolderFailure
 import app.berth.sftp.FolderPhase
 import app.berth.sftp.FolderProgress
 import app.berth.sftp.SftpEntry
+import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
 import app.berth.sftp.SftpFileType
+import app.berth.sftp.SftpPaths
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
@@ -40,6 +42,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -72,6 +75,10 @@ class TransferManagerTest {
     private val server = FakeSftpFileSystem()
     /** Every path downloaded or uploaded through any channel, in the order the copies started. */
     private val moved: MutableList<String> = Collections.synchronizedList(ArrayList())
+
+    /** What a drop hands over as each copy lands, as (session id, the text the terminal should get), in landing order. */
+    private val landed: MutableList<Pair<String, String>> = Collections.synchronizedList(ArrayList())
+    private val onLanded: (TerminalSession, String) -> Unit = { session, text -> landed += session.id to text }
     private val env = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
@@ -532,6 +539,174 @@ class TransferManagerTest {
         assertEquals(listOf("s1" to "/home/demo"), synchronized(changed) { changed.toList() })
     }
 
+    // ---- the share sheet's drop (spec C24) ---------------------------------------------------------
+
+    @Test
+    fun `a drop lands each shared file in a private folder under tmp through the queue, in the order shared, as plain uploads`() {
+        server.dir("/tmp", 0, permissions = 0b111_111_111_111)
+        val session = session("s1")
+        val report = File(tmp, "my report (1).pdf").apply { writeBytes(ByteArray(3000) { it.toByte() }) }
+        val notes = File(tmp, "notes.txt").apply { writeText("shared\n") }
+        // Another user planted a link at the name a drop into /tmp itself would take.
+        server.link("/tmp/notes.txt", SftpFileType.REGULAR, 0)
+        val changed = ArrayList<Pair<String, String>>()
+        val watcher = scope.launch(start = CoroutineStart.UNDISPATCHED) { manager.changedFolders.collect { synchronized(changed) { changed += it } } }
+
+        val ids = manager.dropIntoTmp(session, listOf(Uri.fromFile(report), Uri.fromFile(notes)), onLanded)
+        assertEquals(2, ids.size)
+        val rows = ids.map(::awaitFinished)
+        assertEquals(listOf(TransferState.DONE, TransferState.DONE), rows.map { it.state })
+        assertEquals(listOf(TransferKind.UPLOAD, TransferKind.UPLOAD), rows.map { it.kind })
+        // One folder of the login's own, named at random, both files inside it; 700 on the folder, 600 on each file.
+        val dir = SftpPaths.parent(rows[0].remotePath)
+        assertTrue(dir, Regex("/tmp/berth-[0-9a-f]{8}").matches(dir))
+        assertEquals(listOf("$dir/my report (1).pdf", "$dir/notes.txt"), rows.map { it.remotePath })
+        assertEquals(listOf("$dir/my report (1).pdf", "$dir/notes.txt"), moved.toList())
+        // Handed over as each copy landed, in the order shared, for the session that took the drop: the
+        // path with spaces and parentheses in quotes, the plain one bare, a space ahead of the second.
+        await("both paths handed over") { landed.size == 2 }
+        assertEquals(listOf("s1" to "'$dir/my report (1).pdf'", "s1" to " $dir/notes.txt"), landed.toList())
+        assertEquals(SftpFileType.DIRECTORY, server.nodes[dir]?.type)
+        assertEquals(0b111_000_000, server.nodes[dir]?.permissions)
+        assertEquals(0b110_000_000, server.nodes["$dir/notes.txt"]?.permissions)
+        assertEquals(0b110_000_000, server.nodes["$dir/my report (1).pdf"]?.permissions)
+        assertArrayEquals(ByteArray(3000) { it.toByte() }, server.nodes["$dir/my report (1).pdf"]?.content)
+        assertEquals("shared\n", server.nodes["$dir/notes.txt"]?.content?.toString(Charsets.UTF_8))
+        assertEquals("the planted link is as it was", SftpFileType.SYMLINK, server.nodes["/tmp/notes.txt"]?.type)
+        // The browser on the folder is told, once a copy, as any upload tells it.
+        await("the watcher to see both drops") { synchronized(changed) { changed.size == 2 } }
+        watcher.cancel()
+        assertEquals(listOf("s1" to dir, "s1" to dir), synchronized(changed) { changed.toList() })
+        assertEquals("/tmp", TransferManager.DROP_DIR)
+
+        // The same name again on the same session: the folder is kept, the first copy is kept, and the second is saved beside it.
+        moved.clear()
+        landed.clear()
+        notes.writeText("shared again\n")
+        val again = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
+        assertEquals(TransferState.DONE, again.state)
+        assertEquals("$dir/notes (1).txt", again.remotePath)
+        assertEquals("notes (1).txt", again.name)
+        assertEquals("notes.txt was there \u00B7 saved as notes (1).txt", again.note)
+        assertEquals(listOf("$dir/notes (1).txt"), moved.toList())
+        // A drop of its own: the kept copy's path, quoted for its parentheses, with no space ahead.
+        await("the kept copy's path handed over") { landed.size == 1 }
+        assertEquals(listOf("s1" to "'$dir/notes (1).txt'"), landed.toList())
+        assertEquals("shared\n", server.nodes["$dir/notes.txt"]?.content?.toString(Charsets.UTF_8))
+        assertEquals("shared again\n", server.nodes["$dir/notes (1).txt"]?.content?.toString(Charsets.UTF_8))
+        assertEquals(0b110_000_000, server.nodes["$dir/notes (1).txt"]?.permissions)
+
+        // Another session's drops go to a folder of their own.
+        val other = awaitFinished(manager.dropIntoTmp(session("s2"), listOf(Uri.fromFile(notes)), onLanded).single())
+        assertEquals(TransferState.DONE, other.state)
+        val otherDir = SftpPaths.parent(other.remotePath)
+        assertTrue(otherDir, Regex("/tmp/berth-[0-9a-f]{8}").matches(otherDir))
+        assertNotEquals(dir, otherDir)
+        assertEquals("$otherDir/notes.txt", other.remotePath)
+
+        // The folder gone meanwhile (a reboot, a tmp cleaner): the next drop makes a new one rather than failing on the old name.
+        runBlocking { server.delete(dir) }
+        val remade = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
+        assertEquals(TransferState.DONE, remade.state)
+        val remadeDir = SftpPaths.parent(remade.remotePath)
+        assertTrue(remadeDir, Regex("/tmp/berth-[0-9a-f]{8}").matches(remadeDir))
+        assertNotEquals(dir, remadeDir)
+        assertEquals(0b111_000_000, server.nodes[remadeDir]?.permissions)
+        assertEquals("$remadeDir/notes.txt", remade.remotePath)
+    }
+
+    /**
+     * A remembered folder is reused by what stands at its name, not by the name: `/tmp` is every
+     * user's, and once the folder is gone anyone who saw the name can put something there. A link
+     * to a directory (even one of the login's own), a directory at another mode, and a directory of
+     * another user's at 0700 are each left as they are and a new folder made; the folder as made is
+     * reused, and one the server reports no owner for is reused on its type and mode alone.
+     */
+    @Test
+    fun `a remembered drop folder is reused only while it is the login's own directory at 0700, and anything else at its name gets a new folder`() {
+        server.dir("/tmp", 0, permissions = 0b111_111_111_111)
+        val session = session("s1")
+        val notes = File(tmp, "notes.txt").apply { writeText("shared\n") }
+        fun drop(): String = SftpPaths.parent(awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single()).also { assertEquals(TransferState.DONE, it.state) }.remotePath)
+
+        val first = drop()
+        assertEquals("the folder as made is reused", first, drop())
+
+        // Gone, and a link planted at its name, pointing at a directory the login can write: not followed.
+        runBlocking { server.delete(first) }
+        server.link(first, SftpFileType.DIRECTORY, 0)
+        val second = drop()
+        assertNotEquals(first, second)
+        assertEquals("the planted link is as it was", SftpFileType.SYMLINK, server.nodes[first]?.type)
+        assertTrue("nothing landed under the link's name", server.nodes.keys.none { it.startsWith("$first/") })
+
+        // Gone, and a directory of the login's own at another mode (a stranger's chmod, a server that lost the mode): not reused.
+        runBlocking { server.delete(second) }
+        server.dir(second, 0, permissions = 0b111_101_101)
+        val third = drop()
+        assertNotEquals(second, third)
+        assertTrue("nothing landed in the open directory", server.nodes.keys.none { it.startsWith("$second/") })
+
+        // Gone, and another user's directory at 0700 at its name: theirs, not reused.
+        runBlocking { server.delete(third) }
+        server.dir(third, 0, permissions = 0b111_000_000, uid = FakeSftpFileSystem.LOGIN_UID + 1)
+        val fourth = drop()
+        assertNotEquals(third, fourth)
+        assertTrue("nothing landed in the stranger's directory", server.nodes.keys.none { it.startsWith("$third/") })
+
+        // A server that reports no owner: the folder is reused on its type and mode, which is what there is to go on.
+        server.nodes.getValue(fourth).uid = -1
+        assertEquals(fourth, drop())
+        assertEquals("one folder made each time the name was not the folder, none otherwise", listOf(first, second, third, fourth), mkdirs.toList())
+    }
+
+    @Test
+    fun `a drop folder's name already taken is drawn again, and a run of taken names is the drop failing`() {
+        server.dir("/tmp", 0, permissions = 0b111_111_111_111)
+        val session = session("s1")
+        val notes = File(tmp, "notes.txt").apply { writeText("shared\n") }
+
+        // The first two names are taken (by anyone; mkdir is the check): the third is the folder.
+        mkdirsRefused = 2
+        val row = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
+        assertEquals(TransferState.DONE, row.state)
+        assertEquals(0, mkdirsRefused)
+        assertEquals(3, mkdirs.size)
+        assertEquals("three names drawn, all different", 3, mkdirs.toSet().size)
+        assertEquals(SftpPaths.parent(row.remotePath), mkdirs.last())
+        assertEquals(0b111_000_000, server.nodes[mkdirs.last()]?.permissions)
+
+        // Every name taken, past what the drop will try: the row fails with the server's word for it, and nothing is pasted.
+        val other = session("s2")
+        mkdirsRefused = Int.MAX_VALUE
+        val failed = awaitFinished(manager.dropIntoTmp(other, listOf(Uri.fromFile(notes)), onLanded).single())
+        assertEquals(TransferState.FAILED, failed.state)
+        assertNotNull(failed.error)
+        assertTrue(failed.error!!, failed.error!!.contains("already exists"))
+        await("the first drop's path handed over") { landed.any { it.first == "s1" } }
+        assertTrue("nothing is handed over for a copy that failed", landed.none { it.first == "s2" })
+    }
+
+    @Test
+    fun `a drop folder's suffix is eight hex digits from a secure source`() {
+        val suffixes = (0 until 200).map { TransferManager.dropFolderSuffix() }
+        assertTrue(suffixes.all { Regex("[0-9a-f]{8}").matches(it) })
+        assertEquals("no two of two hundred alike", suffixes.size, suffixes.toSet().size)
+    }
+
+    @Test
+    fun `a path is quoted for the shell only when it needs it, and a quote inside survives`() {
+        assertEquals("/tmp/notes.txt", TransferManager.shellQuote("/tmp/notes.txt"))
+        assertEquals("/tmp/site-backup_2026-09-21.tar.gz", TransferManager.shellQuote("/tmp/site-backup_2026-09-21.tar.gz"))
+        assertEquals("/tmp/a+b@c:d,e=f%g", TransferManager.shellQuote("/tmp/a+b@c:d,e=f%g"))
+        assertEquals("'/tmp/my report (1).pdf'", TransferManager.shellQuote("/tmp/my report (1).pdf"))
+        assertEquals("'/tmp/\$HOME.txt'", TransferManager.shellQuote("/tmp/\$HOME.txt"))
+        assertEquals("'/tmp/it'\\''s.txt'", TransferManager.shellQuote("/tmp/it's.txt"))
+        assertEquals("'/tmp/caf\u00e9.txt'", TransferManager.shellQuote("/tmp/caf\u00e9.txt"))
+        assertEquals("'/tmp/a;rm -rf ~'", TransferManager.shellQuote("/tmp/a;rm -rf ~"))
+        assertEquals("''", TransferManager.shellQuote(""))
+    }
+
     // ---- helpers -----------------------------------------------------------------------------------
 
     private fun session(id: String): TerminalSession {
@@ -578,22 +753,38 @@ class TransferManagerTest {
         values.zipWithNext().forEachIndexed { i, (a, b) -> assertTrue("$what went from $a to $b at step $i", b >= a) }
     }
 
+    /** Every folder any channel was asked to make, in order; and how many of the next `mkdir`s are refused as a name already taken. */
+    private val mkdirs: MutableList<String> = Collections.synchronizedList(ArrayList())
+
+    @Volatile
+    private var mkdirsRefused = 0
+
     /**
      * One channel over the shared server, the way each transfer opens its own: closing it closes
-     * this channel only, and the copies that start on it are written to [moved].
+     * this channel only, the copies that start on it are written to [moved], and the folders it
+     * makes to [mkdirs], the first [mkdirsRefused] of them refused as another user's.
      */
     private inner class Channel(private val inner: FakeSftpFileSystem) : SftpFileSystem by inner {
         override var isOpen: Boolean = true
             private set
+
+        override suspend fun mkdir(path: String, permissions: Int) {
+            mkdirs += path
+            if (mkdirsRefused > 0) {
+                if (mkdirsRefused != Int.MAX_VALUE) mkdirsRefused--
+                throw SftpError.AlreadyExists(path)
+            }
+            inner.mkdir(path, permissions)
+        }
 
         override suspend fun download(path: String, sink: OutputStream, onProgress: (bytes: Long, total: Long) -> Unit) {
             moved += path
             inner.download(path, sink, onProgress)
         }
 
-        override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (bytes: Long, total: Long) -> Unit) {
+        override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (bytes: Long, total: Long) -> Unit) {
             moved += path
-            inner.upload(source, size, path, onProgress)
+            inner.upload(source, size, path, permissions, onProgress)
         }
 
         override fun close() {

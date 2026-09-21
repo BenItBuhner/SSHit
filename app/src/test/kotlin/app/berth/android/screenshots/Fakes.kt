@@ -9,7 +9,7 @@ import androidx.lifecycle.LifecycleRegistry
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
-import app.berth.android.links.LinkInbox
+import app.berth.android.links.IntentInbox
 import app.berth.android.security.AppLockController
 import app.berth.android.security.BerthClipboard
 import app.berth.android.security.FakeAuthenticator
@@ -24,20 +24,24 @@ import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppViewModel
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreSigning
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
@@ -45,6 +49,7 @@ import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -123,6 +128,39 @@ class InMemoryTunnels : TunnelRepository {
         items.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
 }
 
+class InMemoryCommandHistory : CommandHistoryRepository {
+    val items = MutableStateFlow<List<HostCommand>>(emptyList())
+    private var nextId = 1L
+    override fun observeForHost(hostId: String): Flow<List<HostCommand>> = items.map { list -> list.filter { it.hostId == hostId } }
+    override fun observeAll(): Flow<List<HostCommand>> = items.map { list -> list.takeLast(CommandHistoryRepository.CAP) }
+    override suspend fun record(hostId: String, text: String, at: Long): Boolean {
+        val command = text.trim()
+        if (command.isEmpty() || items.value.lastOrNull { it.hostId == hostId }?.text == command) return false
+        items.update { list -> (list + HostCommand(nextId++, hostId, command, at)).trimmed(hostId) }
+        return true
+    }
+    override suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>) {
+        val present = items.value.filter { it.hostId == hostId }.mapTo(HashSet()) { it.text to it.at }
+        val fresh = entries.filter { (text, _) -> text.isNotBlank() }.filter { it !in present }.distinct()
+        if (fresh.isEmpty()) return
+        items.update { list -> (list + fresh.map { (text, at) -> HostCommand(nextId++, hostId, text.trim(), at) }).sortedWith(compareBy({ it.at }, { it.id })).trimmed(hostId) }
+    }
+    override suspend fun rekey(from: String, to: String) {
+        if (from == to) return
+        items.update { list -> list.map { if (it.hostId == from) it.copy(hostId = to) else it }.sortedWith(compareBy({ it.at }, { it.id })).trimmed(to) }
+    }
+    override suspend fun delete(id: Long) = items.update { list -> list.filter { it.id != id } }
+    override suspend fun clear(hostId: String) = items.update { list -> list.filter { it.hostId != hostId } }
+    override suspend fun clearAll() { items.value = emptyList() }
+
+    private fun List<HostCommand>.trimmed(hostId: String): List<HostCommand> {
+        val over = count { it.hostId == hostId } - CommandHistoryRepository.CAP
+        if (over <= 0) return this
+        var drop = over
+        return filter { if (it.hostId == hostId && drop > 0) { drop--; false } else true }
+    }
+}
+
 class InMemorySnippets : SnippetRepository {
     val items = MutableStateFlow<List<Snippet>>(emptyList())
     override fun observeAll(): Flow<List<Snippet>> = items
@@ -197,6 +235,12 @@ class InMemorySettings : SettingsRepository {
     override suspend fun setDefaultTerminalTheme(id: String) { defaultTheme.value = id }
     override val lastActiveSessionId: Flow<String?> = lastActive
     override suspend fun setLastActiveSessionId(id: String?) { lastActive.value = id }
+    val split = MutableStateFlow<StageSplit?>(null)
+    override val stageSplit: Flow<StageSplit?> = split
+    override suspend fun setStageSplit(split: StageSplit?) { this.split.value = split }
+    val dividerFraction = MutableStateFlow(0.5f)
+    override val paneDividerFraction: Flow<Float> = dividerFraction
+    override suspend fun setPaneDividerFraction(fraction: Float) { dividerFraction.value = fraction }
     override val currentWorkspaceId: Flow<String?> = currentWorkspace
     override suspend fun setCurrentWorkspaceId(id: String) { currentWorkspace.value = id }
     private val files = MutableStateFlow(FilesPrefs())
@@ -226,6 +270,10 @@ class InMemorySettings : SettingsRepository {
     val deckGestures = MutableStateFlow(DeckSettings())
     override val deckSettings: Flow<DeckSettings> = deckGestures
     override suspend fun setDeckSettings(settings: DeckSettings) { deckGestures.value = settings }
+
+    val connection = MutableStateFlow(ConnectionSettings())
+    override val connectionSettings: Flow<ConnectionSettings> = connection
+    override suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings) = connection.update(change)
 }
 
 /**
@@ -254,23 +302,27 @@ class FakeLifecycleOwner : LifecycleOwner {
  * every screen test that is not about the ask should see (otherwise the process's first Live
  * raises the rationale sheet over whatever the test is looking at). A test of the permission
  * flow itself passes [notificationsGranted] false.
+ *
+ * [storage] is what the phone keeps across processes; [relaunch] builds a second graph over the
+ * same storage, the way a cold start after process death restores from what the last one wrote.
  */
-class TestGraph(private val context: Context, notificationsGranted: Boolean = true) {
+class TestGraph(private val context: Context, notificationsGranted: Boolean = true, private val storage: TestStorage = TestStorage()) {
     init {
         if (notificationsGranted) {
             shadowOf(context.applicationContext as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    val hosts = InMemoryHosts()
-    val secrets = InMemorySecrets()
-    val identities = InMemoryIdentities(hosts)
-    val knownHosts = InMemoryKnownHosts()
-    val workspaces = InMemoryWorkspaces()
-    val sessionRecords = InMemorySessions()
-    val settings = InMemorySettings()
-    val tunnels = InMemoryTunnels()
-    val snippets = InMemorySnippets()
+    val hosts = storage.hosts
+    val secrets = storage.secrets
+    val identities = storage.identities
+    val knownHosts = storage.knownHosts
+    val workspaces = storage.workspaces
+    val sessionRecords = storage.sessionRecords
+    val settings = storage.settings
+    val tunnels = storage.tunnels
+    val snippets = storage.snippets
+    val commandHistory = storage.commandHistory
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
 
@@ -291,19 +343,30 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val reportsDir: File = createTempDirectory("berth-reports").toFile()
     val reports = CrashReporter(reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
     private val manager = lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports, commandHistory)
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
-    /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
-    val links = LinkInbox()
+    /** Where a test drops an `ssh://` link, a shortcut or a share, as MainActivity does with the intent another app or the launcher hands it. */
+    val inbox = IntentInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports)
+        val bundles = BerthBundles(hosts, identities, workspaces, snippets, tunnels, knownHosts, settings, secrets)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, inbox, reports, commandHistory, bundles)
     }
 
     private companion object {
         /** Unconfined, so the settings land in the security pieces before the first frame, as Room's do behind the splash. */
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    }
+
+    /**
+     * The process died and came back: a new graph over this one's storage, its manager restoring
+     * the tabs, the active tab and the split from what this one wrote. This graph's coroutines end
+     * first, as the old process would have; its tabs are not closed, since a death closes nothing.
+     */
+    fun relaunch(): TestGraph {
+        if (manager.isInitialized()) manager.value.scope.cancel()
+        return TestGraph(context, storage = storage)
     }
 
     /**
@@ -316,4 +379,18 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
         sessions.sessions.value.map { it.id }.forEach { sessions.close(it) }
         sessions.scope.cancel()
     }
+}
+
+/** What the phone's storage holds across processes: the in-memory stand-ins for Room and the secret store. */
+class TestStorage {
+    val hosts = InMemoryHosts()
+    val secrets = InMemorySecrets()
+    val identities = InMemoryIdentities(hosts)
+    val knownHosts = InMemoryKnownHosts()
+    val workspaces = InMemoryWorkspaces()
+    val sessionRecords = InMemorySessions()
+    val settings = InMemorySettings()
+    val tunnels = InMemoryTunnels()
+    val snippets = InMemorySnippets()
+    val commandHistory = InMemoryCommandHistory()
 }

@@ -2,6 +2,8 @@ package app.berth.android.ui.stage
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -65,7 +68,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -77,6 +82,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.FailedHop
 import app.berth.android.session.FilesTab
@@ -86,6 +92,7 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.TerminalAnnouncer
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.reachingClickable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.byId
@@ -117,6 +124,7 @@ import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
+import app.berth.android.ui.tabs.LocalBottomEdge
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabHeader
 import app.berth.android.ui.tabs.TabShortcuts
@@ -643,6 +651,15 @@ private fun StageBody(
     val accessibility = remember(session.id) { TerminalAccessibility() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
+    // A share's text (spec C24) is one more paste: it waits in the view model for this session's
+    // Stage and comes through the same gate, so a note of several lines meets the preview here.
+    val shared by vm.sharedPaste.collectAsState()
+    LaunchedEffect(shared, session.id) {
+        val waiting = shared ?: return@LaunchedEffect
+        if (waiting.sessionId != session.id) return@LaunchedEffect
+        vm.sharedPasteTaken(waiting)
+        paste(waiting.text)
+    }
     val input = remember(session.id) {
         StageInput(
             session = { session },
@@ -777,6 +794,10 @@ private fun StageBody(
             }
         }
 
+        // A notice bar showing at the window's bottom edge reaches past the chrome under this pill
+        // when that chrome is short (the strip) or gone (a detached frame): the pill stands up by that
+        // much, read from the edge, so the two never meet whatever either grows to.
+        val edge = LocalBottomEdge.current
         StatePill(
             state = record.state,
             retryIn = session.retryIn,
@@ -785,16 +806,22 @@ private fun StageBody(
             onDetach = { vm.detach(session.id) },
             onClose = { vm.close(session.id) },
             via = session.via,
+            clearance = edge.pillClearance,
         )
 
         // The bottom chrome takes the larger of the keyboard and navigation-bar insets, so the Deck
         // sits on the keyboard when it is up and its surface runs under the bar when it is not.
+        val density = LocalDensity.current
         val bottomChrome: @Composable () -> Unit = {
+            // What the chrome holds is the edge's to know while it is composed anywhere (here, or in the
+            // pane layer it is handed to), and nothing once it is not.
+            DisposableEffect(edge) { onDispose { edge.chrome = 0.dp } }
             Column(
                 Modifier
                     .fillMaxWidth()
                     .background(if (deckStateOk) c.surface1 else c.surface0)
-                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))
+                    .onSizeChanged { edge.chrome = with(density) { it.height.toDp() } },
             ) {
                 AnimatedVisibility(visible = deckAllowed, enter = BerthMotion.unfoldIn(), exit = BerthMotion.foldOut()) {
                     Deck(
@@ -909,7 +936,10 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
     }
 }
 
-/** Visible height of the state pill; its touch target is the full 44 dp row around it. */
+/**
+ * Visible height of the state pill; its actions' touch targets are the full 48 dp row around it
+ * ([TouchTargetSize], as a button's 44 dp fill sits in its 48 dp box), the pill drawn centred in it.
+ */
 private val StatePillHeight = 32.dp
 
 /**
@@ -918,7 +948,9 @@ private val StatePillHeight = 32.dp
  * follows its own clock unless a [now] is given, and the reconnect countdown is collected here
  * from [retryIn], so the minute tick and the 1 Hz backoff tick recompose the pill alone and the
  * Stage around it never re-runs for either. While a jump chain is being made, [via] names the hop
- * (`Connecting via bastion (1 of 2)…`), so a slow or failing hop is seen as that hop.
+ * (`Connecting via bastion (1 of 2)…`), so a slow or failing hop is seen as that hop. [clearance]
+ * is how far above its 12 dp the pill stands while a notice bar reaches up past the chrome under
+ * it ([app.berth.android.ui.tabs.BottomEdge.pillClearance]).
  */
 @Composable
 internal fun StatePill(
@@ -930,6 +962,7 @@ internal fun StatePill(
     onClose: () -> Unit,
     now: Long? = null,
     via: StateFlow<String?>? = null,
+    clearance: Dp = 0.dp,
 ) {
     val c = Berth.colors
     if (state != SessionState.RECONNECTING && state != SessionState.DETACHED && state != SessionState.CONNECTING && state != SessionState.IDLE) return
@@ -942,15 +975,21 @@ internal fun StatePill(
         SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting$hop\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
+    // The row is the target's height inside the same 60 dp; the pill's 12 dp over the Deck is the
+    // notice bar's over the bottom edge. The clearance moves the pill, not the column: an offset
+    // draws it over the frame's last rows for the bar's stay, where a taller row would shrink the
+    // frame and grow it back for a six-second notice.
+    val lift by animateDpAsState(clearance, BerthMotion.transform(tween(BerthMotion.SHEET_IN_MS, easing = BerthMotion.emphasizedDecelerate)), label = "state pill clearance")
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 12.dp),
+            .offset(y = -lift)
+            .padding(bottom = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             Modifier
-                .height(44.dp)
+                .height(TouchTargetSize)
                 .drawBehind {
                     val h = StatePillHeight.toPx()
                     drawRoundRect(

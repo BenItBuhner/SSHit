@@ -817,7 +817,9 @@ class TerminalToolsScreenshotTest {
     @Test
     fun `history sheet`() {
         val (session, tools) = stageDetached(withHistory = true)
-        assertEquals(HISTORY.size, session.commands.value.size)
+        // The version-2 frame's commands became the host's history as the frame was restored.
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.size == HISTORY.size }
+        assertTrue(graph.commandHistory.items.value.all { it.hostId == homelab.commandHistoryKey })
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("History").performClick()
         compose.waitUntil(5_000) { tools.historyOpen }
@@ -838,12 +840,13 @@ class TerminalToolsScreenshotTest {
         compose.onNode(hasContentDescription("Command ls -la")).performSemanticsAction(SemanticsActions.OnLongClick)
         waitForText("Delete")
         compose.onNodeWithText("Delete").performClick()
-        compose.waitUntil(5_000) { session.commands.value.size == HISTORY.size - 1 }
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.size == HISTORY.size - 1 }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Command ls -la")).fetchSemanticsNodes().isEmpty() }
-        // The deleted entry is out of the next frame; the others travel with it.
-        val kept = historyIn(session.snapshotFrame())
+        // The deleted entry is gone from the host's history; the others stay, and the next frame is text alone (version 3).
+        val kept = graph.commandHistory.items.value.map { it.text }
         assertFalse(kept.contains("ls -la"))
         assertTrue(kept.contains("docker compose ps"))
+        assertEquals(3, frameVersion(session.snapshotFrame()))
 
         // The filter narrows the list.
         field("Search history").performTextInput("no-pager")
@@ -986,7 +989,7 @@ class TerminalToolsScreenshotTest {
         settle(1_500)
         session.sendText("echo re-run from history\n")
         settle(1_200)
-        compose.waitUntil(5_000) { session.commands.value.any { it.text == "echo re-run from history" } }
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.any { it.text == "echo re-run from history" } }
         // The owner column of the listing is the test user, whatever the sshd calls it.
         val owner = " $sshUser "
         assertTrue(session.emulator.screenText().any { it.contains(owner) })
@@ -1128,12 +1131,8 @@ class TerminalToolsScreenshotTest {
         return out.toByteArray()
     }
 
-    /** The commands a version-2 frame carries. */
-    private fun historyIn(frame: ByteArray): List<String> = DataInputStream(frame.inputStream()).use { d ->
-        assertEquals(2, d.readInt())
-        repeat(d.readInt()) { d.readUTF() }
-        List(d.readInt()) { d.readUTF().also { d.readLong() } }
-    }
+    /** The version a saved frame declares; since the history moved to its own table a session writes version 3, text alone. */
+    private fun frameVersion(frame: ByteArray): Int = DataInputStream(frame.inputStream()).use { it.readInt() }
 
     companion object {
         /** Eight commands, oldest first, as minutes ago: two days for the headings, and enough for the sheet's filter field. */

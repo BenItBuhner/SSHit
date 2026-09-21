@@ -50,9 +50,13 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
         attrs.toEntry(name = SftpPaths.name(path), path = SftpPaths.normalize(path))
     }
 
-    override suspend fun mkdir(path: String) = io(path, "creating a folder") {
+    override suspend fun lstat(path: String): SftpEntry = io(path, "reading attributes") {
+        raw.lstat(path).toEntry(name = SftpPaths.name(path), path = SftpPaths.normalize(path))
+    }
+
+    override suspend fun mkdir(path: String, permissions: Int) = io(path, "creating a folder") {
         try {
-            raw.sftpEngine.makeDir(path, DIRECTORY_ATTRIBUTES)
+            raw.sftpEngine.makeDir(path, attributes(permissions))
         } catch (e: SFTPException) {
             // Protocol 3 servers report "exists" as a plain failure; say what actually happened.
             if (e.statusCode == Response.StatusCode.FAILURE && raw.statExistence(path) != null) throw SftpError.AlreadyExists(path)
@@ -106,8 +110,18 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
         }
     }
 
-    override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (Long, Long) -> Unit) = io(path, "uploading") {
-        val file = raw.open(path, EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC), FILE_ATTRIBUTES)
+    override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (Long, Long) -> Unit) = io(path, "uploading") {
+        // A private file is made new, exclusively: EXCL is the server's own check, atomic with the
+        // create, that nothing is at the name, so a link planted there is neither followed nor written.
+        val private = permissions != SftpPermissions.FILE
+        val modes = if (private) EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.EXCL) else EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC)
+        val file = try {
+            raw.open(path, modes, attributes(permissions))
+        } catch (e: SFTPException) {
+            // Protocol 3 servers report a failed exclusive create as a plain failure; say what actually happened.
+            if (private && e.statusCode == Response.StatusCode.FAILURE && raw.statExistence(path) != null) throw SftpError.AlreadyExists(path)
+            throw e
+        }
         try {
             val out = file.RemoteFileOutputStream(0L, WRITE_AHEAD_PACKETS)
             val buffer = ByteArray(CHUNK_BYTES)
@@ -222,12 +236,12 @@ class SftpClient internal constructor(private val raw: SFTPClient) : SftpFileSys
         private const val MAX_LINKS_RESOLVED = 24
 
         /**
-         * The mode a new file or folder asks for, sent with the create so it costs no round trip:
-         * 644 and 755, the same on every server whatever its umask leaves as the default (a
-         * stricter umask still takes bits away, as it should).
+         * The mode a new file or folder asks for, sent with the create so it costs no round trip
+         * and never stands open between two: [SftpPermissions.FILE] and [SftpPermissions.DIRECTORY]
+         * for what the user makes, the private modes for what Berth makes for itself. A stricter
+         * umask on the server still takes bits away, as it should.
          */
-        private val FILE_ATTRIBUTES: FileAttributes = FileAttributes.Builder().withPermissions(0b110_100_100).build()
-        private val DIRECTORY_ATTRIBUTES: FileAttributes = FileAttributes.Builder().withPermissions(0b111_101_101).build()
+        private fun attributes(permissions: Int): FileAttributes = FileAttributes.Builder().withPermissions(permissions and SftpPermissions.MASK).build()
 
         /** Opens the sftp subsystem on [connection]; throws [SftpError.NotConnected] when it has no live client. */
         suspend fun open(connection: SshConnection): SftpClient {

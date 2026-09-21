@@ -6,12 +6,15 @@ import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
@@ -103,6 +106,47 @@ interface SnippetRepository {
     suspend fun delete(id: String)
 }
 
+/**
+ * The commands each host ran (spec C16): one history per host, shared by every tab on it, keyed
+ * by [app.berth.domain.model.Host.commandHistoryKey] and capped at [CAP] entries a host, the
+ * oldest going first. A command equal to the host's latest is not recorded twice in a row, the
+ * way `HISTCONTROL=ignoredups` keeps a shell's own history readable.
+ */
+interface CommandHistoryRepository {
+    /** [hostId]'s commands, oldest first. */
+    fun observeForHost(hostId: String): Flow<List<HostCommand>>
+
+    /** The newest [CAP] commands across every host, oldest first, for the sheet's All hosts view. */
+    fun observeAll(): Flow<List<HostCommand>>
+
+    /** Records [text] run on [hostId] at [at]; false when it was blank or repeats the host's latest entry. */
+    suspend fun record(hostId: String, text: String, at: Long): Boolean
+
+    /**
+     * Entries an older build kept in a tab's frame, handed to the host's history once: an entry
+     * already there with the same text and time is not added again, so restoring the same frame
+     * twice (the process dying before the frame was saved without them) changes nothing.
+     */
+    suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>)
+
+    /**
+     * Moves every entry kept under [from] to [to], for a quick connect saved as a host: its history
+     * was keyed `quick:user@host:port` ([app.berth.domain.model.Host.commandHistoryKey]) and goes
+     * on under the saved host's id, so the sheet on the new host shows what was run before it had a
+     * name. Entries [to] already holds stay, the merged history is oldest first and capped as one
+     * host's; nothing is left under [from]. Two equal ids are nothing to do.
+     */
+    suspend fun rekey(from: String, to: String)
+
+    suspend fun delete(id: Long)
+    suspend fun clear(hostId: String)
+    suspend fun clearAll()
+
+    companion object {
+        const val CAP = 2_000
+    }
+}
+
 /** User preferences: Deck layout, themes, fonts, and small flags. */
 interface SettingsRepository {
     val deckLayout: Flow<DeckLayout>
@@ -129,6 +173,14 @@ interface SettingsRepository {
     val lastActiveSessionId: Flow<String?>
     suspend fun setLastActiveSessionId(id: String?)
 
+    /** The Stage split beside the active tab (spec C23), written as it changes; null while one tab has the Stage. */
+    val stageSplit: Flow<StageSplit?>
+    suspend fun setStageSplit(split: StageSplit?)
+
+    /** Where the divider between the panes rests, as the left pane's share of the width; half until moved. */
+    val paneDividerFraction: Flow<Float>
+    suspend fun setPaneDividerFraction(fraction: Float)
+
     val currentWorkspaceId: Flow<String?>
     suspend fun setCurrentWorkspaceId(id: String)
 
@@ -148,6 +200,12 @@ interface SettingsRepository {
 
     /** Read-modify-write under one lock, so a host's override and a toggle flipped at the same moment both land. */
     suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings)
+
+    /** The idle-detach policy and the two one-time notices about the background (spec C20, Connection; Part B). */
+    val connectionSettings: Flow<ConnectionSettings>
+
+    /** Read-modify-write under one lock, like [updateSecuritySettings]. */
+    suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings)
 
     /** Whether sessions keep the commands they run for the History sheet (spec C16); on by default. */
     val commandHistoryEnabled: Flow<Boolean>

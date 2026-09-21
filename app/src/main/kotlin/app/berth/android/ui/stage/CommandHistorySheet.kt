@@ -3,6 +3,7 @@ package app.berth.android.ui.stage
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -16,7 +17,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -29,40 +32,58 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
+import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.snippets.SnippetEditorSheet
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
+import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.SessionState
-import app.berth.terminal.CommandEntry
 import app.berth.terminal.TerminalKey
 import java.text.DateFormat
 import java.util.Calendar
 
 /**
- * The command history sheet (spec C16): this session's commands, newest first under day headings,
- * narrowed by the field once there are enough to need it. A tap pastes the command to the prompt;
- * a long-press offers Run, Copy, Save as snippet and Delete. Run and the tap need the session Live.
- * History is per session and travels with its frame; the empty state says where commands come
- * from, and the Settings toggle turning it off is reported here rather than silently.
+ * The command history sheet (spec C16): the commands this tab's host ran, from every tab that was
+ * ever on it, newest first under day headings, narrowed by the field once there are enough to
+ * need it; the All hosts chip widens it to every host, each row then naming its host. A tap
+ * pastes the command to the prompt; a long-press offers Run, Copy, Save as snippet and Delete.
+ * Run and the tap need the session Live. History is kept per host in the store, capped at 2,000
+ * a host; the empty state says where commands come from, and the Settings toggle turning it off
+ * is reported here rather than silently.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: () -> Unit, onNotice: (String) -> Unit = {}) {
     val c = Berth.colors
     val record by session.record.collectAsState()
-    val commands by session.commands.collectAsState()
     val enabled by vm.commandHistoryEnabled.collectAsState()
+    val hosts by vm.hosts.collectAsState()
+    val tabs by vm.sessions.records.collectAsState()
     val clipboard = LocalClipboardManager.current
     val haptics = rememberDeckHaptics()
     val live = record.state == SessionState.LIVE
+    val key = record.hostSnapshot.commandHistoryKey
+    var allHosts by rememberSaveable { mutableStateOf(false) }
+    val commands by remember(key, allHosts) { if (allHosts) vm.allCommandHistory else vm.commandHistoryOf(key) }.collectAsState(initial = null)
     var filter by remember { mutableStateOf("") }
-    var menuFor by remember { mutableStateOf<CommandEntry?>(null) }
+    var menuFor by remember { mutableStateOf<HostCommand?>(null) }
     var snippetFrom by remember { mutableStateOf<String?>(null) }
+
+    // A row's host, for the All hosts view: the saved host's name (by its key, since a host saved from a Quick connect
+    // tab keeps the login's), the login of an unsaved quick connect, or a tab still open on it.
+    fun hostLabel(historyKey: String): String =
+        hosts.firstOrNull { it.commandHistoryKey == historyKey }?.name
+            ?: Host.quickConnectLabel(historyKey)
+            ?: tabs.firstOrNull { it.hostSnapshot.commandHistoryKey == historyKey }?.hostSnapshot?.name
+            ?: "Removed host"
+
+    val loaded = commands ?: emptyList()
     val rows = remember(commands, filter) {
         val q = filter.trim()
-        val shown = commands.asReversed().filter { q.isEmpty() || it.text.contains(q, ignoreCase = true) }
+        val shown = loaded.asReversed().filter { q.isEmpty() || it.text.contains(q, ignoreCase = true) }
         val today = System.currentTimeMillis()
         buildList {
             var day: String? = null
@@ -76,7 +97,7 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
             }
         }
     }
-    fun paste(entry: CommandEntry) {
+    fun paste(entry: HostCommand) {
         session.paste(entry.text)
         haptics.paste()
         onDismiss()
@@ -90,32 +111,39 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // The scope, said plainly while history is per tab: the host, this tab, the count.
-            SheetTitle(
-                "History",
-                record.hostSnapshot.name + " \u00B7 this tab \u00B7 " + when (commands.size) {
-                    0 -> "no commands yet"
-                    1 -> "1 command"
-                    else -> "${commands.size} commands"
-                },
-            )
+            // The scope, said plainly: this host or every host, and the count; the chip trades one for the other.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    SheetTitle(
+                        "History",
+                        (if (allHosts) "All hosts" else record.hostSnapshot.name) + " \u00B7 " + when {
+                            commands == null -> "loading"
+                            loaded.isEmpty() -> "no commands yet"
+                            loaded.size == 1 -> "1 command"
+                            else -> "${loaded.size} commands"
+                        },
+                    )
+                }
+                Chip("All hosts", selected = allHosts, onClick = { allHosts = !allHosts })
+            }
             if (!enabled) Text("Command history is off in Settings; nothing new is recorded.", style = BerthType.caption, color = c.danger)
-            if (commands.size > FILTER_FROM) {
+            if (loaded.size > FILTER_FROM) {
                 BerthField(filter, { filter = it }, placeholder = "Search", mono = true, modifier = Modifier.semantics { contentDescription = "Search history" })
             }
-            if (rows.isEmpty()) {
-                Text(
-                    if (commands.isEmpty()) {
-                        "Commands land here as the shell runs them, from its prompt marks or from what is typed and echoed."
-                    } else {
-                        "Nothing matches."
+            when {
+                // Nothing until the store has answered, so an empty state never flashes before the rows.
+                commands == null -> Unit
+                rows.isEmpty() -> Text(
+                    when {
+                        loaded.isNotEmpty() -> "Nothing matches."
+                        allHosts -> "Commands land here as any host's shell runs them, from its prompt marks or from what is typed and echoed."
+                        else -> "Commands land here as this host's shell runs them, from its prompt marks or from what is typed and echoed; every tab on ${record.hostSnapshot.name} shares them."
                     },
                     style = BerthType.body,
                     color = c.text2,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
-            } else {
-                LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                else -> LazyColumn(Modifier.heightIn(max = 440.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(rows, key = { it.key }) { row ->
                         when (row) {
                             is HistoryRow.Day -> Text(
@@ -126,9 +154,10 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
                             )
                             is HistoryRow.Command -> Box {
                                 val entry = row.entry
+                                val time = timeLabel(entry.at)
                                 ListRow(
                                     title = entry.text,
-                                    subtitle = timeLabel(entry.at),
+                                    subtitle = if (allHosts) "${hostLabel(entry.hostId)} \u00B7 $time" else time,
                                     surface = Color.Transparent,
                                     minHeight = 44.dp,
                                     titleStyle = MonoBody,
@@ -158,7 +187,7 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
                                         onNotice("Copied")
                                     }
                                     item("Save as snippet") { snippetFrom = entry.text }
-                                    item("Delete", destructive = true) { session.removeCommand(entry) }
+                                    item("Delete", destructive = true) { vm.deleteCommand(entry.id) }
                                 }
                             }
                         }
@@ -182,8 +211,8 @@ private sealed interface HistoryRow {
         override val key: String get() = "day:$label"
     }
 
-    data class Command(val entry: CommandEntry) : HistoryRow {
-        override val key: String get() = "${entry.at}:${entry.text}"
+    data class Command(val entry: HostCommand) : HistoryRow {
+        override val key: String get() = "command:${entry.id}"
     }
 }
 

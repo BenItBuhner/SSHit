@@ -3,7 +3,9 @@ package app.berth.data
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
+import app.berth.data.db.PreferenceEntity
 import app.berth.data.repo.EncryptedSecretStore
+import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
 import app.berth.data.repo.RoomKnownHostRepository
@@ -13,11 +15,13 @@ import app.berth.data.repo.RoomSnippetRepository
 import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.Host
+import app.berth.domain.model.IdleDetach
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
@@ -28,6 +32,8 @@ import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSide
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
@@ -36,6 +42,7 @@ import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -270,5 +277,137 @@ class RoomRepositoriesTest {
         assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
         settings.setCtrlTabKeysReachTerminal(true)
         assertTrue(settings.ctrlTabKeysReachTerminal.first())
+    }
+
+    @Test
+    fun `the split and the divider are kept beside the active tab, the split cleared as one tab takes the Stage`() = runTest {
+        val settings = RoomSettingsRepository(db)
+        assertNull(settings.stageSplit.first(), "one tab has the Stage until a split is written")
+        assertEquals(0.5f, settings.paneDividerFraction.first(), "the panes start at half each")
+
+        settings.setStageSplit(StageSplit("s-companion", StageSide.LEFT))
+        assertEquals(StageSplit("s-companion", StageSide.LEFT), settings.stageSplit.first())
+        settings.setStageSplit(StageSplit("s-other", StageSide.RIGHT))
+        assertEquals(StageSplit("s-other", StageSide.RIGHT), settings.stageSplit.first())
+        settings.setStageSplit(null)
+        assertNull(settings.stageSplit.first())
+        assertNull(db.preferences().get(RoomSettingsRepository.KEY_STAGE_SPLIT), "cleared is deleted, not written as null")
+
+        settings.setPaneDividerFraction(1f / 3f)
+        assertEquals(1f / 3f, settings.paneDividerFraction.first())
+        assertEquals(1f / 3f, settings.paneDividerFraction.first(), "the divider's rest outlives the split")
+    }
+
+    @Test
+    fun `connection settings start at Never with neither notice shown, and each field changes on its own`() = runTest {
+        val settings = RoomSettingsRepository(db)
+        assertEquals(ConnectionSettings(), settings.connectionSettings.first())
+        assertEquals(IdleDetach.NEVER, settings.connectionSettings.first().idleDetach, "idle sessions are kept unless the user says otherwise")
+
+        settings.updateConnectionSettings { it.copy(idleDetach = IdleDetach.ONE_HOUR) }
+        settings.updateConnectionSettings { it.copy(backgroundNoticeShown = true) }
+        assertEquals(ConnectionSettings(idleDetach = IdleDetach.ONE_HOUR, backgroundNoticeShown = true), settings.connectionSettings.first())
+
+        settings.updateConnectionSettings { it.copy(batteryExplained = true) }
+        val all = settings.connectionSettings.first()
+        assertEquals(IdleDetach.ONE_HOUR, all.idleDetach, "one field's write leaves the others as they were")
+        assertTrue(all.backgroundNoticeShown)
+        assertTrue(all.batteryExplained)
+
+        // The document is read back as written, so a field an older build never wrote comes up as its default.
+        db.preferences().upsert(PreferenceEntity(RoomSettingsRepository.KEY_CONNECTION, """{"idleDetach":"FIFTEEN_MINUTES"}""", 1L))
+        assertEquals(ConnectionSettings(idleDetach = IdleDetach.FIFTEEN_MINUTES), settings.connectionSettings.first())
+    }
+
+    // ---- command history (spec C16) -------------------------------------------------------------
+
+    @Test
+    fun `command history is per host, oldest first, a repeat of the latest folded and the cap kept`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        assertTrue(history.record("h1", "  ls -la ", 1))
+        assertTrue(history.record("h2", "uptime", 2))
+        assertFalse(history.record("h1", "ls -la", 3), "the host's latest again is one entry")
+        assertFalse(history.record("h1", "   ", 4), "a blank is nothing")
+        assertTrue(history.record("h1", "pwd", 5))
+        assertTrue(history.record("h1", "ls -la", 6), "the same command after another is a new entry")
+        assertEquals(listOf("ls -la" to 1L, "pwd" to 5L, "ls -la" to 6L), history.observeForHost("h1").first().map { it.text to it.at })
+        assertEquals(listOf("uptime"), history.observeForHost("h2").first().map { it.text })
+        assertEquals(listOf("ls -la", "uptime", "pwd", "ls -la"), history.observeAll().first().map { it.text })
+
+        // Past the cap the oldest go, one host's cap never touching another's.
+        for (i in 0 until CommandHistoryRepository.CAP + 10) history.record("h3", "cmd $i", 100L + i)
+        val h3 = history.observeForHost("h3").first()
+        assertEquals(CommandHistoryRepository.CAP, h3.size)
+        assertEquals("cmd 10", h3.first().text)
+        assertEquals("cmd ${CommandHistoryRepository.CAP + 9}", h3.last().text)
+        assertEquals(3, history.observeForHost("h1").first().size)
+        assertEquals(CommandHistoryRepository.CAP, history.observeAll().first().size, "All hosts shows the newest up to the cap")
+
+        // Delete one row, not every equal command; clear one host; clear all.
+        val first = history.observeForHost("h1").first().first()
+        history.delete(first.id)
+        assertEquals(listOf("pwd", "ls -la"), history.observeForHost("h1").first().map { it.text })
+        history.clear("h3")
+        assertTrue(history.observeForHost("h3").first().isEmpty())
+        assertEquals(3, history.observeAll().first().size)
+        history.clearAll()
+        assertTrue(history.observeAll().first().isEmpty())
+    }
+
+    @Test
+    fun `entries an older build kept in a frame are imported once`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        history.record("h1", "already", 50)
+        val fromFrame = listOf("git status" to 10L, "already" to 50L, "make" to 60L, "" to 61L, "make" to 60L)
+        history.importEntries("h1", fromFrame)
+        assertEquals(listOf("git status" to 10L, "already" to 50L, "make" to 60L), history.observeForHost("h1").first().map { it.text to it.at })
+
+        // The same frame restored again (the process died before the frame was saved without them) changes nothing.
+        history.importEntries("h1", fromFrame)
+        assertEquals(3, history.observeForHost("h1").first().size)
+        history.importEntries("h1", emptyList())
+        assertEquals(3, history.observeForHost("h1").first().size)
+    }
+
+    @Test
+    fun `a quick connect's history goes on under the host it is saved as`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        val quick = "quick:ben@10.0.0.7:22"
+        history.record(quick, "uptime", 10)
+        history.record(quick, "df -h", 20)
+        // The saved host already ran something (a tab opened on it before the move landed): the two merge by time.
+        history.record("h-saved", "ls", 15)
+        history.record("other", "pwd", 12)
+
+        history.rekey(quick, "h-saved")
+        assertTrue(history.observeForHost(quick).first().isEmpty(), "nothing is left under the quick-connect key")
+        assertEquals(listOf("uptime" to 10L, "ls" to 15L, "df -h" to 20L), history.observeForHost("h-saved").first().map { it.text to it.at })
+        assertEquals(listOf("pwd"), history.observeForHost("other").first().map { it.text }, "another host's history is untouched")
+        assertEquals(4, history.observeAll().first().size)
+
+        // The same id twice is nothing to do, and a key with no rows moves nothing.
+        history.rekey("h-saved", "h-saved")
+        history.rekey("never-seen", "h-saved")
+        assertEquals(3, history.observeForHost("h-saved").first().size)
+
+        // The merged history is one host's: past the cap the oldest go.
+        for (i in 0 until CommandHistoryRepository.CAP) history.record("quick:big", "cmd $i", 1_000L + i)
+        history.rekey("quick:big", "h-saved")
+        val merged = history.observeForHost("h-saved").first()
+        assertEquals(CommandHistoryRepository.CAP, merged.size)
+        assertEquals("cmd 0", merged.first().text, "the three older entries went, the quick connect's cap-worth stayed")
+    }
+
+    @Test
+    fun `deleting a host takes its command history with it`() = runTest {
+        val hosts = RoomHostRepository(db)
+        val history = RoomCommandHistoryRepository(db)
+        hosts.upsert(Host(id = "h1", name = "box", color = SwatchColor.MOSS, monogram = "BO", address = "box", user = "me", createdAt = 1))
+        history.record("h1", "ls", 1)
+        history.record("h2", "pwd", 2)
+        hosts.delete("h1")
+        assertNull(hosts.get("h1"))
+        assertTrue(history.observeForHost("h1").first().isEmpty())
+        assertEquals(listOf("pwd"), history.observeForHost("h2").first().map { it.text }, "another host's history stays")
     }
 }

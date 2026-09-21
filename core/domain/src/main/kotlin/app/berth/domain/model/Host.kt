@@ -89,7 +89,34 @@ data class Host(
 ) {
     val userAtHost: String get() = "$user@$address"
 
+    /**
+     * A Quick connect login (spec C11): its id carries [QUICK_ID_PREFIX]. Unsaved as it opens; the
+     * Session sheet's Save as host keeps the tab's id, so a saved host can carry the prefix too.
+     */
+    val isQuickConnect: Boolean get() = id.startsWith(QUICK_ID_PREFIX)
+
+    /**
+     * The key this host's commands are kept under (spec C16, History per host): a saved host's id,
+     * so every tab on it shares one history; for a quick connect the login itself
+     * ([quickCommandHistoryKey]), so a later quick connect to the same box finds the commands the
+     * first one ran, and a host saved from its tab, under the tab's id, goes on with them. The
+     * Quick connect sheet's Save as host gives its host an id of its own and moves the login's
+     * history under it.
+     */
+    val commandHistoryKey: String get() = if (isQuickConnect) quickCommandHistoryKey(user, address, port) else id
+
     companion object {
+        const val QUICK_ID_PREFIX = "quick-"
+        const val QUICK_HISTORY_PREFIX = "quick:"
+
+        /** The history key of a quick connect login: `quick:user@host`, the port after it when it is not 22. */
+        fun quickCommandHistoryKey(user: String, address: String, port: Int): String =
+            QUICK_HISTORY_PREFIX + "$user@$address" + if (port == 22) "" else ":$port"
+
+        /** The login a quick connect's [commandHistoryKey] names (`user@host[:port]`), or null for a saved host's key. */
+        fun quickConnectLabel(commandHistoryKey: String): String? =
+            commandHistoryKey.removePrefix(QUICK_HISTORY_PREFIX).takeIf { commandHistoryKey.startsWith(QUICK_HISTORY_PREFIX) }
+
         fun monogramFor(name: String): String {
             val words = name.trim().split(Regex("[\\s_\\-.]+")).filter { it.isNotEmpty() }
             val raw = when {

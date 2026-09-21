@@ -145,6 +145,19 @@ data class SnippetEntity(
     val workspaceId: String? = null,
 )
 
+/**
+ * Added in schema version 5: one command a host ran (spec C16), keyed by the host so every tab on
+ * it shares one history. Before this the entries rode in each tab's frame; the session that
+ * restores such a frame hands them over. [hostId] is the host's `commandHistoryKey`.
+ */
+@Entity(tableName = "command_history", indices = [Index("hostId", "at")])
+data class CommandHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val hostId: String,
+    val text: String,
+    val at: Long,
+)
+
 /** Small settings, one JSON document per key. Observed as flows so the UI reacts to edits. */
 @Entity(tableName = "preferences")
 data class PreferenceEntity(

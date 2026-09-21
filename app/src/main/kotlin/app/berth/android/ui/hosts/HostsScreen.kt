@@ -403,7 +403,8 @@ fun QuickConnectSheet(
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetTitle("Quick connect", if (initialSpec != null) "No saved host matches the link." else null)
+            // The launcher's Quick connect shortcut lands here too (spec, App shortcuts), as an empty spec: the field takes focus, and there is no link to speak of.
+            SheetTitle("Quick connect", if (!initialSpec.isNullOrEmpty()) "No saved host matches the link." else null)
             BerthField(
                 value = spec,
                 onValueChange = { spec = it; error = null },

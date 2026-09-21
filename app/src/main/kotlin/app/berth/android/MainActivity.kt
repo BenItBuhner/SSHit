@@ -11,7 +11,9 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import app.berth.android.links.LinkInbox
+import app.berth.android.links.Arrival
+import app.berth.android.links.IntentInbox
+import app.berth.android.links.LauncherShortcuts
 import app.berth.android.security.LockState
 import app.berth.android.security.SecurityCenter
 import app.berth.android.security.WindowSecurity
@@ -30,7 +32,8 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     @Inject lateinit var sessions: SessionManager
     @Inject lateinit var security: SecurityCenter
-    @Inject lateinit var links: LinkInbox
+    @Inject lateinit var inbox: IntentInbox
+    @Inject lateinit var shortcuts: LauncherShortcuts
 
     /** The settings the window flags were last set from; the splash waits a frame for the relayout after a change. */
     private var windowSettings: SecuritySettings? = null
@@ -71,6 +74,9 @@ class MainActivity : ComponentActivity() {
                 AppRoot()
             }
         }
+        // The launcher's four recent hosts follow the host list while this activity lives (spec Part
+        // B, App shortcuts): every connection is made from here, so this is when the four can change.
+        shortcuts.publishFrom(lifecycleScope)
         // A recreation (rotation, a restore after a kill) keeps the launch intent; only a fresh launch acts on it.
         if (savedInstanceState == null) intentPending = true
     }
@@ -89,13 +95,19 @@ class MainActivity : ComponentActivity() {
      * manager holds a tap under the lock (or before its decision) until the unlock, so the tab's news
      * is not marked seen behind the lock screen; read earlier, it would be judged against the state
      * left over from before the app went away.
+     *
+     * Everything another app or the launcher hands over goes the same way, as an [Arrival] the view
+     * model reads once the lock allows, so none of it opens a login or pastes into one behind the
+     * lock screen: an `ssh://` or `sftp://` link (the VIEW filter), a shortcut's host or Quick connect
+     * ([LauncherShortcuts]), and the share sheet's files or text (spec C24).
      */
     private fun openTabFrom(intent: Intent?) {
         if (intent == null) return
-        // An ssh:// or sftp:// link from another app (the VIEW filter in the manifest): the view model
-        // reads it once the lock allows, so a link never opens a login behind the lock screen.
-        if (intent.action == Intent.ACTION_VIEW) {
-            intent.dataString?.let(links::offer)
+        val arrival = Arrival.of(intent)
+        if (arrival != null) {
+            // The launcher ranks its shortcuts by use; a host opened from one is a use of it.
+            if (arrival is Arrival.OpenHost) shortcuts.used(arrival.hostId)
+            inbox.offer(arrival)
             return
         }
         val id = intent.getStringExtra(SessionNotifier.EXTRA_TAB_ID) ?: return

@@ -51,6 +51,8 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.StageSide
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TmuxMode
@@ -75,6 +77,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 /** A Pixel-class phone upright, the size every other screenshot class renders at. */
 private const val PHONE_PORTRAIT = "w411dp-h914dp-420dpi"
@@ -331,6 +334,55 @@ class LargeScreenScreenshotTest {
         assertEquals("s-build", panes.left.id)
         assertEquals("s-homelab", panes.right.id)
         assertEquals("s-build", graph.sessions.activeTabId.value)
+    }
+
+    /**
+     * The split and the divider across processes (spec C23 with C3's Persistence). The last process
+     * left pi-hole beside homelab, homelab on the left with the keys, and the divider at two thirds:
+     * the relaunch opens on both panes, there. Where a drag lets the divider go is written, so the
+     * next split, and the next process, open at it; a keyboard step writes the same way. The manager's
+     * side of the restore (the companion checked against the strip) is `SessionPanesTest`'s.
+     */
+    @Test
+    @Config(qualifiers = TABLET_LANDSCAPE)
+    fun `tablet on its side, the split and the divider come back where the last process left them`() {
+        runBlocking {
+            graph.settings.setPaneDividerFraction(2f / 3f)
+            graph.settings.setStageSplit(StageSplit("s-pihole", StageSide.LEFT))
+        }
+        mountApp()
+        waitForPane("s-homelab", PaneSide.LEFT)
+        waitForPane("s-pihole", PaneSide.RIGHT)
+        assertEquals("s-homelab", graph.sessions.activeTabId.value)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasContentDescription("Divider between the panes") and hasStateDescription("Left pane 67 percent")).fetchSemanticsNodes().isNotEmpty()
+        }
+        val usable = paneBounds("s-homelab", PaneSide.LEFT).width + paneBounds("s-pihole", PaneSide.RIGHT).width
+        assertEquals(usable * 2f / 3f, paneBounds("s-homelab", PaneSide.LEFT).width, 2f)
+        capture("tablet-landscape-split-restored")
+
+        // Let go near a third: the snap settles it there, and there is what is written.
+        dragDivider("s-homelab", "s-pihole", -1f / 3f)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasContentDescription("Divider between the panes") and hasStateDescription("Left pane 33 percent")).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.waitUntil(5_000) { abs(graph.settings.dividerFraction.value - 1f / 3f) < 0.001f }
+
+        // One pane again, then split again: the divider is where it was let go, not back at half.
+        compose.onNodeWithContentDescription("Close pane").performClick()
+        compose.waitUntil(5_000) { graph.sessions.panes.value == null }
+        compose.waitForIdle()
+        split("s-homelab", PaneSide.LEFT)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasContentDescription("Divider between the panes") and hasStateDescription("Left pane 33 percent")).fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(StageSplit("s-pihole", StageSide.LEFT), graph.settings.split.value)
+
+        // The keyboard's step is a release too.
+        val widen = compose.onNode(hasContentDescription("Divider between the panes")).fetchSemanticsNode()
+            .config[SemanticsActions.CustomActions].first { it.label == "Widen left pane" }
+        compose.runOnUiThread { widen.action() }
+        compose.waitUntil(5_000) { abs(graph.settings.dividerFraction.value - (1f / 3f + 0.1f)) < 0.001f }
     }
 
     /**

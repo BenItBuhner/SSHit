@@ -3,16 +3,19 @@ package app.berth.data.repo
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
+import app.berth.data.db.CommandHistoryEntity
 import app.berth.data.db.PreferenceEntity
 import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyStorage
@@ -20,6 +23,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
@@ -27,6 +31,7 @@ import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -42,6 +47,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 
 class RoomHostRepository(private val db: BerthDatabase) : HostRepository {
@@ -49,8 +55,63 @@ class RoomHostRepository(private val db: BerthDatabase) : HostRepository {
     override fun observe(id: String): Flow<Host?> = db.hosts().observe(id).map { it?.toDomain() }
     override suspend fun get(id: String): Host? = db.hosts().get(id)?.toDomain()
     override suspend fun upsert(host: Host) = db.hosts().upsert(host.toEntity())
-    override suspend fun delete(id: String) = db.hosts().delete(id)
+
+    /** The host's commands go with it: a history nothing can open again is not kept (spec C16). */
+    override suspend fun delete(id: String) {
+        db.hosts().delete(id)
+        db.commandHistory().clear(id)
+    }
+
     override suspend fun markConnected(id: String, at: Long) = db.hosts().markConnected(id, at)
+}
+
+class RoomCommandHistoryRepository(private val db: BerthDatabase) : CommandHistoryRepository {
+    private val writeLock = Mutex()
+
+    override fun observeForHost(hostId: String): Flow<List<HostCommand>> =
+        db.commandHistory().observeForHost(hostId).map { list -> list.map { it.toDomain() } }
+
+    override fun observeAll(): Flow<List<HostCommand>> =
+        db.commandHistory().observeNewest(CommandHistoryRepository.CAP).map { list -> list.asReversed().map { it.toDomain() } }
+
+    /** Under one lock: two tabs on the same host committing at the same moment must not both read the old latest and both write. */
+    override suspend fun record(hostId: String, text: String, at: Long): Boolean = writeLock.withLock {
+        val command = text.trim()
+        if (command.isEmpty()) return false
+        val dao = db.commandHistory()
+        if (dao.latest(hostId)?.text == command) return false
+        dao.insert(CommandHistoryEntity(hostId = hostId, text = command, at = at))
+        dao.trim(hostId, CommandHistoryRepository.CAP)
+        true
+    }
+
+    override suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>) = writeLock.withLock {
+        val dao = db.commandHistory()
+        val present = dao.forHost(hostId).mapTo(HashSet()) { it.text to it.at }
+        val fresh = entries.asSequence()
+            .map { (text, at) -> text.trim() to at }
+            .filter { (text, _) -> text.isNotEmpty() }
+            .filter { it !in present }
+            .distinct()
+            .map { (text, at) -> CommandHistoryEntity(hostId = hostId, text = text, at = at) }
+            .toList()
+        if (fresh.isEmpty()) return@withLock
+        dao.insertAll(fresh)
+        dao.trim(hostId, CommandHistoryRepository.CAP)
+    }
+
+    override suspend fun rekey(from: String, to: String) = writeLock.withLock {
+        if (from == to) return@withLock
+        val dao = db.commandHistory()
+        dao.rekey(from, to)
+        dao.trim(to, CommandHistoryRepository.CAP)
+    }
+
+    override suspend fun delete(id: Long) = db.commandHistory().delete(id)
+    override suspend fun clear(hostId: String) = db.commandHistory().clear(hostId)
+    override suspend fun clearAll() = db.commandHistory().clearAll()
+
+    private fun CommandHistoryEntity.toDomain() = HostCommand(id = id, hostId = hostId, text = text, at = at)
 }
 
 class EncryptedSecretStore(private val db: BerthDatabase, private val crypto: SecretCrypto) : SecretStore {
@@ -219,6 +280,14 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         else db.preferences().upsert(PreferenceEntity(KEY_LAST_SESSION, id, System.currentTimeMillis()))
     }
 
+    override val stageSplit: Flow<StageSplit?> = document(KEY_STAGE_SPLIT, StageSplit.serializer().nullable) { null }
+    override suspend fun setStageSplit(split: StageSplit?) {
+        if (split == null) db.preferences().delete(KEY_STAGE_SPLIT) else write(KEY_STAGE_SPLIT, StageSplit.serializer(), split)
+    }
+
+    override val paneDividerFraction: Flow<Float> = document(KEY_PANE_DIVIDER, Float.serializer()) { DEFAULT_PANE_DIVIDER }
+    override suspend fun setPaneDividerFraction(fraction: Float) = write(KEY_PANE_DIVIDER, Float.serializer(), fraction)
+
     override val currentWorkspaceId: Flow<String?> = db.preferences().observe(KEY_CURRENT_WORKSPACE)
     override suspend fun setCurrentWorkspaceId(id: String) =
         db.preferences().upsert(PreferenceEntity(KEY_CURRENT_WORKSPACE, id, System.currentTimeMillis()))
@@ -239,6 +308,13 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings) = securityLock.withLock {
         val current = db.preferences().get(KEY_SECURITY)?.let { runCatching { dataJson.decodeFromString(SecuritySettings.serializer(), it) }.getOrNull() } ?: SecuritySettings()
         write(KEY_SECURITY, SecuritySettings.serializer(), change(current))
+    }
+
+    private val connectionLock = Mutex()
+    override val connectionSettings: Flow<ConnectionSettings> = document(KEY_CONNECTION, ConnectionSettings.serializer()) { ConnectionSettings() }
+    override suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings) = connectionLock.withLock {
+        val current = db.preferences().get(KEY_CONNECTION)?.let { runCatching { dataJson.decodeFromString(ConnectionSettings.serializer(), it) }.getOrNull() } ?: ConnectionSettings()
+        write(KEY_CONNECTION, ConnectionSettings.serializer(), change(current))
     }
 
     private val hardwareKeyboardLock = Mutex()
@@ -272,10 +348,16 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_CUSTOM_THEMES = "terminal_themes_custom"
         const val KEY_DEFAULT_THEME = "terminal_theme_default"
         const val KEY_LAST_SESSION = "last_active_session"
+        const val KEY_STAGE_SPLIT = "stage_split"
+        const val KEY_PANE_DIVIDER = "pane_divider_fraction"
         const val KEY_CURRENT_WORKSPACE = "current_workspace"
+
+        /** The divider's rest until the user moves it: the panes at half each. */
+        const val DEFAULT_PANE_DIVIDER = 0.5f
         const val KEY_TAB_SWIPE = "tab_swipe_gesture"
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
         const val KEY_SECURITY = "security"
+        const val KEY_CONNECTION = "connection"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
         const val KEY_TERMINAL = "terminal"

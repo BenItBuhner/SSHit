@@ -1,10 +1,20 @@
 package app.berth.android.session
 
+import app.berth.domain.model.StageSide
+import app.berth.domain.model.StageSplit
+
 /** One of the two panes of a split Stage (spec C23). */
 enum class PaneSide {
     LEFT, RIGHT;
 
     val other: PaneSide get() = if (this == LEFT) RIGHT else LEFT
+
+    /** The side as it is stored across processes. */
+    val stored: StageSide get() = if (this == LEFT) StageSide.LEFT else StageSide.RIGHT
+
+    companion object {
+        fun of(side: StageSide): PaneSide = if (side == StageSide.LEFT) LEFT else RIGHT
+    }
 }
 
 /**
@@ -15,6 +25,14 @@ enum class PaneSide {
  */
 data class Split(val companionId: String, val activeSide: PaneSide) {
     val companionSide: PaneSide get() = activeSide.other
+
+    /** The split as it is written beside the last active tab (spec C23 with C3's Persistence). */
+    val stored: StageSplit get() = StageSplit(companionId, activeSide.stored)
+
+    companion object {
+        /** The split a saved document names; whether its companion is still open is the manager's to check. */
+        fun of(saved: StageSplit): Split = Split(saved.companionId, PaneSide.of(saved.activeSide))
+    }
 }
 
 /** Two tabs side by side, resolved from the split: what the Stage lays out on a width that fits them. */

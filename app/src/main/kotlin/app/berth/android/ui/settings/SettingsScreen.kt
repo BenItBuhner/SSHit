@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +46,9 @@ import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
+import app.berth.android.ui.keys.GenerateKeySheet
+import app.berth.android.ui.keys.NewKeyPrefill
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.terminal.resolvedFamily
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -57,6 +61,7 @@ import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
+import kotlinx.coroutines.delay
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
 @Composable
@@ -86,16 +91,34 @@ fun SettingsScreen(
     var importKnownHosts by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
     var fontPicker by remember { mutableStateOf(false) }
+    var exportBundle by remember { mutableStateOf(false) }
+    var importBundle by remember { mutableStateOf(false) }
+    // The New key sheet the import's report opens, on the key it names to make again (spec C20).
+    var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
+    // One line at the foot of the screen for what a row just did (cleared, exported, imported); the text stays for the exit animation.
+    var notice by remember { mutableStateOf<String?>(null) }
+    val shownNotice = remember { mutableStateOf<String?>(null) }
+    if (notice != null) shownNotice.value = notice
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(NOTICE_MS)
+            notice = null
+        }
+    }
+    val onNotice: (String) -> Unit = { notice = it }
 
     if (importConfig) ImportHostsSheet(vm, onDismiss = { importConfig = false })
     if (importKnownHosts) ImportKnownHostsSheet(vm, onDismiss = { importKnownHosts = false })
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
     if (fontPicker) FontPickerSheet(vm, onDismiss = { fontPicker = false })
+    if (exportBundle) ExportBundleSheet(vm, onDismiss = { exportBundle = false }, onNotice = onNotice)
+    if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice, onMakeKey = { makeKey = it })
+    makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
 
+    Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(c.surface0)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -167,7 +190,7 @@ fun SettingsScreen(
                 CyclePicker("Scrollback", TerminalSettings.SCROLLBACK_CHOICES, terminal.scrollbackLines, { "%,d lines".format(it) }, caption = "History kept above each terminal's screen") { lines -> vm.updateTerminalSettings { it.copy(scrollbackLines = lines) } }
             }
 
-            CommandHistorySettings(vm)
+            CommandHistorySettings(vm, onNotice = onNotice)
 
             Panel(label = "Deck") {
                 ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
@@ -208,11 +231,15 @@ fun SettingsScreen(
 
             VolumeButtonsPanel(vm)
 
+            ConnectionSettingsPanel(vm)
+
             NotificationsSection(vm.notifier)
 
             SecurityPanel(vm, onKnownHosts)
 
             Panel(label = "Data") {
+                ListRow("Export encrypted bundle", subtitle = "Hosts, keys, snippets, themes and the rest in one .berth file, under a passphrase", surface = Color.Transparent, minHeight = 44.dp, onClick = { exportBundle = true }, trailing = chevron)
+                ListRow("Import bundle", subtitle = "A .berth file from this phone or another", surface = Color.Transparent, minHeight = 44.dp, onClick = { importBundle = true }, trailing = chevron)
                 ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
                 ListRow("Import known_hosts", subtitle = "Server keys from ~/.ssh/known_hosts", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKnownHosts = true }, trailing = chevron)
                 ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
@@ -242,7 +269,18 @@ fun SettingsScreen(
             }
         }
     }
+    NoticeBar(
+        visible = notice != null,
+        text = shownNotice.value ?: "",
+        action = "OK",
+        onAction = { notice = null },
+        modifier = Modifier.align(Alignment.BottomCenter),
+    )
+    }
 }
+
+/** How long a notice stands before it sinks on its own. */
+private const val NOTICE_MS = 3_500L
 
 /** The accent choices with the names a screen reader gives them; the colour alone never tells them apart. */
 private val ACCENTS = listOf(

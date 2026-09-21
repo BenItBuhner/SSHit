@@ -24,7 +24,9 @@ private const val PROMPT = "demo@box:~$ "
 
 /**
  * How a session collects its command history (spec C16) with no shell attached: the emulator is
- * fed what the remote would have echoed, and the session's input methods stand for the keys.
+ * fed what the remote would have echoed, and the session's input methods stand for the keys. The
+ * session hands each command to the host's history through its environment; [store] is what it
+ * handed over, under which host.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CommandHistorySessionTest {
@@ -37,18 +39,29 @@ class CommandHistorySessionTest {
         id = id, workspaceId = "home", hostId = host.id, hostSnapshot = host, state = SessionState.LIVE, layer = PersistenceLayer.IN_APP, sortOrder = 0, createdAt = 0,
     )
 
-    private fun env(historyOn: Boolean = true) = object : SessionEnvironment {
+    /** Stands in for the manager: what the sessions recorded, and what a restored frame handed over, each with its host key. */
+    private class Store(var historyOn: Boolean) : SessionEnvironment {
+        val recorded = ArrayList<Triple<String, String, Long>>()
+        val imported = ArrayList<Pair<String, List<Pair<String, Long>>>>()
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
         override val networkAvailable: Flow<Unit> = emptyFlow()
         override fun onClipboardText(host: Host, text: String) = Unit
         override fun commandHistoryEnabled(): Boolean = historyOn
         override fun now(): Long = 1_700_000_000_000L
+        override fun recordCommand(hostId: String, text: String, at: Long) { recorded += Triple(hostId, text, at) }
+        override fun importCommands(hostId: String, entries: List<Pair<String, Long>>) { imported += hostId to entries }
     }
 
-    private fun TestScope.session(historyOn: Boolean = true, id: String = "s") = TerminalSession(record(id), backgroundScope, env(historyOn)) {}
+    private val store = Store(historyOn = true)
 
-    private fun TerminalSession.texts() = commands.value.map { it.text }
+    private fun TestScope.session(historyOn: Boolean = true, id: String = "s"): TerminalSession {
+        store.historyOn = historyOn
+        return TerminalSession(record(id), backgroundScope, store) {}
+    }
+
+    @Suppress("UnusedReceiverParameter")
+    private fun TerminalSession.texts() = store.recorded.map { it.second }
 
     // ---- typed-line fallback ---------------------------------------------------------------------
 
@@ -61,8 +74,9 @@ class CommandHistorySessionTest {
             s.emulator.write(ch.toString())
         }
         s.sendKey(TerminalKey.ENTER)
-        // Recorded before the command's output, so a command that clears the screen is not lost.
+        // Recorded before the command's output, so a command that clears the screen is not lost; under the host, at the session's clock.
         assertEquals(listOf("ls -la"), s.texts())
+        assertEquals(listOf(Triple(host.commandHistoryKey, "ls -la", 1_700_000_000_000L)), store.recorded)
         assertEquals("ls -la", s.record.value.lastCommand)
     }
 
@@ -209,29 +223,77 @@ class CommandHistorySessionTest {
         assertEquals(listOf("make test", "echo hi"), s.texts())
     }
 
+    /** The store folds a repeat of the host's latest into one (RoomRepositoriesTest); the session reports every run and leaves that to it. */
     @Test
-    fun `the same command run twice in a row is one entry`() = runTest {
+    fun `every command run reaches the host's history, a repeat included`() = runTest {
         val s = session()
         s.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007ls\r\n\u001b]133;C\u0007")
         s.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007ls\r\n\u001b]133;C\u0007")
         s.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007pwd\r\n\u001b]133;C\u0007")
-        assertEquals(listOf("ls", "pwd"), s.texts())
+        assertEquals(listOf("ls", "ls", "pwd"), s.texts())
+        assertTrue(store.recorded.all { it.first == host.commandHistoryKey })
+    }
+
+    /** Two tabs on one host write to the same history; a quick connect's goes under its login, not its throwaway id. */
+    @Test
+    fun `commands are keyed by the host, and a quick connect by its login`() = runTest {
+        val s = session()
+        val t = session(id = "t")
+        s.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007ls\r\n\u001b]133;C\u0007")
+        t.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007pwd\r\n\u001b]133;C\u0007")
+        assertEquals(listOf("h", "h"), store.recorded.map { it.first })
+
+        val quick = host.copy(id = Host.QUICK_ID_PREFIX + "abc", port = 2222)
+        val q = TerminalSession(record("q").copy(hostId = quick.id, hostSnapshot = quick), backgroundScope, store) {}
+        q.emulator.write("\u001b]133;A\u0007$PROMPT\u001b]133;B\u0007uptime\r\n\u001b]133;C\u0007")
+        assertEquals("quick:demo@127.0.0.1:2222", store.recorded.last().first)
+        assertEquals("demo@127.0.0.1:2222", Host.quickConnectLabel(store.recorded.last().first))
     }
 
     // ---- the frame -------------------------------------------------------------------------------
 
+    /** The frame a session writes is text alone (version 3); the history is the host's and is not in it. */
     @Test
-    fun `the frame carries the history and a text-only frame still restores`() = runTest {
+    fun `the frame is text alone and restoring it hands nothing over`() = runTest {
         val s = session()
         s.emulator.write("$PROMPT\u001b]133;B\u0007ls\r\n\u001b]133;C\u0007a  b\r\n$PROMPT\u001b]133;B\u0007pwd\r\n\u001b]133;C\u0007/home/demo\r\n$PROMPT")
         val frame = s.snapshotFrame()
+        assertEquals(3, java.io.DataInputStream(frame.inputStream()).use { it.readInt() })
 
         val back = session(id = "t")
         back.restoreFrame(frame)
-        assertEquals(listOf("ls", "pwd"), back.texts())
-        assertEquals(1_700_000_000_000L, back.commands.value.first().at)
+        assertTrue(store.imported.isEmpty())
         assertTrue(back.emulator.screenText().any { it.contains("/home/demo") })
+    }
 
+    /** A frame the build before this one saved ends in the tab's commands; restoring it hands them to the host's history, once, and the next frame drops them. */
+    @Test
+    fun `a version 2 frame's commands are handed to the host's history`() = runTest {
+        val old = java.io.ByteArrayOutputStream().also { out ->
+            java.io.DataOutputStream(out).use { d ->
+                d.writeInt(2)
+                d.writeInt(1)
+                d.writeUTF("$PROMPT echo old")
+                d.writeInt(2)
+                d.writeUTF("ls -la"); d.writeLong(1_600_000_000_000L)
+                d.writeUTF("echo old"); d.writeLong(1_600_000_001_000L)
+            }
+        }.toByteArray()
+        val v2 = session(id = "u")
+        v2.restoreFrame(old)
+        assertEquals(listOf(host.commandHistoryKey to listOf("ls -la" to 1_600_000_000_000L, "echo old" to 1_600_000_001_000L)), store.imported)
+        assertTrue(v2.emulator.screenText().first().contains("echo old"))
+        assertTrue("handed over, not recorded again at the session's clock", store.recorded.isEmpty())
+
+        // The frame written now is text alone; another restore of it hands nothing over.
+        val again = session(id = "v")
+        again.restoreFrame(v2.snapshotFrame())
+        assertEquals(1, store.imported.size)
+        assertTrue(again.emulator.screenText().first().contains("echo old"))
+    }
+
+    @Test
+    fun `a text-only frame from the first build still restores`() = runTest {
         val old = java.io.ByteArrayOutputStream().also { out ->
             java.io.DataOutputStream(out).use { d ->
                 d.writeInt(1)
@@ -242,17 +304,7 @@ class CommandHistorySessionTest {
         val v1 = session(id = "u")
         v1.restoreFrame(old)
         assertTrue(v1.texts().isEmpty())
+        assertTrue(store.imported.isEmpty())
         assertTrue(v1.emulator.screenText().first().contains("echo old"))
-    }
-
-    @Test
-    fun `removing an entry takes it out of the next frame`() = runTest {
-        val s = session()
-        s.emulator.write("$PROMPT\u001b]133;B\u0007ls\r\n\u001b]133;C\u0007$PROMPT\u001b]133;B\u0007pwd\r\n\u001b]133;C\u0007")
-        s.removeCommand(s.commands.value.first())
-        assertEquals(listOf("pwd"), s.texts())
-        val back = session(id = "t")
-        back.restoreFrame(s.snapshotFrame())
-        assertEquals(listOf("pwd"), back.texts())
     }
 }

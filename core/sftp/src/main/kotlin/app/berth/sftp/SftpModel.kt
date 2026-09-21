@@ -47,6 +47,18 @@ object SftpPermissions {
     const val STICKY = 0b001_000_000_000
     const val MASK = 0xFFF
 
+    /** The mode a new file asks for, 644: the same on every server whatever its umask leaves as the default (a stricter umask still takes bits away). */
+    const val FILE = 0b110_100_100
+
+    /** The mode a new folder asks for, 755. */
+    const val DIRECTORY = 0b111_101_101
+
+    /** A file the login alone reads and writes, 600. */
+    const val PRIVATE_FILE = 0b110_000_000
+
+    /** A folder the login alone enters, 700. */
+    const val PRIVATE_DIRECTORY = 0b111_000_000
+
     fun text(type: SftpFileType, permissions: Int): String {
         val p = permissions and MASK
         val sb = StringBuilder(10)
@@ -139,7 +151,13 @@ object SftpPaths {
         return result
     }
 
-    fun isValidName(name: String): Boolean = name.isNotEmpty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\u0000')
+    /**
+     * A name one entry can have: not empty, not `.` or `..`, no `/`, and no control character
+     * (below space, or DEL): a newline or an escape inside a name is nothing a user typed and, pasted
+     * into a shell inside quotes, drops it to a continuation prompt or moves its cursor.
+     */
+    fun isValidName(name: String): Boolean =
+        name.isNotEmpty() && name != "." && name != ".." && !name.contains('/') && name.none { it.code < 0x20 || it.code == 0x7F }
 
     /**
      * The name a copy takes beside the original when both are kept: `report (1).pdf`, then
@@ -198,7 +216,19 @@ interface SftpFileSystem : Closeable {
     /** `stat` following symlinks. */
     suspend fun stat(path: String): SftpEntry
 
-    suspend fun mkdir(path: String)
+    /**
+     * `lstat`: the entry at [path] itself, a symlink as a symlink with nothing behind it resolved,
+     * for a caller that has to know what stands at a name before trusting it.
+     */
+    suspend fun lstat(path: String): SftpEntry
+
+    /**
+     * Makes the folder at [path] with [permissions], the mode sent with the create so it never
+     * stands open between two round trips; [SftpPermissions.DIRECTORY] by default, or
+     * [SftpPermissions.PRIVATE_DIRECTORY] for one that is the login's alone. Throws
+     * [SftpError.AlreadyExists] when something is already there.
+     */
+    suspend fun mkdir(path: String, permissions: Int = SftpPermissions.DIRECTORY)
 
     suspend fun rename(from: String, to: String)
 
@@ -213,8 +243,15 @@ interface SftpFileSystem : Closeable {
      */
     suspend fun download(path: String, sink: OutputStream, onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> })
 
-    /** Streams [source] into a new or truncated file at [path]; [size] is what the progress total shows. */
-    suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> })
+    /**
+     * Streams [source] into the file at [path]; [size] is what the progress total shows. With
+     * [permissions] left as [SftpPermissions.FILE] the file is created or truncated, as a copy into
+     * a folder the user chose is. Any other mode is a private file the login alone reads
+     * ([SftpPermissions.PRIVATE_FILE]): it is created new with that mode and never opened when
+     * something is already at [path], a file or a link pointing anywhere, which is
+     * [SftpError.AlreadyExists], so nothing another user planted at the name is followed or written.
+     */
+    suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int = SftpPermissions.FILE, onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> })
 
     /** Reads up to [maxBytes] for the viewer, deciding whether the file is text. */
     suspend fun readText(path: String, maxBytes: Int): TextRead
