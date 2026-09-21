@@ -6,6 +6,7 @@ import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
@@ -101,6 +102,38 @@ interface SnippetRepository {
     suspend fun get(id: String): Snippet?
     suspend fun upsert(snippet: Snippet)
     suspend fun delete(id: String)
+}
+
+/**
+ * The commands each host ran (spec C16): one history per host, shared by every tab on it, keyed
+ * by [app.berth.domain.model.Host.commandHistoryKey] and capped at [CAP] entries a host, the
+ * oldest going first. A command equal to the host's latest is not recorded twice in a row, the
+ * way `HISTCONTROL=ignoredups` keeps a shell's own history readable.
+ */
+interface CommandHistoryRepository {
+    /** [hostId]'s commands, oldest first. */
+    fun observeForHost(hostId: String): Flow<List<HostCommand>>
+
+    /** The newest [CAP] commands across every host, oldest first, for the sheet's All hosts view. */
+    fun observeAll(): Flow<List<HostCommand>>
+
+    /** Records [text] run on [hostId] at [at]; false when it was blank or repeats the host's latest entry. */
+    suspend fun record(hostId: String, text: String, at: Long): Boolean
+
+    /**
+     * Entries an older build kept in a tab's frame, handed to the host's history once: an entry
+     * already there with the same text and time is not added again, so restoring the same frame
+     * twice (the process dying before the frame was saved without them) changes nothing.
+     */
+    suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>)
+
+    suspend fun delete(id: Long)
+    suspend fun clear(hostId: String)
+    suspend fun clearAll()
+
+    companion object {
+        const val CAP = 2_000
+    }
 }
 
 /** User preferences: Deck layout, themes, fonts, and small flags. */

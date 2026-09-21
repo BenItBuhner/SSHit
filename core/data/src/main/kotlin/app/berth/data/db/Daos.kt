@@ -165,6 +165,44 @@ interface SnippetDao {
 }
 
 @Dao
+interface CommandHistoryDao {
+    @Query("SELECT * FROM command_history WHERE hostId = :hostId ORDER BY at, id")
+    fun observeForHost(hostId: String): Flow<List<CommandHistoryEntity>>
+
+    @Query("SELECT * FROM command_history WHERE hostId = :hostId ORDER BY at, id")
+    suspend fun forHost(hostId: String): List<CommandHistoryEntity>
+
+    /** The newest [limit] rows across every host, oldest first once reversed by the caller. */
+    @Query("SELECT * FROM command_history ORDER BY at DESC, id DESC LIMIT :limit")
+    fun observeNewest(limit: Int): Flow<List<CommandHistoryEntity>>
+
+    @Query("SELECT * FROM command_history WHERE hostId = :hostId ORDER BY at DESC, id DESC LIMIT 1")
+    suspend fun latest(hostId: String): CommandHistoryEntity?
+
+    @Insert
+    suspend fun insert(entry: CommandHistoryEntity): Long
+
+    @Insert
+    suspend fun insertAll(entries: List<CommandHistoryEntity>)
+
+    /** Drops the host's oldest rows past [keep], so a host never holds more than the cap. */
+    @Query(
+        "DELETE FROM command_history WHERE hostId = :hostId AND id NOT IN " +
+            "(SELECT id FROM command_history WHERE hostId = :hostId ORDER BY at DESC, id DESC LIMIT :keep)",
+    )
+    suspend fun trim(hostId: String, keep: Int)
+
+    @Query("DELETE FROM command_history WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM command_history WHERE hostId = :hostId")
+    suspend fun clear(hostId: String)
+
+    @Query("DELETE FROM command_history")
+    suspend fun clearAll()
+}
+
+@Dao
 interface PreferenceDao {
     @Query("SELECT value FROM preferences WHERE `key` = :key")
     fun observe(key: String): Flow<String?>

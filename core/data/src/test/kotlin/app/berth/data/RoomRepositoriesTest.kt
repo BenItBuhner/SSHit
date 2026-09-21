@@ -4,6 +4,7 @@ import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
 import app.berth.data.repo.EncryptedSecretStore
+import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
 import app.berth.data.repo.RoomIdentityRepository
 import app.berth.data.repo.RoomKnownHostRepository
@@ -36,6 +37,7 @@ import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -270,5 +272,68 @@ class RoomRepositoriesTest {
         assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
         settings.setCtrlTabKeysReachTerminal(true)
         assertTrue(settings.ctrlTabKeysReachTerminal.first())
+    }
+
+    // ---- command history (spec C16) -------------------------------------------------------------
+
+    @Test
+    fun `command history is per host, oldest first, a repeat of the latest folded and the cap kept`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        assertTrue(history.record("h1", "  ls -la ", 1))
+        assertTrue(history.record("h2", "uptime", 2))
+        assertFalse(history.record("h1", "ls -la", 3), "the host's latest again is one entry")
+        assertFalse(history.record("h1", "   ", 4), "a blank is nothing")
+        assertTrue(history.record("h1", "pwd", 5))
+        assertTrue(history.record("h1", "ls -la", 6), "the same command after another is a new entry")
+        assertEquals(listOf("ls -la" to 1L, "pwd" to 5L, "ls -la" to 6L), history.observeForHost("h1").first().map { it.text to it.at })
+        assertEquals(listOf("uptime"), history.observeForHost("h2").first().map { it.text })
+        assertEquals(listOf("ls -la", "uptime", "pwd", "ls -la"), history.observeAll().first().map { it.text })
+
+        // Past the cap the oldest go, one host's cap never touching another's.
+        for (i in 0 until CommandHistoryRepository.CAP + 10) history.record("h3", "cmd $i", 100L + i)
+        val h3 = history.observeForHost("h3").first()
+        assertEquals(CommandHistoryRepository.CAP, h3.size)
+        assertEquals("cmd 10", h3.first().text)
+        assertEquals("cmd ${CommandHistoryRepository.CAP + 9}", h3.last().text)
+        assertEquals(3, history.observeForHost("h1").first().size)
+        assertEquals(CommandHistoryRepository.CAP, history.observeAll().first().size, "All hosts shows the newest up to the cap")
+
+        // Delete one row, not every equal command; clear one host; clear all.
+        val first = history.observeForHost("h1").first().first()
+        history.delete(first.id)
+        assertEquals(listOf("pwd", "ls -la"), history.observeForHost("h1").first().map { it.text })
+        history.clear("h3")
+        assertTrue(history.observeForHost("h3").first().isEmpty())
+        assertEquals(3, history.observeAll().first().size)
+        history.clearAll()
+        assertTrue(history.observeAll().first().isEmpty())
+    }
+
+    @Test
+    fun `entries an older build kept in a frame are imported once`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        history.record("h1", "already", 50)
+        val fromFrame = listOf("git status" to 10L, "already" to 50L, "make" to 60L, "" to 61L, "make" to 60L)
+        history.importEntries("h1", fromFrame)
+        assertEquals(listOf("git status" to 10L, "already" to 50L, "make" to 60L), history.observeForHost("h1").first().map { it.text to it.at })
+
+        // The same frame restored again (the process died before the frame was saved without them) changes nothing.
+        history.importEntries("h1", fromFrame)
+        assertEquals(3, history.observeForHost("h1").first().size)
+        history.importEntries("h1", emptyList())
+        assertEquals(3, history.observeForHost("h1").first().size)
+    }
+
+    @Test
+    fun `deleting a host takes its command history with it`() = runTest {
+        val hosts = RoomHostRepository(db)
+        val history = RoomCommandHistoryRepository(db)
+        hosts.upsert(Host(id = "h1", name = "box", color = SwatchColor.MOSS, monogram = "BO", address = "box", user = "me", createdAt = 1))
+        history.record("h1", "ls", 1)
+        history.record("h2", "pwd", 2)
+        hosts.delete("h1")
+        assertNull(hosts.get("h1"))
+        assertTrue(history.observeForHost("h1").first().isEmpty())
+        assertEquals(listOf("pwd"), history.observeForHost("h2").first().map { it.text }, "another host's history stays")
     }
 }

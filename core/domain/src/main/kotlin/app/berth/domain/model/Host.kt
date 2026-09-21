@@ -89,7 +89,24 @@ data class Host(
 ) {
     val userAtHost: String get() = "$user@$address"
 
+    /** An unsaved Quick connect login (spec C11): not in the hosts table, its id carries [QUICK_ID_PREFIX]. */
+    val isQuickConnect: Boolean get() = id.startsWith(QUICK_ID_PREFIX)
+
+    /**
+     * The key this host's commands are kept under (spec C16, History per host): a saved host's id,
+     * so every tab on it shares one history; for an unsaved quick connect the login itself, so a
+     * later quick connect to the same box finds the commands the first one ran.
+     */
+    val commandHistoryKey: String get() = if (isQuickConnect) QUICK_HISTORY_PREFIX + userAtHost + (if (port == 22) "" else ":$port") else id
+
     companion object {
+        const val QUICK_ID_PREFIX = "quick-"
+        const val QUICK_HISTORY_PREFIX = "quick:"
+
+        /** The login a quick connect's [commandHistoryKey] names (`user@host[:port]`), or null for a saved host's key. */
+        fun quickConnectLabel(commandHistoryKey: String): String? =
+            commandHistoryKey.removePrefix(QUICK_HISTORY_PREFIX).takeIf { commandHistoryKey.startsWith(QUICK_HISTORY_PREFIX) }
+
         fun monogramFor(name: String): String {
             val words = name.trim().split(Regex("[\\s_\\-.]+")).filter { it.isNotEmpty() }
             val raw = when {

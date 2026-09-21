@@ -3,6 +3,7 @@ package app.berth.data.repo
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
+import app.berth.data.db.CommandHistoryEntity
 import app.berth.data.db.PreferenceEntity
 import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
@@ -13,6 +14,7 @@ import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyStorage
@@ -27,6 +29,7 @@ import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -49,8 +52,56 @@ class RoomHostRepository(private val db: BerthDatabase) : HostRepository {
     override fun observe(id: String): Flow<Host?> = db.hosts().observe(id).map { it?.toDomain() }
     override suspend fun get(id: String): Host? = db.hosts().get(id)?.toDomain()
     override suspend fun upsert(host: Host) = db.hosts().upsert(host.toEntity())
-    override suspend fun delete(id: String) = db.hosts().delete(id)
+
+    /** The host's commands go with it: a history nothing can open again is not kept (spec C16). */
+    override suspend fun delete(id: String) {
+        db.hosts().delete(id)
+        db.commandHistory().clear(id)
+    }
+
     override suspend fun markConnected(id: String, at: Long) = db.hosts().markConnected(id, at)
+}
+
+class RoomCommandHistoryRepository(private val db: BerthDatabase) : CommandHistoryRepository {
+    private val writeLock = Mutex()
+
+    override fun observeForHost(hostId: String): Flow<List<HostCommand>> =
+        db.commandHistory().observeForHost(hostId).map { list -> list.map { it.toDomain() } }
+
+    override fun observeAll(): Flow<List<HostCommand>> =
+        db.commandHistory().observeNewest(CommandHistoryRepository.CAP).map { list -> list.asReversed().map { it.toDomain() } }
+
+    /** Under one lock: two tabs on the same host committing at the same moment must not both read the old latest and both write. */
+    override suspend fun record(hostId: String, text: String, at: Long): Boolean = writeLock.withLock {
+        val command = text.trim()
+        if (command.isEmpty()) return false
+        val dao = db.commandHistory()
+        if (dao.latest(hostId)?.text == command) return false
+        dao.insert(CommandHistoryEntity(hostId = hostId, text = command, at = at))
+        dao.trim(hostId, CommandHistoryRepository.CAP)
+        true
+    }
+
+    override suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>) = writeLock.withLock {
+        val dao = db.commandHistory()
+        val present = dao.forHost(hostId).mapTo(HashSet()) { it.text to it.at }
+        val fresh = entries.asSequence()
+            .map { (text, at) -> text.trim() to at }
+            .filter { (text, _) -> text.isNotEmpty() }
+            .filter { it !in present }
+            .distinct()
+            .map { (text, at) -> CommandHistoryEntity(hostId = hostId, text = text, at = at) }
+            .toList()
+        if (fresh.isEmpty()) return@withLock
+        dao.insertAll(fresh)
+        dao.trim(hostId, CommandHistoryRepository.CAP)
+    }
+
+    override suspend fun delete(id: Long) = db.commandHistory().delete(id)
+    override suspend fun clear(hostId: String) = db.commandHistory().clear(hostId)
+    override suspend fun clearAll() = db.commandHistory().clearAll()
+
+    private fun CommandHistoryEntity.toDomain() = HostCommand(id = id, hostId = hostId, text = text, at = at)
 }
 
 class EncryptedSecretStore(private val db: BerthDatabase, private val crypto: SecretCrypto) : SecretStore {
