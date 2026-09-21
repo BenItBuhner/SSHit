@@ -36,7 +36,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -93,6 +92,7 @@ import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
@@ -489,7 +489,7 @@ private fun StageOverflow(
         IconAction(onClick = { menu = true }, description = "More") {
             BerthIcon(BerthIcons.moreVert)
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface3, shape = RoundedCornerShape(BerthRadius.row)) {
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
             @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
                 DropdownMenuItem(
                     text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },

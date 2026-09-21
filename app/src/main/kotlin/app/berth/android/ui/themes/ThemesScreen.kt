@@ -20,7 +20,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -43,6 +42,7 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
@@ -114,7 +114,7 @@ fun ThemesScreen(
             IconAction(onClick = ::newTheme, description = "New theme") { BerthIcon(BerthIcons.add) }
             Box {
                 IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                BerthMenu(expanded = menu, onDismiss = { menu = false }) {
                     MenuItem("Import file") { menu = false; openFile() }
                     MenuItem("Paste theme text") { menu = false; pasteSheet = true }
                     MenuItem("Export custom themes") {
@@ -228,7 +228,7 @@ private fun ThemeTile(
                 )
             }
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
             if (!isDefault) MenuItem("Set as app default") { menu = false; onSetDefault() }
             MenuItem("Duplicate") { menu = false; onDuplicate() }
             MenuItem("Export") { menu = false; onExport() }

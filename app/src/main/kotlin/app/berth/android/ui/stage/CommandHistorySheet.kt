@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -29,12 +27,12 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.snippets.SnippetEditorSheet
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionState
 import app.berth.terminal.CommandEntry
@@ -138,12 +136,7 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
                                     onLongClick = { menuFor = entry },
                                     modifier = Modifier.semantics { contentDescription = "Command ${entry.text}" },
                                 )
-                                DropdownMenu(
-                                    expanded = menuFor == entry,
-                                    onDismissRequest = { menuFor = null },
-                                    containerColor = c.surface3,
-                                    shape = RoundedCornerShape(BerthRadius.row),
-                                ) {
+                                BerthMenu(expanded = menuFor == entry, onDismiss = { menuFor = null }) {
                                     @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
                                         DropdownMenuItem(
                                             text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },

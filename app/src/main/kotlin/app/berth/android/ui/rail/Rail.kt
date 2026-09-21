@@ -3,8 +3,6 @@ package app.berth.android.ui.rail
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,13 +15,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TabSource
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
@@ -99,7 +97,7 @@ fun SessionRow(
                 }
             },
         )
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
             if (!record.state.isActive) DropdownMenuItem(text = { Text("Reconnect", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onReconnect() })
             if (record.state.isActive && !files) DropdownMenuItem(text = { Text("Detach", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onDetach() })
             DropdownMenuItem(text = { Text("Close", style = BerthType.body, color = c.danger) }, onClick = { menu = false; onClose() })

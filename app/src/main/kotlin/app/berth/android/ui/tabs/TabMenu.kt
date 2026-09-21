@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -119,18 +119,14 @@ fun GroupMenu(
     }
 }
 
-/** Floating panel at the row radius on `surface.3` with 8 dp padding (spec C3, Long-press menu). */
+/**
+ * Floating panel at the row radius on `surface.3` with 8 dp padding (spec C3, Long-press menu):
+ * the app's [BerthMenu], which is surface.3 over a screen and keeps the interface's font cap
+ * inside its window, with the spec's padding around the rows.
+ */
 @Composable
 private fun MenuPanel(expanded: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val c = Berth.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = c.surface3,
-        shape = RoundedCornerShape(BerthRadius.row),
-        shadowElevation = 0.dp,
-        tonalElevation = 0.dp,
-    ) {
+    BerthMenu(expanded = expanded, onDismiss = onDismiss) {
         Box(Modifier.padding(horizontal = 8.dp)) {
             androidx.compose.foundation.layout.Column { content() }
         }
