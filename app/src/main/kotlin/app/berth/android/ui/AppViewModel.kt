@@ -40,6 +40,7 @@ import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
@@ -71,7 +72,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
@@ -189,6 +193,14 @@ class AppViewModel @Inject constructor(
 
     fun updateHardwareKeyboard(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) {
         viewModelScope.launch { settings.updateHardwareKeyboardSettings(change) }
+    }
+
+    /** Scrollback size and the drag arrows (spec C20, Settings › Terminal and Gestures); every terminal on stage follows it. */
+    val terminalSettings: StateFlow<TerminalSettings> =
+        settings.terminalSettings.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalSettings())
+
+    fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) {
+        viewModelScope.launch { settings.updateTerminalSettings(change) }
     }
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
@@ -913,6 +925,74 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch {
             val current = settings.terminalFont.first()
             settings.setTerminalFont(current.copy(sizeSp = sizeSp.coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP)))
+        }
+    }
+
+    // ---- predictive text (spec C6) ----------------------------------------------------------------
+
+    private val _predictiveTextTabIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The terminal tabs whose keyboard may suggest words (spec C6, the Session sheet's row): the
+     * Stage tells the keyboard and lights the grip from the one flag. Off for every tab until asked,
+     * and the tab's alone: not saved with it, so a shell told to suggest is told again next launch,
+     * and the privacy default is the one a restored tab comes back to.
+     */
+    val predictiveTextTabIds: StateFlow<Set<String>> = _predictiveTextTabIds.asStateFlow()
+
+    fun setPredictiveText(tabId: String, on: Boolean) {
+        _predictiveTextTabIds.update { if (on) it + tabId else it - tabId }
+    }
+
+    init {
+        // A closed tab's flag goes with it. Ids are never reused, so this is tidiness, not correctness.
+        viewModelScope.launch {
+            sessions.records.collect { list ->
+                _predictiveTextTabIds.update { on -> if (on.isEmpty()) on else on.filterTo(HashSet()) { id -> list.any { it.id == id } } }
+            }
+        }
+    }
+
+    /** Font size writes one at a time: a pinch fires several steps in a row and each must read the last one's result. */
+    private val fontSizeLock = Mutex()
+
+    /**
+     * The pinch and the font-step chord, one function for both (review #15): on a host with its
+     * own size the step writes that override, so the terminal under the fingers is the one that
+     * changes; on any other tab, or a quick-connect tab with no saved host, it writes the app's size.
+     */
+    fun stepFontSize(hostId: String?, step: Int) {
+        viewModelScope.launch {
+            fontSizeLock.withLock {
+                val host = hostId?.let { hostRepository.get(it) }
+                val override = host?.appearance?.fontSizeSp
+                if (host != null && override != null) {
+                    hostRepository.upsert(host.copy(appearance = host.appearance.copy(fontSizeSp = (override + step).coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP))))
+                } else {
+                    val current = settings.terminalFont.first()
+                    settings.setTerminalFont(current.copy(sizeSp = (current.sizeSp + step).coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP)))
+                }
+            }
+        }
+    }
+
+    /**
+     * The two-finger double-tap (spec D1, "reset font size to host default"): a host with its own
+     * size loses it and follows the app's again; with none, the app's size returns to its default.
+     * The pinch writes the same field the host editor does, so the one size a reset can go back to
+     * is the one underneath, not a value pinched over.
+     */
+    fun resetFontSize(hostId: String?) {
+        viewModelScope.launch {
+            fontSizeLock.withLock {
+                val host = hostId?.let { hostRepository.get(it) }
+                if (host?.appearance?.fontSizeSp != null) {
+                    hostRepository.upsert(host.copy(appearance = host.appearance.copy(fontSizeSp = null)))
+                } else {
+                    val current = settings.terminalFont.first()
+                    settings.setTerminalFont(current.copy(sizeSp = TerminalFont().sizeSp))
+                }
+            }
         }
     }
 

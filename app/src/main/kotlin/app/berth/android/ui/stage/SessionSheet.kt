@@ -33,6 +33,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.rail.SessionRow
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
@@ -159,6 +160,17 @@ fun SessionSheet(
                     }
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() })
                 }
+            }
+            // C6's toggle row: this tab's keyboard may suggest words; the Stage tells the keyboard and lights the grip.
+            if (session != null && !session.tunnelsOnly) {
+                val predictiveIds by vm.predictiveTextTabIds.collectAsState()
+                ToggleRow(
+                    "Predictive text",
+                    session.id in predictiveIds,
+                    { vm.setPredictiveText(session.id, it) },
+                    // A request, not a promise: IME_FLAG_NO_PERSONALIZED_LEARNING is honoured as the keyboard chooses (review #16).
+                    caption = "Word suggestions on this tab; Berth asks the keyboard not to learn from it",
+                )
             }
             val rest = others.filter { it.id != tab.id }
             if (rest.isNotEmpty()) {

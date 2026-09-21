@@ -1,5 +1,6 @@
 package app.berth.android.ui.stage
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -10,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -31,7 +34,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +50,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -57,6 +60,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
@@ -69,6 +74,7 @@ import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
@@ -82,6 +88,7 @@ import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
+import app.berth.android.ui.terminal.LinkTap
 import app.berth.android.ui.terminal.TerminalSearch
 import app.berth.android.ui.terminal.TerminalSelection
 import app.berth.android.ui.terminal.TerminalViewport
@@ -108,6 +115,9 @@ class StageTools {
     var pendingPaste by mutableStateOf<PasteAnalysis?>(null)
     var notice by mutableStateOf<String?>(null)
     var historyOpen by mutableStateOf(false)
+
+    /** The OSC 8 link tapped on the canvas and waiting for a look in [LinkOpenSheet] (spec A60). */
+    var pendingLink by mutableStateOf<LinkTap?>(null)
 
     /**
      * Sends [text] to the session as a paste, or holds it for the preview sheet when it is more
@@ -143,6 +153,12 @@ class StageTools {
     companion object {
         /** The notice for a paste into a session without a shell. */
         const val NOT_CONNECTED = "Not connected"
+
+        /** The selection bar's overflow toggle for block selection (spec C18 as ruled in review #9). */
+        const val RECTANGULAR = "Rectangular"
+
+        /** The notice when no app on the phone takes a link's scheme. */
+        const val NOTHING_OPENS = "Nothing on this phone opens that link"
     }
 }
 
@@ -168,10 +184,13 @@ fun StageToolbar(tools: StageTools, session: TerminalSession?, focus: StageFocus
 
 /**
  * `24 chars · Copy · Paste · Search · Share · ⋮ · ×` where the tab strip was (spec C18). Copy
- * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all and, when the
- * selection is a link, Open. Paste is there only while the session is Live: on a frozen frame there
- * is nothing to paste into, and its absence says so. Same height and fill as the header so nothing
- * below moves.
+ * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all, Rectangular
+ * and, when the selection is a link, Open. Paste is there only while the session is Live: on a
+ * frozen frame there is nothing to paste into, and its absence says so. Same height and fill as
+ * the header so nothing below moves. Where the row is too narrow for all of them (a phone at the
+ * interface's font cap), Share and then Search step into the overflow rather than squeeze the
+ * buttons after them under their 48 dp: the bar measures what its actions need against the width
+ * it has, so nothing is cut and nothing is guessed from the scale.
  */
 @Composable
 private fun SelectionBar(tools: StageTools, session: TerminalSession) {
@@ -195,58 +214,69 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
         }
         selection.clear()
     }
+    fun search() {
+        val t = text()
+        selection.clear()
+        tools.openSearch(t)
+    }
+    fun shareText() {
+        val t = text()
+        selection.clear()
+        if (t.isNotEmpty()) share(context, t)
+    }
     val row: @Composable (Modifier) -> Unit = { m ->
-        Row(m.height(style.height), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                selection.summary,
-                style = BerthType.label,
-                color = c.text2,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 12.dp, end = 4.dp).semantics { contentDescription = "Selection, ${selection.summary}" },
-            )
-            Spacer(Modifier.weight(1f))
-            BarAction("Copy", onClick = ::copy)
-            if (live) {
-                BarAction("Paste") {
-                    clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
-                    selection.clear()
-                }
-            }
-            BarAction("Search") {
-                val t = text()
-                selection.clear()
-                tools.openSearch(t)
-            }
-            BarAction("Share") {
-                val t = text()
-                selection.clear()
-                if (t.isNotEmpty()) share(context, t)
-            }
-            Box {
-                IconAction(onClick = { menu = true }, description = "Selection options") { BerthIcon(BerthIcons.moreVert) }
-                BerthMenu(expanded = menu, onDismiss = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Select all", style = BerthType.body, color = c.text1) },
-                        onClick = {
-                            menu = false
-                            synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
-                        },
-                    )
-                    val link = remember(selection.range) { linkIn(text()) }
-                    if (link != null) {
-                        DropdownMenuItem(
-                            text = { Text("Open link", style = BerthType.body, color = c.text1) },
-                            onClick = {
-                                menu = false
-                                selection.clear()
-                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                            },
-                        )
+        BoxWithConstraints(m.height(style.height)) {
+            val kept = barActionsThatFit(constraints.maxWidth, selection.summary, listOfNotNull("Copy", if (live) "Paste" else null), listOf("Search", "Share"))
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    selection.summary,
+                    style = BerthType.label,
+                    color = c.text2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = SUMMARY_PAD_START, end = SUMMARY_PAD_END).semantics { contentDescription = "Selection, ${selection.summary}" },
+                )
+                Spacer(Modifier.weight(1f))
+                BarAction("Copy", onClick = ::copy)
+                if (live) {
+                    BarAction("Paste") {
+                        clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
+                        selection.clear()
                     }
                 }
+                if (kept >= 1) BarAction("Search", onClick = ::search)
+                if (kept >= 2) BarAction("Share", onClick = ::shareText)
+                Box {
+                    IconAction(onClick = { menu = true }, description = "Selection options") { BerthIcon(BerthIcons.moreVert) }
+                    BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+                        if (kept < 1) BerthMenuItem("Search", onClick = { menu = false; search() })
+                        if (kept < 2) BerthMenuItem("Share", onClick = { menu = false; shareText() })
+                        BerthMenuItem("Select all", onClick = {
+                            menu = false
+                            synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
+                        })
+                        // The block between the selection's corners instead of the stream from one to the
+                        // other (review #9: a toggle, not a second-finger gesture); on, in accent, until
+                        // switched off, for this tab's later selections too.
+                        BerthMenuItem(StageTools.RECTANGULAR, selected = selection.rectangular, onClick = {
+                            menu = false
+                            synchronized(session.emulator.lock) { selection.setRectangular(session.emulator, !selection.rectangular) }
+                        })
+                        // The link the selection is: the OSC 8 link its first cell was printed under (how a
+                        // link is reached while the application has the mouse, spec A60), else its text when
+                        // the whole of it is an address. Either goes through the link sheet for a look.
+                        val link = remember(selection.range, selection.rectangular) { linkUnder(session, selection) ?: linkIn(text())?.let { LinkTap(it, it) } }
+                        if (link != null) {
+                            BerthMenuItem("Open link", onClick = {
+                                menu = false
+                                selection.clear()
+                                tools.pendingLink = link
+                            })
+                        }
+                    }
+                }
+                IconAction(onClick = { selection.clear() }, description = "Clear selection") { BerthIcon(BerthIcons.close) }
             }
-            IconAction(onClick = { selection.clear() }, description = "Clear selection") { BerthIcon(BerthIcons.close) }
         }
     }
     when (style.chrome) {
@@ -279,10 +309,37 @@ private fun BarAction(label: String, onClick: () -> Unit) {
             .semantics { role = Role.Button }
             // A short word (Copy) still answers to a 48 dp column; the longer ones set their own width.
             .defaultMinSize(minWidth = TouchTargetSize)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = BAR_ACTION_PAD),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, style = BerthType.label, color = c.accent, maxLines = 1)
+    }
+}
+
+private val BAR_ACTION_PAD = 8.dp
+private val SUMMARY_PAD_START = 12.dp
+private val SUMMARY_PAD_END = 4.dp
+
+/**
+ * How many of the bar's [optional] actions, taken from the front, stand in a row [width] pixels
+ * wide beside [summary], the [always] actions and the two icon actions after them, each text
+ * action as wide as [BarAction] makes it: its label in the Label style plus its padding, and 48 dp
+ * at the least. The rest go into the overflow. Measured, not read off the font scale, so a wider
+ * bar (a tablet, landscape) keeps them all at any scale and a narrow one sheds only what it must.
+ */
+@Composable
+private fun barActionsThatFit(width: Int, summary: String, always: List<String>, optional: List<String>): Int {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(width, summary, always, optional, density) {
+        with(density) {
+            fun action(label: String) = maxOf(TouchTargetSize.roundToPx(), measurer.measure(label, BerthType.label).size.width + (BAR_ACTION_PAD * 2).roundToPx())
+            val fixed = measurer.measure(summary, BerthType.label).size.width + (SUMMARY_PAD_START + SUMMARY_PAD_END).roundToPx() +
+                always.sumOf { action(it) } + 2 * TouchTargetSize.roundToPx()
+            var kept = optional.size
+            while (kept > 0 && fixed + optional.take(kept).sumOf { action(it) } > width) kept--
+            kept
+        }
     }
 }
 
@@ -498,6 +555,315 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
     }
 }
 
+/**
+ * The look before an OSC 8 link opens (spec A60), on the paste preview's posture: the address in
+ * full, since the text it wore on screen is the remote's choice and need not be where it goes. What
+ * the sheet says and offers follows the link's scheme ([LinkLook]): a web page or a mail address
+ * has Open filled; a `file://` link, what `ls --hyperlink` prints, names a file on the remote that
+ * nothing on this phone can open, so its answers are Copy path and, on a live tab, Paste path (the
+ * path quoted for the shell, through the paste path so bracketed paste applies); an `ssh://` or
+ * `sftp://` link says that Berth itself is what opens it; any other scheme is another app's, and
+ * the weight goes to Cancel with Open anyway plain beside it. When the text on screen claimed
+ * another address than the link's (a link dressed as another site), the caption says so in the
+ * danger colour and the weight goes to Cancel likewise, as the clipboard notice weighs its
+ * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first. A
+ * link nothing on the phone handles says so in the notice pill rather than doing nothing.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, haptics: DeckHaptics, onDismiss: () -> Unit) {
+    val c = Berth.colors
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val look = remember(link) { LinkLook.of(link) }
+    val record by session.record.collectAsState()
+    val live = record.state == SessionState.LIVE
+    fun open() {
+        onDismiss()
+        // A plain view of the address, never Intent.parseUri: the URL cannot name an intent of its own.
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            tools.notice = StageTools.NOTHING_OPENS
+        } catch (e: RuntimeException) {
+            tools.notice = "Couldn't open that link"
+        }
+    }
+    fun copy(text: String) {
+        clipboard.setText(AnnotatedString(text))
+        tools.notice = "Copied"
+        onDismiss()
+    }
+    BerthSheet(onDismiss = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetTitle("Open link", look.caption, captionColor = if (look.warning) c.danger else c.text2)
+            Panel {
+                // Left to right whatever the address holds, so a right-to-left run in a path can never re-order the scheme and host.
+                Text(
+                    link.url,
+                    style = MonoBody.copy(textDirection = TextDirection.Ltr),
+                    color = c.text1,
+                    modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${link.url}" },
+                )
+            }
+            when {
+                look.posture == LinkLook.Posture.FILE -> {
+                    val path = look.path.orEmpty()
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Copy path", kind = ButtonKind.PRIMARY, onClick = { copy(path) })
+                        if (live) {
+                            BerthButton("Paste path", onClick = {
+                                onDismiss()
+                                tools.paste(session, LinkLook.shellQuote(path), haptics)
+                            })
+                        }
+                        BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                    }
+                }
+                look.warning || look.posture == LinkLook.Posture.OTHER_APP -> {
+                    // Three answers side by side, wrapping where they will not fit (the interface's font cap), as the paste warning's do.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Cancel", onClick = onDismiss)
+                        BerthButton("Open anyway", kind = ButtonKind.TEXT, onClick = ::open)
+                        BerthButton("Copy", kind = ButtonKind.TEXT, onClick = { copy(link.url) })
+                    }
+                }
+                else -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Open", kind = ButtonKind.PRIMARY, onClick = ::open)
+                        BerthButton("Copy", kind = ButtonKind.TEXT, onClick = { copy(link.url) })
+                        Spacer(Modifier.weight(1f))
+                        BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What the link sheet says over the address and which answers it lays out (spec A60): the
+ * [posture] from the link's scheme, the [caption] from where the link goes and from the text it
+ * wore on screen, and [warning] when that text claimed another address than the link's. A text
+ * claims an address when it carries a scheme, begins with `www.`, or is a bare host whose last
+ * label is letters, two or more of them, that is not a file extension a terminal prints all day
+ * (`notes.txt`, `main.py`, `Node.js`, `report.pdf` are names, not sites) and is not a segment of
+ * the link's own path, since a text that appears in the address is the address naming itself
+ * (a directory listing's every entry). Version numbers and decimals end in digits and claim
+ * nothing. A claim is the link's own when it is the link's host, give or take `www.`, or a parent
+ * of it (`github.com` over gist.github.com), which no stranger's host can be. The query is not
+ * exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
+ * link [path] is the file's path, percent-decoded. An `http`, `https` or `file` address is read
+ * the way the browser and Android's `Uri` that will open it read it, a `\` as a `/`, so its
+ * authority ends at the first of either and `https://evil.example\@google.com/` goes to
+ * evil.example, not to the host after the `@`; the sheet shows and opens the URL as it is. Pure,
+ * so the rule is tested on its own ([LinkLookTest][app.berth.android.ui.stage.LinkLookTest]).
+ */
+class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, val path: String? = null) {
+    enum class Posture {
+        /** A web page or a mail address: Open filled, Copy and Cancel beside it. */
+        OPEN,
+        /** A file on the remote: nothing here opens it; Copy path, Paste path on a live tab, Cancel. */
+        FILE,
+        /** `ssh://` or `sftp://`: Berth itself opens it, through Quick connect's own look; Open filled. */
+        BERTH,
+        /** Any other scheme is another app's to open: Cancel carries the weight, Open anyway and Copy stand plain. */
+        OTHER_APP,
+    }
+
+    companion object {
+        /** Scheme, an authority whose userinfo runs to its last `@` (the browser's and `SshLink`'s reading), then the host: a bracketed IPv6 literal or a name. */
+        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^/?#\s]*@)?(\[[^\]]*\]|[^/?#:;@\s]+)""")
+        /** A host of two labels or more, `www.` or not, a port and a tail drawn with any of the slashes a text can wear. */
+        private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#\\].*)?$""")
+        private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
+        private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
+
+        /**
+         * The schemes whose addresses a WHATWG parser, Chrome and Android's `Uri` among them, reads
+         * with `\` as `/`: the special schemes the sheet parses a host from. The parsers that read
+         * `https://evil.example\@google.com/` as google.com's are the ones that will never open it.
+         */
+        private val SLASH_SCHEMES = setOf("http", "https", "file")
+
+        /** What a terminal prints as file names all day: a bare word ending in one of these is a name, not a host. */
+        private val FILE_EXTENSIONS = setOf(
+            "txt", "md", "rst", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "htm", "css", "ini", "cfg", "conf", "env", "lock", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt",
+            "py", "js", "ts", "tsx", "jsx", "rs", "go", "kt", "kts", "java", "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "pl", "pm", "sh", "bash", "zsh", "fish", "lua", "swift", "scala", "clj", "ex", "exs", "erl", "hs", "ml", "sql", "vue", "svelte", "gradle", "cmake", "mk", "nix", "tf", "proto",
+            "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "mp3", "mp4", "mkv", "webm", "wav", "flac", "ogg", "mov", "avi",
+            "zip", "gz", "tgz", "bz2", "xz", "zst", "tar", "rar", "jar", "war", "apk", "aab", "deb", "rpm", "iso", "img", "dmg", "exe", "dll", "so", "dylib", "bin", "o", "a", "class", "pyc", "wasm",
+            "bak", "tmp", "swp", "orig", "rej", "patch", "diff", "map", "min", "sum", "sig", "asc", "gpg", "pem", "crt", "key", "pub",
+        )
+
+        fun of(link: LinkTap): LinkLook {
+            val url = link.url.trim()
+            val scheme = url.substringBefore(':', "").lowercase()
+            // `ls` quotes a name with a space in it; the quotes are the listing's, not the name's.
+            val shown = link.text.trim().trim('\'', '"')
+            val truncated = "\u201C${shown.take(SHOWN_CHARS)}${if (shown.length > SHOWN_CHARS) "\u2026" else ""}\u201D"
+            var path: String? = null
+            // A `mailto:` link's mailbox, decoded and lowercased: what a shown mail address is measured against.
+            var mailbox: String? = null
+            // Where the link goes, as the caption's second half, and the host a shown text is measured against.
+            val to: String?
+            val where: String
+            val posture: Posture
+            when (scheme) {
+                "http", "https" -> {
+                    to = hostOf(url)
+                    where = if (to != null) "goes to $to" else "a web link"
+                    posture = Posture.OPEN
+                }
+                "file" -> {
+                    to = hostOf(url)?.takeIf { it.isNotEmpty() }
+                    path = percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')).ifEmpty { "/" }
+                    where = if (to != null) "a file on $to: $path" else "a file: $path"
+                    posture = Posture.FILE
+                }
+                "ssh", "sftp" -> {
+                    to = hostOf(url)
+                    where = "opens in Berth: ${sshTarget(url)}"
+                    posture = Posture.BERTH
+                }
+                "mailto" -> {
+                    val address = percentDecode(url.substringAfter(':').substringBefore('?')).trim()
+                    mailbox = address.lowercase()
+                    to = address.substringAfterLast('@', "").lowercase().ifEmpty { null }
+                    where = "mails $address"
+                    posture = Posture.OPEN
+                }
+                else -> {
+                    to = null
+                    where = "another app on this phone would open this ${scheme.ifEmpty { "plain" }} link"
+                    posture = Posture.OTHER_APP
+                }
+            }
+            val namesItself = shown.isEmpty() || sameAddress(shown, url) ||
+                (posture == Posture.FILE && path != null && shown.lowercase() in segments(path)) ||
+                (mailbox != null && percentDecode(shown.lowercase().removePrefix("mailto:")) == mailbox)
+            if (namesItself) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false, posture = posture, path = path)
+            // A mail address as the text claims that mailbox; the same one named itself above, so what is left is another's.
+            val claim = hostClaim(shown, url) ?: EMAIL.matchEntire(shown)?.value?.lowercase()?.takeIf { mailbox != null }
+            val deceptive = claim != null && (to == null || !sameSite(claim, to))
+            return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, path = path)
+        }
+
+        /**
+         * [claim] names the site the link goes [to]: that host, give or take `www.`, or a parent of it,
+         * since `github.com` over gist.github.com is no lie and an attacker cannot make evil.example
+         * end in `.google.com`, only carry it. One way: a claim deeper than the host is another host.
+         * A parent is a domain, not a bare TLD: `www.com` shorn of its `www.` is no parent of every `.com`.
+         */
+        private fun sameSite(claim: String, to: String): Boolean {
+            val c = claim.removePrefix("www.")
+            val t = to.removePrefix("www.")
+            return c == t || ('.' in c && t.endsWith(".$c"))
+        }
+
+        /**
+         * The host of an address with a scheme and an authority, lowercased, as the parser that opens
+         * it would read it ([asRead]); null for one without (`mailto:`, a bare word).
+         */
+        fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.lowercase()
+
+        /**
+         * [url] as the parser that will open it reads it: in the [SLASH_SCHEMES] every `\` is a `/`,
+         * so the authority ends at the first of either. For reading only; the sheet's panel and
+         * `Uri.parse` get the URL as it is, since that is what is opened.
+         */
+        private fun asRead(url: String): String =
+            if (url.indexOf('\\') >= 0 && url.substringBefore(':', "").lowercase() in SLASH_SCHEMES) url.replace('\\', '/') else url
+
+        /**
+         * The host a shown [text] claims to be, or null when it claims none: the host of an address
+         * with a scheme, a `www.` name, or a bare host that is neither a file name nor a segment of
+         * [url]'s own path.
+         */
+        fun hostClaim(text: String, url: String): String? {
+            hostOf(text)?.let { return it }
+            val host = BARE_HOST.matchEntire(text)?.groupValues?.get(1)?.lowercase() ?: return null
+            if (text.startsWith("www.", ignoreCase = true)) return host
+            val last = host.substringAfterLast('.')
+            if (last.length < 2 || !last.all { it in 'a'..'z' }) return null
+            if (last in FILE_EXTENSIONS) return null
+            if (host in segments(percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')))) return null
+            return host
+        }
+
+        /**
+         * [path] as one word for a POSIX shell: as it is when it holds nothing the shell reads, else
+         * in single quotes, a quote of its own closed, escaped and reopened, so a name with a space
+         * or a `$` lands on the prompt as the name it is.
+         */
+        fun shellQuote(path: String): String {
+            if (path.isNotEmpty() && path.all { it.isLetterOrDigit() && it.code < 128 || it in "-_./:+=@,%" }) return path
+            return "'" + path.replace("'", "'\\''") + "'"
+        }
+
+        /** `%XX` runs read as UTF-8 bytes; anything malformed is left as it stands. */
+        fun percentDecode(s: String): String {
+            if (!s.contains('%')) return s
+            val out = java.io.ByteArrayOutputStream(s.length)
+            var i = 0
+            while (i < s.length) {
+                val c = s[i]
+                if (c == '%' && i + 2 < s.length && isHex(s[i + 1]) && isHex(s[i + 2])) {
+                    out.write(s.substring(i + 1, i + 3).toInt(16))
+                    i += 3
+                } else {
+                    val bytes = c.toString().toByteArray(Charsets.UTF_8)
+                    out.write(bytes, 0, bytes.size)
+                    i++
+                }
+            }
+            return String(out.toByteArray(), Charsets.UTF_8)
+        }
+
+        private fun isHex(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+        /** What follows `scheme://authority`, read as [asRead]: the path with its query and fragment, or nothing for an address with no path. */
+        private fun afterAuthority(url: String): String {
+            val read = asRead(url)
+            val start = read.indexOf("://")
+            if (start < 0) return ""
+            val slash = read.indexOf('/', start + 3)
+            return if (slash < 0) "" else read.substring(slash)
+        }
+
+        /** The path's segments, lowercased, empty ones dropped. */
+        private fun segments(path: String): Set<String> = path.split('/').mapNotNullTo(HashSet()) { it.lowercase().takeIf { s -> s.isNotEmpty() } }
+
+        /**
+         * `user@host:port` for an `ssh://` or `sftp://` link, read as `SshLink` reads it: the authority to
+         * the first `/`, `?` or `#`, the host after its last `@`, and the user's `;fingerprint=`
+         * parameter (the draft URI keeps it in the userinfo) and password, never a caption's business, left out.
+         */
+        private fun sshTarget(url: String): String {
+            val start = url.indexOf("://") + 3
+            val end = url.indexOfAny(charArrayOf('/', '?', '#'), start).let { if (it < 0) url.length else it }
+            val authority = url.substring(start, end)
+            val at = authority.lastIndexOf('@')
+            val user = if (at < 0) "" else authority.substring(0, at).substringBefore(';').substringBefore(':')
+            val hostPort = authority.substring(at + 1).substringBefore(';')
+            return if (user.isEmpty()) hostPort else "$user@$hostPort"
+        }
+
+        /** The text is the address itself, give or take the scheme, `www.`, a closing slash and how its slashes are drawn ([asRead]). */
+        private fun sameAddress(text: String, url: String): Boolean {
+            fun norm(s: String) = asRead(s.trim()).lowercase().replace(SCHEME_PREFIX, "").removePrefix("www.").trimEnd('/')
+            return norm(text) == norm(url)
+        }
+
+        private const val SHOWN_CHARS = 40
+    }
+}
+
 /** `Has 2 control characters (^[, ^C) the shell would act on.`: the count and the first names, for the sheet's caption. */
 fun controlWarning(analysis: PasteAnalysis): String {
     val n = analysis.controlChars
@@ -543,6 +909,15 @@ private val LINK = Regex("""https?://\S+|ssh://\S+|ftp://\S+""")
 private fun linkIn(text: String): String? {
     val t = text.trim()
     return LINK.matchEntire(t)?.value
+}
+
+/** The OSC 8 link under the selection's first cell, with the selected text as what it wore; null when that cell is plain. */
+private fun linkUnder(session: TerminalSession, selection: TerminalSelection): LinkTap? {
+    val emulator = session.emulator
+    return synchronized(emulator.lock) {
+        val start = selection.current(emulator)?.start ?: return@synchronized null
+        emulator.linkAt(start.row, start.col)?.let { LinkTap(it, selection.text(emulator)) }
+    }
 }
 
 private fun share(context: android.content.Context, text: String) {

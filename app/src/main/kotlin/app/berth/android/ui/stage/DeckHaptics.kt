@@ -72,6 +72,11 @@ class DeckHaptics(
         if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
     }
 
+    /** A two-finger tap lifted with the double-tap window running (spec D1): a light touch, so the finger knows it landed before the paste follows. */
+    fun twoFingerTapArmed() {
+        if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
     /** Text copied from the terminal (spec C18): Confirm, the same tick as a paste. */
     fun copy() {
         if (level == HapticLevel.FULL) haptics.performHapticFeedback(HapticFeedbackType.Confirm)

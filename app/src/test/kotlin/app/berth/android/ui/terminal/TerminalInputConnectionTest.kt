@@ -148,4 +148,43 @@ class TerminalInputConnectionTest {
         assertEquals(EditorInfo.IME_ACTION_NONE, info.imeOptions and EditorInfo.IME_MASK_ACTION)
         assertEquals(0, info.initialCapsMode)
     }
+
+    @Test
+    fun `with predictive text on the editor info is plain text the keyboard may suggest for, and still learns nothing from it`() {
+        val info = EditorInfo()
+        configureTerminalEditorInfo(info, predictive = true)
+        // Plain text, nothing else: no suggestions flag, no visible-password variation, and no
+        // autocorrect or capitalisation asked for either.
+        assertEquals(InputType.TYPE_CLASS_TEXT, info.inputType)
+        // What is typed into a shell stays out of the keyboard's dictionary whichever way the row is set.
+        assertNotEquals(0, info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)
+        assertNotEquals(0, info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION)
+        assertNotEquals(0, info.imeOptions and EditorInfo.IME_FLAG_NO_EXTRACT_UI)
+        assertNotEquals(0, info.imeOptions and EditorInfo.IME_FLAG_NO_FULLSCREEN)
+        assertEquals(EditorInfo.IME_ACTION_NONE, info.imeOptions and EditorInfo.IME_MASK_ACTION)
+        assertEquals(0, info.initialCapsMode)
+        // And off again is the default, flag for flag.
+        val off = EditorInfo()
+        configureTerminalEditorInfo(off, predictive = false)
+        val default = EditorInfo()
+        configureTerminalEditorInfo(default)
+        assertEquals(default.inputType, off.inputType)
+        assertEquals(default.imeOptions, off.imeOptions)
+        assertNotEquals(0, off.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+    }
+
+    @Test
+    fun `a restart for the predictive text flip sends the word the keyboard was composing first, so nothing typed is lost`() {
+        connection.setComposingText("gi", 1)
+        connection.restart()
+        assertEquals(listOf("text:gi"), sink.sent)
+        assertFalse(connection.isComposing)
+        // The keyboard's late commit of the word it was composing is the new connection's problem, not
+        // a second copy: on this one the word is gone, so a finish sends nothing.
+        connection.finishComposingText()
+        assertEquals(listOf("text:gi"), sink.sent)
+        // With nothing composing a restart sends nothing at all.
+        connection.restart()
+        assertEquals(listOf("text:gi"), sink.sent)
+    }
 }

@@ -21,6 +21,9 @@ import kotlin.math.roundToInt
  */
 class FrameOverlay {
     var selection: CellRange? = null
+
+    /** Whether [selection] is a block between its corners rather than a stream from start to end (spec C18). */
+    var selectionRectangular: Boolean = false
     var selectionColor: Int = 0
     val matches = ArrayList<CellRange>()
     var matchColor: Int = 0
@@ -30,13 +33,22 @@ class FrameOverlay {
     /** The glyph colour inside [current], as 0xRRGGBB: the theme's background, which the accent is chosen to read against. */
     var currentFg: Int = 0
 
+    /**
+     * The OSC 8 link a finger is down on, by id, underlined in [linkColor] (the theme's `links`)
+     * for as long as it is held (spec A60; links are underlined on hover or press only). 0 for none.
+     */
+    var pressedLink: Int = 0
+    var linkColor: Int = 0
+
     fun clear() {
         selection = null
+        selectionRectangular = false
         matches.clear()
         current = null
+        pressedLink = 0
     }
 
-    val isEmpty: Boolean get() = selection == null && matches.isEmpty() && current == null
+    val isEmpty: Boolean get() = selection == null && matches.isEmpty() && current == null && pressedLink == 0
 }
 
 /**
@@ -119,7 +131,7 @@ object TerminalRenderer {
             // Selection and search highlights sit between the cell backgrounds and the glyphs, so the
             // text keeps its colour over them (spec: selection text unchanged).
             if (overlay != null) {
-                overlay.selection?.let { fillRange(nc, it, y, cols, cw, ch, top, overlay.selectionColor, paints) }
+                overlay.selection?.let { fillRange(nc, it, y, cols, cw, ch, top, overlay.selectionColor, paints, overlay.selectionRectangular) }
                 for (m in overlay.matches) if (m.touches(y)) fillRange(nc, m, y, cols, cw, ch, top, overlay.matchColor, paints)
                 overlay.current?.let { if (it.touches(y)) fillRange(nc, it, y, cols, cw, ch, top, overlay.currentColor, paints) }
             }
@@ -187,6 +199,25 @@ object TerminalRenderer {
                 }
                 x = maxOf(end, x + 1)
             }
+
+            // The link under a finger: one underline in the theme's links colour per run of its
+            // cells on this row, over whatever the cells' own underline was.
+            val pressed = overlay?.pressedLink ?: 0
+            if (pressed != 0 && line.links != null) {
+                paints.line.color = opaque(overlay!!.linkColor)
+                val uy = top + paints.baseline + paints.line.strokeWidth * 1.5f
+                x = 0
+                while (x < lineCols) {
+                    if (line.linkAt(x) != pressed) {
+                        x++
+                        continue
+                    }
+                    var end = x + 1
+                    while (end < lineCols && line.linkAt(end) == pressed) end++
+                    nc.drawLine(x * cw, uy, end * cw, uy, paints.line)
+                    x = end
+                }
+            }
         }
 
         // Cursor, only on the live screen.
@@ -245,9 +276,11 @@ object TerminalRenderer {
         }
     }
 
-    private fun fillRange(nc: Canvas, range: CellRange, y: Int, cols: Int, cw: Float, ch: Float, top: Float, color: Int, paints: TerminalPaints) {
-        val a = range.firstCol(y) ?: return
-        val b = range.lastCol(y, cols) ?: return
+    /** Fills the cells of [range] on view row [y]: the block's columns on every row when [rectangular], else the stream's. */
+    private fun fillRange(nc: Canvas, range: CellRange, y: Int, cols: Int, cw: Float, ch: Float, top: Float, color: Int, paints: TerminalPaints, rectangular: Boolean = false) {
+        if (!range.touches(y)) return
+        val a = if (rectangular) range.left else range.firstCol(y) ?: return
+        val b = if (rectangular) range.right else range.lastCol(y, cols) ?: return
         if (b < a) return
         paints.fill.color = color
         nc.drawRect(a * cw, top, (b + 1).coerceAtMost(cols) * cw, top + ch, paints.fill)

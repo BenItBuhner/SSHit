@@ -40,6 +40,7 @@ import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
@@ -216,6 +217,10 @@ class InMemorySettings : SettingsRepository {
     val hardwareKeyboard = MutableStateFlow(HardwareKeyboardSettings())
     override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> = hardwareKeyboard
     override suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) = hardwareKeyboard.update(change)
+
+    val terminal = MutableStateFlow(TerminalSettings())
+    override val terminalSettings: Flow<TerminalSettings> = terminal
+    override suspend fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) = terminal.update(change)
 }
 
 /**

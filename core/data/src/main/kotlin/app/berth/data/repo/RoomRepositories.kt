@@ -22,6 +22,7 @@ import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
@@ -249,6 +250,15 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         write(KEY_HARDWARE_KEYBOARD, HardwareKeyboardSettings.serializer(), change(current))
     }
 
+    private val terminalLock = Mutex()
+    override val terminalSettings: Flow<TerminalSettings> = document(KEY_TERMINAL, TerminalSettings.serializer()) { TerminalSettings() }
+    override suspend fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) = terminalLock.withLock {
+        val current = db.preferences().get(KEY_TERMINAL)
+            ?.let { runCatching { dataJson.decodeFromString(TerminalSettings.serializer(), it) }.getOrNull() }
+            ?: TerminalSettings()
+        write(KEY_TERMINAL, TerminalSettings.serializer(), change(current))
+    }
+
     companion object {
         const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
@@ -264,5 +274,6 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_SECURITY = "security"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
+        const val KEY_TERMINAL = "terminal"
     }
 }

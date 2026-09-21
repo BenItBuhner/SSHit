@@ -1,12 +1,18 @@
 package app.berth.android.ui.a11y
 
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
 import androidx.compose.ui.node.SemanticsModifierNode
@@ -47,12 +53,21 @@ class TerminalAccessibility(val announcer: Announcer = Announcer()) {
     private var hasFrame = false
     private var announced: TerminalSpeech.Snapshot? = null
 
+    /**
+     * Whether anything is listening: the canvas sets it from [AccessibilityManager.isEnabled] (see
+     * [rememberAccessibilityEnabled]) and, off, [onFrame] copies nothing, so a `cat` of a large file
+     * at 60 fps costs the reader nothing while no reader is running (review #15). On by default, for
+     * a canvas that never says otherwise.
+     */
+    var enabled: Boolean = true
+
     /** Bumps with every frame the canvas draws; the canvas' semantics node observes it and re-reads the screen. */
     var version: Int by mutableIntStateOf(0)
         private set
 
     /** The canvas calls this on the main thread with the frame it is about to draw. */
     fun onFrame(front: TerminalFrame) {
+        if (!enabled) return
         frame.copyFrom(front)
         hasFrame = true
         version++
@@ -201,6 +216,26 @@ object TerminalSpeech {
         val text = kept.joinToString("\n")
         return if (text.length > MAX_CHARS) text.takeLast(MAX_CHARS) else text
     }
+}
+
+/**
+ * Whether an accessibility service is enabled, as [AccessibilityManager] reports it, observed for
+ * the composition's life: read once on entry, then through the manager's own listener, so the
+ * frame copy the reader needs starts the moment TalkBack does and stops when it is turned off.
+ */
+@Composable
+fun rememberAccessibilityEnabled(): State<Boolean> {
+    val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(AccessibilityManager::class.java) }
+    val enabled = remember(manager) { mutableStateOf(manager?.isEnabled == true) }
+    DisposableEffect(manager) {
+        if (manager == null) return@DisposableEffect onDispose {}
+        val listener = AccessibilityManager.AccessibilityStateChangeListener { enabled.value = it }
+        manager.addAccessibilityStateChangeListener(listener)
+        enabled.value = manager.isEnabled
+        onDispose { manager.removeAccessibilityStateChangeListener(listener) }
+    }
+    return enabled
 }
 
 /**

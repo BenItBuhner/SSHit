@@ -4,7 +4,7 @@ package app.berth.terminal
  * A grid of [rows] visible lines plus, for the primary screen, a bounded scrollback of lines that
  * have scrolled off the top.
  */
-class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
+class ScreenBuffer(cols: Int, rows: Int, maxScrollback: Int) {
     var cols: Int = cols
         private set
     var rows: Int = rows
@@ -12,6 +12,13 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
 
     private val lines = ArrayList<TerminalLine>(rows).apply { repeat(rows) { add(TerminalLine(cols)) } }
     private val scrollback = ArrayDeque<TerminalLine>()
+
+    /** How many lines history keeps; lowering it evicts the oldest at once, as if they had scrolled past. */
+    var maxScrollback: Int = maxScrollback.coerceAtLeast(0)
+        set(value) {
+            field = value.coerceAtLeast(0)
+            while (scrollback.size > field) evictOldest()
+        }
 
     val scrollbackSize: Int get() = scrollback.size
 
@@ -191,11 +198,12 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
                 val cursorHere = (k == cursorPhysical)
                 cells.ensure(cells.size + len)
                 val marks = l.combining
+                val links = l.links
                 for (x in 0 until len) {
                     if (l.attrs[x] and Attr.WIDE_TAIL != 0) continue
                     if (cursorHere && x == cursorX) cursorCellIndex = cells.size
                     marks?.get(x)?.let { m -> (combiningByCell ?: HashMap<Int, String>().also { combiningByCell = it })[cells.size] = m }
-                    cells.add(l.chars[x], l.fg[x], l.bg[x], l.attrs[x])
+                    cells.add(l.chars[x], l.fg[x], l.bg[x], l.attrs[x], links?.get(x) ?: 0)
                 }
                 // Cursor sitting past the content: remember how far beyond the last cell it was.
                 if (cursorHere && cursorX >= len) cursorCellIndex = cells.size + (cursorX - len)
@@ -228,9 +236,10 @@ class ScreenBuffer(cols: Int, rows: Int, val maxScrollback: Int) {
                     placedCursor = true
                 }
                 val line = row()
-                line.set(x, cells.chars[idx], cells.fg[idx], cells.bg[idx], attrs)
+                val link = cells.links[idx]
+                line.set(x, cells.chars[idx], cells.fg[idx], cells.bg[idx], attrs, link)
                 combiningByCell?.get(idx)?.let { marks -> for (ch in marks.codePoints()) line.addCombining(x, ch) }
-                if (width == 2 && x + 1 < newCols) line.set(x + 1, 0, cells.fg[idx], cells.bg[idx], Attr.WIDE_TAIL)
+                if (width == 2 && x + 1 < newCols) line.set(x + 1, 0, cells.fg[idx], cells.bg[idx], Attr.WIDE_TAIL, link)
                 x += width
             }
             if (logicalHasCursor && !placedCursor) {
@@ -281,6 +290,7 @@ private class ReflowCells(capacity: Int) {
     var fg = IntArray(capacity)
     var bg = IntArray(capacity)
     var attrs = IntArray(capacity)
+    var links = IntArray(capacity)
     var size = 0
         private set
 
@@ -295,13 +305,15 @@ private class ReflowCells(capacity: Int) {
         fg = fg.copyOf(n)
         bg = bg.copyOf(n)
         attrs = attrs.copyOf(n)
+        links = links.copyOf(n)
     }
 
-    fun add(cp: Int, f: Int, b: Int, a: Int) {
+    fun add(cp: Int, f: Int, b: Int, a: Int, link: Int) {
         chars[size] = cp
         fg[size] = f
         bg[size] = b
         attrs[size] = a
+        links[size] = link
         size++
     }
 }

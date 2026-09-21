@@ -1,5 +1,6 @@
 package app.berth.android.ui.terminal
 
+import app.berth.terminal.Attr
 import app.berth.terminal.CellRange
 import app.berth.terminal.CursorStyle
 import app.berth.terminal.TerminalEmulator
@@ -108,12 +109,54 @@ class TerminalFrame {
         version = other.version
     }
 
+    /** The OSC 8 link id of the cell at view [row], [col]; 0 for none or off the grid (spec A60). */
+    fun linkAt(row: Int, col: Int): Int {
+        if (row !in 0 until rows) return 0
+        val line = lines[row]
+        return if (col in 0 until line.cols) line.linkAt(col) else 0
+    }
+
+    /**
+     * The text printed under the link at view [row], [col]: the run of cells with its id around
+     * the cell, continued onto the rows above and below while the id runs on at their edges (a
+     * name wrapped over two rows), trailing blanks trimmed. Empty when the cell is not a link.
+     */
+    fun linkText(row: Int, col: Int): String {
+        val id = linkAt(row, col)
+        if (id == 0) return ""
+        var startRow = row
+        var startCol = col
+        while (true) {
+            val line = lines[startRow]
+            while (startCol > 0 && line.linkAt(startCol - 1) == id) startCol--
+            if (startCol == 0 && startRow > 0 && lines[startRow - 1].let { it.cols > 0 && it.linkAt(it.cols - 1) == id }) {
+                startRow--
+                startCol = lines[startRow].cols - 1
+            } else break
+        }
+        val sb = StringBuilder()
+        var r = startRow
+        var c = startCol
+        while (r < rows) {
+            val line = lines[r]
+            while (c < line.cols && line.linkAt(c) == id) {
+                if (line.attrs[c] and Attr.WIDE_TAIL == 0) sb.append(line.cellText(c))
+                c++
+            }
+            if (c < line.cols || r + 1 >= rows || lines[r + 1].let { it.cols == 0 || it.linkAt(0) != id }) break
+            r++
+            c = 0
+        }
+        return sb.toString().trimEnd()
+    }
+
     /**
      * A range made under [anchor] in this frame's view rows (0 is the top row drawn), or null when
-     * the anchor no longer fits the buffer or nothing of the range is in view.
+     * the anchor no longer fits the buffer or nothing of the range is in view. A [rectangular]
+     * range keeps its left column when its top has left history.
      */
-    fun viewRange(range: CellRange, anchor: BufferAnchor): CellRange? {
-        val now = anchor.translate(range, linesDropped, alternateScreen, cols, rows) ?: return null
+    fun viewRange(range: CellRange, anchor: BufferAnchor, rectangular: Boolean = false): CellRange? {
+        val now = anchor.translate(range, linesDropped, alternateScreen, cols, rows, rectangular) ?: return null
         val top = scrollbackSize - offset
         val shifted = now.shiftRows(-top)
         return if (shifted.end.row < 0 || shifted.start.row >= rows) null else shifted

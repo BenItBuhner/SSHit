@@ -121,6 +121,7 @@ import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.tabs.rememberTabStripState
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
+import app.berth.android.ui.terminal.cursorShapeOf
 import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -130,6 +131,8 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
+import app.berth.terminal.CursorStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
@@ -218,9 +221,9 @@ fun StageScreen(
             override fun toggleDeck() { if (session != null) deckVisible = !deckVisible }
             override fun fontStep(step: Int) {
                 session ?: return
-                val size = session.record.value.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
                 haptics.fontStep()
-                vm.setFontSize(size + step)
+                // The chord and the pinch are one function (review #15): a host with its own size keeps the change to itself.
+                vm.stepFontSize(session.record.value.hostId, step)
             }
             override fun shortcutSheet() { shortcutSheet = true }
             override fun split() { panes.split?.invoke() }
@@ -585,7 +588,11 @@ private fun StageBody(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
-    val host = record.hostSnapshot
+    val hosts by vm.hosts.collectAsState()
+    // The saved host as it is now, not as it was when the tab opened: a pinch writes the host's own
+    // size (review #15) and the terminal under the fingers has to follow it. A quick-connect tab
+    // has no saved host and keeps the snapshot the record carries.
+    val host = record.hostId?.let { id -> hosts.firstOrNull { it.id == id } } ?: record.hostSnapshot
     // Host override, then the workspace's theme, then the app default; all three flows are live, so a theme edit lands here at once.
     val theme = AppViewModel.resolveTerminalTheme(themes, defaultTheme, host, workspaces.byId(record.workspaceId))
     val font: TerminalFont = host.appearance.fontSizeSp?.let { fontSetting.copy(sizeSp = it) } ?: fontSetting
@@ -628,6 +635,8 @@ private fun StageBody(
                     DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     DeckAppAction.JUMP_TO_UNREAD -> vm.jumpToUnread()
+                    // The Deck key for C5's "Toggle predictive text" flips the same flag the Session sheet's row does.
+                    DeckAppAction.TOGGLE_PREDICTIVE_TEXT -> vm.setPredictiveText(session.id, session.id !in vm.predictiveTextTabIds.value)
                     else -> Unit
                 }
             },
@@ -639,14 +648,32 @@ private fun StageBody(
         session.markSeen()
         viewport.scrollOffset = 0
     }
+    // Settings › Terminal reaches the emulator here: the history it keeps, and the cursor the user
+    // chose, which stands until the program on the other end asks for its own (DECSCUSR).
+    val terminalSettings by vm.terminalSettings.collectAsState()
+    LaunchedEffect(session.id, terminalSettings.scrollbackLines) {
+        session.emulator.maxScrollback = terminalSettings.scrollbackLines.coerceIn(TerminalSettings.MIN_SCROLLBACK, TerminalSettings.MAX_SCROLLBACK)
+    }
+    LaunchedEffect(session.id, fontSetting.cursorShape, fontSetting.cursorBlink) {
+        session.emulator.defaultCursorStyle = CursorStyle(cursorShapeOf(fontSetting.cursorShape), fontSetting.cursorBlink)
+    }
     // Bell while on stage is haptic only (C2), unless the host mutes it. Keyed on the patterns too,
     // so a haptic level change restarts the collector on the new instance.
     LaunchedEffect(session.id, host.muteBell, patterns) {
         if (host.muteBell) return@LaunchedEffect
         session.bell.collect { patterns.bell() }
     }
+    // A key typed into a detached tab reconnects it (review #15); the pill shows the reconnect, the
+    // notice says the key itself went nowhere, so a sentence is not typed into the gap.
+    LaunchedEffect(session.id) {
+        session.keyReconnected.collect { tools.notice = "Reconnecting, the key was not sent" }
+    }
 
     BackHandler(enabled = imeVisible) { keyboard?.hide() }
+
+    // Predictive text is the tab's own (spec C6, the Session sheet's row): the keyboard is told, and the grip lit, from the one flag.
+    val predictiveTabIds by vm.predictiveTextTabIds.collectAsState()
+    val predictiveText = session.id in predictiveTabIds
 
     val live = record.state == SessionState.LIVE
     val frameAlpha = when (record.state) {
@@ -677,14 +704,26 @@ private fun StageBody(
                     .alpha(frameAlpha),
                 onFontSizeStep = { step ->
                     patterns.fontStep()
-                    vm.setFontSize(font.sizeSp + step)
+                    vm.stepFontSize(record.hostId, step)
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
                 onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },
+                // The D1 gestures the canvas reports and the Stage owns: the font back to the host's default,
+                // the Deck shown or hidden (its own state lives here, not in Deck.kt), arrows for a drag when asked.
+                onTwoFingerDoubleTap = {
+                    patterns.fontStep()
+                    vm.resetFontSize(record.hostId)
+                },
+                onTwoFingerTapArmed = { patterns.twoFingerTapArmed() },
+                onThreeFingerTap = { if (deckStateOk) onDeckVisibleChange(!deckVisible) },
+                horizontalDragArrows = terminalSettings.horizontalDragArrows,
+                // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
+                onLinkTap = { tools.pendingLink = it },
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },
                 accessibility = accessibility,
+                predictiveText = predictiveText,
             )
             TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
@@ -745,6 +784,7 @@ private fun StageBody(
                         onGripLongPress = { if (vm.jumpToUnread()) patterns.hold() },
                         snippets = pinnedSnippets,
                         onOpenDeckEditor = onOpenDeckEditor,
+                        predictiveText = predictiveText,
                     )
                 }
                 if (!deckVisible && deckStateOk) {
@@ -772,6 +812,7 @@ private fun StageBody(
 
     pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
     tools.pendingPaste?.let { p -> PastePreviewSheet(p, session, patterns, onDismiss = { tools.pendingPaste = null }) }
+    tools.pendingLink?.let { l -> LinkOpenSheet(l, session, tools, patterns, onDismiss = { tools.pendingLink = null }) }
     if (tools.historyOpen) CommandHistorySheet(vm, session, onDismiss = { tools.historyOpen = false }, onNotice = { tools.notice = it })
 }
 

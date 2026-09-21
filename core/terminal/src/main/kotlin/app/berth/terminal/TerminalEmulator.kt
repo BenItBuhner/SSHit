@@ -35,6 +35,35 @@ class TerminalEmulator(
     val isAlternateScreen: Boolean get() = buffer === altBuffer
     val scrollbackSize: Int get() = buffer.scrollbackSize
 
+    /**
+     * How many lines of history the main screen keeps (Settings › Terminal › Scrollback). Lowering
+     * it drops the oldest lines at once; raising it lets history grow from here.
+     */
+    var maxScrollback: Int
+        get() = mainBuffer.maxScrollback
+        set(value) {
+            synchronized(lock) {
+                if (mainBuffer.maxScrollback == value.coerceAtLeast(0)) return
+                mainBuffer.maxScrollback = value
+                markDirty()
+            }
+            flushChanges()
+        }
+
+    /** The hyperlinks printed so far, resolving the ids in [TerminalLine.links] (spec A60). */
+    val links = LinkRegistry()
+
+    /** The id of the OSC 8 link cells are printed under now; 0 outside a link. */
+    private var currentLink = 0
+
+    /** The URL of the link at buffer [row], [col], or null when the cell is not part of one. */
+    fun linkAt(row: Int, col: Int): String? = synchronized(lock) {
+        if (row !in 0 until buffer.bufferRows) return null
+        val line = buffer.bufferLine(row)
+        if (col !in 0 until line.cols) return null
+        links.url(line.linkAt(col))
+    }
+
     /** History plus screen of the current buffer as one run of rows; the alternate screen has no history. */
     val bufferRows: Int get() = buffer.bufferRows
 
@@ -90,8 +119,24 @@ class TerminalEmulator(
         private set
     var focusEvents = false
         private set
-    var cursorStyle = CursorStyle.DEFAULT
-        private set
+
+    /**
+     * The cursor as drawn: the application's DECSCUSR choice while it has made one, else
+     * [defaultCursorStyle], the user's setting. DECSCUSR 0 and a reset hand the cursor back.
+     */
+    val cursorStyle: CursorStyle get() = appCursorStyle ?: defaultCursorStyle
+    private var appCursorStyle: CursorStyle? = null
+
+    /** The user's cursor (Settings › Terminal › Cursor), shown whenever the application has not chosen one. */
+    var defaultCursorStyle: CursorStyle = CursorStyle.DEFAULT
+        set(value) {
+            synchronized(lock) {
+                if (field == value) return
+                field = value
+                markDirty()
+            }
+            flushChanges()
+        }
     var title = ""
         private set
 
@@ -331,8 +376,8 @@ class TerminalEmulator(
         repairOverwrite(line, cursorX)
         if (width == 2) repairOverwrite(line, cursorX + 1)
 
-        line.set(cursorX, cp, fg, bg, attrs or if (width == 2) Attr.WIDE else 0)
-        if (width == 2) line.set(cursorX + 1, 0, fg, bg, attrs or Attr.WIDE_TAIL)
+        line.set(cursorX, cp, fg, bg, attrs or if (width == 2) Attr.WIDE else 0, currentLink)
+        if (width == 2) line.set(cursorX + 1, 0, fg, bg, attrs or Attr.WIDE_TAIL, currentLink)
         lastPrinted = cp
 
         cursorX += width
@@ -430,7 +475,7 @@ class TerminalEmulator(
             "?" -> csiPrivate(params, final)
             ">" -> csiGreater(params, final)
             "!" -> if (final == 'p') softReset()
-            " " -> if (final == 'q') { cursorStyle = CursorStyle.fromDecscusr(params.zeroBased(0)) }
+            " " -> if (final == 'q') { appCursorStyle = params.zeroBased(0).let { if (it == 0) null else CursorStyle.fromDecscusr(it) } }
             "$" -> if (final == 'p') reportMode(params.zeroBased(0), private = false)
             "?$" -> if (final == 'p') reportMode(params.zeroBased(0), private = true)
             "=" -> Unit
@@ -505,14 +550,20 @@ class TerminalEmulator(
 
     override fun oscDispatch(payload: String) {
         val sep = payload.indexOf(';')
-        val code = (if (sep < 0) payload else payload.substring(0, sep)).toIntOrNull() ?: return
+        val code = oscCode(payload, if (sep < 0) payload.length else sep)
+        if (code < 0) return
+        if (code == 8) {
+            // A listing prints one of these a link and another to close it, so it reads the payload in place.
+            currentLink = oscHyperlink(payload, sep + 1)
+            markDirty()
+            return
+        }
         val arg = if (sep < 0) "" else payload.substring(sep + 1)
         when (code) {
             0, 2 -> setTitle(arg)
             1 -> Unit
             4 -> oscPalette(arg)
             7 -> listener.onWorkingDirectoryChanged(arg)
-            8 -> Unit // Hyperlinks: the URL is accepted; per-cell link ids are not stored yet.
             9 -> oscNotification9(arg)
             99 -> oscNotification99(arg)
             133 -> if (arg.isNotEmpty()) shellMark(arg[0], arg.substringAfter(';', ""))
@@ -530,6 +581,44 @@ class TerminalEmulator(
             else -> Unit
         }
         markDirty()
+    }
+
+    /** The OSC code in [payload] before [end], read in place; -1 when it is not one to nine digits. */
+    private fun oscCode(payload: String, end: Int): Int {
+        if (end == 0 || end > 9) return -1
+        var code = 0
+        for (i in 0 until end) {
+            val d = payload[i] - '0'
+            if (d < 0 || d > 9) return -1
+            code = code * 10 + d
+        }
+        return code
+    }
+
+    /**
+     * OSC 8 hyperlinks (spec A60): `8;params;URL` opens a link that the cells printed from here
+     * carry, `8;;` closes it. The params, from [start] in [payload], are `key=value` pairs
+     * separated by colons, of which `id` names the link so two runs of it (a name wrapped over two
+     * rows) are one; the URL itself may hold semicolons, so only the first is a separator. Returns
+     * the id the cells take, 0 for none; the common `8;;URL` costs the URL's own copy and no more.
+     */
+    private fun oscHyperlink(payload: String, start: Int): Int {
+        val sep = payload.indexOf(';', start)
+        if (sep < 0 || sep + 1 == payload.length) return 0
+        val idParam = if (sep == start) "" else idParamOf(payload, start, sep)
+        return links.register(idParam, payload.substring(sep + 1))
+    }
+
+    /** The value of the `id=` pair among the colon-separated params in [payload] from [start] to [end], or empty. */
+    private fun idParamOf(payload: String, start: Int, end: Int): String {
+        var from = start
+        while (from < end) {
+            var stop = payload.indexOf(':', from)
+            if (stop < 0 || stop > end) stop = end
+            if (payload.startsWith("id=", from) && stop - from >= 3) return payload.substring(from + 3, stop)
+            from = stop + 1
+        }
+        return ""
     }
 
     /**
@@ -828,7 +917,7 @@ class TerminalEmulator(
             6 -> { originMode = enable; setCursorPosition(0, 0) }
             7 -> { autoWrap = enable; pendingWrap = false }
             9 -> mouseTracking = if (enable) MouseTracking.X10 else MouseTracking.NONE
-            12 -> cursorStyle = cursorStyle.copy(blinking = enable)
+            12 -> appCursorStyle = cursorStyle.copy(blinking = enable)
             25 -> cursorVisible = enable
             47, 1047 -> {
                 if (enable) switchToAlternate(clear = false) else switchToMain(clearAltFirst = mode == 1047)
@@ -922,7 +1011,8 @@ class TerminalEmulator(
         charsetG1 = Charset.ASCII
         shiftedOut = false
         pendingWrap = false
-        cursorStyle = CursorStyle.DEFAULT
+        appCursorStyle = null
+        currentLink = 0
         savedMain.let { it.x = 0; it.y = 0; it.fg = TermColor.COLOR_DEFAULT; it.bg = TermColor.COLOR_DEFAULT; it.attrs = 0 }
     }
 
@@ -943,6 +1033,7 @@ class TerminalEmulator(
         cursorX = 0
         cursorY = 0
         commandStartRow = -1L
+        links.clear()
         title = ""
         listener.onTitleChanged(title)
     }
@@ -1177,7 +1268,8 @@ class TerminalEmulator(
     }
 
     companion object {
-        const val DEFAULT_SCROLLBACK = 5000
+        /** Lines of history a session keeps unless Settings say otherwise (spec C20). */
+        const val DEFAULT_SCROLLBACK = 10_000
         const val MIN_COLS = 2
         const val MIN_ROWS = 1
 
