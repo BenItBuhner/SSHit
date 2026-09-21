@@ -3,6 +3,7 @@ package app.berth.data
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
+import app.berth.data.db.PreferenceEntity
 import app.berth.data.repo.EncryptedSecretStore
 import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
@@ -14,11 +15,13 @@ import app.berth.data.repo.RoomSnippetRepository
 import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.Host
+import app.berth.domain.model.IdleDetach
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
@@ -293,6 +296,27 @@ class RoomRepositoriesTest {
         settings.setPaneDividerFraction(1f / 3f)
         assertEquals(1f / 3f, settings.paneDividerFraction.first())
         assertEquals(1f / 3f, settings.paneDividerFraction.first(), "the divider's rest outlives the split")
+    }
+
+    @Test
+    fun `connection settings start at Never with neither notice shown, and each field changes on its own`() = runTest {
+        val settings = RoomSettingsRepository(db)
+        assertEquals(ConnectionSettings(), settings.connectionSettings.first())
+        assertEquals(IdleDetach.NEVER, settings.connectionSettings.first().idleDetach, "idle sessions are kept unless the user says otherwise")
+
+        settings.updateConnectionSettings { it.copy(idleDetach = IdleDetach.ONE_HOUR) }
+        settings.updateConnectionSettings { it.copy(backgroundNoticeShown = true) }
+        assertEquals(ConnectionSettings(idleDetach = IdleDetach.ONE_HOUR, backgroundNoticeShown = true), settings.connectionSettings.first())
+
+        settings.updateConnectionSettings { it.copy(batteryExplained = true) }
+        val all = settings.connectionSettings.first()
+        assertEquals(IdleDetach.ONE_HOUR, all.idleDetach, "one field's write leaves the others as they were")
+        assertTrue(all.backgroundNoticeShown)
+        assertTrue(all.batteryExplained)
+
+        // The document is read back as written, so a field an older build never wrote comes up as its default.
+        db.preferences().upsert(PreferenceEntity(RoomSettingsRepository.KEY_CONNECTION, """{"idleDetach":"FIFTEEN_MINUTES"}""", 1L))
+        assertEquals(ConnectionSettings(idleDetach = IdleDetach.FIFTEEN_MINUTES), settings.connectionSettings.first())
     }
 
     // ---- command history (spec C16) -------------------------------------------------------------

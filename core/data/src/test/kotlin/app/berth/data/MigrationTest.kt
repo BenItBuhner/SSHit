@@ -22,6 +22,7 @@ import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
 import app.berth.domain.model.AppearanceOverride
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckKey
@@ -432,6 +433,8 @@ class MigrationTest {
         // Version 5's Stage documents: no older build wrote a split or moved the divider, so one tab has the Stage at half.
         assertNull(settings.stageSplit.first())
         assertEquals(0.5f, settings.paneDividerFraction.first())
+        // Settings › Connection is new with this build too: idle sessions are kept, and neither one-time notice has been shown.
+        assertEquals(ConnectionSettings(), settings.connectionSettings.first())
     }
 
     // ---- SQL helpers -------------------------------------------------------------------------------

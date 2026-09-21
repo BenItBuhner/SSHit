@@ -8,6 +8,7 @@ import app.berth.data.db.PreferenceEntity
 import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
@@ -302,6 +303,13 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         write(KEY_SECURITY, SecuritySettings.serializer(), change(current))
     }
 
+    private val connectionLock = Mutex()
+    override val connectionSettings: Flow<ConnectionSettings> = document(KEY_CONNECTION, ConnectionSettings.serializer()) { ConnectionSettings() }
+    override suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings) = connectionLock.withLock {
+        val current = db.preferences().get(KEY_CONNECTION)?.let { runCatching { dataJson.decodeFromString(ConnectionSettings.serializer(), it) }.getOrNull() } ?: ConnectionSettings()
+        write(KEY_CONNECTION, ConnectionSettings.serializer(), change(current))
+    }
+
     private val hardwareKeyboardLock = Mutex()
     override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> =
         document(KEY_HARDWARE_KEYBOARD, HardwareKeyboardSettings.serializer()) { HardwareKeyboardSettings() }
@@ -342,6 +350,7 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_TAB_SWIPE = "tab_swipe_gesture"
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
         const val KEY_SECURITY = "security"
+        const val KEY_CONNECTION = "connection"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
         const val KEY_TERMINAL = "terminal"

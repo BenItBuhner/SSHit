@@ -8,6 +8,7 @@ import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
@@ -190,6 +191,12 @@ interface SettingsRepository {
 
     /** Read-modify-write under one lock, so a host's override and a toggle flipped at the same moment both land. */
     suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings)
+
+    /** The idle-detach policy and the two one-time notices about the background (spec C20, Connection; Part B). */
+    val connectionSettings: Flow<ConnectionSettings>
+
+    /** Read-modify-write under one lock, like [updateSecuritySettings]. */
+    suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings)
 
     /** Whether sessions keep the commands they run for the History sheet (spec C16); on by default. */
     val commandHistoryEnabled: Flow<Boolean>

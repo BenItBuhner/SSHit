@@ -27,6 +27,7 @@ import app.berth.android.ui.AppViewModel
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreSigning
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
@@ -265,6 +266,10 @@ class InMemorySettings : SettingsRepository {
     val deckGestures = MutableStateFlow(DeckSettings())
     override val deckSettings: Flow<DeckSettings> = deckGestures
     override suspend fun setDeckSettings(settings: DeckSettings) { deckGestures.value = settings }
+
+    val connection = MutableStateFlow(ConnectionSettings())
+    override val connectionSettings: Flow<ConnectionSettings> = connection
+    override suspend fun updateConnectionSettings(change: (ConnectionSettings) -> ConnectionSettings) = connection.update(change)
 }
 
 /**
