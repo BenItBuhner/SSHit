@@ -90,15 +90,16 @@ private const val FOLD_PORTRAIT = "w701dp-h841dp-port-420dpi"
 /** A 10-inch tablet on its side. */
 private const val TABLET_LANDSCAPE = "w1280dp-h800dp-land-320dpi"
 
-/** The same tablet upright: medium in width, so no rail, but panes and dialogs. */
+/** The same tablet upright: medium in width, so the narrow rail, with panes and dialogs. */
 private const val TABLET_PORTRAIT = "w800dp-h1280dp-port-320dpi"
 
 /**
  * The app past a phone in portrait (spec A12, C23): the shell as [AppRoot] mounts it, at a phone
  * on its side, a foldable open in both orientations and a tablet in both, through Robolectric's
  * native graphics into `build/outputs/roborazzi`. Each size gets the two-pane Stage where it fits,
- * the rail where the width is expanded, sheets as dialogs where a strip across the bottom would
- * be absurd, and the shorter strip where the height is compact. The fixtures are the phone
+ * the 280 dp rail where the width is expanded and the 72 dp column of swatches and glyphs where it
+ * is medium (spec C7), sheets as dialogs where a strip across the bottom would be absurd, and the
+ * shorter strip where the height is compact. The fixtures are the phone
  * classes' three detached tabs and a Files tab, so the strip reads as it does in their frames, and
  * for one case a Tunnels tab (spec C14) beside a terminal; the phone in portrait is captured
  * through the same shell as the set's reference. The two live cases drive a real sshj login against
@@ -205,14 +206,15 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * The fold turned tall: a medium width, so panes and dialogs but no rail. A tab in neither
-     * pane offers Open beside in its long-press menu and lands in the pane opposite the focused one.
+     * The fold turned tall: a medium width, so panes and dialogs, and the drawer standing as the 72 dp
+     * column of swatches and glyphs (spec C7) rather than the rail with names. A tab in neither pane
+     * offers Open beside in its long-press menu and lands in the pane opposite the focused one.
      */
     @Test
     @Config(qualifiers = FOLD_PORTRAIT)
-    fun `foldable turned tall, no rail, and a tab opens beside the active one from its menu`() {
+    fun `foldable turned tall, the narrow rail, and a tab opens beside the active one from its menu`() {
         mountApp()
-        drawerIsASheet()
+        drawerIsTheNarrowRail()
         split("s-pihole", PaneSide.RIGHT)
 
         tab("build box").performSemanticsAction(SemanticsActions.OnLongClick)
@@ -331,16 +333,16 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * The tablet upright: medium, so no rail, but the Stage splits. The reference layout first (one
-     * tab under the strip, no rail), the New tab sheet as a dialog over it, and once that is closed
-     * from its scrim a Files tab beside a terminal (the pane owns the bottom inset, so the browser
-     * pads for nothing).
+     * The tablet upright: medium, so the narrow rail, and the Stage splits. The reference layout
+     * first (one tab under the strip, the 72 dp column beside it), the New tab sheet as a dialog over
+     * it, and once that is closed from its scrim a Files tab beside a terminal (the pane owns the
+     * bottom inset, so the browser pads for nothing).
      */
     @Test
     @Config(qualifiers = TABLET_PORTRAIT)
-    fun `tablet upright, the New tab sheet as a dialog over the Stage, and a Files tab beside a terminal`() {
+    fun `tablet upright, the narrow rail, the New tab sheet as a dialog over the Stage, and a Files tab beside a terminal`() {
         mountApp()
-        drawerIsASheet()
+        drawerIsTheNarrowRail()
         capture("tablet-portrait-stage")
 
         openNewTabSheet()
@@ -482,10 +484,26 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * The drawer is a sheet here, not the rail: its rows are composed off the left edge, not in view.
+     * The drawer is a sheet here, not a rail: its rows are composed off the left edge, not in view.
      * (The count is not zero; the modal drawer keeps its sheet composed where it will slide in from.)
      */
     private fun drawerIsASheet() = compose.onNodeWithText("New group").assertIsNotDisplayed()
+
+    /**
+     * The drawer stands as the 72 dp column (spec C7): no row has a name (the words "New group" are
+     * nowhere, not even off screen), the same rows stand as a 48 dp swatch or glyph each, named for
+     * the reader, in 12 dp of padding, and the Stage's strip begins past the column and its gutter.
+     */
+    private fun drawerIsTheNarrowRail() {
+        compose.onAllNodes(hasText("New group")).assertCountEquals(0)
+        compose.onNodeWithContentDescription("New group").assertIsDisplayed()
+        val hosts = compose.onNodeWithContentDescription("Hosts").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val density = compose.density.density
+        assertEquals("a 48 dp slot", 48f, hosts.width / density, 0.5f)
+        assertEquals("in the column's 12 dp of padding", 12f, hosts.left / density, 0.5f)
+        val strip = compose.onNode(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNode().boundsInRoot
+        assertEquals("the strip starts past the 72 dp column and the 12 dp gutter", 84f, strip.left / density, 0.5f)
+    }
 
     /** Puts [id] in the pane on [side] and waits for the pane to show under the tab's title. */
     private fun split(id: String, side: PaneSide) {

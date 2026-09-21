@@ -1191,6 +1191,12 @@ object BerthIcons {
     @DrawableRes val trash: Int = R.drawable.glyph_trash
     /** A ring with a handle; the New tab sheet's host filter. */
     @DrawableRes val search: Int = R.drawable.glyph_search
+    /** The library as glyphs (spec C7), for the drawer's 72 dp column: a rack, a key, a tunnel's mouth, a run of code, three sliders. */
+    @DrawableRes val hosts: Int = R.drawable.glyph_hosts
+    @DrawableRes val key: Int = R.drawable.glyph_key
+    @DrawableRes val tunnel: Int = R.drawable.glyph_tunnel
+    @DrawableRes val snippet: Int = R.drawable.glyph_snippet
+    @DrawableRes val settings: Int = R.drawable.glyph_settings
 }
 
 /** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */
