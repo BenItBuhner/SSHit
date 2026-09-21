@@ -49,6 +49,8 @@ import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.keys.KeyInstall
 import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.settings.KnownHostsScreen
+import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.stage.SessionSheet
@@ -120,8 +122,8 @@ import javax.crypto.spec.SecretKeySpec
  * quick-connected tab; a key's detail with its randomart and the `ssh-keygen -lf` line, its QR
  * and Install on host; the trust sheet's visual fingerprint and compare-on-the-server command,
  * and the changed-key sheet's Replace held to confirm; the known_hosts import beside the ssh
- * config import; the groups overview with its Edit mode and the group editor's Reconnect tabs at
- * launch. Every capture is the accessibility audit too, and no text on a new surface is cut at
+ * config import, from the Hosts overflow, Settings › Data and the Known hosts screen; the groups
+ * overview with its Edit mode and the group editor's Reconnect tabs at launch. Every capture is the accessibility audit too, and no text on a new surface is cut at
  * either size except the one line that elides by design. `install on host over the local sshd`
  * types the command into a real shell and logs in with the key it installed when the
  * `SSH_TEST_*` variables are set.
@@ -734,6 +736,54 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertEquals(listOf("ssh-ed25519", "ssh-rsa"), keys.filter { it.host == "203.0.113.10" }.map { it.keyType }.sorted())
         assertEquals(trusted, keys.first { it.id == trusted.id })
         assertEquals(SshKeys.fingerprintSha256(prodRsa), keys.first { it.keyType == "ssh-rsa" }.fingerprintSha256)
+    }
+
+    /** Settings › Data has the same import as a row beside the config import's, opening the same sheet. */
+    @Test
+    fun `known_hosts import from Settings Data`() {
+        seedLibrary()
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        // The panel's last row brings the whole of Data into the frame.
+        compose.onNodeWithText("Import private key").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Import ssh config").assertExists()
+        compose.onNodeWithText("Import known_hosts").assertExists()
+        compose.onNodeWithText("Server keys from ~/.ssh/known_hosts").assertExists()
+        capture("settings-data-imports")
+        assertNoTextCut("Settings › Data")
+        compose.onNodeWithText("Import known_hosts").performClick()
+        waitForText("Import known hosts")
+        compose.onNodeWithText("Choose file").assertExists()
+    }
+
+    /** The Known hosts screen's overflow holds the import too, so a key can be added where the keys are read. */
+    @Test
+    fun `known_hosts import from the Known hosts screen`() {
+        seedLibrary()
+        themed { KnownHostsScreen(graph.viewModel, onBack = {}) }
+        // The row's title is the endpoint and the host's name in one line.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("203.0.113.10", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Import known_hosts")
+        capture("known-hosts-more-menu")
+        assertNoTextCut("the Known hosts overflow")
+        compose.onNodeWithText("Import known_hosts").performClick()
+        waitForText("Import known hosts")
+        compose.onNodeWithText("Choose file").assertExists()
+    }
+
+    /** With no key saved yet, the empty screen offers the import itself, as the empty Hosts library offers the config import. */
+    @Test
+    fun `the empty Known hosts screen offers the import`() {
+        seedLibrary()
+        runBlocking { graph.knownHosts.delete("kh-1") }
+        themed { KnownHostsScreen(graph.viewModel, onBack = {}) }
+        waitForText("No saved server keys.")
+        compose.onNodeWithText("Import known_hosts").assertExists()
+        capture("known-hosts-empty")
+        assertNoTextCut("the empty Known hosts screen")
+        compose.onNodeWithText("Import known_hosts").performClick()
+        waitForText("Import known hosts")
     }
 
     // ---- groups overview (C8) ---------------------------------------------------------------------

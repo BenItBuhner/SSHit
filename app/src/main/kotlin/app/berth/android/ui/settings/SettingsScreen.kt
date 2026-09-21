@@ -43,6 +43,7 @@ import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKeySheet
+import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -76,9 +77,11 @@ fun SettingsScreen(
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
     var importConfig by remember { mutableStateOf(false) }
+    var importKnownHosts by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
 
     if (importConfig) ImportHostsSheet(vm, onDismiss = { importConfig = false })
+    if (importKnownHosts) ImportKnownHostsSheet(vm, onDismiss = { importKnownHosts = false })
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
 
     Column(
@@ -172,6 +175,7 @@ fun SettingsScreen(
 
             Panel(label = "Data") {
                 ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
+                ListRow("Import known_hosts", subtitle = "Server keys from ~/.ssh/known_hosts", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKnownHosts = true }, trailing = chevron)
                 ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
             }
 

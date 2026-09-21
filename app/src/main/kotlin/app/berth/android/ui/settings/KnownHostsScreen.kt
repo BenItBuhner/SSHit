@@ -2,6 +2,7 @@ package app.berth.android.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -36,14 +37,20 @@ import androidx.compose.ui.unit.sp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
+import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.prompts.Fingerprint
 import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.theme.Berth
@@ -55,7 +62,9 @@ import app.berth.ssh.SshKeys
 
 /**
  * Every server key the user has trusted (C13): searchable, one row per key with the algorithm and
- * fingerprint, a pill on pinned keys. Tap opens the detail sheet with pin and forget.
+ * fingerprint, a pill on pinned keys. Tap opens the detail sheet with pin and forget. The header's
+ * overflow, and the empty screen, offer the `known_hosts` import (A16), the same sheet the Hosts
+ * overflow and Settings › Data open.
  */
 @Composable
 fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -64,6 +73,8 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     val hosts by vm.hosts.collectAsState()
     var query by remember { mutableStateOf("") }
     var detail by remember { mutableStateOf<String?>(null) }
+    var menu by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
 
     val q = query.trim().lowercase()
     val shown = known
@@ -80,23 +91,38 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
-        ScreenHeader("Known hosts", onBack = onBack)
+        ScreenHeader(
+            "Known hosts",
+            onBack = onBack,
+            actions = {
+                Box {
+                    IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
+                    BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+                        BerthMenuItem("Import known_hosts", onClick = { menu = false; importing = true })
+                    }
+                }
+            },
+        )
         if (known.isEmpty()) {
             Spacer(Modifier.height(48.dp))
-            EmptyState("No saved server keys.", "The first connection to each server asks you to trust its key; the keys you trust are listed here.") {}
+            EmptyState("No saved server keys.", "The first connection to each server asks you to trust its key; the keys you trust are listed here.") {
+                BerthButton("Import known_hosts", onClick = { importing = true }, kind = ButtonKind.TEXT)
+            }
         } else {
             if (known.size > 4) {
+                // 4 of the 12 dp over the first row end here, outside the list, so the 44 dp field's
+                // 48 dp reach is not cut by the list's claim on the space (as the Hosts search).
                 BerthField(
                     query,
                     { query = it },
                     placeholder = "Search hosts and fingerprints",
-                    modifier = Modifier.padding(horizontal = BerthSpace.screenMargin),
+                    modifier = Modifier.padding(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, bottom = 4.dp),
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                 )
             }
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 12.dp),
+                contentPadding = PaddingValues(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, top = if (known.size > 4) 8.dp else 12.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(shown, key = { it.id }) { k ->
@@ -139,6 +165,9 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     val selected = detail?.let { id -> known.firstOrNull { it.id == id } }
     if (selected != null) {
         KnownHostSheet(vm, selected, hostNamesFor(selected, hosts), onDismiss = { detail = null })
+    }
+    if (importing) {
+        ImportKnownHostsSheet(vm, onDismiss = { importing = false })
     }
 }
 
