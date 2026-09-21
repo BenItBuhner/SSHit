@@ -714,4 +714,137 @@ class TerminalEmulatorTest {
         assertNotNull(t.viewLine(1, 2))
         assertEquals("b", t.viewLine(1, 2).toText())
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // OSC 8 hyperlinks (spec A60)
+
+    private fun link(url: String, text: String, params: String = "") = "\u001b]8;$params;$url\u001b\\$text\u001b]8;;\u001b\\"
+
+    @Test
+    fun `OSC 8 gives the cells printed under it a link that resolves to the URL`() {
+        val (t, _) = term(cols = 20)
+        t.write(link("https://example.com/a", "here") + " not")
+        val row = t.scrollbackSize
+        for (col in 0..3) assertEquals("https://example.com/a", t.linkAt(row, col), "col $col")
+        for (col in 4..8) assertNull(t.linkAt(row, col), "col $col")
+        val line = t.line(0)
+        assertTrue(line.linkAt(0) != 0)
+        assertEquals(line.linkAt(0), line.linkAt(3))
+        assertEquals(0, line.linkAt(4))
+        assertEquals("here not", t.text(0))
+    }
+
+    @Test
+    fun `one URL is one link, another URL another, and an id parameter joins runs`() {
+        val (t, _) = term(cols = 40)
+        t.write(link("https://a.example", "aa") + link("https://b.example", "bb") + link("https://a.example", "cc"))
+        val l = t.line(0)
+        assertEquals(l.linkAt(0), l.linkAt(4), "the same URL twice is one link")
+        assertTrue(l.linkAt(0) != l.linkAt(2), "two URLs are two links")
+        t.write("\r\n" + link("https://c.example", "x", params = "id=one") + link("https://c.example", "y", params = "id=one") + link("https://c.example", "z", params = "id=two"))
+        val m = t.line(1)
+        assertEquals(m.linkAt(0), m.linkAt(1), "the same id and URL is one link")
+        assertTrue(m.linkAt(0) != m.linkAt(2), "another id on the same URL is another link")
+        assertEquals("https://c.example", t.linkAt(1, 2))
+    }
+
+    @Test
+    fun `an OSC 8 URL keeps its semicolons and an empty URL closes the link`() {
+        val (t, _) = term(cols = 40)
+        t.write("\u001b]8;;https://example.com/?a=1;b=2\u001b\\q\u001b]8;;\u001b\\r")
+        assertEquals("https://example.com/?a=1;b=2", t.linkAt(0, 0))
+        assertNull(t.linkAt(0, 1))
+        t.write("\r\n\u001b]8;;https://x.example\u001b\\s\u001b]8;;\u001b\\t")
+        assertEquals("https://x.example", t.linkAt(1, 0))
+        assertNull(t.linkAt(1, 1))
+    }
+
+    @Test
+    fun `a wide character carries its link on both halves and erasing drops it`() {
+        val (t, _) = term(cols = 10)
+        t.write(link("https://w.example", "\u4E2D"))
+        assertEquals("https://w.example", t.linkAt(0, 0))
+        assertEquals("https://w.example", t.linkAt(0, 1))
+        t.write("\u001b[H\u001b[K")
+        assertNull(t.linkAt(0, 0))
+        assertNull(t.linkAt(0, 1))
+        assertEquals(0, t.line(0).linkAt(0))
+    }
+
+    @Test
+    fun `links follow their text into history and through a reflow`() {
+        val (t, _) = term(cols = 10, rows = 2)
+        t.write(link("https://long.example", "abcdefgh") + "\r\nsecond\r\nthird")
+        // "abcdefgh" is now in history, row 0 of the buffer.
+        assertEquals(1, t.scrollbackSize)
+        assertEquals("https://long.example", t.linkAt(0, 0))
+        assertEquals("https://long.example", t.linkAt(0, 7))
+        assertNull(t.linkAt(0, 8))
+        t.resize(5, 2)
+        // Re-wrapped over two rows of five, every cell of both still the link.
+        assertEquals("abcde", t.bufferLine(0).toText())
+        assertEquals("fgh", t.bufferLine(1).toText())
+        for (col in 0..4) assertEquals("https://long.example", t.linkAt(0, col), "row 0 col $col")
+        for (col in 0..2) assertEquals("https://long.example", t.linkAt(1, col), "row 1 col $col")
+        assertNull(t.linkAt(1, 3))
+    }
+
+    @Test
+    fun `a full reset forgets the links and a soft reset closes the open one`() {
+        val (t, _) = term(cols = 20)
+        t.write("\u001b]8;;https://open.example\u001b\\ab\u001b[!pcd")
+        assertEquals("https://open.example", t.linkAt(0, 1))
+        assertNull(t.linkAt(0, 2), "text after a soft reset is outside the link")
+        t.write("\u001bc")
+        assertEquals(0, t.links.size)
+        assertNull(t.linkAt(0, 0))
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Scrollback size and the cursor's default (spec C20)
+
+    @Test
+    fun `the default scrollback is ten thousand lines`() {
+        assertEquals(10_000, TerminalEmulator.DEFAULT_SCROLLBACK)
+        val t = TerminalEmulator(10, 2, listener = Recorder())
+        assertEquals(10_000, t.maxScrollback)
+    }
+
+    @Test
+    fun `lowering the scrollback drops the oldest lines at once and raising it lets history grow`() {
+        val (t, r) = term(cols = 5, rows = 2, scrollback = 10)
+        for (i in 1..8) t.write("l$i\r\n")
+        assertEquals(7, t.scrollbackSize)
+        val changes = r.screenChanges
+        t.maxScrollback = 3
+        assertEquals(3, t.scrollbackSize)
+        assertEquals("l5", t.bufferLine(0).toText())
+        assertEquals(4L, t.linesDropped)
+        assertTrue(r.screenChanges > changes, "the view is told to redraw")
+        t.maxScrollback = 5
+        t.write("a\r\nb\r\nc\r\n")
+        assertEquals(5, t.scrollbackSize)
+        t.maxScrollback = 0
+        assertEquals(0, t.scrollbackSize)
+        t.write("x\r\n")
+        assertEquals(0, t.scrollbackSize)
+    }
+
+    @Test
+    fun `the cursor shows the user's default until the application chooses, and again when it lets go`() {
+        val (t, _) = term()
+        assertEquals(CursorStyle.DEFAULT, t.cursorStyle)
+        t.defaultCursorStyle = CursorStyle(CursorShape.BAR, blinking = false)
+        assertEquals(CursorStyle(CursorShape.BAR, blinking = false), t.cursorStyle)
+        t.write("\u001b[3 q")
+        assertEquals(CursorStyle(CursorShape.UNDERLINE, blinking = true), t.cursorStyle)
+        t.defaultCursorStyle = CursorStyle(CursorShape.BLOCK, blinking = false)
+        assertEquals(CursorStyle(CursorShape.UNDERLINE, blinking = true), t.cursorStyle, "the application's choice stands")
+        t.write("\u001b[0 q")
+        assertEquals(CursorStyle(CursorShape.BLOCK, blinking = false), t.cursorStyle, "DECSCUSR 0 hands the cursor back")
+        t.write("\u001b[6 q\u001b[!p")
+        assertEquals(CursorStyle(CursorShape.BLOCK, blinking = false), t.cursorStyle, "so does a soft reset")
+        t.write("\u001b[?12h")
+        assertEquals(CursorStyle(CursorShape.BLOCK, blinking = true), t.cursorStyle, "DECSET 12 blinks the cursor the user chose")
+    }
 }
