@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.SessionNotifier
 import app.berth.android.session.SessionService
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
@@ -89,7 +91,8 @@ class SessionsScreenshotTest {
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
-    private val now = System.currentTimeMillis()
+    /** The fixture's clock and the interface's: pinned, so an age or a `detached HH:MM` marker reads the same on every run. */
+    private val now = FIXED_NOW
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
@@ -117,9 +120,18 @@ class SessionsScreenshotTest {
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
+        }
+    }
+
+    /** The whole app, its ages read against the fixture's clock. */
+    private fun app() {
+        compose.setContent {
+            CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) }
         }
     }
 
@@ -129,16 +141,6 @@ class SessionsScreenshotTest {
     @Composable
     private fun Stage(tab: ManagedTab?) {
         StageScreen(graph.viewModel, tab, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
-    }
-
-    /** Real time passes while the compose clock keeps ticking, so a pulse or a sheet's entrance finishes. */
-    private fun settle(ms: Long) {
-        val end = System.currentTimeMillis() + ms
-        while (System.currentTimeMillis() < end) {
-            compose.mainClock.advanceTimeBy(64)
-            compose.waitForIdle()
-            Thread.sleep(16)
-        }
     }
 
     // ---- the permission (spec C1 note, C21) -------------------------------------------------------
@@ -160,7 +162,7 @@ class SessionsScreenshotTest {
         graph.notifier.onFirstLive()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Allow notifications")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("To hear from your sessions while you're in another app.").assertExists()
-        settle(400)
+        compose.settle(400)
         capture("notification-rationale")
         // A tap on the scrim puts the sheet away and decides nothing: the next process asks again.
         compose.onNodeWithContentDescription("Close sheet").performClick()
@@ -274,7 +276,7 @@ class SessionsScreenshotTest {
         compose.onNode(hasContentDescription("homelab, detached", substring = true) and !hasContentDescription("needs attention", substring = true)).assertExists()
         assertFalse("the tab on stage sees its own bell", graph.sessions.get("s-homelab")!!.record.value.needsAttention)
         assertTrue(graph.sessions.get("s-build")!!.record.value.needsAttention)
-        settle(1_200)
+        compose.settle(1_200)
         capture("stage-attention")
 
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performSemanticsAction(SemanticsActions.OnLongClick)
@@ -284,7 +286,7 @@ class SessionsScreenshotTest {
         assertTrue(graph.sessions.get("s-pihole")!!.record.value.needsAttention)
         // pi-hole's ring is on its tab wherever the scroll left it laid out; the tile carries it too unless the
         // tab lies wholly inside the strip. A cut tab speaks twice rather than not at all.
-        settle(600)
+        compose.settle(600)
         val piholeAfter = tabInView("pi-hole, detached")
         assertEquals(if (piholeAfter != null) 1 else 0, compose.onAllNodes(litTabs).fetchSemanticsNodes().size)
         assertEquals(if (piholeAfter == true) 0 else 1, compose.onAllNodes(litTile).fetchSemanticsNodes().size)
@@ -323,7 +325,7 @@ class SessionsScreenshotTest {
         // thread's dispatcher a device uses.)
         restore()
         runBlocking { graph.sessions.activeTab.first { it?.id == "s-homelab" } }
-        compose.setContent { AppRoot(graph.viewModel) }
+        app()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
         val session = graph.sessions.get("s-homelab")!!
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detached \u00B7 4 min ago")).fetchSemanticsNodes().isNotEmpty() }
@@ -332,7 +334,7 @@ class SessionsScreenshotTest {
         assertFalse(session.emulator.screenText().any { it.contains("paused") })
         compose.onNodeWithText("Reconnect").assertExists()
         compose.onAllNodesWithText("No tabs").assertCountEquals(0)
-        settle(400)
+        compose.settle(400)
         capture("app-cold-start-paused")
     }
 
@@ -364,7 +366,11 @@ class SessionsScreenshotTest {
         }
         val app = ApplicationProvider.getApplicationContext<Application>()
         val notifications = shadowOf(app.getSystemService(NotificationManager::class.java))
-        compose.setContent { AppRoot(graph.viewModel) }
+        // The live tab stamps its records and its marker rows off this clock: real time from the fixture's moment,
+        // so the 11 s command below is still 11 s long, and set back to that moment before the detach that the last frame shows.
+        val sessionClock = ShiftedClock(now)
+        graph.sessions.clock = sessionClock
+        app()
         graph.process.start()
         compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 && graph.viewModel.activeTabId.value == "s-homelab" }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
@@ -382,7 +388,7 @@ class SessionsScreenshotTest {
         // The first Live of the process is the moment (spec C1 note): the rationale, over the live Stage.
         compose.waitUntil(5_000) { graph.notifier.prompt.value == NotificationPrompt.Rationale }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Allow notifications")).fetchSemanticsNodes().isNotEmpty() }
-        settle(800)
+        compose.settle(800)
         capture("notification-rationale-live")
         // Continue hands over to the system dialog, which is not Compose; its answer arrives the way the launcher's does.
         // Refused: the six-second notice at the bottom of the live Stage, on the Deck, and nothing argues.
@@ -390,7 +396,7 @@ class SessionsScreenshotTest {
         graph.notifier.onPermissionResult(granted = false)
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Notifications are off")).fetchSemanticsNodes().isNotEmpty() }
         assertTrue("a refusal is an answer: no second ask", graph.notifier.asked)
-        settle(300)
+        compose.settle(300)
         capture("notification-denied")
         // Settings is the way back: the system page for Berth's notifications, and the notice goes with the tap.
         // (The drawer keeps its own Settings row composed off the start edge, so the bar's action is named by its line.)
@@ -412,14 +418,14 @@ class SessionsScreenshotTest {
 
         // bash marks its own commands: OSC 133 C as a command starts, D with its exit status before the next prompt.
         live.sendText("PS0=$'\\e]133;C\\a'; PROMPT_COMMAND='printf \"\\e]133;D;%s\\a\" \"$?\"'; clear\n")
-        settle(1_000)
+        compose.settle(1_000)
         compose.onNode(hasContentDescription("homelab, detached", substring = true)).performClick()
         compose.waitUntil(5_000) { graph.sessions.activeTabId.value == "s-homelab" && !live.onStage }
         live.sendText("true\n")
-        settle(1_500)
+        compose.settle(1_500)
         assertFalse("a quick command off stage is not news", live.record.value.needsAttention)
         live.sendText("sleep 11; echo done\n")
-        settle(2_000)
+        compose.settle(2_000)
         assertFalse("not before the threshold", live.record.value.needsAttention)
         compose.waitUntil(15_000) { live.record.value.needsAttention }
         assertEquals("Command finished", live.record.value.attentionReason)
@@ -432,14 +438,14 @@ class SessionsScreenshotTest {
         assertEquals(if (liveInView != null) 1 else 0, compose.onAllNodes(litTabs).fetchSemanticsNodes().size)
         assertEquals(if (liveInView == true) 0 else 1, compose.onAllNodes(litTile).fetchSemanticsNodes().size)
         assertNull("on screen, the ring says it; the shade stays quiet", notifications.getNotification(SessionNotifier.attentionTag(live.id), 2))
-        settle(1_200)
+        compose.settle(1_200)
         capture("stage-attention-live")
 
         // Held, the count tile stages the tab that needs the user; arriving clears its ring.
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performSemanticsAction(SemanticsActions.OnLongClick)
         compose.waitUntil(5_000) { graph.sessions.activeTabId.value == live.id && !live.record.value.needsAttention }
         assertTrue(live.emulator.screenText().any { it.contains("done") })
-        settle(600)
+        compose.settle(600)
         capture("stage-live-jumped")
 
         // Away, with this tab on stage: its frame is on disk at once, and nothing is on stage any more, so a bell
@@ -459,13 +465,15 @@ class SessionsScreenshotTest {
         graph.process.start()
         compose.waitUntil(5_000) { !live.record.value.needsAttention && notifications.getNotification(SessionNotifier.attentionTag(live.id), 2) == null }
 
-        // Detach all, as the Sessions notification's action sends it: the tab detaches onto its frame.
+        // Detach all, as the Sessions notification's action sends it: the tab detaches onto its frame, whose
+        // `detached 14:07` row is stamped off the session's clock, put back to the fixture's moment for it.
+        sessionClock.set(now)
         assertTrue(graph.notifier.dispatch(shadowOf(sessionsNotification.actions[0].actionIntent).savedIntent, graph.sessions))
         compose.waitUntil(15_000) { live.state == SessionState.DETACHED }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Detached \u00B7 just now")).fetchSemanticsNodes().isNotEmpty() }
         assertTrue(frameLines(graph.sessionRecords.frames.getValue(live.id)).any { it.contains("done") })
         compose.waitUntil(5_000) { graph.notifier.summary.value.active == 0 }
-        settle(600)
+        compose.settle(600)
         capture("stage-live-detached-all")
     }
 

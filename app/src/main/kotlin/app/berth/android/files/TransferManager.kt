@@ -123,6 +123,12 @@ class TransferManager(
     /** Opens the channel a transfer runs on; tests point this at a fake file system. */
     internal var channelFor: suspend (TerminalSession) -> SftpFileSystem = { it.openSftp() }
 
+    /**
+     * The clock the speed meter and the publish throttle read, in nanoseconds; a screenshot test
+     * advances it with the bytes its channel moves, so the rate on a row is a number and not a race.
+     */
+    internal var nanoTime: () -> Long = System::nanoTime
+
     /** How links inside a folder are treated; see [LinkPolicy]. */
     var linkPolicy: LinkPolicy = LinkPolicy.FOLLOW_FILE_LINKS
 
@@ -523,7 +529,7 @@ class TransferManager(
             val meter = SpeedMeter()
             var lastPublish = 0L
             val bytes: (Long, Long) -> Unit = { copied, size ->
-                val now = System.nanoTime()
+                val now = nanoTime()
                 val speed = meter.update(copied, now)
                 if (now - lastPublish > PUBLISH_INTERVAL_NANOS || copied == size) {
                     lastPublish = now
@@ -532,7 +538,7 @@ class TransferManager(
             }
             var lastFolder: FolderProgress? = null
             val folderProgress: (FolderProgress) -> Unit = { p ->
-                val now = System.nanoTime()
+                val now = nanoTime()
                 val speed = meter.update(p.bytesDone, now)
                 // Chunks are throttled like bytes; a change of shape (a file done, a conflict, a failure) goes out at once.
                 if (lastFolder?.sameShape(p) != true || now - lastPublish > PUBLISH_INTERVAL_NANOS) {

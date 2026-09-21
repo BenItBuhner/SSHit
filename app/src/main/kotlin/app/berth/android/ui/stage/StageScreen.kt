@@ -102,6 +102,7 @@ import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
 import app.berth.android.ui.keyboard.BindVolumeButtons
@@ -1116,14 +1117,15 @@ fun ageText(since: Long?, now: Long = System.currentTimeMillis()): String {
     }
 }
 
-/** Ticks once a minute so ages re-render. */
+/** Ticks twice a minute so ages re-render; reads [LocalWallClock], which a screenshot test pins. */
 @Composable
 fun ageTicker(): Long {
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
+    val clock = LocalWallClock.current
+    var now by remember(clock) { mutableStateOf(clock()) }
+    LaunchedEffect(clock) {
         while (true) {
             delay(30_000)
-            now = System.currentTimeMillis()
+            now = clock()
         }
     }
     return now

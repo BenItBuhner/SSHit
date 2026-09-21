@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -205,27 +207,33 @@ class EditorScreenshotTest {
 
         // The Snippets layer previews as one key per pinned snippet, named after them. In the editor
         // a slot is one button to a reader and what it holds is its state, so the slot names them.
-        compose.onNodeWithText("Snippets").performScrollTo().performClick()
+        // The layer chips and the Presets row stay in the frames that follow, so they are chosen through their
+        // click action rather than pressed: a press leaves a ripple that Robolectric never finishes, its sparkle
+        // drawn off the wall clock, so two frames of it never match.
+        compose.onNodeWithText("Snippets").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { compose.onAllNodes(hasStateDescription("Snippets: compose ps, tail caddy")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Slot 1").performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Expands to one key per pinned snippet: compose ps, tail caddy.")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Deck preview").performScrollTo()
         capture("deck-editor-snippets-layer")
-        compose.onNodeWithText("Base").performClick()
+        compose.onNodeWithText("Base").performSemanticsAction(SemanticsActions.OnClick)
 
-        compose.onNodeWithText("Presets").performScrollTo().performClick()
+        compose.onNodeWithText("Presets").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(500)
         capture("deck-editor-presets")
         dismissSheet()
 
         // The layout panel and the import, export and preset actions at the end of the page.
         compose.onNodeWithText("Import").performScrollTo()
+        compose.settle(500)
         capture("deck-editor-layout")
 
         compose.onNodeWithText("Two").performScrollTo().performClick()
         compose.onNodeWithText("Left").performScrollTo().performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.rows == 2 && graph.viewModel.deckLayout.value.reach == DeckReach.LEFT }
         compose.onNodeWithContentDescription("Deck preview").performScrollTo()
+        compose.settle(500)
         capture("deck-editor-two-rows-left")
 
         // Undo walks back through the changes that were applied live.
@@ -239,6 +247,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Import").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Import a Deck")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasSetTextAction()).performTextInput("extra-keys = [['ESC','/','-','HOME','UP','END'],['TAB','CTRL','ALT','LEFT','DOWN','RIGHT']]")
+        compose.settle(500)
         capture("deck-editor-import")
         compose.onAllNodesWithText("Import").onLast().performClick()
         compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.layers.size == 2 && graph.viewModel.deckLayout.value.rows == 2 }

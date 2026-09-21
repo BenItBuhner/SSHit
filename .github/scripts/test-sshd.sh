@@ -55,6 +55,7 @@ PermitRootLogin no
 AllowTcpForwarding yes
 GatewayPorts no
 AcceptEnv LANG LC_* COLORTERM TERM_PROGRAM
+PrintLastLog no
 Subsystem sftp /usr/lib/openssh/sftp-server
 PidFile $pidfile
 LogLevel VERBOSE
@@ -66,6 +67,9 @@ EOF
 # chain through the jump host, the tunnels, the transfers), and past ten unauthenticated connections at once the
 # default MaxStartups 10:30:100 drops new ones at random, a handshake that fails once and passes on the rerun. A
 # hundred of each is more than the suite ever holds open, and both sshds are reachable from this machine alone.
+# PrintLastLog no: with it on, every pty login after the first opens with "Last login: <the previous test's
+# moment> from 127.0.0.1", a line in the terminal that no two runs share, so the live screenshot frames never
+# repeated; the shell's own prompt is what a frame should show.
 
 start_instance() {
     local dir="$1" pidfile="$2"

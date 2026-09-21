@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,7 +31,9 @@ import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -45,6 +48,7 @@ import app.berth.android.files.TransferState
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.files.FilesActions
 import app.berth.android.ui.files.FilesPane
 import app.berth.android.ui.files.formatModified
@@ -62,6 +66,10 @@ import app.berth.sftp.FolderPhase
 import app.berth.sftp.FolderProgress
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
+import app.berth.ssh.AcceptAllHostKeys
+import app.berth.ssh.SshAuth
+import app.berth.ssh.SshConnection
+import app.berth.ssh.SshEndpoint
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -70,6 +78,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import net.schmizz.sshj.sftp.FileAttributes
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -89,7 +98,10 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Random
+import java.util.TimeZone
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.io.path.createTempDirectory
 
 /**
@@ -112,7 +124,10 @@ class FilesScreenshotTest {
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val now = System.currentTimeMillis()
+    /** The offline tree's clock and the interface's: pinned, so a modified time reads the same on every run. */
+    private val now = FIXED_NOW
+    /** The zone the modified column is formatted in, pinned with the clock so "11:07" is the same digits on every machine. */
+    private val zone = TimeZone.getDefault()
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
@@ -124,6 +139,7 @@ class FilesScreenshotTest {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(ApplicationProvider.getApplicationContext())
@@ -132,6 +148,7 @@ class FilesScreenshotTest {
     @After
     fun tearDown() {
         scope.cancel()
+        TimeZone.setDefault(zone)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -190,8 +207,10 @@ class FilesScreenshotTest {
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
     }
@@ -493,19 +512,23 @@ class FilesScreenshotTest {
         capture("files-folder-transfers-sheet")
 
         // Open, a running folder shows the file moving now with its own line and the last few failures; no retry while it runs.
-        compose.onNode(hasText("berth") and hasStateDescription("Collapsed")).performClick()
+        // The rows are opened through their click action, not a press: a pressed row keeps a ripple Robolectric never
+        // finishes, and the frame is taken once the row's opening has run its course.
+        compose.onNode(hasText("berth") and hasStateDescription("Collapsed")).performSemanticsAction(SemanticsActions.OnClick)
         waitForText("app/build/intermediates/dex/debug/classes.dex")
         waitForText("9 MB of 24 MB")
         waitForText("Didn't copy so far")
         compose.onNode(hasText("berth") and hasStateDescription("Expanded")).assertExists()
         compose.onAllNodes(hasText("Retry failed")).assertCountEquals(0)
+        compose.settle(500)
         capture("files-folder-transfer-expanded")
 
         // Open, a finished one is the summary: what failed, with the reason, and Retry failed for the part that can go again.
-        compose.onNode(hasText("photos") and hasStateDescription("Collapsed")).performClick()
+        compose.onNode(hasText("photos") and hasStateDescription("Collapsed")).performSemanticsAction(SemanticsActions.OnClick)
         waitForText("Didn't copy")
         waitForText("Retry failed")
         compose.onNodeWithText("2025/raw \u00B7 The server refused access to /home/demo/photos/2025/raw.").assertExists()
+        compose.settle(500)
         capture("files-folder-transfer-summary")
         compose.onNodeWithText("Retry failed").performClick()
         assertEquals(listOf("f0"), retried)
@@ -755,9 +778,14 @@ class FilesScreenshotTest {
                 fs.close()
             }
         }
+        // Dated as the column will show them, folders after what is in them.
+        pinModified(treeModified, "$dir/README.txt", "$dir/site-backup.tar.gz", "$dir/nginx.conf", "$dir/logs/app.log", "$dir/logs", "$dir/releases", dir)
         // The shell reports its directory over OSC 7 so the Files screen can jump to it.
         session.sendText("PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\e\\\\\\\\\" \"\$HOSTNAME\" \"\$PWD\"' && cd $dir/logs && clear\n")
         compose.waitUntil(10_000) { session.cwd == "$dir/logs" }
+        // bash retitles the tab with the prompt that follows the OSC 7; the strip has that title before the Files tab
+        // opens beside it, or the retitle lands mid-scroll and leaves the strip wherever the scroll had got to.
+        compose.waitUntil(10_000) { session.record.value.displayTitle.endsWith("/logs") }
 
         // The Session sheet sits behind the Stage overflow; its Files button, beside Detach, opens the host's Files tab riding this terminal.
         compose.onNodeWithContentDescription("More").performClick()
@@ -794,13 +822,21 @@ class FilesScreenshotTest {
         dismissSheet()
         waitForNoText("Copy path")
 
-        // Download through the transfer queue into a file:// document, the way a SAF result lands.
+        // Download through the transfer queue into a file:// document, the way a SAF result lands; the copy is
+        // held at 12 of the 40 MiB for its frame, then let go.
         val out = File.createTempFile("berth-files-live", ".bin")
         val entry = runBlocking { session.openSftp().use { it.stat("$dir/site-backup.tar.gz") } }
-        val id = graph.files.transfers.download(session, entry, Uri.fromFile(out))
-        fun transfer() = graph.files.transfers.transfers.value.first { it.id == id }
-        compose.waitUntil(30_000) { transfer().let { (it.state == TransferState.RUNNING && it.bytes > 0) || it.state == TransferState.DONE } }
+        val queue = graph.files.transfers
+        val clock = AtomicLong(TimeUnit.SECONDS.toNanos(1))
+        var channel: MeteredChannel? = null
+        queue.nanoTime = clock::get
+        queue.channelFor = { s -> MeteredChannel(s.openSftp(), clock, holdAt = 12 * MIB).also { channel = it } }
+        val id = queue.download(session, entry, Uri.fromFile(out))
+        fun transfer() = queue.transfers.value.first { it.id == id }
+        compose.waitUntil(30_000) { transfer().let { it.state == TransferState.RUNNING && it.bytes >= 12 * MIB } }
+        compose.settle(300)
         capture("files-live-download")
+        channel!!.release()
         compose.waitUntil(120_000) { transfer().state == TransferState.DONE }
         assertArrayEquals(sha256(payload), sha256(out.readBytes()))
         compose.onNodeWithContentDescription("Transfers").performClick()
@@ -809,14 +845,17 @@ class FilesScreenshotTest {
         dismissSheet()
         waitForNoText("Clear finished")
 
-        // Upload a local document into the folder being shown; the listing picks it up on its own.
+        // Upload a local document into the folder being shown; the listing picks it up on its own. Three MiB never
+        // reach a channel's hold, so the upload runs through; the file is then dated for the column before its frame.
         val uploads = createTempDirectory("berth-upload").toFile()
         val local = File(uploads, "app-2026-09-19.log").apply { writeBytes(ByteArray(3 * 1024 * 1024).also(random::nextBytes)) }
-        val up = graph.files.transfers.upload(session, listOf(Uri.fromFile(local)), dir).single()
-        compose.waitUntil(60_000) { graph.files.transfers.transfers.value.first { it.id == up }.state == TransferState.DONE }
+        val up = queue.upload(session, listOf(Uri.fromFile(local)), dir).single()
+        compose.waitUntil(60_000) { queue.transfers.value.first { it.id == up }.state == TransferState.DONE }
         waitForText(local.name, 15_000)
         val uploaded = runBlocking { session.openSftp().use { it.stat("$dir/${local.name}") } }
         assertEquals(local.length(), uploaded.size)
+        pinModified(uploadedModified, "$dir/${local.name}")
+        refreshUntil("13:07")
         capture("files-live-uploaded")
 
         // The shell moves on; the pane follows it into the empty releases folder through the Stage's one overflow,
@@ -839,6 +878,8 @@ class FilesScreenshotTest {
         compose.onNodeWithText("Create").performClick()
         waitForText("Created archive", 15_000)
         waitForText("archive", 15_000)
+        pinModified(createdModified, "$dir/releases/archive")
+        refreshUntil("13:37")
         capture("files-live-new-folder")
         compose.onNodeWithText("archive").performTouchInput { longClick() }
         waitForText("1 selected", 5_000)
@@ -932,6 +973,8 @@ class FilesScreenshotTest {
             }
         }
         assertEquals(85, expected.size)
+        // The tree's row at home shows the tree's date; dated as the column will show it.
+        pinModified(treeModified, dir)
 
         // The host's Files tab from the session sheet; it opens at home, where the tree is a row.
         compose.onNodeWithContentDescription("More").performClick()
@@ -940,25 +983,34 @@ class FilesScreenshotTest {
         compose.onNode(hasText("Files") and hasAnySibling(hasText("Detach"))).performClick()
         waitForText("berth-folder-demo", 20_000)
 
-        // The folder comes down as one transfer into a directory standing for the picked tree; the channel is paced so it can be watched.
+        // The folder comes down as one transfer into a directory standing for the picked tree, on a channel that
+        // meters the queue's clock and holds the copy at a third of the bytes (the big file moving, the rate settled)
+        // for the strip's and the sheet's frames.
         val queue = graph.files.transfers
-        queue.channelFor = { s -> PacedChannel(s.openSftp(), perFileMs = 60, perChunkMs = 8) }
+        val clock = AtomicLong(TimeUnit.SECONDS.toNanos(1))
+        var holdAt = 11 * MIB
+        var channel: MeteredChannel? = null
+        queue.nanoTime = clock::get
+        queue.channelFor = { s -> MeteredChannel(s.openSftp(), clock, holdAt).also { channel = it } }
         val dest = createTempDirectory("berth-folder-down").toFile()
         val entry = runBlocking { session.openSftp().use { it.stat(dir) } }
         val down = queue.downloadFolder(session, entry, Uri.fromFile(dest))
         fun transfer(id: String) = queue.transfers.value.first { it.id == id }
-        // Photographed once a third of the bytes are across: the big file is moving, the speed has settled.
-        fun Transfer.aThirdIn() = state == TransferState.RUNNING && folder?.let { f -> f.phase == FolderPhase.COPYING && f.filesCopied > 0 && f.bytesDone * 3 > f.bytesTotal } == true
-        compose.waitUntil(30_000) { transfer(down).aThirdIn() }
+        fun Transfer.heldAt(bytes: Long) = state == TransferState.RUNNING && folder?.let { f -> f.phase == FolderPhase.COPYING && f.bytesDone >= bytes } == true
+        compose.waitUntil(30_000) { transfer(down).heldAt(holdAt) }
+        compose.settle(300)
         capture("files-folder-live-download")
         compose.onNodeWithContentDescription("Transfers, 1 running").performClick()
         waitForText("1 running", 5_000)
-        compose.onNode(hasText("berth-folder-demo") and hasStateDescription("Collapsed")).performClick()
+        compose.onNode(hasText("berth-folder-demo") and hasStateDescription("Collapsed")).performSemanticsAction(SemanticsActions.OnClick)
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("berth-folder-demo") and hasStateDescription("Expanded")).fetchSemanticsNodes().isNotEmpty() }
         assertEquals("still moving while the row is open", TransferState.RUNNING, transfer(down).state)
+        compose.settle(500)
         capture("files-folder-live-sheet")
+        channel!!.release()
         compose.waitUntil(180_000) { transfer(down).state == TransferState.DONE }
         waitForText("Done", 5_000)
+        compose.settle(300)
         capture("files-folder-live-done")
         dismissSheet()
         waitForNoText("Clear finished", 5_000)
@@ -983,11 +1035,16 @@ class FilesScreenshotTest {
         for (i in 1..30) write("photos/2026/IMG_%04d.jpg".format(i), ByteArray(16 * 1024 + i).also(random::nextBytes))
         write("photos/clip.mp4", ByteArray(8 * 1024 * 1024).also(random::nextBytes))
         File(local, "photos/empty").mkdirs()
+        holdAt = 3 * MIB
         val up = queue.uploadFolder(session, Uri.fromFile(local), home)
-        compose.waitUntil(30_000) { transfer(up).aThirdIn() }
+        compose.waitUntil(30_000) { transfer(up).heldAt(holdAt) }
+        compose.settle(300)
         capture("files-folder-live-upload")
+        channel!!.release()
         compose.waitUntil(180_000) { transfer(up).state == TransferState.DONE }
         waitForText("berth-folder-upload", 15_000)
+        pinModified(createdModified, "$home/berth-folder-upload")
+        refreshUntil("13:37")
         capture("files-folder-live-uploaded")
         compose.onNodeWithContentDescription("Transfers").performClick()
         waitForText("2 done", 5_000)
@@ -1036,19 +1093,94 @@ class FilesScreenshotTest {
         return out
     }
 
+    // ---- the live fixture's clocks ---------------------------------------------------------------
+
+    /** What the live flows make on the sshd is dated as the column shows it: the trees three hours before the interface's 14:07, what a flow adds later an hour and a half-hour before. */
+    private val treeModified = now - TimeUnit.HOURS.toMillis(3)
+    private val uploadedModified = now - TimeUnit.HOURS.toMillis(1)
+    private val createdModified = now - TimeUnit.MINUTES.toMillis(30)
+
     /**
-     * The real channel with a short pause before each file and after each chunk, so a copy over
-     * localhost lasts long enough for the strip and the sheet to be photographed mid-way.
+     * Sets the modified time of [paths] on the sshd to [at], through a login of the test's own beside
+     * the session under test (the client has no call for it and should not grow one for a fixture): a
+     * listing of what the test made then reads the same on every run rather than the minute it ran in.
      */
-    private class PacedChannel(private val inner: SftpFileSystem, private val perFileMs: Long, private val perChunkMs: Long) : SftpFileSystem by inner {
+    private fun pinModified(at: Long, vararg paths: String) = runBlocking {
+        val endpoint = SshEndpoint(host = sshHost, port = sshPort, user = sshUser, auth = listOf(SshAuth.Password { sshPassword.toCharArray() }), keepaliveSeconds = 5)
+        val connection = SshConnection(endpoint, AcceptAllHostKeys)
+        connection.connect()
+        try {
+            connection.openSftp().use { sftp ->
+                val attrs = FileAttributes.Builder().withAtimeMtime(at / 1000, at / 1000).build()
+                for (path in paths) sftp.setattr(path, attrs)
+            }
+        } finally {
+            connection.close()
+        }
+    }
+
+    /** Re-lists the folder on show through the Stage overflow's Refresh row, waits for [text] to be on it and for the refresh indicator to have gone. */
+    private fun refreshUntil(text: String) {
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Refresh", 5_000)
+        compose.onNodeWithText("Refresh").performClick()
+        waitForText(text, 15_000, substring = true)
+        compose.settle(500)
+    }
+
+    /**
+     * The real channel with the queue's clock in its hand. The bytes still cross the sshd, but where
+     * the test once slept to slow them, each [STEP] of a file now advances the queue's nanosecond
+     * clock by what the step takes at four mebibytes a second (and a file's start by a pause of its
+     * own), so the rate on a row is a number and not a race; and the copy stops at [holdAt] bytes,
+     * counted across the transfer's files, until [release], so the strip and the sheet are
+     * photographed at one count on every run. Progress is passed on at the steps and at a file's
+     * start and end, which is all the rows can show; each step is longer than the queue's publish
+     * interval, so what is passed on is what is shown.
+     */
+    private class MeteredChannel(private val inner: SftpFileSystem, private val clock: AtomicLong, private val holdAt: Long) : SftpFileSystem by inner {
+        private val gate = CountDownLatch(1)
+        private var moved = 0L
+        private var held = false
+
+        fun release() = gate.countDown()
+
         override suspend fun download(path: String, sink: OutputStream, onProgress: (Long, Long) -> Unit) {
-            delay(perFileMs)
-            inner.download(path, sink) { bytes, total -> onProgress(bytes, total); Thread.sleep(perChunkMs) }
+            clock.addAndGet(PER_FILE_NANOS)
+            var last = -1L
+            inner.download(path, sink) { bytes, total -> last = tick(bytes, total, last, onProgress) }
+            moved += maxOf(last, 0L)
         }
 
         override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (Long, Long) -> Unit) {
-            delay(perFileMs)
-            inner.upload(source, size, path, permissions) { bytes, total -> onProgress(bytes, total); Thread.sleep(perChunkMs) }
+            clock.addAndGet(PER_FILE_NANOS)
+            var last = -1L
+            inner.upload(source, size, path, permissions) { bytes, total -> last = tick(bytes, total, last, onProgress) }
+            moved += maxOf(last, 0L)
         }
+
+        /** Passes [bytes] on when a file starts, ends or crosses a step, holding there once [holdAt] is reached; returns what was last passed on. */
+        private fun tick(bytes: Long, total: Long, last: Long, onProgress: (Long, Long) -> Unit): Long {
+            if (last >= 0 && bytes != total && bytes / STEP == last / STEP) return last
+            clock.addAndGet((bytes - maxOf(last, 0L)) * NANOS_PER_BYTE)
+            onProgress(bytes, total)
+            if (!held && moved + bytes >= holdAt) {
+                held = true
+                gate.await(2, TimeUnit.MINUTES)
+            }
+            return bytes
+        }
+
+        private companion object {
+            const val STEP = 512L * 1024
+            /** 250 ns a byte: 3.8 MiB/s, what the paced channel used to run at over localhost. */
+            const val NANOS_PER_BYTE = 250L
+            const val PER_FILE_NANOS = 60_000_000L
+        }
+    }
+
+    private companion object {
+        /** Where the live copies are held for their frames: the file at 12 of 40 MiB, the tree at 11 of 32, the tree going up at 3 of 8.5. */
+        const val MIB = 1024L * 1024
     }
 }

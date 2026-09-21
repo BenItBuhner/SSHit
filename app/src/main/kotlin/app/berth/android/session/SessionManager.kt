@@ -317,7 +317,14 @@ class SessionManager @Inject constructor(
      */
     private val historyWrites = Channel<suspend () -> Unit>(Channel.UNLIMITED)
 
+    /**
+     * The wall clock the sessions stamp their records and marker rows with ([SessionEnvironment.now]);
+     * a screenshot test of a live tab shifts it, so a `detached 14:07` row reads the same on every run.
+     */
+    internal var clock: () -> Long = System::currentTimeMillis
+
     private val environment = object : SessionEnvironment {
+        override fun now(): Long = clock()
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
         override fun recordCommand(hostId: String, text: String, at: Long) {
             historyWrites.trySend { commandHistory.record(hostId, text, at) }

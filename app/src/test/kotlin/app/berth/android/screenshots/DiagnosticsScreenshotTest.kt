@@ -6,6 +6,7 @@ import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -21,9 +22,11 @@ import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
+import app.berth.android.diagnostics.LogRing
 import app.berth.android.diagnostics.ReportKind
 import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.diagnostics.DiagnosticsScreen
 import app.berth.android.ui.diagnostics.formatDateTime
 import app.berth.android.ui.settings.SettingsScreen
@@ -56,6 +59,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
+import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 
 /**
@@ -78,7 +82,11 @@ class DiagnosticsScreenshotTest {
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var graph: TestGraph
-    private val now = System.currentTimeMillis()
+    /**
+     * The fixture's clock: the reports are written at it and the interface reads it, so a Written line, a
+     * date and an age come out the same on every run. It steps between reports so they have an order.
+     */
+    private var now = FIXED_NOW
 
     @Before
     fun setUp() {
@@ -86,7 +94,7 @@ class DiagnosticsScreenshotTest {
             System.setProperty("roborazzi.test.record", "true")
         }
         outDir.mkdirs()
-        graph = TestGraph(context)
+        graph = TestGraph(context, wallClock = { now }, install = { FIXED_INSTALL })
     }
 
     @After
@@ -98,31 +106,27 @@ class DiagnosticsScreenshotTest {
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
-        }
-    }
-
-    /** Real time passes while the compose clock keeps ticking. */
-    private fun settle(ms: Long) {
-        val end = System.currentTimeMillis() + ms
-        while (System.currentTimeMillis() < end) {
-            compose.mainClock.advanceTimeBy(64)
-            compose.waitForIdle()
-            Thread.sleep(16)
         }
     }
 
     private val clipText: String? get() = context.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()
 
-    /** The previous run: its log, then a crash through the handler's path, with Android's handler stood in for. */
+    /**
+     * The previous run: its log, then a crash through the handler's path, with Android's handler stood in
+     * for. Its lines are stamped on the fixture's clock and the crash is on a thread named `main`, as it
+     * would be, so the report's text is the same on every run.
+     */
     private fun crashPreviousRun(): String {
-        BerthLog.i("App", "process started")
-        BerthLog.i("Session", "[homelab] detached \u2192 connecting")
-        BerthLog.i("Session", "[homelab] connecting \u2192 live")
-        BerthLog.d("Session", "app left the screen; saving 1 frame")
-        val previousRun = CrashReporter(graph.reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
+        BerthLog.ring.log(LogRing.Level.INFO, "App", "process started", at = now - 4_000)
+        BerthLog.ring.log(LogRing.Level.INFO, "Session", "[homelab] detached \u2192 connecting", at = now - 3_000)
+        BerthLog.ring.log(LogRing.Level.INFO, "Session", "[homelab] connecting \u2192 live", at = now - 2_000)
+        BerthLog.ring.log(LogRing.Level.DEBUG, "Session", "app left the screen; saving 1 frame", at = now - 1_000)
+        val previousRun = CrashReporter(graph.reportsDir, { FIXED_INSTALL }, BerthLog.ring, now = { now }, zone = { ZoneOffset.UTC })
         val error = IllegalStateException("Frame 1 of 1 has no cells for row 24", ArrayIndexOutOfBoundsException("Index 24 out of bounds for length 24"))
         previousRun.onCrash(Thread("main"), error)
         val written = graph.reportsDir.listFiles()!!.single { it.name.startsWith("crash-") }
@@ -138,7 +142,7 @@ class DiagnosticsScreenshotTest {
         val text = crashPreviousRun()
         assertEquals("the crash of the previous run, unread", ReportKind.CRASH, graph.reports.unread.value?.kind)
 
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Berth crashed last time").fetchSemanticsNodes().isNotEmpty() }
         // The file is read off the main thread; the box holds it once it is here, whole and once.
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth crash report", substring = true)).fetchSemanticsNodes().size == 1 }
@@ -152,7 +156,7 @@ class DiagnosticsScreenshotTest {
         compose.onAllNodes(hasText("Nothing has been sent anywhere", substring = true)).assertCountEquals(1)
         compose.onAllNodes(hasText("leaves the phone", substring = true)).assertCountEquals(0)
         assertFalse(text, text.contains("leaves the phone"))
-        settle(300)
+        compose.settle(300)
         capture("crash-sheet")
 
         // A prompt the restore raises while the sheet is up (a password for a reconnecting tab) waits behind it:
@@ -160,7 +164,7 @@ class DiagnosticsScreenshotTest {
         val homelab = graph.hosts.items.value.first { it.id == "homelab" }
         val asking = CoroutineScope(Dispatchers.IO).launch { graph.prompts.password(homelab) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.Password }
-        settle(200)
+        compose.settle(200)
         compose.onAllNodes(hasText("Password for ", substring = true)).assertCountEquals(0)
         compose.onNodeWithText("Berth crashed last time").assertIsDisplayed()
 
@@ -186,10 +190,12 @@ class DiagnosticsScreenshotTest {
     private fun seedReports() {
         val homelab = host()
         val hostLine = "${homelab.name} \u00B7 ${homelab.user}@${homelab.address}:${homelab.port}"
-        graph.reports.report(ReportKind.TRANSPORT, "Connection lost: homelab", IOException("Broken pipe"), details = listOf("Host" to hostLine, "Phase" to "Connection lost", "Reason" to "Broken pipe"))
-        Thread.sleep(5)
-        graph.reports.report(ReportKind.TRANSPORT, "Gave up reconnecting: homelab", null, details = listOf("Host" to hostLine, "Phase" to "Gave up reconnecting", "Reason" to "after 960 s and 6 retries"))
-        Thread.sleep(5)
+        // Five seconds apart on the fixture's clock, so the list has an order and the files distinct names; the
+        // session layer reports from its own thread, which a test runner names after itself, so the thread is named here.
+        graph.reports.report(ReportKind.TRANSPORT, "Connection lost: homelab", IOException("Broken pipe"), details = listOf("Host" to hostLine, "Phase" to "Connection lost", "Reason" to "Broken pipe"), thread = Thread("DefaultDispatcher-worker-3"))
+        now += 5_000
+        graph.reports.report(ReportKind.TRANSPORT, "Gave up reconnecting: homelab", null, details = listOf("Host" to hostLine, "Phase" to "Gave up reconnecting", "Reason" to "after 960 s and 6 retries"), thread = Thread("DefaultDispatcher-worker-3"))
+        now += 5_000
         crashPreviousRun()
         graph.reports.markRead()
         assertEquals(3, graph.reports.reports.value.size)
@@ -216,14 +222,14 @@ class DiagnosticsScreenshotTest {
         // The age in the trailing slot the way the Hosts rows give it, not a date that takes a third of the row.
         compose.onAllNodesWithText("just now").assertCountEquals(3)
         compose.onAllNodes(hasText(formatDateTime(graph.reports.reports.value.first().at))).assertCountEquals(0)
-        settle(200)
+        compose.settle(200)
         capture("diagnostics")
 
         compose.onNodeWithText("Connection lost: homelab").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Share report").fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth connection report", substring = true)).fetchSemanticsNodes().size == 1 }
         compose.onAllNodes(hasText("Reason    Broken pipe", substring = true)).assertCountEquals(1)
-        settle(300)
+        compose.settle(300)
         capture("diagnostics-report")
 
         compose.onNodeWithText("Delete").performClick()
@@ -252,7 +258,7 @@ class DiagnosticsScreenshotTest {
         compose.onNodeWithText("Share report").assertIsNotEnabled()
         compose.onNodeWithText("Copy report").assertIsNotEnabled()
         compose.onNodeWithText("Delete").assertIsEnabled()
-        settle(300)
+        compose.settle(300)
         capture("diagnostics-report-unreadable")
     }
 

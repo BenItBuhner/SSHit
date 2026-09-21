@@ -31,8 +31,10 @@ class FakeNode(
  * An in-memory [SftpFileSystem] for the offline captures: a path-keyed tree with the errors the
  * screen has to show, a latch to hold a listing so the refreshing state can be photographed, and
  * chunked copies with a per-chunk pause so a transfer stays in flight long enough to see.
+ * [clock] stamps what a test makes on it (a new folder, an upload); [demoTree] pins it to the tree's
+ * own `now`, so a capture of a fresh entry reads the same on every run.
  */
-class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
+class FakeSftpFileSystem(val homePath: String = "/home/demo", private val clock: () -> Long = System::currentTimeMillis) : SftpFileSystem {
     val nodes = LinkedHashMap<String, FakeNode>()
     val locked = HashSet<String>()
     /** While set, `list` waits on it; complete it to let the listing through. */
@@ -130,7 +132,7 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         val n = SftpPaths.normalize(path)
         node(SftpPaths.parent(n))
         if (n in nodes) throw SftpError.AlreadyExists(n)
-        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF)
+        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = clock(), permissions = permissions and 0xFFF)
     }
 
     override suspend fun rename(from: String, to: String) {
@@ -176,7 +178,7 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         // A private file is made new, as the client's exclusive create is: anything at the name, a link included, is a refusal.
         if (permissions != SftpPermissions.FILE && n in nodes) throw SftpError.AlreadyExists(n)
         val bytes = source.readBytes()
-        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF, content = bytes)
+        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = clock(), permissions = permissions and 0xFFF, content = bytes)
         onProgress(bytes.size.toLong(), bytes.size.toLong())
     }
 
@@ -201,7 +203,7 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         fun demoTree(now: Long): FakeSftpFileSystem {
             val h = TimeUnit.HOURS.toMillis(1)
             val d = TimeUnit.DAYS.toMillis(1)
-            val fs = FakeSftpFileSystem()
+            val fs = FakeSftpFileSystem(clock = { now })
             fs.dir("/home/demo", now - 2 * h)
             fs.dir("/home/demo/projects", now - 3 * h)
             fs.dir("/home/demo/projects/berth", now - 3 * h)

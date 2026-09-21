@@ -51,6 +51,21 @@ fun ComposeTestRule.captureAudited(file: File) {
 private fun SemanticsNode.holdsDialog(): Boolean =
     config.contains(SemanticsProperties.IsDialog) || children.any { it.holdsDialog() }
 
+/**
+ * Lets [ms] of real time pass while the compose clock keeps ticking. The platform ripple a
+ * `clickable` draws runs on the render thread's own clock, not the test's, and its sparkle is
+ * seeded from that clock, so a frame taken within half a second of a click holds a ripple in a
+ * state no two runs share; a capture that follows a click settles first.
+ */
+fun ComposeTestRule.settle(ms: Long) {
+    val end = System.currentTimeMillis() + ms
+    while (System.currentTimeMillis() < end) {
+        mainClock.advanceTimeBy(64)
+        waitForIdle()
+        Thread.sleep(16)
+    }
+}
+
 @OptIn(ExperimentalRoborazziApi::class)
 private val Level = RoborazziATFAccessibilityChecker.CheckLevel.valueOf(System.getenv("BERTH_A11Y_LEVEL") ?: "Error")
 

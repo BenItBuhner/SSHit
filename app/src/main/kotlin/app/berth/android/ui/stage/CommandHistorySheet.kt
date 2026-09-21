@@ -34,6 +34,7 @@ import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.ListRow
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.snippets.SnippetEditorSheet
 import app.berth.android.ui.theme.Berth
@@ -81,10 +82,11 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
             ?: "Removed host"
 
     val loaded = commands ?: emptyList()
+    val clock = LocalWallClock.current
     val rows = remember(commands, filter) {
         val q = filter.trim()
         val shown = loaded.asReversed().filter { q.isEmpty() || it.text.contains(q, ignoreCase = true) }
-        val today = System.currentTimeMillis()
+        val today = clock()
         buildList {
             var day: String? = null
             for (entry in shown) {
