@@ -58,7 +58,7 @@ import app.berth.domain.model.LeaderKey
  * keyboard links to. C22's two-column table, one panel per group: a row per chord with what it
  * does as the row's title and the keys in mono at the trailing edge (A3's mono for keys), one line
  * each, so a reader scanning for "Close tab" finds it where the eye lands and the whole sheet is
- * under two screens on a phone and one in the tablet's dialog; a note under a group for what is
+ * under two screens on a phone; a note under a group for what is
  * said once (how the strip and the Deck are walked, where Alt is set), and a caption naming the
  * setting that moves Ctrl+T and Ctrl+W between the app and the shell. A [BerthSheet], so on a
  * window that fits two panes (spec C23) it opens as a dialog like every other sheet.
