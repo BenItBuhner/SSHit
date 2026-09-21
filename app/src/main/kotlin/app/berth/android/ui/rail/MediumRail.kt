@@ -35,6 +35,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -69,7 +73,8 @@ private val SlotInset = (SlotSize - SlotSwatch) / 2
  * [Drawer], with its words taken away. A persistent 72 dp column on `surface.1` beside the Stage:
  * the groups as their swatches, 36 dp with the attention ring, the current one on `surface.3`;
  * then New group as the `+` glyph; and at the foot the library as glyphs, Settings last, the order
- * the 280 dp rail keeps. A group's tap and long-press do what its row's do, and a screen reader
+ * and the place the 280 dp rail keeps, so a window crossing 840 dp trades the words for nothing
+ * else. A group's tap and long-press do what its row's do, and a screen reader
  * hears each swatch as the row it stands for (the group's name, its tab count, its attention) and
  * each glyph by the screen it opens. No labels and no lines: the run of swatches and the run of
  * glyphs are told apart by the room between them, as the rail's sections are.
@@ -148,10 +153,16 @@ private fun LibraryGlyph(name: String, icon: Int, onClick: () -> Unit) {
     }
 }
 
+/** The keyboard's focus bar under a slot's swatch or glyph: 2 dp, the width of the swatch less its corners, flush with the slot's foot. */
+private val FocusBarWidth = SlotSwatch - 8.dp
+
 /**
  * One slot of the column: a 48 dp square that steps to `surface.3` when it is the current group,
  * pressed or holding the keyboard's focus, at the radius concentric with the swatch inside it, so
- * the row's tonal step (spec A6) becomes the slot's. One node to a screen reader, a button named
+ * the row's tonal step (spec A6) becomes the slot's. The keyboard's focus is a shape as well as a
+ * tone: the 2 dp accent bar C4 draws under a locked modifier and the strip draws under a focused
+ * tab (#15 review), here along the slot's foot, so the current group and the focused slot read
+ * apart when the two are one and when they are not. One node to a screen reader, a button named
  * [description], selected when it is the current group; a long-press opens the group's menu.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -181,6 +192,13 @@ private fun RailSlot(
             .size(SlotSize)
             .clip(RoundedCornerShape(BerthRadius.swatch + SlotInset))
             .background(bg)
+            .drawBehind {
+                if (focused) {
+                    val h = 2.dp.toPx()
+                    val w = FocusBarWidth.toPx()
+                    drawRoundRect(c.accent, Offset((size.width - w) / 2, size.height - h), Size(w, h), CornerRadius(h / 2))
+                }
+            }
             .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
             // The swatch's monogram and the glyph are decoration; the reader gets the group or the screen.
             .clearAndSetSemantics {

@@ -5,14 +5,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
@@ -28,6 +33,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
@@ -179,6 +185,37 @@ class DeckRailScreenshotTest {
         theNarrowRail()
         compose.onNodeWithContentDescription("Home, 2 tabs").assertIsSelected()
         capture("medium-rail-tablet-portrait")
+    }
+
+    /**
+     * The keyboard's focus on the column, out of touch mode (#15 review nit 1; #20 review nit 3): a
+     * 2 dp accent bar along the slot's foot as well as the tonal step, so a focused swatch reads
+     * apart from the current group's whether it is another group's or the current group's own, and
+     * a glyph shows the bar under its accent.
+     */
+    @Test
+    @Config(qualifiers = FOLD_PORTRAIT)
+    fun `the column's swatches show the keyboard's focus apart from the current group`() {
+        mountApp(keyboardMode = true)
+        theNarrowRail()
+        val work = compose.onNodeWithContentDescription("Work, 1 tab")
+        work.requestFocus()
+        compose.waitForIdle()
+        work.assertIsFocused().assertIsNotSelected()
+        compose.onNodeWithContentDescription("Home, 2 tabs").assertIsSelected()
+        capture("medium-rail-focus-swatch")
+
+        val home = compose.onNodeWithContentDescription("Home, 2 tabs")
+        home.requestFocus()
+        compose.waitForIdle()
+        home.assertIsFocused().assertIsSelected()
+        capture("medium-rail-focus-current-group")
+
+        val hosts = compose.onNodeWithContentDescription("Hosts")
+        hosts.requestFocus()
+        compose.waitForIdle()
+        hosts.assertIsFocused()
+        capture("medium-rail-focus-glyph")
     }
 
     // ---- the Deck of two rows (spec C4; #14 review, nit 6; #15 review, nit 8) ---------------------------
@@ -412,11 +449,11 @@ class DeckRailScreenshotTest {
 
     // ---- the shell, the Stage and the fixtures -----------------------------------------------------------
 
-    /** The app as the shell mounts it over the fixture's three detached tabs, homelab on stage. */
-    private fun mountApp() {
+    /** The app as the shell mounts it over the fixture's three detached tabs, homelab on stage; [keyboardMode] out of touch mode, so the focus shows. */
+    private fun mountApp(keyboardMode: Boolean = false) {
         StageFixture.seed(graph)
         graph.sessions.setActive("s-homelab")
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent { if (keyboardMode) InKeyboardMode { AppRoot(graph.viewModel) } else AppRoot(graph.viewModel) }
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("homelab, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
@@ -451,6 +488,15 @@ class DeckRailScreenshotTest {
                 Box(Modifier.fillMaxSize()) { content() }
             }
         }
+    }
+
+    /** The window out of touch mode, as a typed key leaves it: every control shows the focus it holds. */
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Composable
+    private fun InKeyboardMode(content: @Composable () -> Unit) {
+        val modes = LocalInputModeManager.current
+        LaunchedEffect(modes) { modes.requestInputMode(InputMode.Keyboard) }
+        content()
     }
 
     /** Tab actions without the shell: data changes reach the manager, sheet requests land in a state nobody renders. */
