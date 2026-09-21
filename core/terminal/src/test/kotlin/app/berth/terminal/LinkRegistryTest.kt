@@ -1,5 +1,6 @@
 package app.berth.terminal
 
+import java.util.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -60,5 +61,59 @@ class LinkRegistryTest {
         assertEquals(0, r.size)
         assertNull(r.url(again))
         assertTrue(r.register("", "https://first.example/") > again, "ids keep counting after a clear")
+    }
+
+    /**
+     * The ring and its probing index against the plain shape of the same rules, a map in insertion
+     * order: a long stream of links from a pool wider than the bound, so most are forgotten and many
+     * are seen again, some under an id parameter, with a clear in the middle, agreeing on every id
+     * handed out, every URL looked up (live, forgotten and never given) and the count held.
+     */
+    @Test
+    fun `over a long stream of repeats, forgets and a clear the registry agrees with a plain model`() {
+        val r = LinkRegistry()
+        val model = Model()
+        val random = Random(7)
+        val pool = Array(12_000) { "https://h${it % 97}.example/p/$it" }
+        repeat(60_000) { step ->
+            val url = pool[random.nextInt(pool.size)]
+            val param = if (random.nextInt(4) == 0) "id=${random.nextInt(5)}" else ""
+            assertEquals(model.register(param, url), r.register(param, url), "id at step $step")
+            val probe = random.nextInt(model.nextId + 1)
+            assertEquals(model.url(probe), r.url(probe), "url($probe) at step $step")
+            assertEquals(model.size, r.size, "size at step $step")
+            if (step == 30_000) {
+                r.clear()
+                model.clear()
+            }
+        }
+    }
+
+    private class Model {
+        private val idByKey = LinkedHashMap<String, Int>()
+        private val urlById = HashMap<Int, String>()
+        var nextId = 1
+        val size: Int get() = idByKey.size
+
+        fun register(param: String, url: String): Int {
+            val key = if (param.isEmpty()) url else "$param\u0000$url"
+            idByKey[key]?.let { return it }
+            val id = nextId++
+            idByKey[key] = id
+            urlById[id] = url
+            if (idByKey.size > LinkRegistry.MAX_LINKS) {
+                val eldest = idByKey.entries.first()
+                urlById.remove(eldest.value)
+                idByKey.remove(eldest.key)
+            }
+            return id
+        }
+
+        fun url(id: Int): String? = urlById[id]
+
+        fun clear() {
+            idByKey.clear()
+            urlById.clear()
+        }
     }
 }

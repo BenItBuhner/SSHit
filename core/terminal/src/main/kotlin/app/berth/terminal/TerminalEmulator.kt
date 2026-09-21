@@ -550,7 +550,8 @@ class TerminalEmulator(
 
     override fun oscDispatch(payload: String) {
         val sep = payload.indexOf(';')
-        val code = (if (sep < 0) payload else payload.substring(0, sep)).toIntOrNull() ?: return
+        val code = oscCode(payload, if (sep < 0) payload.length else sep)
+        if (code < 0) return
         val arg = if (sep < 0) "" else payload.substring(sep + 1)
         when (code) {
             0, 2 -> setTitle(arg)
@@ -577,6 +578,18 @@ class TerminalEmulator(
         markDirty()
     }
 
+    /** The OSC code in [payload] before [end], read in place; -1 when it is not one to nine digits. */
+    private fun oscCode(payload: String, end: Int): Int {
+        if (end == 0 || end > 9) return -1
+        var code = 0
+        for (i in 0 until end) {
+            val d = payload[i] - '0'
+            if (d < 0 || d > 9) return -1
+            code = code * 10 + d
+        }
+        return code
+    }
+
     /**
      * OSC 8 hyperlinks (spec A60): `8;params;URL` opens a link that the cells printed from here
      * carry, `8;;` closes it. The params are `key=value` pairs separated by colons, of which `id`
@@ -585,12 +598,22 @@ class TerminalEmulator(
      */
     private fun oscHyperlink(arg: String): Int {
         val sep = arg.indexOf(';')
-        if (sep < 0) return 0
-        val params = arg.substring(0, sep)
-        val url = arg.substring(sep + 1)
-        if (url.isEmpty()) return 0
-        val idParam = params.split(':').firstOrNull { it.startsWith("id=") }?.substring(3) ?: ""
-        return links.register(idParam, url)
+        if (sep < 0 || sep + 1 == arg.length) return 0
+        // A listing prints a link a line, so the common `8;;URL` takes no more than the URL's own copy.
+        val idParam = if (sep == 0) "" else idParamOf(arg, sep)
+        return links.register(idParam, arg.substring(sep + 1))
+    }
+
+    /** The value of the `id=` pair among the colon-separated params in [arg] before [end], or empty. */
+    private fun idParamOf(arg: String, end: Int): String {
+        var start = 0
+        while (start < end) {
+            var stop = arg.indexOf(':', start)
+            if (stop < 0 || stop > end) stop = end
+            if (arg.startsWith("id=", start) && stop - start >= 3) return arg.substring(start + 3, stop)
+            start = stop + 1
+        }
+        return ""
     }
 
     /**
