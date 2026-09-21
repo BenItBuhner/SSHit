@@ -12,6 +12,7 @@ import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.RecreateNotice
+import app.berth.domain.model.TerminalTheme
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -38,15 +39,19 @@ import kotlinx.coroutines.flow.first
  *   public half and fingerprint read from its private bytes, never the ones the document claims;
  *   and a hardware-backed identity, which comes without a key by construction, is not created,
  *   the hosts that used it ask each time and the report names both so the user knows what to make again.
- * - Known hosts: a bundled key that differs from a key this phone already trusts for its endpoint
- *   ([KnownHostStanding.differs]) is not taken, since the pin this phone holds is the check between
- *   the user and a wrong key and a bundle is not the place that check is overridden; the same key
- *   is nothing to do, and a plainly new one is written.
- * - Tunnels bound to every interface come in switched off, whatever the bundle said, so nothing
- *   an import brings listens on the network until the user turns it on where the binding shows.
+ * - Known hosts: a bundled key for an endpoint this phone already holds a key for is not taken
+ *   unless it is that very key, whether it differs from the key of its type, from a pin, or is of
+ *   a type this phone holds none of for that endpoint ([standings]); the key this phone holds is
+ *   the check between the user and a wrong key, and a bundle is not the place that check is
+ *   overridden. The same key is nothing to do, and a key for an endpoint held nothing of is written.
+ * - Tunnels bound to every interface that the bundle had switched on come in switched off, so
+ *   nothing an import brings listens on the network until the user turns it on where the binding shows.
  *
- * The Deck layout and the interface theme are this phone's one copy each, replaced rather than
- * added to, so [BundleImportOptions] lets the import leave either as it is.
+ * The Deck layout, the interface theme and the default terminal theme are this phone's one copy
+ * each, replaced rather than added to, so [BundleImportOptions] lets the import leave any as it is.
+ *
+ * A bundle with a software key Berth cannot read is refused whole, by [plan] before the sheet
+ * offers the import and by [apply] before its first write, so it leaves nothing behind.
  */
 class BerthBundles(
     private val hosts: HostRepository,
@@ -113,23 +118,65 @@ class BerthBundles(
      * the write.
      */
     suspend fun plan(bundle: BerthBundle): BundleImportPlan {
+        // Read for the refusal alone: a key Berth cannot read fails the plan, so the sheet never offers the import.
+        readIdentities(bundle)
         val standings = standings(bundle.knownHosts)
         return BundleImportPlan(
             knownHostsNew = standings.count { it.second == KnownHostStanding.NEW },
             knownHostsExisting = standings.count { it.second == KnownHostStanding.EXISTING },
             knownHostsKept = standings.filter { it.second.differs }.map { it.first },
-            tunnelsOnEveryInterface = bundle.tunnels.filter { it.exposed },
+            tunnelsOnEveryInterface = bundle.tunnels.filter { it.exposed && it.enabled },
+            defaultTerminalTheme = newDefaultTerminalTheme(bundle)?.name,
         )
     }
 
-    /** Each bundled key with where it stands against the keys this phone holds for its endpoint. */
+    /**
+     * Each bundled key with where it stands for the import against the keys this phone holds for
+     * its endpoint: [KnownHostStanding.of], with one rule of the import's own over it. A key of a
+     * type this phone holds none of, for an endpoint it does hold a key for, is NEW to `of`: live,
+     * that is the case the policy asks the user about, the trust sheet handed what is held for the
+     * endpoint; an import cannot ask, so here it stands as [KnownHostStanding.Conflicting] with
+     * what is held and is kept like any other key that differs. The shared rule stays as it is.
+     */
     private suspend fun standings(bundled: List<KnownHostKey>): List<Pair<KnownHostKey, KnownHostStanding>> {
         val here = knownHosts.observeAll().first().groupBy { it.host.lowercase() to it.port }
-        return bundled.map { key -> key to KnownHostStanding.of(key, here[key.host.lowercase() to key.port].orEmpty()) }
+        return bundled.map { key ->
+            val held = here[key.host.lowercase() to key.port].orEmpty()
+            val standing = KnownHostStanding.of(key, held)
+            key to if (standing == KnownHostStanding.NEW && held.isNotEmpty()) KnownHostStanding.Conflicting(held.first()) else standing
+        }
+    }
+
+    /**
+     * The theme the bundle would make this phone's default for new terminals, when taking it
+     * changes anything: the bundle's default, if it is a theme the bundle carries or this phone has
+     * (a built-in), and not the default here already. Null when the import leaves the default as it is.
+     */
+    private suspend fun newDefaultTerminalTheme(bundle: BerthBundle): TerminalTheme? {
+        val id = bundle.defaultTerminalThemeId ?: return null
+        if (id == settings.defaultTerminalThemeId.first()) return null
+        return bundle.terminalThemes.firstOrNull { it.id == id } ?: settings.terminalThemes.first().firstOrNull { it.id == id }
+    }
+
+    /** A bundled identity as the import stores it, with the private bytes it came with, if any. */
+    private data class ReadIdentity(val identity: Identity, val key: ByteArray?)
+
+    /**
+     * Every bundled identity read as its own bytes say ([withOwnPublicHalf]), before anything is
+     * written: bytes Berth cannot read are [BundleFormatException.UnreadableKey] here, so the
+     * refusal comes with nothing stored behind it.
+     */
+    private fun readIdentities(bundle: BerthBundle): List<ReadIdentity> = bundle.identities.map { entry ->
+        val carried = entry.identity
+        val key = entry.privateKeyBytes()
+        // A software key is what its bytes say it is, not what the document says about them.
+        ReadIdentity(if (carried.isHardwareBacked || key == null) carried else withOwnPublicHalf(carried, key), key)
     }
 
     /** Writes [bundle] into the repositories and says what it did. */
     suspend fun apply(bundle: BerthBundle, options: BundleImportOptions = BundleImportOptions()): BundleImportReport {
+        // Before the first write: a bundle this build refuses leaves nothing behind.
+        val read = readIdentities(bundle)
         workspaces.upsertAll(bundle.workspaces)
 
         // Bundled identity id → the id that names the same key here.
@@ -139,11 +186,7 @@ class BerthBundles(
         val mapped = HashMap<String, String>()
         val absent = LinkedHashMap<String, Identity>()
         var identitiesWritten = 0
-        for (entry in bundle.identities) {
-            val carried = entry.identity
-            val key = entry.privateKeyBytes()
-            // A software key is what its bytes say it is, not what the document says about them.
-            val identity = if (carried.isHardwareBacked || key == null) carried else withOwnPublicHalf(carried, key)
+        for ((identity, key) in read) {
             val here = byId[identity.id] ?: byFingerprint[identity.fingerprintSha256]
             when {
                 here != null -> mapped[identity.id] = here.id
@@ -178,6 +221,7 @@ class BerthBundles(
         var tunnelsHeldOff = 0
         for (tunnel in bundle.tunnels) {
             // Exposed is #13's rule: only an explicit `*`, `0.0.0.0` or `::` listens for other devices.
+            // Held off is the one the import switches off, the count the plan's row gave; one already off comes in as it was.
             if (tunnel.exposed && tunnel.enabled) tunnelsHeldOff++
             tunnels.upsert(if (tunnel.exposed) tunnel.copy(enabled = false) else tunnel)
         }
@@ -197,9 +241,8 @@ class BerthBundles(
         }
 
         for (theme in bundle.terminalThemes) settings.upsertTerminalTheme(theme)
-        bundle.defaultTerminalThemeId?.let { id ->
-            if (settings.terminalThemes.first().any { it.id == id }) settings.setDefaultTerminalTheme(id)
-        }
+        val newDefault = if (options.defaultTerminalTheme) newDefaultTerminalTheme(bundle) else null
+        newDefault?.let { settings.setDefaultTerminalTheme(it.id) }
         if (options.interfaceTheme) bundle.interfaceTheme?.let { settings.setInterfaceTheme(it) }
         if (options.deck) bundle.deck?.let { settings.setDeckLayout(it) }
 
@@ -218,6 +261,7 @@ class BerthBundles(
             knownHostsKept = knownHostsKept,
             tunnelsHeldOff = tunnelsHeldOff,
             interfaceTheme = options.interfaceTheme && bundle.interfaceTheme != null,
+            defaultTerminalTheme = newDefault != null,
         )
     }
 

@@ -59,6 +59,8 @@ class BundleSheetsTest {
         // A caption names six and counts the rest, as every row of the panel does.
         assertEquals("1, 2, 3, 4, 5, 6 and 2 more", namesLine((1..8).map { it.toString() }))
         assertEquals("1, 2", namesLine(listOf("1", "2")))
+        // The third switch says what new terminals would open in and what they open in now.
+        assertEquals("New terminals open in Mine instead of Berth Dark", defaultTerminalThemeCaption("Mine", "Berth Dark"))
     }
 
     @Test

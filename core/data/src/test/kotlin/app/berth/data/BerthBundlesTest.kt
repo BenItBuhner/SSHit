@@ -194,12 +194,13 @@ class BerthBundlesTest {
         assertEquals(1, report.knownHosts)
         assertTrue(report.deck)
         assertTrue(report.interfaceTheme)
+        assertTrue(report.defaultTerminalTheme, "the new phone opened new terminals in Berth Dark; now in Mine")
         assertEquals(1, report.needsRecreation.size)
         val notice = report.needsRecreation.single()
         assertEquals("Phone key", notice.identityName)
         assertEquals(KeyAlgorithm.ECDSA_P256, notice.algorithm)
         assertEquals(listOf("db-primary"), notice.hostNames)
-        assertEquals("Imported 3 hosts, 1 key, 2 workspaces, 2 snippets, 2 tunnels, 1 theme, 1 known host, the Deck and the interface theme.", report.summary)
+        assertEquals("Imported 3 hosts, 1 key, 2 workspaces, 2 snippets, 2 tunnels, 1 theme, 1 known host, the Deck, the interface theme and the default terminal theme.", report.summary)
     }
 
     @Test
@@ -270,31 +271,36 @@ class BerthBundlesTest {
 
     /**
      * The check between the user and a wrong key is the key this phone holds; a bundle never
-     * overrides it. The four standings, before the import in the plan and after it in the report:
-     * a different key for a pinned endpoint and a different key of the same type for an unpinned
-     * one both stay as this phone has them, the very key is nothing to do, a new endpoint is written.
+     * overrides it. The standings, before the import in the plan and after it in the report: a
+     * different key for a pinned endpoint, a different key of the same type for an unpinned one,
+     * and a key of another type for an endpoint this phone holds a key for (live, the case the
+     * policy asks about; an import cannot ask) all stay as this phone has them, the very key is
+     * nothing to do, a new endpoint is written.
      */
     @Test
-    fun `a bundled known host that differs from the key this phone trusts stays as this phone has it, and the sheet is told so first`() = runTest {
+    fun `a bundled known host for an endpoint this phone trusts another key for stays as this phone has it, and the sheet is told so first`() = runTest {
         val rotatedWeb = known.copy(id = "k-web-old", publicKeyBase64 = "AAAAoldwebkey", fingerprintSha256 = "SHA256:oldwebkey", pinned = false)
         val dbHere = KnownHostKey("k-db", "db.internal", 2200, "ssh-ed25519", "AAAAdbhere", "SHA256:dbhere", 1, 2)
         val dbBundled = dbHere.copy(id = "k-db-theirs", publicKeyBase64 = "AAAAdbtheirs", fingerprintSha256 = "SHA256:dbtheirs")
+        // The other phone met db.internal on RSA: a type this phone holds none of, for an endpoint it does hold a key for.
+        val dbRsa = KnownHostKey("k-db-rsa", "db.internal", 2200, "ssh-rsa", "AAAAdbrsa", "SHA256:dbrsa", 5, 6)
         val nasKey = KnownHostKey("k-nas", "10.0.0.5", 22, "ssh-ed25519", "AAAAnas", "SHA256:nas", 3, 4)
         val sameWeb = known.copy(id = "k-web-same", pinned = false, firstSeenAt = 50, lastSeenAt = 60)
         new.knownHosts.upsert(known) // pinned, the bundle's is a rotated (or planted) one
         new.knownHosts.upsert(dbHere) // unpinned, the bundle's differs: the changed-key case
-        val bundle = BerthBundle(exportedAt = 1, knownHosts = listOf(rotatedWeb, dbBundled, nasKey, sameWeb))
+        val bundle = BerthBundle(exportedAt = 1, knownHosts = listOf(rotatedWeb, dbBundled, dbRsa, nasKey, sameWeb))
 
         val plan = new.bundles.plan(bundle)
         assertEquals(1, plan.knownHostsNew)
         assertEquals(1, plan.knownHostsExisting)
-        assertEquals(listOf(rotatedWeb, dbBundled), plan.knownHostsKept)
+        assertEquals(listOf(rotatedWeb, dbBundled, dbRsa), plan.knownHostsKept)
 
         val report = new.bundles.apply(bundle)
         val here = new.knownHosts.observeAll().first()
         assertEquals(setOf(known, dbHere, nasKey), here.toSet(), "the pin and the unpinned key stay; the new endpoint is written; the same key is not written twice")
+        assertEquals(listOf(dbHere), here.filter { it.host == "db.internal" }, "one key for the endpoint, the one this phone had; the RSA one was not added beside it")
         assertEquals(1, report.knownHosts)
-        assertEquals(2, report.knownHostsKept)
+        assertEquals(3, report.knownHostsKept)
         assertEquals("Imported 1 known host.", report.summary)
     }
 
@@ -324,60 +330,84 @@ class BerthBundlesTest {
             other.db.close()
         }
 
-        // Bytes that are not an OpenSSH key are not a document Berth wrote: refused whole, by name.
+        // Bytes that are not an OpenSSH key are not a document Berth wrote: refused whole, by name,
+        // by the plan before the sheet offers the import and by the import before its first write,
+        // so the workspace and the host that came with the key are nowhere.
         val junkBytes = "-----BEGIN OPENSSH PRIVATE KEY-----\nbGFwdG9wLXNlY3JldC1ieXRlcw==\n-----END OPENSSH PRIVATE KEY-----\n".toByteArray()
-        val junk = BerthBundle(exportedAt = 1, identities = listOf(BundledIdentity.of(laptop.copy(id = "id-junk", name = "junk key"), junkBytes)))
+        val junk = BerthBundle(exportedAt = 1, identities = listOf(BundledIdentity.of(laptop.copy(id = "id-junk", name = "junk key"), junkBytes)), workspaces = listOf(work), hosts = listOf(nas))
+        assertTrue("junk key" in assertFailsWith<BundleFormatException.UnreadableKey> { new.bundles.plan(junk) }.message!!)
         assertTrue("junk key" in assertFailsWith<BundleFormatException.UnreadableKey> { new.bundles.apply(junk) }.message!!)
         assertNull(new.identities.get("id-junk"))
         assertEquals(listOf("id-laptop"), new.identities.observeAll().first().map { it.id })
+        assertNull(new.workspaces.get("w-work"), "nothing was written ahead of the refusal")
+        assertNull(new.hosts.get("h-nas"))
     }
 
-    /** Nothing an import brings listens for other devices until the user turns it on where the binding shows. */
+    /**
+     * Nothing an import brings listens for other devices until the user turns it on where the
+     * binding shows. The plan's row and the report count the same thing: the tunnels the import
+     * switches off; one the bundle had off already comes in as it was and is neither.
+     */
     @Test
     fun `a tunnel bound to every interface comes in switched off, and the plan names it`() = runTest {
         val everywhere = Tunnel(id = "t-all", hostId = "h-web", type = TunnelType.LOCAL, bindAddress = "*", bindPort = 9090, destinationHost = "localhost", destinationPort = 9090, enabled = true)
         val v4 = everywhere.copy(id = "t-v4", bindAddress = "0.0.0.0", bindPort = 9091)
+        val alreadyOff = everywhere.copy(id = "t-off", bindPort = 9092, enabled = false)
         val remote = Tunnel(id = "t-remote", hostId = "h-web", type = TunnelType.REMOTE, bindAddress = "*", bindPort = 9000, destinationHost = "127.0.0.1", destinationPort = 3000, enabled = true)
-        val bundle = BerthBundle(exportedAt = 1, hosts = listOf(web), tunnels = listOf(forward, everywhere, v4, remote))
+        val bundle = BerthBundle(exportedAt = 1, hosts = listOf(web), tunnels = listOf(forward, everywhere, v4, alreadyOff, remote))
 
-        assertEquals(listOf(everywhere, v4), new.bundles.plan(bundle).tunnelsOnEveryInterface, "a remote forward's bind is the server's, not this phone's")
+        assertEquals(listOf(everywhere, v4), new.bundles.plan(bundle).tunnelsOnEveryInterface, "a remote forward's bind is the server's, not this phone's; one already off is not held off")
         val report = new.bundles.apply(bundle)
 
-        assertEquals(4, report.tunnels)
+        assertEquals(5, report.tunnels)
         assertEquals(2, report.tunnelsHeldOff)
         val stored = new.tunnels.observeAll().first().associateBy { it.id }
         assertEquals(false, stored.getValue("t-all").enabled)
         assertEquals(false, stored.getValue("t-v4").enabled)
+        assertEquals(false, stored.getValue("t-off").enabled)
         assertEquals(true, stored.getValue("t-web").enabled, "a loopback forward comes in as it was")
         assertEquals(true, stored.getValue("t-remote").enabled)
     }
 
-    /** The Deck and the interface theme are this phone's one copy each; the import leaves either alone when told to. */
+    /** The Deck, the interface theme and the default terminal theme are this phone's one copy each; the import leaves any alone when told to. */
     @Test
-    fun `the Deck and the interface theme are kept when the import's switches are off`() = runTest {
+    fun `the Deck, the interface theme and the default terminal theme are kept when the import's switches are off`() = runTest {
         fillOldPhone()
         val mineDeck = DeckLayout(layers = listOf(DeckLayer("Mine", listOf(DeckKey(tap = DeckAction.Text("y"))))))
         val mineLook = InterfaceTheme(variant = InterfaceVariant.DARK, tone = 0.2f, radiusScale = 0.8f)
         new.settings.setDeckLayout(mineDeck)
         new.settings.setInterfaceTheme(mineLook)
         val bundle = new.bundles.open(old.bundles.export("pw".toCharArray(), exportedAt = 1, cost = quick), "pw".toCharArray())
+        assertEquals("Mine", new.bundles.plan(bundle).defaultTerminalTheme, "the bundle's default is a theme it carries, and not this phone's default")
 
-        val report = new.bundles.apply(bundle, BundleImportOptions(deck = false, interfaceTheme = false))
+        val report = new.bundles.apply(bundle, BundleImportOptions(deck = false, interfaceTheme = false, defaultTerminalTheme = false))
 
         assertEquals(mineDeck, new.settings.deckLayout.first())
         assertEquals(mineLook, new.settings.interfaceTheme.first())
+        assertEquals(TerminalTheme.BERTH_DARK_ID, new.settings.defaultTerminalThemeId.first())
         assertFalse(report.deck)
         assertFalse(report.interfaceTheme)
+        assertFalse(report.defaultTerminalTheme)
         assertEquals(3, report.hosts, "everything else came in")
         assertFalse("the Deck" in report.summary)
         assertFalse("the interface theme" in report.summary)
+        assertFalse("the default terminal theme" in report.summary)
 
-        val deckOnly = new.bundles.apply(bundle, BundleImportOptions(deck = true, interfaceTheme = false))
+        val deckOnly = new.bundles.apply(bundle, BundleImportOptions(deck = true, interfaceTheme = false, defaultTerminalTheme = false))
         assertEquals(deck, new.settings.deckLayout.first())
         assertEquals(mineLook, new.settings.interfaceTheme.first())
+        assertEquals(TerminalTheme.BERTH_DARK_ID, new.settings.defaultTerminalThemeId.first())
         assertTrue(deckOnly.deck)
         assertFalse(deckOnly.interfaceTheme)
         assertTrue(deckOnly.summary.endsWith(" and the Deck."), deckOnly.summary)
+
+        // The third switch on its own; and once Mine is the default, the plan has nothing to offer and the report nothing to say.
+        val themeOnly = new.bundles.apply(bundle, BundleImportOptions(deck = false, interfaceTheme = false, defaultTerminalTheme = true))
+        assertEquals("mine", new.settings.defaultTerminalThemeId.first())
+        assertTrue(themeOnly.defaultTerminalTheme)
+        assertTrue(themeOnly.summary.endsWith(" and the default terminal theme."), themeOnly.summary)
+        assertNull(new.bundles.plan(bundle).defaultTerminalTheme)
+        assertFalse(new.bundles.apply(bundle).defaultTerminalTheme)
     }
 
     @Test
@@ -385,11 +415,13 @@ class BerthBundlesTest {
         old.workspaces.ensureDefault()
         val blob = old.bundles.export("pw".toCharArray(), exportedAt = 1, cost = quick)
         val bundle = new.bundles.open(blob, "pw".toCharArray())
+        assertNull(new.bundles.plan(bundle).defaultTerminalTheme, "both phones open new terminals in Berth Dark")
         val report = new.bundles.apply(bundle)
         assertEquals(0, report.hosts)
         assertEquals(1, report.workspaces, "the default workspace is one")
         assertTrue(report.deck, "the Deck is always carried")
         assertTrue(report.interfaceTheme, "and so is the interface theme")
+        assertFalse(report.defaultTerminalTheme, "the default terminal theme is carried too, and is this phone's already")
         assertEquals("Imported 1 workspace, the Deck and the interface theme.", report.summary)
     }
 }

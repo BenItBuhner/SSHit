@@ -132,25 +132,32 @@ sealed class BundleFormatException(message: String) : RuntimeException(message) 
 }
 
 /**
- * The two things in a bundle that are not records with an id but this phone's one copy, and so
+ * The three things in a bundle that are not records with an id but this phone's one copy, and so
  * are replaced rather than added to: the import sheet offers each as a switch, on by default.
  */
-data class BundleImportOptions(val deck: Boolean = true, val interfaceTheme: Boolean = true)
+data class BundleImportOptions(val deck: Boolean = true, val interfaceTheme: Boolean = true, val defaultTerminalTheme: Boolean = true)
 
 /**
  * What an import of a bundle would do here beyond writing its records, read before it is done so
  * the sheet can say so: the known hosts by where they stand against this phone's ([KnownHostStanding]),
- * and the tunnels that would listen on every interface, which come in switched off.
+ * the tunnels that would listen on every interface, which come in switched off, and the theme that
+ * would become the default for new terminals.
  */
 data class BundleImportPlan(
-    /** Bundled keys for endpoints this phone holds nothing of that type for: written. */
+    /** Bundled keys for endpoints this phone holds nothing for: written. */
     val knownHostsNew: Int,
     /** Bundled keys this phone already trusts as they are: nothing to do. */
     val knownHostsExisting: Int,
-    /** Bundled keys that differ from a key this phone trusts for the endpoint: left as this phone has them. */
+    /** Bundled keys for endpoints this phone holds another key for: left as this phone has them. */
     val knownHostsKept: List<KnownHostKey>,
-    /** Bundled tunnels bound to every interface: imported disabled, whatever the bundle said. */
+    /** Bundled tunnels bound to every interface that the bundle had switched on: imported switched off. */
     val tunnelsOnEveryInterface: List<Tunnel>,
+    /**
+     * The name of the theme the bundle would make this phone's default for new terminals, one the
+     * bundle carries or this phone has; null when the import leaves the default as it is, the
+     * bundle's being this phone's already or none this phone will have.
+     */
+    val defaultTerminalTheme: String? = null,
 )
 
 /**
@@ -171,10 +178,12 @@ data class BundleImportReport(
     val needsRecreation: List<RecreateNotice>,
     /** Bundled known-host keys that differed from what this phone trusts and were not taken. */
     val knownHostsKept: Int = 0,
-    /** Tunnels bound to every interface, imported switched off. */
+    /** Tunnels bound to every interface that the bundle had switched on, imported switched off. */
     val tunnelsHeldOff: Int = 0,
     /** Whether the bundle's interface theme was taken over this phone's ([BundleImportOptions.interfaceTheme]). */
     val interfaceTheme: Boolean = false,
+    /** Whether the bundle's default terminal theme became this phone's ([BundleImportOptions.defaultTerminalTheme]); false when it was already. */
+    val defaultTerminalTheme: Boolean = false,
 ) {
     /** One line for a notice: `Imported 12 hosts, 3 keys and 8 snippets.` */
     val summary: String
@@ -189,6 +198,7 @@ data class BundleImportReport(
                 if (knownHosts > 0) add(count(knownHosts, "known host"))
                 if (deck) add("the Deck")
                 if (interfaceTheme) add("the interface theme")
+                if (defaultTerminalTheme) add("the default terminal theme")
             }
             return when (parts.size) {
                 0 -> "Nothing to import."

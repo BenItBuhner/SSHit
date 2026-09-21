@@ -30,6 +30,7 @@ import app.berth.android.ui.settings.ImportBundleSheet
 import app.berth.android.ui.settings.MIN_BUNDLE_PASSPHRASE
 import app.berth.android.ui.settings.PickedFile
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.settings.defaultTerminalThemeCaption
 import app.berth.android.ui.settings.knownHostsKeptLine
 import app.berth.android.ui.settings.tunnelsHeldOffLine
 import app.berth.android.ui.stage.CommandHistorySheet
@@ -265,9 +266,9 @@ class PersistenceScreenshotTest {
      * sheet lists what is inside in one panel and names the key that did not travel and the host
      * waiting on it, the known host that differs from the one this phone trusts for the same
      * address and stays this phone's, the tunnel that would listen on every interface and comes in
-     * switched off, and the Deck and the interface theme as switches; the import writes every
-     * table as the sheet said, leaves that host asking each time, and ends on the list of keys to
-     * make again, which stays until Done.
+     * switched off, and the default terminal theme, the Deck and the interface theme as switches;
+     * the import writes every table as the sheet said, leaves that host asking each time, and ends
+     * on the list of keys to make again, which stays until Done.
      */
     private fun importSheet(name: String) {
         seedThisPhone()
@@ -291,6 +292,7 @@ class PersistenceScreenshotTest {
         waitForText("3 tunnels")
         waitForText(tunnelsHeldOffLine(1))
         waitForText("it listens on every interface; it stays off until you turn it on", substring = true)
+        waitForText(defaultTerminalThemeCaption("Mine", "Berth Dark"))
         waitForText("Replaces this phone's Deck with ", substring = true)
         waitForText("Replaces this phone's look with the bundle's")
         waitForText("1 known host")
@@ -305,7 +307,7 @@ class PersistenceScreenshotTest {
         compose.onNodeWithText("Import").performScrollTo().performClick()
         waitForText("MAKE AGAIN IN KEYS")
         // No known host in the line: the one the bundle carried differed from this phone's and was not taken.
-        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme, the Deck and the interface theme.")
+        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme, the Deck, the interface theme and the default terminal theme.")
         waitForText("db-primary asks each time until you pick a key", substring = true)
         capture("$name-recreate")
         compose.assertNoTextCut("the import's report")
@@ -330,6 +332,7 @@ class PersistenceScreenshotTest {
             assertEquals("this phone's pin is as it was", pinnedBefore, knownHosts.first { it.id == "kh-1" })
             assertEquals(1, knownHosts.count { it.endpoint == pinnedBefore.endpoint && it.keyType == pinnedBefore.keyType })
             assertTrue(graph.settings.terminalThemes.first().any { it.id == "mine" && !it.builtIn })
+            assertEquals("the third switch was on: new terminals open in the bundle's theme", "mine", graph.settings.defaultTerminalThemeId.first())
         }
     }
 

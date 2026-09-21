@@ -212,6 +212,7 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
     var plan by remember { mutableStateOf<BundleImportPlan?>(null) }
     var options by remember { mutableStateOf(BundleImportOptions()) }
     var report by remember { mutableStateOf<BundleImportReport?>(null) }
+    val defaultTheme by vm.defaultTerminalTheme.collectAsState()
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
@@ -291,7 +292,7 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                 }
                 opened != null -> {
                     SheetTitle("Import bundle", file?.let { "${it.name} \u00B7 made ${exportedOn(opened.exportedAt)}" })
-                    BundleContents(opened, plan, options, onOptions = { options = it })
+                    BundleContents(opened, plan, options, defaultThemeHere = defaultTheme.name, onOptions = { options = it })
                     Text(
                         IMPORT_DISCLOSURE,
                         style = BerthType.caption,
@@ -334,13 +335,15 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
 
 /**
  * What an opened bundle holds, one row a kind inside one panel (A1: grouped by the tonal step,
- * not by boxes), with the names where they fit in a caption. The two things that are this phone's
- * one copy, the Deck and the interface theme, are switches; what the import will not take as
- * carried, a known host that differs from one this phone trusts and a tunnel that would listen on
- * every interface, has its own row under the kind it belongs to once [plan] has been read.
+ * not by boxes), with the names where they fit in a caption. The three things that are this
+ * phone's one copy, the default terminal theme, the Deck and the interface theme, are switches,
+ * the first only where the bundle's would change what new terminals open in ([defaultThemeHere]
+ * names what they open in now); what the import will not take as carried, a known host for an
+ * endpoint this phone trusts another key for and a tunnel that would listen on every interface,
+ * has its own row under the kind it belongs to once [plan] has been read.
  */
 @Composable
-private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options: BundleImportOptions, onOptions: (BundleImportOptions) -> Unit) {
+private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options: BundleImportOptions, defaultThemeHere: String, onOptions: (BundleImportOptions) -> Unit) {
     val c = Berth.colors
     if (bundle.isEmpty) {
         SectionLabel("In this bundle", Modifier.padding(start = 4.dp))
@@ -375,6 +378,14 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         val everywhere = plan?.tunnelsOnEveryInterface.orEmpty()
         if (everywhere.isNotEmpty()) row(tunnelsHeldOffLine(everywhere.size), tunnelsHeldOffCaption(everywhere.map { it.spec }))
         row(bundle.terminalThemes.size, "theme", bundle.terminalThemes.map { it.name })
+        plan?.defaultTerminalTheme?.let { name ->
+            ToggleRow(
+                "Default terminal theme",
+                checked = options.defaultTerminalTheme,
+                onCheckedChange = { onOptions(options.copy(defaultTerminalTheme = it)) },
+                caption = defaultTerminalThemeCaption(name, defaultThemeHere),
+            )
+        }
         bundle.deck?.let { deck ->
             ToggleRow(
                 "The Deck",
@@ -419,6 +430,9 @@ internal fun knownHostsKeptLine(n: Int): String = if (n == 1) "1 known host stay
 
 internal fun knownHostsKeptCaption(endpoints: List<String>): String =
     namesLine(endpoints) + " \u00B7 " + if (endpoints.size == 1) "the bundle's key differs from the one this phone trusts" else "the bundle's keys differ from the ones this phone trusts"
+
+/** The default terminal theme switch's caption: what new terminals would open in, and what they open in now. */
+internal fun defaultTerminalThemeCaption(bundled: String, here: String): String = "New terminals open in $bundled instead of $here"
 
 /** The row for bundled tunnels that would listen on every interface, imported switched off: its title, and the caption that names them and says why. */
 internal fun tunnelsHeldOffLine(n: Int): String = if (n == 1) "1 tunnel comes in switched off" else "$n tunnels come in switched off"
