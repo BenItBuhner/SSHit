@@ -481,10 +481,11 @@ class TerminalSurfaceScreenshotTest {
         compose.mainClock.advanceTimeBy(1_600)
         waitForNoText("Copied")
 
-        // Dressed as another site's address: the sheet is a warning, Cancel carries the weight and Open anyway stands plain beside it.
+        // Dressed as another site's address: the sheet is a warning, its caption showing the text as it
+        // was worn, Cancel carries the weight and Open anyway stands plain beside it.
         val (dressedRow, dressedCol) = cellOf(session, "https://github.com/berth/releases")
         canvas.performTouchInput { click(cellCenter(dressedRow, dressedCol + 5)) }
-        waitForText("Shown as github.com, but goes to evil.example")
+        waitForText("Shown as \u201Chttps://github.com/berth/releases\u201D, but goes to evil.example")
         compose.onNodeWithContentDescription("Link address, $dressed").assertIsDisplayed()
         compose.onNodeWithText("Open anyway").assertIsDisplayed()
         compose.onAllNodesWithText("Open").assertCountEquals(0)

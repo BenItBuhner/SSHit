@@ -1,5 +1,6 @@
 package app.berth.android.ui.stage
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
@@ -154,6 +156,9 @@ class StageTools {
 
         /** The selection bar's overflow toggle for block selection (spec C18 as ruled in review #9). */
         const val RECTANGULAR = "Rectangular"
+
+        /** The notice when no app on the phone takes a link's scheme. */
+        const val NOTHING_OPENS = "Nothing on this phone opens that link"
     }
 }
 
@@ -257,12 +262,15 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
                             menu = false
                             synchronized(session.emulator.lock) { selection.setRectangular(session.emulator, !selection.rectangular) }
                         })
-                        val link = remember(selection.range, selection.rectangular) { linkIn(text()) }
+                        // The link the selection is: the OSC 8 link its first cell was printed under (how a
+                        // link is reached while the application has the mouse, spec A60), else its text when
+                        // the whole of it is an address. Either goes through the link sheet for a look.
+                        val link = remember(selection.range, selection.rectangular) { linkUnder(session, selection) ?: linkIn(text())?.let { LinkTap(it, it) } }
                         if (link != null) {
                             BerthMenuItem("Open link", onClick = {
                                 menu = false
                                 selection.clear()
-                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                tools.pendingLink = link
                             })
                         }
                     }
@@ -549,27 +557,40 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
 
 /**
  * The look before an OSC 8 link opens (spec A60), on the paste preview's posture: the address in
- * full, since the text it wore on screen is the remote's choice and need not be where it goes. The
- * caption names the destination's host, and the text on screen when that was not the address
- * itself. Open is the filled button while the two agree. When the text on screen is itself an
- * address or a host that is not the destination's (a link dressed as another site), the sheet is
- * a warning: the caption says so in the danger colour and the weight goes to the safe answer,
- * Cancel in the resting kind with Open anyway plain beside it, as the clipboard notice weighs its
- * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first.
+ * full, since the text it wore on screen is the remote's choice and need not be where it goes. What
+ * the sheet says and offers follows the link's scheme ([LinkLook]): a web page or a mail address
+ * has Open filled; a `file://` link, what `ls --hyperlink` prints, names a file on the remote that
+ * nothing on this phone can open, so its answers are Copy path and, on a live tab, Paste path (the
+ * path quoted for the shell, through the paste path so bracketed paste applies); an `ssh://` or
+ * `sftp://` link says that Berth itself is what opens it; any other scheme is another app's, and
+ * the weight goes to Cancel with Open anyway plain beside it. When the text on screen claimed
+ * another address than the link's (a link dressed as another site), the caption says so in the
+ * danger colour and the weight goes to Cancel likewise, as the clipboard notice weighs its
+ * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first. A
+ * link nothing on the phone handles says so in the notice pill rather than doing nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
+fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, haptics: DeckHaptics, onDismiss: () -> Unit) {
     val c = Berth.colors
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val look = remember(link) { LinkLook.of(link) }
+    val record by session.record.collectAsState()
+    val live = record.state == SessionState.LIVE
     fun open() {
         onDismiss()
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        // A plain view of the address, never Intent.parseUri: the URL cannot name an intent of its own.
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            tools.notice = StageTools.NOTHING_OPENS
+        } catch (e: RuntimeException) {
+            tools.notice = "Couldn't open that link"
+        }
     }
-    fun copy() {
-        clipboard.setText(AnnotatedString(link.url))
+    fun copy(text: String) {
+        clipboard.setText(AnnotatedString(text))
         tools.notice = "Copied"
         onDismiss()
     }
@@ -583,26 +604,43 @@ fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
         ) {
             SheetTitle("Open link", look.caption, captionColor = if (look.warning) c.danger else c.text2)
             Panel {
+                // Left to right whatever the address holds, so a right-to-left run in a path can never re-order the scheme and host.
                 Text(
                     link.url,
-                    style = MonoBody,
+                    style = MonoBody.copy(textDirection = TextDirection.Ltr),
                     color = c.text1,
                     modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${link.url}" },
                 )
             }
-            if (look.warning) {
-                // Three answers side by side, wrapping where they will not fit (the interface's font cap), as the paste warning's do.
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BerthButton("Cancel", onClick = onDismiss)
-                    BerthButton("Open anyway", kind = ButtonKind.TEXT, onClick = ::open)
-                    BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
+            when {
+                look.posture == LinkLook.Posture.FILE -> {
+                    val path = look.path.orEmpty()
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Copy path", kind = ButtonKind.PRIMARY, onClick = { copy(path) })
+                        if (live) {
+                            BerthButton("Paste path", onClick = {
+                                onDismiss()
+                                tools.paste(session, LinkLook.shellQuote(path), haptics)
+                            })
+                        }
+                        BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                    }
                 }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    BerthButton("Open", kind = ButtonKind.PRIMARY, onClick = ::open)
-                    BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
-                    Spacer(Modifier.weight(1f))
-                    BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                look.warning || look.posture == LinkLook.Posture.OTHER_APP -> {
+                    // Three answers side by side, wrapping where they will not fit (the interface's font cap), as the paste warning's do.
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Cancel", onClick = onDismiss)
+                        BerthButton("Open anyway", kind = ButtonKind.TEXT, onClick = ::open)
+                        BerthButton("Copy", kind = ButtonKind.TEXT, onClick = { copy(link.url) })
+                    }
+                }
+                else -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BerthButton("Open", kind = ButtonKind.PRIMARY, onClick = ::open)
+                        BerthButton("Copy", kind = ButtonKind.TEXT, onClick = { copy(link.url) })
+                        Spacer(Modifier.weight(1f))
+                        BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                    }
                 }
             }
         }
@@ -610,35 +648,173 @@ fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
 }
 
 /**
- * What the link sheet says over the address: where the link goes, whether the text on screen was
- * something else, and whether that something else was an address of its own. Pure, so the rule is
- * tested on its own.
+ * What the link sheet says over the address and which answers it lays out (spec A60): the
+ * [posture] from the link's scheme, the [caption] from where the link goes and from the text it
+ * wore on screen, and [warning] when that text claimed another address than the link's. A text
+ * claims an address when it carries a scheme, begins with `www.`, or is a bare host whose last
+ * label is letters, two or more of them, that is not a file extension a terminal prints all day
+ * (`notes.txt`, `main.py`, `Node.js`, `report.pdf` are names, not sites) and is not a segment of
+ * the link's own path, since a text that appears in the address is the address naming itself
+ * (a directory listing's every entry). Version numbers and decimals end in digits and claim
+ * nothing. The query is not exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
+ * link [path] is the file's path, percent-decoded. Pure, so the rule is tested on its own
+ * ([LinkLookTest][app.berth.android.ui.stage.LinkLookTest]).
  */
-class LinkLook(val caption: String, val warning: Boolean) {
+class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, val path: String? = null) {
+    enum class Posture {
+        /** A web page or a mail address: Open filled, Copy and Cancel beside it. */
+        OPEN,
+        /** A file on the remote: nothing here opens it; Copy path, Paste path on a live tab, Cancel. */
+        FILE,
+        /** `ssh://` or `sftp://`: Berth itself opens it, through Quick connect's own look; Open filled. */
+        BERTH,
+        /** Any other scheme is another app's to open: Cancel carries the weight, Open anyway and Copy stand plain. */
+        OTHER_APP,
+    }
+
     companion object {
-        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?([^/?#:\s]+)""")
+        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?([^/?#:;\s]+)""")
         private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#].*)?$""")
+        private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
+        private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
+
+        /** What a terminal prints as file names all day: a bare word ending in one of these is a name, not a host. */
+        private val FILE_EXTENSIONS = setOf(
+            "txt", "md", "rst", "log", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "html", "htm", "css", "ini", "cfg", "conf", "env", "lock", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt",
+            "py", "js", "ts", "tsx", "jsx", "rs", "go", "kt", "kts", "java", "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "pl", "pm", "sh", "bash", "zsh", "fish", "lua", "swift", "scala", "clj", "ex", "exs", "erl", "hs", "ml", "sql", "vue", "svelte", "gradle", "cmake", "mk", "nix", "tf", "proto",
+            "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "mp3", "mp4", "mkv", "webm", "wav", "flac", "ogg", "mov", "avi",
+            "zip", "gz", "tgz", "bz2", "xz", "zst", "tar", "rar", "jar", "war", "apk", "aab", "deb", "rpm", "iso", "img", "dmg", "exe", "dll", "so", "dylib", "bin", "o", "a", "class", "pyc", "wasm",
+            "bak", "tmp", "swp", "orig", "rej", "patch", "diff", "map", "min", "sum", "sig", "asc", "gpg", "pem", "crt", "key", "pub",
+        )
 
         fun of(link: LinkTap): LinkLook {
-            val to = hostOf(link.url)
-            val where = if (to != null) "goes to $to" else "a ${link.url.substringBefore(':').lowercase().ifEmpty { "plain" }} link"
-            val shown = link.text.trim()
-            if (shown.isEmpty() || sameAddress(shown, link.url)) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false)
-            val shownHost = hostOf(shown) ?: BARE_HOST.matchEntire(shown)?.groupValues?.get(1)?.lowercase()
-            val deceptive = shownHost != null && to != null && shownHost.removePrefix("www.") != to.removePrefix("www.")
-            return if (deceptive) {
-                LinkLook("Shown as $shownHost, but $where", warning = true)
-            } else {
-                LinkLook("Shown as \u201C${shown.take(SHOWN_CHARS)}${if (shown.length > SHOWN_CHARS) "\u2026" else ""}\u201D, $where", warning = false)
+            val url = link.url.trim()
+            val scheme = url.substringBefore(':', "").lowercase()
+            // `ls` quotes a name with a space in it; the quotes are the listing's, not the name's.
+            val shown = link.text.trim().trim('\'', '"')
+            val truncated = "\u201C${shown.take(SHOWN_CHARS)}${if (shown.length > SHOWN_CHARS) "\u2026" else ""}\u201D"
+            var path: String? = null
+            // A `mailto:` link's mailbox, decoded and lowercased: what a shown mail address is measured against.
+            var mailbox: String? = null
+            // Where the link goes, as the caption's second half, and the host a shown text is measured against.
+            val to: String?
+            val where: String
+            val posture: Posture
+            when (scheme) {
+                "http", "https" -> {
+                    to = hostOf(url)
+                    where = if (to != null) "goes to $to" else "a web link"
+                    posture = Posture.OPEN
+                }
+                "file" -> {
+                    to = hostOf(url)?.takeIf { it.isNotEmpty() }
+                    path = percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')).ifEmpty { "/" }
+                    where = if (to != null) "a file on $to: $path" else "a file: $path"
+                    posture = Posture.FILE
+                }
+                "ssh", "sftp" -> {
+                    to = hostOf(url)
+                    where = "opens in Berth: ${sshTarget(url)}"
+                    posture = Posture.BERTH
+                }
+                "mailto" -> {
+                    val address = percentDecode(url.substringAfter(':').substringBefore('?')).trim()
+                    mailbox = address.lowercase()
+                    to = address.substringAfterLast('@', "").lowercase().ifEmpty { null }
+                    where = "mails $address"
+                    posture = Posture.OPEN
+                }
+                else -> {
+                    to = null
+                    where = "another app on this phone would open this ${scheme.ifEmpty { "plain" }} link"
+                    posture = Posture.OTHER_APP
+                }
             }
+            val namesItself = shown.isEmpty() || sameAddress(shown, url) ||
+                (posture == Posture.FILE && path != null && shown.lowercase() in segments(path)) ||
+                (mailbox != null && percentDecode(shown.lowercase().removePrefix("mailto:")) == mailbox)
+            if (namesItself) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false, posture = posture, path = path)
+            // A mail address as the text claims that mailbox; the same one named itself above, so what is left is another's.
+            val claim = hostClaim(shown, url) ?: EMAIL.matchEntire(shown)?.value?.lowercase()?.takeIf { mailbox != null }
+            val deceptive = claim != null && (to == null || claim.removePrefix("www.") != to.removePrefix("www."))
+            return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, path = path)
         }
 
-        /** The host of an address with a scheme, lowercased; null for one without (`mailto:`, a bare word). */
+        /** The host of an address with a scheme and an authority, lowercased; null for one without (`mailto:`, a bare word). */
         fun hostOf(url: String): String? = SCHEME_HOST.find(url.trim())?.groupValues?.get(1)?.lowercase()
+
+        /**
+         * The host a shown [text] claims to be, or null when it claims none: the host of an address
+         * with a scheme, a `www.` name, or a bare host that is neither a file name nor a segment of
+         * [url]'s own path.
+         */
+        fun hostClaim(text: String, url: String): String? {
+            hostOf(text)?.let { return it }
+            val host = BARE_HOST.matchEntire(text)?.groupValues?.get(1)?.lowercase() ?: return null
+            if (text.startsWith("www.", ignoreCase = true)) return host
+            val last = host.substringAfterLast('.')
+            if (last.length < 2 || !last.all { it in 'a'..'z' }) return null
+            if (last in FILE_EXTENSIONS) return null
+            if (host in segments(percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')))) return null
+            return host
+        }
+
+        /**
+         * [path] as one word for a POSIX shell: as it is when it holds nothing the shell reads, else
+         * in single quotes, a quote of its own closed, escaped and reopened, so a name with a space
+         * or a `$` lands on the prompt as the name it is.
+         */
+        fun shellQuote(path: String): String {
+            if (path.isNotEmpty() && path.all { it.isLetterOrDigit() && it.code < 128 || it in "-_./:+=@,%" }) return path
+            return "'" + path.replace("'", "'\\''") + "'"
+        }
+
+        /** `%XX` runs read as UTF-8 bytes; anything malformed is left as it stands. */
+        fun percentDecode(s: String): String {
+            if (!s.contains('%')) return s
+            val out = java.io.ByteArrayOutputStream(s.length)
+            var i = 0
+            while (i < s.length) {
+                val c = s[i]
+                if (c == '%' && i + 2 < s.length && isHex(s[i + 1]) && isHex(s[i + 2])) {
+                    out.write(s.substring(i + 1, i + 3).toInt(16))
+                    i += 3
+                } else {
+                    val bytes = c.toString().toByteArray(Charsets.UTF_8)
+                    out.write(bytes, 0, bytes.size)
+                    i++
+                }
+            }
+            return String(out.toByteArray(), Charsets.UTF_8)
+        }
+
+        private fun isHex(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+        /** What follows `scheme://authority`: the path with its query and fragment, or nothing for an address with no path. */
+        private fun afterAuthority(url: String): String {
+            val start = url.indexOf("://")
+            if (start < 0) return ""
+            val slash = url.indexOf('/', start + 3)
+            return if (slash < 0) "" else url.substring(slash)
+        }
+
+        /** The path's segments, lowercased, empty ones dropped. */
+        private fun segments(path: String): Set<String> = path.split('/').mapNotNullTo(HashSet()) { it.lowercase().takeIf { s -> s.isNotEmpty() } }
+
+        /** `user@host:port` for an `ssh://` or `sftp://` link, the user's password (never a caption's business) and any `;fingerprint=` parameter left out. */
+        private fun sshTarget(url: String): String {
+            val start = url.indexOf("://") + 3
+            val end = url.indexOfAny(charArrayOf('/', '?', '#', ';'), start).let { if (it < 0) url.length else it }
+            val authority = url.substring(start, end)
+            val at = authority.lastIndexOf('@')
+            val user = if (at < 0) "" else authority.substring(0, at).substringBefore(':')
+            val hostPort = authority.substring(at + 1)
+            return if (user.isEmpty()) hostPort else "$user@$hostPort"
+        }
 
         /** The text is the address itself, give or take the scheme, `www.` and a closing slash. */
         private fun sameAddress(text: String, url: String): Boolean {
-            fun norm(s: String) = s.trim().lowercase().replace(Regex("""^[a-z][a-z0-9+.\-]*://"""), "").removePrefix("www.").trimEnd('/')
+            fun norm(s: String) = s.trim().lowercase().replace(SCHEME_PREFIX, "").removePrefix("www.").trimEnd('/')
             return norm(text) == norm(url)
         }
 
@@ -691,6 +867,15 @@ private val LINK = Regex("""https?://\S+|ssh://\S+|ftp://\S+""")
 private fun linkIn(text: String): String? {
     val t = text.trim()
     return LINK.matchEntire(t)?.value
+}
+
+/** The OSC 8 link under the selection's first cell, with the selected text as what it wore; null when that cell is plain. */
+private fun linkUnder(session: TerminalSession, selection: TerminalSelection): LinkTap? {
+    val emulator = session.emulator
+    return synchronized(emulator.lock) {
+        val start = selection.current(emulator)?.start ?: return@synchronized null
+        emulator.linkAt(start.row, start.col)?.let { LinkTap(it, selection.text(emulator)) }
+    }
 }
 
 private fun share(context: android.content.Context, text: String) {

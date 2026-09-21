@@ -811,7 +811,7 @@ private fun StageBody(
 
     pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
     tools.pendingPaste?.let { p -> PastePreviewSheet(p, session, patterns, onDismiss = { tools.pendingPaste = null }) }
-    tools.pendingLink?.let { l -> LinkOpenSheet(l, tools, onDismiss = { tools.pendingLink = null }) }
+    tools.pendingLink?.let { l -> LinkOpenSheet(l, session, tools, patterns, onDismiss = { tools.pendingLink = null }) }
     if (tools.historyOpen) CommandHistorySheet(vm, session, onDismiss = { tools.historyOpen = false }, onNotice = { tools.notice = it })
 }
 

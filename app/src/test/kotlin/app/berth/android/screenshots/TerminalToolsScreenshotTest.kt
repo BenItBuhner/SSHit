@@ -64,6 +64,7 @@ import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.terminal.HANDLE_RADIUS
 import app.berth.android.ui.terminal.HandleSpot
+import app.berth.android.ui.terminal.LinkTap
 import app.berth.android.ui.terminal.SelectionHandle
 import app.berth.android.ui.terminal.TerminalPaints
 import app.berth.android.ui.terminal.TerminalPaintsCache
@@ -470,10 +471,18 @@ class TerminalToolsScreenshotTest {
         waitForText("Open link")
         compose.onNodeWithText("Open link").performClick()
         compose.waitUntil(5_000) { !tools.selection.active }
+        // The address goes through the link sheet for a look first, as a tap on a link's would (spec A60):
+        // the text is the address itself, so the caption names the host alone and Open is filled.
+        compose.waitUntil(5_000) { tools.pendingLink == LinkTap(url, url) }
+        waitForText("Goes to caddyserver.com")
+        assertNull("nothing opens before the look", shadowOf(context as Application).nextStartedActivity)
+        compose.onNodeWithText("Open").performClick()
+        compose.waitUntil(5_000) { tools.pendingLink == null }
         val opened = shadowOf(context as Application).nextStartedActivity
         assertNotNull(opened)
         assertEquals(Intent.ACTION_VIEW, opened.action)
         assertEquals(url, opened.dataString)
+        waitForNoText("Goes to caddyserver.com")
 
         longPress(cellCenter(row, 2)) { tools.selection.active }
         canvas.performTouchInput { up() }
