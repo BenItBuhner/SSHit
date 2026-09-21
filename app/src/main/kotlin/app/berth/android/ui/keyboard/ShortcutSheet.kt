@@ -1,13 +1,14 @@
 package app.berth.android.ui.keyboard
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,7 +30,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.alwaysFocusable
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
@@ -57,12 +61,12 @@ import app.berth.domain.model.LeaderKey
  * window that fits two panes (spec C23) it opens as a dialog like every other sheet.
  *
  * The rows of the app's own chords are the remap table (spec C22, A44) when the sheet has an
- * [onRemap] to write with: a tap on one listens for the next chord the keyboard sends and says,
- * under the row, what taking it would cost or why it cannot be taken ([ChordConflict], the
- * conflict detection against the shell-bound set); Use or Enter binds it, Default gives the row its
- * prefix chord back, Esc or Cancel leaves it as it was. A rebound row shows its chord in accent and
- * says under it what it was and what the shell lost. The strip's browser conventions and the
- * terminal's own keys are read, not rebound.
+ * [onRemap] to write with: a tap on one takes the keyboard's focus, listens for the next chord the
+ * keyboard sends and says, under the row, what taking it would cost or why it cannot be taken
+ * ([ChordConflict], the conflict detection against the shell-bound set); Use or Enter binds it,
+ * Default gives the row its prefix chord back, Esc or Cancel leaves it as it was. A rebound row
+ * shows its chord in accent and says under it what it was and what the shell lost. The strip's
+ * browser conventions and the terminal's own keys are read, not rebound.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,83 +81,107 @@ fun ShortcutSheet(
     var capturing by remember { mutableStateOf<ChordAction?>(null) }
     val prefix = table.prefixPhrase()
     BerthSheet(onDismiss = onDismiss) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = BerthSpace.screenMargin)
-                .padding(bottom = 32.dp)
-                .navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
-        ) {
-            SheetTitle(
-                "Keyboard shortcuts",
-                if (onRemap != null) "The app\u2019s chords start with $prefix. Tap one to rebind it; Settings \u203A Hardware keyboard changes the prefix."
-                else "The app\u2019s chords start with $prefix; Settings \u203A Hardware keyboard changes the prefix and rebinds them.",
-            )
-            for (group in shortcutGroups(table, panes)) {
-                Panel(label = group.title) {
-                    for (entry in group.entries) {
-                        val action = entry.chord
-                        if (action != null && onRemap != null) {
-                            RemapRow(
-                                entry = entry,
-                                table = table,
-                                capturing = capturing == action,
-                                onCapture = { capturing = if (it) action else null },
-                                onRemap = { chord ->
-                                    onRemap(action, chord)
-                                    capturing = null
-                                },
-                            )
-                        } else {
-                            ShortcutRow(entry)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // The keys' column stops at half a row's content (the sheet's width less its margin, the
+            // panel's padding, the row's own and the gap between its columns) and wraps past it, so the
+            // action keeps the other half whole at the font cap; at 1× only a list of keys is that wide.
+            val keysMaxWidth = (maxWidth - BerthSpace.screenMargin * 2 - BerthSpace.panelPadding * 2 - ROW_PADDING * 2 - COLUMN_GAP) / 2
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = BerthSpace.screenMargin)
+                    .padding(bottom = 32.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(BerthSpace.panelGap),
+            ) {
+                SheetTitle(
+                    "Keyboard shortcuts",
+                    if (onRemap != null) "The app\u2019s chords start with $prefix. Tap one to rebind it; Settings \u203A Hardware keyboard changes the prefix."
+                    else "The app\u2019s chords start with $prefix; Settings \u203A Hardware keyboard changes the prefix and rebinds them.",
+                )
+                for (group in shortcutGroups(table, panes)) {
+                    Panel(label = group.title) {
+                        for (entry in group.entries) {
+                            val action = entry.chord
+                            if (action != null && onRemap != null) {
+                                RemapRow(
+                                    entry = entry,
+                                    table = table,
+                                    keysMaxWidth = keysMaxWidth,
+                                    capturing = capturing == action,
+                                    onCapture = { capturing = if (it) action else null },
+                                    onRemap = { chord ->
+                                        onRemap(action, chord)
+                                        capturing = null
+                                    },
+                                )
+                            } else {
+                                ShortcutRow(entry, keysMaxWidth)
+                            }
                         }
+                        if (group.note != null) PanelNote(group.note)
                     }
-                    if (group.note != null) PanelNote(group.note)
                 }
             }
         }
     }
 }
 
-/** The tag on the node that listens for a remap's chord, for a test to send the keys to. */
+/** A [ListRow]'s horizontal padding and the gap it puts between its title and its trailing column. */
+private val ROW_PADDING = 12.dp
+private val COLUMN_GAP = 12.dp
+
+/** The tag on the one row listening for a remap's chord, for a test to send the keys to; no row carries it otherwise. */
 const val ChordCaptureTag = "chord-capture"
 
 /**
  * One chord as a line of C22's table: the action as the row's title in body, the keys in mono and
- * `text.2` at the trailing edge, right-aligned, on a 40 dp row. A wide chord takes its width first
- * and the action wraps beside it, to two lines for the few long ones; the keys wrap only past the
- * row's whole width, never clip. TalkBack hears the action first: "Next tab, Ctrl+Tab".
+ * `text.2` at the trailing edge, right-aligned, on a row of a touch target's height (48 dp), since
+ * the app's rows are the remap table's controls and the fixed rows keep step with them. A wide
+ * chord takes its width first and the action wraps beside it, to two lines for the few long ones;
+ * the keys wrap once they would take more than half the row ([keysMaxWidth]), never clip. TalkBack
+ * hears the action first: "Next tab, Ctrl+Tab".
  */
 @Composable
-private fun ShortcutRow(entry: ShortcutEntry) {
+private fun ShortcutRow(entry: ShortcutEntry, keysMaxWidth: Dp) {
     ListRow(
         title = entry.action,
         titleStyle = BerthType.body,
         titleMaxLines = 2,
-        trailing = {
-            Text(entry.keys, style = BerthType.mono, color = Berth.colors.text2, textAlign = TextAlign.End)
-        },
+        trailing = { KeysText(entry.keys, Berth.colors.text2, keysMaxWidth) },
         surface = Color.Transparent,
-        minHeight = 40.dp,
+        minHeight = TouchTargetSize,
         modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = "${entry.action}, ${entry.keys.spoken()}" },
     )
+}
+
+/** The keys of a row, in mono at the trailing edge and right-aligned, wrapping past [maxWidth]. */
+@Composable
+private fun KeysText(keys: String, color: Color, maxWidth: Dp) {
+    Text(keys, style = BerthType.mono, color = color, textAlign = TextAlign.End, modifier = Modifier.widthIn(max = maxWidth))
 }
 
 /**
  * The row of one of the app's chords, and the remap table's one control (spec C22, A44): the
  * [ShortcutRow] with a tap, its chord in accent once rebound with the caption saying what it was
- * and what the shell lost. Tapped, the row steps up a tone and listens: the caption asks for the
- * chord, then names the one pressed and what binding it would cost ([conflictText]), and a row of
- * Use, Default and Cancel stands under it, the keyboard's Enter and Esc being Use and Cancel. A
- * chord that blocks (another action's, the strip's, a signal, a bare key) is said and not offered.
+ * and what the shell lost. Tapped, the row steps up a tone, takes the keyboard's focus and listens:
+ * the caption asks for the chord, then names the one pressed and what binding it would cost
+ * ([conflictText]), and a row of Use, Default and Cancel stands under it, the keyboard's Enter and
+ * Esc being Use and Cancel. A chord that blocks (another action's, the strip's, a signal, a bare
+ * key) is said and not offered. The row is what listens, rather than a node of its own under it,
+ * so what holds the focus is the thing a reader names ("Find in scrollback, listening for the new
+ * chord") and the focus stays on the row once it is bound, reading its new keys. It takes the focus
+ * in touch mode too ([alwaysFocusable]): a tapped row is in touch mode, and the Ctrl chord typed
+ * next does not leave it, so a clickable's own rule would refuse the focus and the chord would land
+ * elsewhere.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RemapRow(
     entry: ShortcutEntry,
     table: ChordTable,
+    keysMaxWidth: Dp,
     capturing: Boolean,
     onCapture: (Boolean) -> Unit,
     onRemap: (ChordKey?) -> Unit,
@@ -186,6 +214,11 @@ private fun RemapRow(
             }
         }
     }
+    // A reader per listening, so a Leader tapped here is this row's and never the Stage's, and one left armed by a Cancel is not the next listening's.
+    val reader = remember(capturing) { ChordReader() }
+    val leaderKey = table.settings.leaderKey.takeIf { table.settings.chordPrefix == ChordPrefix.LEADER }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(capturing) { if (capturing) runCatching { focus.requestFocus() } }
     ListRow(
         title = entry.action,
         titleStyle = BerthType.body,
@@ -194,42 +227,36 @@ private fun RemapRow(
         subtitleMaxLines = 2,
         selected = capturing,
         surface = Color.Transparent,
-        minHeight = 40.dp,
+        minHeight = TouchTargetSize,
         onClick = { onCapture(!capturing) },
         role = Role.Button,
         trailing = {
             val shown = if (capturing) chord?.label() ?: "\u2026" else entry.keys
-            Text(shown, style = BerthType.mono, color = if (capturing || entry.remapped) c.accent else c.text2, textAlign = TextAlign.End)
+            KeysText(shown, if (capturing || entry.remapped) c.accent else c.text2, keysMaxWidth)
         },
-        modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = spoken },
+        modifier = Modifier
+            .semantics(mergeDescendants = true) { contentDescription = spoken }
+            .focusRequester(focus)
+            // A tapped row is in touch mode, and a Ctrl chord does not leave it: the row's focus is
+            // taken by request the way the Stage's landing controls take theirs (alwaysFocusable).
+            .alwaysFocusable()
+            .onPreviewKeyEvent { event ->
+                capturing && captureKey(
+                    event = event,
+                    reader = reader,
+                    leaderKey = leaderKey,
+                    onChord = { pressed = it },
+                    onUse = {
+                        if (bindable) onRemap(chord)
+                        bindable
+                    },
+                    onCancel = { onCapture(false) },
+                )
+            }
+            .then(if (capturing) Modifier.testTag(ChordCaptureTag) else Modifier),
     )
     if (capturing) {
-        // The listening row's own reader, so a Leader tapped here is this row's and never the Stage's.
-        val reader = remember { ChordReader() }
-        val leaderKey = table.settings.leaderKey.takeIf { table.settings.chordPrefix == ChordPrefix.LEADER }
-        val focus = remember { FocusRequester() }
-        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-        FlowRow(
-            Modifier
-                .padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
-                .focusRequester(focus)
-                .focusable()
-                .onPreviewKeyEvent { event ->
-                    captureKey(
-                        event = event,
-                        reader = reader,
-                        leaderKey = leaderKey,
-                        onChord = { pressed = it },
-                        onUse = {
-                            if (bindable) onRemap(chord)
-                            bindable
-                        },
-                        onCancel = { onCapture(false) },
-                    )
-                }
-                .testTag(ChordCaptureTag),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        FlowRow(Modifier.padding(start = 8.dp, top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BerthButton("Use", onClick = { onRemap(chord) }, kind = ButtonKind.PRIMARY, enabled = bindable)
             if (entry.remapped) BerthButton("Default", onClick = { onRemap(null) })
             BerthButton("Cancel", onClick = { onCapture(false) }, kind = ButtonKind.TEXT)
