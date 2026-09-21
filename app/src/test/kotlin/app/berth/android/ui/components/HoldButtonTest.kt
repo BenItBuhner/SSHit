@@ -46,10 +46,11 @@ class HoldButtonTest {
         var confirmed = 0
         compose.mainClock.autoAdvance = false
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) { HoldButton(label, onConfirm = { confirmed++ }, holdMillis = 1000) }
+            BerthTheme(InterfaceTheme.DEFAULT) { HoldButton(label, onConfirm = { confirmed++ }) }
         }
         val button = compose.onNodeWithText(label)
         button.assert(hasStateDescription("Hold to confirm"))
+        assertEquals("the default hold is A9's", 800, HOLD_TO_CONFIRM_MS)
 
         // Each touch is followed by an idle pass, as a phone's main thread takes the press into the
         // composition before the next frame; the clock then stands for the hold's duration alone.
@@ -58,11 +59,13 @@ class HoldButtonTest {
         button.assert(hasStateDescription("Holding"))
         touch(button) { up() }
         compose.mainClock.advanceTimeBy(1200)
-        assertEquals("lifted at 400 ms of 1000, nothing fires", 0, confirmed)
+        assertEquals("lifted at 400 ms of 800, nothing fires", 0, confirmed)
         button.assert(hasStateDescription("Hold to confirm"))
 
         touch(button) { down(center) }
-        compose.mainClock.advanceTimeBy(1200)
+        compose.mainClock.advanceTimeBy(700)
+        assertEquals("at 700 ms of 800, not yet", 0, confirmed)
+        compose.mainClock.advanceTimeBy(500)
         assertEquals("held past the hold time, it fires", 1, confirmed)
         button.assert(hasStateDescription("Hold to confirm"))
         touch(button) { up() }

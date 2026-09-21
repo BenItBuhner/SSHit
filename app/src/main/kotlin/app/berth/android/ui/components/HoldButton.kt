@@ -51,9 +51,12 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.HapticLevel
 
+/** How long a [HoldButton] is held before it fires: A9's hold-to-confirm, "a fill sweeps left to right over 800 ms". */
+const val HOLD_TO_CONFIRM_MS = 800
+
 /**
  * The spec's hold-to-confirm answer (C13, `Replace saved key — hold to confirm`): a destructive
- * button in [BerthButton]'s clothes that fires after [holdMillis] of being held, the fill filling
+ * button in [BerthButton]'s clothes that fires after [holdMillis] of being held (A9's 800 ms), the fill filling
  * from the leading edge for as long as the finger stays and falling back when it lifts early, so a
  * tap explains itself. A screen reader's long-press (TalkBack's double-tap and hold) confirms
  * outright, since a timed hold is not a gesture it relays; a keyboard holds Enter or Space the way
@@ -65,7 +68,7 @@ fun HoldButton(
     onConfirm: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    holdMillis: Int = 1000,
+    holdMillis: Int = HOLD_TO_CONFIRM_MS,
 ) {
     val c = Berth.colors
     val haptics = LocalHapticFeedback.current

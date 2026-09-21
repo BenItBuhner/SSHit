@@ -54,6 +54,7 @@ import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.Prompt
 import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.components.HOLD_TO_CONFIRM_MS
 import app.berth.android.ui.groups.GroupsScreen
 import app.berth.android.ui.hosts.HostEditorFields
 import app.berth.android.ui.hosts.HostEditorScreen
@@ -721,13 +722,13 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(1_500)
         compose.waitForIdle()
-        assertTrue("let go at 400 ms of 1000: still asking", graph.prompts.current.value is Prompt.HostKeyChanged)
+        assertTrue("let go at 400 ms of ${HOLD_TO_CONFIRM_MS}: still asking", graph.prompts.current.value is Prompt.HostKeyChanged)
         assertTrue(asking.isActive)
 
-        // Held: the progress fills under the label; at the end the saved key is replaced.
+        // Held: the progress fills under the label, half way at half the hold; at the end the saved key is replaced.
         button.performTouchInput { down(center) }
         compose.waitForIdle()
-        compose.mainClock.advanceTimeBy(500)
+        compose.mainClock.advanceTimeBy(HOLD_TO_CONFIRM_MS / 2L)
         compose.waitForIdle()
         capture("changed-key-sheet-holding")
         compose.mainClock.advanceTimeBy(700)
