@@ -77,6 +77,7 @@ fun SettingsScreen(
     val themes by vm.terminalThemes.collectAsState()
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val deck by vm.deckLayout.collectAsState()
+    val deckSettings by vm.deckSettings.collectAsState()
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
     val terminal by vm.terminalSettings.collectAsState()
@@ -171,6 +172,13 @@ fun SettingsScreen(
             Panel(label = "Deck") {
                 ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
+                // Two-row mode (spec C4) is the tablet's default: a device preference over the layout's own row count, which the editor sets.
+                ToggleRow(
+                    "Two rows on a large screen",
+                    deckSettings.twoRowsOnLargeScreens,
+                    { vm.setDeckSettings(deckSettings.copy(twoRowsOnLargeScreens = it)) },
+                    caption = "A second row, Nav/Fn under Base, on a tablet or a fold open; off, the layout's own rows everywhere",
+                )
                 // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
                 CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }
                 PanelNote("Hold the Deck's layer key on the Stage to open the editor from a session; on a Deck of one layer that key is the editor's.")
@@ -180,6 +188,19 @@ fun SettingsScreen(
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
                 // Spec D1's optional drag: off, a sideways drag on the terminal does nothing, as it always has.
                 ToggleRow("Drag for arrow keys", terminal.horizontalDragArrows, { on -> vm.updateTerminalSettings { it.copy(horizontalDragArrows = on) } }, caption = "A one-finger sideways drag on the terminal sends Left and Right, one per cell")
+                // The Deck's hand (spec D2): the swipe down is off by default, the swipe across on.
+                ToggleRow(
+                    "Swipe down on a Deck key",
+                    deckSettings.swipeDown,
+                    { vm.setDeckSettings(deckSettings.copy(swipeDown = it)) },
+                    caption = "Sends the key's third action; its glyph shows at the key's bottom right",
+                )
+                ToggleRow(
+                    "Swipe across the Deck",
+                    deckSettings.layerSwipe,
+                    { vm.setDeckSettings(deckSettings.copy(layerSwipe = it)) },
+                    caption = "Steps the row's layer: left for the one before, right for the next",
+                )
                 PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
