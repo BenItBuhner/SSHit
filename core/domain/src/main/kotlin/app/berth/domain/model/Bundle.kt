@@ -126,7 +126,32 @@ data class BundledSecret(val id: String, val value: String) {
 sealed class BundleFormatException(message: String) : RuntimeException(message) {
     class NotABundle(detail: String?) : BundleFormatException("This is not a Berth bundle" + (detail?.let { ": $it" } ?: "."))
     class NewerThanThisBuild(val format: Int) : BundleFormatException("This bundle was made by a newer Berth (document format $format).")
+
+    /** A software identity whose private bytes are not an OpenSSH key: not a document Berth wrote. */
+    class UnreadableKey(identityName: String) : BundleFormatException("The key \u201C$identityName\u201D in this bundle is not one Berth can read.")
 }
+
+/**
+ * The two things in a bundle that are not records with an id but this phone's one copy, and so
+ * are replaced rather than added to: the import sheet offers each as a switch, on by default.
+ */
+data class BundleImportOptions(val deck: Boolean = true, val interfaceTheme: Boolean = true)
+
+/**
+ * What an import of a bundle would do here beyond writing its records, read before it is done so
+ * the sheet can say so: the known hosts by where they stand against this phone's ([KnownHostStanding]),
+ * and the tunnels that would listen on every interface, which come in switched off.
+ */
+data class BundleImportPlan(
+    /** Bundled keys for endpoints this phone holds nothing of that type for: written. */
+    val knownHostsNew: Int,
+    /** Bundled keys this phone already trusts as they are: nothing to do. */
+    val knownHostsExisting: Int,
+    /** Bundled keys that differ from a key this phone trusts for the endpoint: left as this phone has them. */
+    val knownHostsKept: List<KnownHostKey>,
+    /** Bundled tunnels bound to every interface: imported disabled, whatever the bundle said. */
+    val tunnelsOnEveryInterface: List<Tunnel>,
+)
 
 /**
  * What an import did (spec C20, Data): the counts, and the identities that were hardware-backed
@@ -140,9 +165,14 @@ data class BundleImportReport(
     val snippets: Int,
     val tunnels: Int,
     val terminalThemes: Int,
+    /** Known hosts written; the ones kept as this phone had them are [knownHostsKept]. */
     val knownHosts: Int,
     val deck: Boolean,
     val needsRecreation: List<RecreateNotice>,
+    /** Bundled known-host keys that differed from what this phone trusts and were not taken. */
+    val knownHostsKept: Int = 0,
+    /** Tunnels bound to every interface, imported switched off. */
+    val tunnelsHeldOff: Int = 0,
 ) {
     /** One line for a notice: `Imported 12 hosts, 3 keys and 8 snippets.` */
     val summary: String

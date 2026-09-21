@@ -66,6 +66,30 @@ class SshKeysTest {
         assertFalse(SshKeys.isEncrypted(plain))
     }
 
+    /**
+     * The public half is in the clear ahead of the private section, so it reads without the
+     * passphrase for every type Berth writes, protected or not; anything that is not an
+     * `openssh-key-v1` file, or one cut short or with its envelope edited, reads as nothing.
+     */
+    @Test
+    fun `the public key of an OpenSSH private key file reads without its passphrase`() {
+        for (algorithm in listOf(KeyAlgorithm.ED25519, KeyAlgorithm.ECDSA_P256, KeyAlgorithm.ECDSA_P384, KeyAlgorithm.RSA_3072)) {
+            val pair = SshKeys.generate(algorithm)
+            val expected = SshKeys.publicKeyBlob(pair.public)
+            val plain = SshKeys.openSshPrivate(pair, "berth test")
+            assertContentEquals(expected, SshKeys.publicKeyBlob(SshKeys.publicKeyOfOpenSshPrivate(plain)!!), "plain $algorithm")
+            val protected = SshKeys.openSshPrivate(pair, "berth test", "hunter2".toCharArray())
+            assertTrue(SshKeys.isEncrypted(protected))
+            assertContentEquals(expected, SshKeys.publicKeyBlob(SshKeys.publicKeyOfOpenSshPrivate(protected)!!), "protected $algorithm")
+        }
+        assertEquals(null, SshKeys.publicKeyOfOpenSshPrivate("-----BEGIN OPENSSH PRIVATE KEY-----\nbGFwdG9wLXNlY3JldC1ieXRlcw==\n-----END OPENSSH PRIVATE KEY-----\n"))
+        assertEquals(null, SshKeys.publicKeyOfOpenSshPrivate("-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n"))
+        assertEquals(null, SshKeys.publicKeyOfOpenSshPrivate("not a key at all"))
+        val whole = SshKeys.openSshPrivate(SshKeys.generate(KeyAlgorithm.ED25519))
+        val cut = whole.lines().let { lines -> (lines.take(2) + lines.last()).joinToString("\n") }
+        assertEquals(null, SshKeys.publicKeyOfOpenSshPrivate(cut))
+    }
+
     @Test
     fun `OpenSSH itself accepts the private keys we write`() {
         val keygen = listOf("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen").map(::File).firstOrNull { it.canExecute() }

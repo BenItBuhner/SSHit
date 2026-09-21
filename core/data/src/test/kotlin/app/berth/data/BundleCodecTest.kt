@@ -98,6 +98,43 @@ class BundleCodecTest {
         assertFailsWith<BundleException.Unsupported> { codec.open(oddSalt, "pw".toCharArray()) }
     }
 
+    /**
+     * The band the ceiling is for: a header within what Argon2 can express and beyond what a phone
+     * can allocate. The reader's own cap refuses it as unsupported, never as a wrong passphrase,
+     * before a block is asked for; a header at the cap is one it would run. The test JVM's heap is
+     * Gradle's default 512 MB, so had the gigabyte been allocated this would have died of an
+     * `OutOfMemoryError`, not failed an assertion.
+     */
+    @Test
+    fun `a header asking for a gigabyte, or for more passes than the work cap allows, is refused before any of it is allocated`() {
+        val blob = codec.seal(payload, "pw".toCharArray(), quick)
+        fun withCost(memoryKiB: Int, iterations: Int): ByteArray = blob.copyOf().also {
+            ByteBuffer.wrap(it, 6, 4).putInt(memoryKiB)
+            ByteBuffer.wrap(it, 10, 4).putInt(iterations)
+        }
+        // 1 GiB, exactly what the old bound let through.
+        val gigabyte = withCost(1 shl 20, 3)
+        val started = System.nanoTime()
+        assertTrue("1048576 KiB" in assertFailsWith<BundleException.Unsupported> { codec.open(gigabyte, "pw".toCharArray()) }.message!!)
+        assertTrue((System.nanoTime() - started) < 1_000_000_000L, "a refused header costs nothing")
+        // One KiB over the memory ceiling.
+        assertFailsWith<BundleException.Unsupported> { codec.open(withCost(BundleKdf.MAX_MEMORY_KIB + 1, 1), "pw".toCharArray()) }
+        // At the memory ceiling but over the work cap: 256 MiB × 5 passes.
+        assertFailsWith<BundleException.Unsupported> { codec.open(withCost(BundleKdf.MAX_MEMORY_KIB, 5), "pw".toCharArray()) }
+        // Under both caps the header is taken and it is the passphrase that decides: the tag fails on the changed header.
+        assertFailsWith<BundleException.Sealed> { codec.open(withCost(2048, 2), "pw".toCharArray()) }
+
+        // The predicate itself, at its edges.
+        assertTrue(BundleKdf(BundleKdf.MAX_MEMORY_KIB, 4, 4).isSane, "256 MiB × 4 is 1 GiB·pass, the most a reader runs")
+        assertFalse(BundleKdf(BundleKdf.MAX_MEMORY_KIB, 5, 4).isSane, "256 MiB × 5 is over the work cap")
+        assertFalse(BundleKdf(BundleKdf.MAX_MEMORY_KIB + 1, 1, 1).isSane, "one KiB over the memory cap")
+        assertTrue(BundleKdf(64 * 1024, 16, 4).isSane, "64 MiB runs sixteen passes")
+        assertFalse(BundleKdf(64 * 1024, 17, 4).isSane, "and not seventeen")
+        assertFalse(BundleKdf(1 shl 20, 1, 1).isSane, "a gigabyte is never run")
+        assertEquals(256 * 1024, BundleKdf.MAX_MEMORY_KIB)
+        assertEquals(1L shl 20, BundleKdf.MAX_WORK_KIB_PASSES)
+    }
+
     @Test
     fun `sealing is randomised and the payload never shows through`() {
         val first = codec.seal(payload, "pw".toCharArray(), quick)

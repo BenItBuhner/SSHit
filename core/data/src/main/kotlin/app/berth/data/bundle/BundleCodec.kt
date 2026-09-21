@@ -91,7 +91,9 @@ class BundleCodec(private val random: SecureRandom = SecureRandom()) {
         val kdf = buffer.get().toInt() and 0xFF
         if (kdf != KDF_ARGON2ID) throw BundleException.Unsupported("key derivation $kdf")
         val cost = BundleKdf(memoryKiB = buffer.getInt(), iterations = buffer.getInt(), parallelism = buffer.get().toInt() and 0xFF)
-        // A hostile header must not make this phone allocate a gigabyte before the tag fails.
+        // The header is only authenticated by the tag, the tag needs the key and the key needs the
+        // KDF run at the header's cost: so the cost is the one field taken on trust, and it is held
+        // to what a phone can run ([BundleKdf.isSane]) before a byte of Argon2 memory is asked for.
         if (!cost.isSane) throw BundleException.Unsupported("key derivation cost ${cost.memoryKiB} KiB × ${cost.iterations} × ${cost.parallelism}")
         val saltLength = buffer.get().toInt() and 0xFF
         if (saltLength != SALT_BYTES) throw BundleException.Unsupported("salt of $saltLength bytes")
@@ -126,7 +128,13 @@ class BundleCodec(private val random: SecureRandom = SecureRandom()) {
                 .withSalt(salt)
                 .build()
             val key = ByteArray(KEY_BYTES)
-            Argon2BytesGenerator().apply { init(params) }.generateBytes(bytes, key)
+            try {
+                Argon2BytesGenerator().apply { init(params) }.generateBytes(bytes, key)
+            } catch (e: OutOfMemoryError) {
+                // Within the ceiling and still more than this process has left: the generator and
+                // its blocks are garbage by now, so the answer is a line on the sheet, not a crash.
+                throw BundleException.TooCostly()
+            }
             return key
         } finally {
             bytes.fill(0)
@@ -152,20 +160,38 @@ class BundleCodec(private val random: SecureRandom = SecureRandom()) {
  * passphrases spends the same on each guess.
  */
 data class BundleKdf(val memoryKiB: Int, val iterations: Int, val parallelism: Int) {
-    /** Within what a phone can be asked to do: at most 1 GiB, 64 passes and 16 lanes, and Argon2's own floors. */
+    /**
+     * Within what a phone can be asked to run, since a reader runs the header's cost before it can
+     * check the header: at most [MAX_MEMORY_KIB] (256 MiB, four times [DEFAULT]'s, room for a
+     * stronger writer later and still under any phone's heap), at most [MAX_WORK_KIB_PASSES] of
+     * memory × passes (1 GiB·pass, so 256 MiB runs four passes at most and 64 MiB sixteen), at most
+     * 64 passes and 16 lanes, and Argon2's own floors.
+     */
     val isSane: Boolean
-        get() = memoryKiB in (8 * parallelism)..(1 shl 20) && iterations in 1..64 && parallelism in 1..16
+        get() = memoryKiB in (8 * parallelism)..MAX_MEMORY_KIB &&
+            iterations in 1..64 &&
+            parallelism in 1..16 &&
+            memoryKiB.toLong() * iterations <= MAX_WORK_KIB_PASSES
 
     fun requireSane() = require(isSane) { "key derivation cost out of range: $this" }
 
     companion object {
         val DEFAULT = BundleKdf(memoryKiB = 64 * 1024, iterations = 3, parallelism = 4)
+
+        /** The most memory a reader will allocate for a header: 256 MiB. */
+        const val MAX_MEMORY_KIB = 256 * 1024
+
+        /** The most work a reader will do for a header, in KiB × passes: 1 GiB·pass. */
+        const val MAX_WORK_KIB_PASSES = 1L shl 20
     }
 }
 
 /** Why a bundle did not open, in the words the sheet shows. */
 sealed class BundleException(message: String) : RuntimeException(message) {
-    class NotABundle : BundleException("This file is not a Berth bundle.")
+    class NotABundle : BundleException("This is not a .berth file.")
     class Unsupported(detail: String) : BundleException("This Berth can't open this bundle ($detail).")
     class Sealed : BundleException("That passphrase didn't open the bundle, or the file was changed since it was exported.")
+
+    /** The header's cost is within the ceiling and this process still could not allocate it. */
+    class TooCostly : BundleException("This file asks for more memory than this phone has.")
 }
