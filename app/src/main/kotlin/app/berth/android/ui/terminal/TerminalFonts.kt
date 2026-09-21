@@ -89,6 +89,14 @@ object TerminalFonts {
     /** The sample line the picker sets each family in (spec C20): the glyphs that tell coding fonts apart. */
     const val SAMPLE = "0O il1 {} => -> |~"
 
+    /**
+     * The OpenType feature string for the Ligatures switch (spec C19), the canvas's paints' and the
+     * picker's sample line's alike: `liga` and `calt` said on or off outright, so no style around the
+     * text speaks for it (the interface's mono role keeps its own ligatures off, and a sample laid
+     * over it with nothing said would follow that, not the switch).
+     */
+    fun featureSettings(ligatures: Boolean): String = if (ligatures) "liga, calt" else "-liga, -calt"
+
     val bundled: List<BundledFamily> = listOf(
         BundledFamily(DEFAULT, R.font.jetbrains_mono_regular, R.font.jetbrains_mono_bold, R.font.jetbrains_mono_italic, R.font.jetbrains_mono_bold_italic, "OFL"),
         BundledFamily("IBM Plex Mono", R.font.ibm_plex_mono_regular, R.font.ibm_plex_mono_bold, R.font.ibm_plex_mono_italic, R.font.ibm_plex_mono_bold_italic, "OFL"),

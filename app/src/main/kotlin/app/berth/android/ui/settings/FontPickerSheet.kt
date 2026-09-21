@@ -147,14 +147,15 @@ fun FontPickerSheet(vm: AppViewModel, onDismiss: () -> Unit) {
 /**
  * One family: its name, the sample line in its own face in text.1, and its caption. The sample is
  * set in the default family until the face has loaded, so the row stands at its height from the
- * first frame, and with [ligatures] off its `=>` and `->` stay two glyphs, as the terminal's would.
+ * first frame, and its `=>` and `->` join or stay two glyphs as [ligatures] says, the terminal's
+ * own setting said outright over the row's mono style ([TerminalFonts.featureSettings]).
  * An imported family carries Remove at its trailing edge.
  */
 @Composable
 private fun FontRow(choice: FontChoice, face: FontFamily?, ligatures: Boolean, selected: Boolean, onClick: () -> Unit, onRemove: (() -> Unit)?) {
     val c = Berth.colors
     val subtitle = buildAnnotatedString {
-        withStyle(SpanStyle(fontFamily = face ?: JetBrainsMono, color = c.text1, fontFeatureSettings = if (ligatures) null else NO_LIGATURES)) { append(TerminalFonts.SAMPLE) }
+        withStyle(SpanStyle(fontFamily = face ?: JetBrainsMono, color = c.text1, fontFeatureSettings = TerminalFonts.featureSettings(ligatures))) { append(TerminalFonts.SAMPLE) }
         append('\n')
         withStyle(SpanStyle(fontFamily = BerthType.caption.fontFamily, fontSize = BerthType.caption.fontSize, fontWeight = BerthType.caption.fontWeight, letterSpacing = BerthType.caption.letterSpacing)) {
             append(choice.note)
@@ -174,10 +175,6 @@ private fun FontRow(choice: FontChoice, face: FontFamily?, ligatures: Boolean, s
         },
     )
 }
-
-/** The OpenType features a ligature is made of, off: the terminal's own paint setting for the switch off ([TerminalCanvas][app.berth.android.ui.terminal.TerminalCanvas]). */
-private const val NO_LIGATURES = "-liga, -calt"
-
 /** The face as the import note names it. */
 private fun FontFace.label(): String = when (this) {
     FontFace.REGULAR -> "regular"

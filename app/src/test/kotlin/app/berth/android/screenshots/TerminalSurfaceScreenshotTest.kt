@@ -325,7 +325,7 @@ class TerminalSurfaceScreenshotTest {
         TerminalPaintsCache.clear()
     }
 
-    /** The OpenType feature setting on every sample line's span: null with ligatures on, the terminal's `-liga, -calt` with them off. */
+    /** The OpenType feature setting on every sample line's span: the terminal's own `liga, calt` with ligatures on and `-liga, -calt` with them off, said outright either way. */
     private fun sampleFeatureSettings(): Set<String?> =
         compose.onAllNodes(hasText(TerminalFonts.SAMPLE, substring = true)).fetchSemanticsNodes()
             .flatMap { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty() }
@@ -363,11 +363,11 @@ class TerminalSurfaceScreenshotTest {
 
         // The samples show what the terminal would draw: with the Ligatures switch off, every sample's
         // `=>` and `->` are two glyphs each, the terminal's own feature setting on the span (review #16).
-        assertEquals(setOf<String?>(null), sampleFeatureSettings())
+        assertEquals(setOf<String?>("liga, calt"), sampleFeatureSettings())
         graph.viewModel.setTerminalFont(graph.viewModel.terminalFont.value.copy(ligatures = false))
         compose.waitUntil(5_000) { sampleFeatureSettings() == setOf<String?>("-liga, -calt") }
         graph.viewModel.setTerminalFont(graph.viewModel.terminalFont.value.copy(ligatures = true))
-        compose.waitUntil(5_000) { sampleFeatureSettings() == setOf<String?>(null) }
+        compose.waitUntil(5_000) { sampleFeatureSettings() == setOf<String?>("liga, calt") }
 
         // Fira Code chosen: the setting follows and the row behind the sheet reads it.
         compose.onNodeWithText("Fira Code").performClick()

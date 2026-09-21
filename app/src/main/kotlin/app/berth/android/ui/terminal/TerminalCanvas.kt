@@ -92,7 +92,7 @@ class TerminalPaints(context: Context, font: TerminalFont, density: Float, fontS
         boldItalic.typeface = faces[3]
         listOf(regular, bold, italic, boldItalic).forEach {
             it.textSize = px
-            it.fontFeatureSettings = if (font.ligatures) "liga, calt" else "-liga, -calt"
+            it.fontFeatureSettings = TerminalFonts.featureSettings(font.ligatures)
         }
         cellWidth = regular.measureText("M")
         val fm = regular.fontMetrics
