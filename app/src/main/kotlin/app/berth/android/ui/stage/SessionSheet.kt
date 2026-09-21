@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -112,7 +111,7 @@ fun SessionSheet(
     // The sheet opens whole, as the prompts do, rather than at half the window with its second row of
     // pills below the fold at the interface cap; and the column scrolls, for a window shorter than the
     // facts and the pills at that size (a half-open sheet without a scroll would lay them out unreached).
-    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
