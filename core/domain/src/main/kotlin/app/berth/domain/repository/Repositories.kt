@@ -13,6 +13,7 @@ import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
@@ -156,4 +157,10 @@ interface SettingsRepository {
 
     /** Read-modify-write under one lock, like [updateSecuritySettings]. */
     suspend fun updateHardwareKeyboardSettings(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings)
+
+    /** Scrollback size and the optional drag arrows (spec C20, Settings › Terminal and Gestures). */
+    val terminalSettings: Flow<TerminalSettings>
+
+    /** Read-modify-write under one lock, like [updateSecuritySettings]. */
+    suspend fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings)
 }

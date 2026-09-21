@@ -48,6 +48,7 @@ import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.Attr
 import app.berth.terminal.CellRange
+import app.berth.terminal.CursorShape
 import app.berth.terminal.MouseButton
 import app.berth.terminal.MouseTracking
 import app.berth.terminal.SelectionMode
@@ -692,3 +693,10 @@ private fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines
 
 /** Position of a cell for a point inside the canvas; used by the Stage for tap-to-place features later. */
 fun TerminalPaints.cellAt(offset: Offset): Pair<Int, Int> = (offset.x / cellWidth).toInt() to (offset.y / cellHeight).toInt()
+
+/** The cursor a [TerminalFont.cursorShape] names (spec C20: block, underline, bar); anything else is the block. */
+fun cursorShapeOf(name: String): CursorShape = when (name.lowercase()) {
+    "underline" -> CursorShape.UNDERLINE
+    "bar" -> CursorShape.BAR
+    else -> CursorShape.BLOCK
+}

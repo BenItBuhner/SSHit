@@ -121,6 +121,7 @@ import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.tabs.rememberTabStripState
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
+import app.berth.android.ui.terminal.cursorShapeOf
 import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -130,6 +131,8 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
+import app.berth.terminal.CursorStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
@@ -638,6 +641,15 @@ private fun StageBody(
         session.onStage = true
         session.markSeen()
         viewport.scrollOffset = 0
+    }
+    // Settings › Terminal reaches the emulator here: the history it keeps, and the cursor the user
+    // chose, which stands until the program on the other end asks for its own (DECSCUSR).
+    val terminalSettings by vm.terminalSettings.collectAsState()
+    LaunchedEffect(session.id, terminalSettings.scrollbackLines) {
+        session.emulator.maxScrollback = terminalSettings.scrollbackLines.coerceIn(TerminalSettings.MIN_SCROLLBACK, TerminalSettings.MAX_SCROLLBACK)
+    }
+    LaunchedEffect(session.id, fontSetting.cursorShape, fontSetting.cursorBlink) {
+        session.emulator.defaultCursorStyle = CursorStyle(cursorShapeOf(fontSetting.cursorShape), fontSetting.cursorBlink)
     }
     // Bell while on stage is haptic only (C2), unless the host mutes it. Keyed on the patterns too,
     // so a haptic level change restarts the collector on the new instance.

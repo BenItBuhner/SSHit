@@ -1,0 +1,24 @@
+package app.berth.domain.model
+
+import kotlinx.serialization.Serializable
+
+/**
+ * Settings › Terminal beyond the font (spec C20, A65, D1). One document, so a change to any field
+ * lands atomically, the way [HardwareKeyboardSettings] does.
+ */
+@Serializable
+data class TerminalSettings(
+    /** Lines of history a terminal keeps above its screen (spec, "Very long output": default 10,000, 1,000 to 100,000). */
+    val scrollbackLines: Int = DEFAULT_SCROLLBACK,
+    /** A one-finger horizontal drag on the terminal sends Left and Right arrows, one per cell of travel (spec D1); off by default. */
+    val horizontalDragArrows: Boolean = false,
+) {
+    companion object {
+        const val DEFAULT_SCROLLBACK = 10_000
+        const val MIN_SCROLLBACK = 1_000
+        const val MAX_SCROLLBACK = 100_000
+
+        /** The sizes the Settings row cycles through, the spec's bounds at either end. */
+        val SCROLLBACK_CHOICES: List<Int> = listOf(1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000)
+    }
+}

@@ -40,6 +40,7 @@ import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
@@ -189,6 +190,14 @@ class AppViewModel @Inject constructor(
 
     fun updateHardwareKeyboard(change: (HardwareKeyboardSettings) -> HardwareKeyboardSettings) {
         viewModelScope.launch { settings.updateHardwareKeyboardSettings(change) }
+    }
+
+    /** Scrollback size and the drag arrows (spec C20, Settings › Terminal and Gestures); every terminal on stage follows it. */
+    val terminalSettings: StateFlow<TerminalSettings> =
+        settings.terminalSettings.stateIn(viewModelScope, SharingStarted.Eagerly, TerminalSettings())
+
+    fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) {
+        viewModelScope.launch { settings.updateTerminalSettings(change) }
     }
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =
