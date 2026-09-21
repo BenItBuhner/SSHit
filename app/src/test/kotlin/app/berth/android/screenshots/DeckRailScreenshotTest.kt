@@ -24,8 +24,10 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -45,6 +47,7 @@ import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.LocalDeckFit
@@ -456,6 +459,43 @@ class DeckRailScreenshotTest {
         compose.waitUntil(5_000) { graph.hosts.items.value.first { it.id == "homelab" }.appearance.fontSizeSp == 16 }
         settle(300)
         capture("look-sheet-size-picked")
+
+        compose.onNodeWithText("Font").performClick()
+        waitForText("System monospace")
+        compose.onNodeWithText("System monospace").performClick()
+        compose.waitUntil(5_000) { graph.hosts.items.value.first { it.id == "homelab" }.appearance.fontFamily == "System monospace" }
+    }
+
+    /**
+     * The host editor's Look panel carries the Font row the Look sheet sets (spec C10; #20 review,
+     * nit 5): the family picked over the Stage reads here, between Theme and Font size, and can be
+     * set back to Inherit here, the one field under both.
+     */
+    @Test
+    fun `the host editor's Look panel reads the font the Look sheet set, and sets it back`() {
+        StageFixture.seed(graph)
+        val homelab = graph.hosts.items.value.first { it.id == "homelab" }
+        runBlocking { graph.hosts.upsert(homelab.copy(appearance = homelab.appearance.copy(fontFamily = "System monospace"))) }
+        themed { HostEditorScreen(graph.viewModel, hostId = "homelab", onDone = {}) }
+        waitForText("homelab")
+        compose.onNodeWithText("Font size").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Font").assertIsDisplayed()
+        compose.onNodeWithText("System monospace").assertIsDisplayed()
+        // The Look panel's own texts whole. The editor's two cut texts at 1x (the Add tunnel plus, the
+        // Alt key's caption) are main's, fixed in #19 and held there; the whole editor is held once that lands.
+        val cut = compose.cutTexts()
+        val look = listOf("Look", "Theme", "Font", "Font size", "System monospace", "Inherit")
+        assertTrue("text cut on the host editor's Look panel: ${cut.filter { it in look }}", cut.none { it in look })
+        capture("host-editor-look-font")
+
+        compose.onNodeWithText("Font").performClick()
+        waitForText("JetBrains Mono")
+        // The menu's Inherit, not the Theme or Font size row's.
+        compose.onNode(hasText("Inherit") and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("System monospace")).fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { graph.hosts.items.value.first { it.id == "homelab" }.appearance.fontFamily == null }
     }
 
     // ---- Settings › Deck and Gestures ---------------------------------------------------------------------
