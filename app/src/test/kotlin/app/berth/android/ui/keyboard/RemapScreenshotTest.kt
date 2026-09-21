@@ -6,6 +6,7 @@ import android.view.KeyEvent.ACTION_DOWN
 import android.view.KeyEvent.ACTION_UP
 import android.view.KeyEvent.KEYCODE_ALT_RIGHT
 import android.view.KeyEvent.KEYCODE_C
+import android.view.KeyEvent.KEYCODE_CTRL_RIGHT
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_ENTER
 import android.view.KeyEvent.KEYCODE_ESCAPE
@@ -19,6 +20,7 @@ import android.view.KeyEvent.KEYCODE_W
 import android.view.KeyEvent.META_ALT_ON
 import android.view.KeyEvent.META_ALT_RIGHT_ON
 import android.view.KeyEvent.META_CTRL_ON
+import android.view.KeyEvent.META_CTRL_RIGHT_ON
 import android.view.KeyEvent.META_SHIFT_ON
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -100,11 +102,13 @@ import java.io.File
  * what Ctrl+F takes from the shell, the row rebound, the line refusing Ctrl+C; the Stage with
  * pass-through on and its pill in the header; the hint bar a first plain Ctrl+W leaves in place of
  * the close, and the notice after its action; Settings › Hardware keyboard with the prefix, its
- * menu, the Leader key under it, and the Volume buttons panel with its menu; the sheet under the
- * Leader prefix, opened by a tapped Right Alt then `/`; and the Settings panel and the sheet at the
- * interface's 1.3× font cap, no text cut. Every key travels the way a hardware keyboard's does,
- * into the window whose control holds the focus, the Stage's preview first. The Stage rides a live
- * session with nowhere to send (`StageFixture.liveHomelab`), so no sshd is needed.
+ * menu of two (Meta is Android's and not offered), the Leader key under it, Right Ctrl as it comes,
+ * the same row beside a keyboard whose layout types with Right Alt, and the Volume buttons panel
+ * with its menu; the sheet under the Leader prefix, opened by a tapped Right Ctrl then `/`; and
+ * the Settings panel and the sheet at the interface's 1.3× font cap, no text cut. Every key travels
+ * the way a hardware keyboard's does, into the window whose control holds the focus, the Stage's
+ * preview first. The Stage rides a live session with nowhere to send (`StageFixture.liveHomelab`),
+ * so no sshd is needed; the keyboard that types with Right Alt is [LocalRightAltTypes]'s to say.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -266,15 +270,25 @@ class RemapScreenshotTest {
 
         compose.onNodeWithText("Chord prefix").performClick()
         waitForText("Leader key")
+        // Two prefixes: Meta is Android's, read before any app sees it, and is not offered.
+        assertTrue("no Meta in the menu", compose.onAllNodes(hasText("Meta")).fetchSemanticsNodes().isEmpty())
         capture("settings-chord-prefix-menu")
 
-        // The Leader key row stands only under the Leader prefix, and the note under it says how a tap and a hold differ.
+        // The Leader key row stands only under the Leader prefix, Right Ctrl as it comes (Right Alt is
+        // AltGr on most layouts); no keyboard is attached here, so its caption says how the key is
+        // pressed, and the note under the rows says how a tap and a hold differ and what AltGr is.
         compose.onNodeWithText("Leader key").performClick()
         compose.waitUntil(5_000) { settings.chordPrefix == ChordPrefix.LEADER }
-        waitForText("Right Alt")
+        assertEquals(LeaderKey.RIGHT_CTRL, settings.leaderKey)
+        waitForText("Right Ctrl")
+        text("Held with the key, or tapped once before it").assertExists()
         compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
         compose.waitForIdle()
-        text("Right Alt is the app\u2019s and never reaches the shell: hold it with a key, or tap it and the next key is the chord; a second tap or Esc lets a tap go. Leader P sends every key to the shell until it is pressed again.").assertExists()
+        text(
+            "Right Ctrl is the app\u2019s and never reaches the shell: hold it with a key, or tap it and the next key is the chord; a second tap or Esc lets a tap go. " +
+                "On a layout that types with AltGr (@, {, |, ~ on a German or Nordic keyboard) Right Alt is that key; pick Right Ctrl. " +
+                "Leader P sends every key to the shell until it is pressed again.",
+        ).assertExists()
         text("Leader / opens this from a session").assertExists()
         compose.assertNoTextCut("the Settings screen at 1\u00D7 under the Leader prefix")
         capture("settings-chord-prefix-leader")
@@ -290,26 +304,59 @@ class RemapScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Page Up and Down")).fetchSemanticsNodes().size == 1 }
     }
 
+    @Test
+    fun `Settings beside a keyboard that types with Right Alt, the Leader key row says so, and says to pick Right Ctrl once Right Alt is chosen`() {
+        StageFixture.seed(graph)
+        graph.viewModel.updateHardwareKeyboard { it.withChordPrefix(ChordPrefix.LEADER) }
+        compose.waitUntil(5_000) { settings.chordPrefix == ChordPrefix.LEADER }
+        // A German or Nordic keyboard attached: its layout's map has a third level under Right Alt.
+        themed {
+            CompositionLocalProvider(LocalRightAltTypes provides { true }) {
+                SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
+            }
+        }
+        compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
+        compose.waitForIdle()
+        // Right Ctrl as it comes, and the caption says what this keyboard's Right Alt is for.
+        assertEquals(LeaderKey.RIGHT_CTRL, settings.leaderKey)
+        text("Tapped or held; this keyboard types with Right Alt").assertExists()
+
+        // Right Alt chosen all the same: the row says to pick Right Ctrl, so the key is never taken there in silence.
+        // The row by its caption: the Chord prefix row above reads "Leader key" too, as its value.
+        compose.onNode(hasText("Tapped or held; this keyboard types with Right Alt") and hasClickAction()).performClick()
+        waitForText("Right Alt")
+        compose.onNodeWithText("Right Alt").performClick()
+        compose.waitUntil(5_000) { settings.leaderKey == LeaderKey.RIGHT_ALT }
+        text("This keyboard types with Right Alt; pick Right Ctrl").assertExists()
+        compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
+        compose.waitForIdle()
+        compose.assertNoTextCut("the Settings screen at 1\u00D7, Right Alt the Leader on a keyboard that types with it")
+        capture("settings-leader-key-altgr")
+    }
+
     // ---- the Leader prefix on the Stage ----------------------------------------------------------------------------------
 
     @Test
-    fun `under the Leader prefix a tapped Right Alt then slash opens the sheet, which names the Leader on every row`() {
+    fun `under the Leader prefix a tapped Right Ctrl then slash opens the sheet, which names the Leader on every row, and a tapped Right Alt is the keyboard's own`() {
         stageWithKeyboard { it.withChordPrefix(ChordPrefix.LEADER) }
-        assertEquals(LeaderKey.RIGHT_ALT, settings.leaderKey)
+        // The Leader as it comes: Right Ctrl, since nothing types with it, where Right Alt is AltGr on most layouts.
+        assertEquals(LeaderKey.RIGHT_CTRL, settings.leaderKey)
         // Ctrl+Shift+/ is nobody's now and reaches the shell: no sheet.
         chord(KEYCODE_SLASH, META_CTRL_ON or META_SHIFT_ON)
         assertTrue("Ctrl+Shift+/ opens nothing under the Leader", compose.onAllNodes(hasText("Keyboard shortcuts")).fetchSemanticsNodes().isEmpty())
-        // Right Alt tapped, then /: the Leader chord.
-        compose.onRoot().performKeyPress(KeyEvent(android.view.KeyEvent(0L, 0L, ACTION_DOWN, KEYCODE_ALT_RIGHT, 0, META_ALT_ON or META_ALT_RIGHT_ON)))
-        compose.onRoot().performKeyPress(KeyEvent(android.view.KeyEvent(0L, 0L, ACTION_UP, KEYCODE_ALT_RIGHT, 0, 0)))
-        compose.waitForIdle()
+        // Right Alt tapped, then /: no Leader chord, since Right Alt is the keyboard's own; both keys reach the shell.
+        tap(KEYCODE_ALT_RIGHT, META_ALT_ON or META_ALT_RIGHT_ON)
+        chord(KEYCODE_SLASH, 0)
+        assertTrue("a tapped Right Alt is no Leader under Right Ctrl", compose.onAllNodes(hasText("Keyboard shortcuts")).fetchSemanticsNodes().isEmpty())
+        // Right Ctrl tapped, then /: the Leader chord.
+        tap(KEYCODE_CTRL_RIGHT, META_CTRL_ON or META_CTRL_RIGHT_ON)
         chord(KEYCODE_SLASH, 0)
         waitForText("Keyboard shortcuts")
-        waitForText("the Leader, Right Alt, held with the key or tapped before it")
+        waitForText("the Leader, Right Ctrl, held with the key or tapped before it")
         row("Find in scrollback, Leader F. Rebind").assertExists()
         row("This sheet, Leader /. Rebind").assertExists()
         // The Terminal group's note says the Leader is the one key that never reaches the shell.
-        compose.onNode(hasText("The Leader, Right Alt, never does: it is the app\u2019s.", substring = true), useUnmergedTree = true).assertExists()
+        compose.onNode(hasText("The Leader, Right Ctrl, never does: it is the app\u2019s.", substring = true), useUnmergedTree = true).assertExists()
         expandSheet()
         capture("shortcut-sheet-leader")
     }
@@ -351,10 +398,16 @@ class RemapScreenshotTest {
         StageFixture.seed(graph)
         graph.viewModel.updateHardwareKeyboard { it.withChordPrefix(ChordPrefix.LEADER).withRemap(ChordAction.FIND, ChordKey("F", ctrl = true)) }
         compose.waitUntil(5_000) { settings.chordPrefix == ChordPrefix.LEADER && ChordAction.FIND in settings.remaps }
-        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        // Beside a keyboard that types with Right Alt, so the Leader key row carries its longest caption at the cap.
+        themed {
+            CompositionLocalProvider(LocalRightAltTypes provides { true }) {
+                SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
+            }
+        }
         compose.onNodeWithText("Keyboard shortcuts").performScrollTo()
         compose.waitForIdle()
         text("Leader / opens this from a session \u00B7 1 rebound").assertExists()
+        text("Tapped or held; this keyboard types with Right Alt").assertExists()
         compose.assertNoTextCut("the Settings screen at the interface's font cap, under the Leader prefix")
         capture("settings-chord-prefix-leader-font-scale-2x")
 
@@ -505,6 +558,13 @@ class RemapScreenshotTest {
     /** A chord's down, the way a hardware keyboard's arrives on the Stage: through the focused control's ancestors, the Stage's preview first. */
     private fun chord(code: Int, meta: Int) {
         compose.onRoot().performKeyPress(KeyEvent(android.view.KeyEvent(0L, 0L, ACTION_DOWN, code, 0, meta)))
+        compose.waitForIdle()
+    }
+
+    /** A modifier tapped on its own: its down with [meta] as the key sets it, then its up with none. */
+    private fun tap(code: Int, meta: Int) {
+        compose.onRoot().performKeyPress(KeyEvent(android.view.KeyEvent(0L, 0L, ACTION_DOWN, code, 0, meta)))
+        compose.onRoot().performKeyPress(KeyEvent(android.view.KeyEvent(0L, 0L, ACTION_UP, code, 0, 0)))
         compose.waitForIdle()
     }
 

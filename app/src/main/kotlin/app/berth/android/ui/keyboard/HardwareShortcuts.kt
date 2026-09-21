@@ -91,9 +91,10 @@ interface StageShortcutActions {
  * keys are the shell's (Ctrl+F is readline's forward-char, every pager's forward key), and so is any
  * chord nobody bound. Two exceptions run the other way: a Leader chord nobody bound is still
  * swallowed, since the Leader is the key the app took for itself and the shell should never see
- * half of it; and in pass-through every key reaches the terminal (the Leader's own included) but
- * the chord that ends it. The first plain Ctrl+W of an install is held back for its hint
- * ([StageShortcutActions.ctrlWHint]); every one after closes the tab.
+ * half of it (which is why the Leader is Right Ctrl unless chosen otherwise: Right Alt types on an
+ * AltGr layout, [app.berth.domain.model.LeaderKey]); and in pass-through every key reaches the
+ * terminal (the Leader's own included) but the chord that ends it. The first plain Ctrl+W of an
+ * install is held back for its hint ([StageShortcutActions.ctrlWHint]); every one after closes the tab.
  */
 class HardwareShortcuts(
     private val tabs: TabShortcuts,
@@ -194,10 +195,9 @@ fun chordTitle(action: ChordAction): String = when (action) {
     ChordAction.SHORTCUT_SHEET -> "This sheet"
 }
 
-/** `Ctrl+Shift`, `Meta`, `the Leader, Right Alt`: the prefix as the sheet names it in a sentence. */
+/** `Ctrl+Shift`, `the Leader, Right Ctrl`: the prefix as the sheet names it in a sentence. */
 fun ChordTable.prefixPhrase(): String = when (settings.chordPrefix) {
     ChordPrefix.CTRL_SHIFT -> "Ctrl+Shift"
-    ChordPrefix.META -> "Meta, the keyboard\u2019s Cmd or Win key"
     ChordPrefix.LEADER -> "the Leader, ${settings.leaderKey.label()}, held with the key or tapped before it"
 }
 
@@ -206,9 +206,10 @@ fun ChordTable.prefixPhrase(): String = when (settings.chordPrefix) {
  * (spec C22, conflict detection): [ChordConflict.Shell] is allowed and the line is a warning.
  */
 fun conflictText(conflict: ChordConflict, chord: ChordKey): String = when (conflict) {
-    ChordConflict.Typing -> "${chord.label()} alone is typing. Hold Ctrl, Alt or Meta with it."
+    ChordConflict.Typing -> "${chord.label()} alone is typing. Hold Ctrl or Alt with it."
     is ChordConflict.Taken -> "${chord.label()} is taken: ${chordTitle(conflict.by)}."
     is ChordConflict.Strip -> "${chord.label()} is the strip\u2019s: ${conflict.what}."
+    is ChordConflict.System -> "${chord.label()} is Android\u2019s: ${conflict.what}."
     is ChordConflict.Signal -> "${chord.label()} is ${conflict.what}; the shell keeps it."
     is ChordConflict.Shell -> "Takes ${conflict.what} from the shell."
 }

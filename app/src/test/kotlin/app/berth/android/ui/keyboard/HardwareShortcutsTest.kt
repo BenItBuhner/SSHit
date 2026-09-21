@@ -35,6 +35,7 @@ import android.view.KeyEvent.META_SHIFT_ON
 import androidx.compose.ui.input.key.KeyEvent
 import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.domain.model.ChordAction
+import app.berth.domain.model.ChordConflict
 import app.berth.domain.model.ChordKey
 import app.berth.domain.model.ChordPrefix
 import app.berth.domain.model.ChordTable
@@ -50,8 +51,9 @@ import org.robolectric.annotation.Config
 
 /**
  * The Stage's chords of spec C22, as the Stage's key handler sees them: under the default prefix,
- * under Meta and a Leader, as rebound, and in pass-through; the strip's plain Ctrl+T and Ctrl+W on
- * either side of the readline setting, and the first Ctrl+W's hint (A44, A46).
+ * under a Leader (Right Ctrl as it comes, Right Alt chosen), as rebound, and in pass-through; a Meta
+ * chord as nobody's; the strip's plain Ctrl+T and Ctrl+W on either side of the readline setting,
+ * and the first Ctrl+W's hint (A44, A46).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -263,16 +265,30 @@ class HardwareShortcutsTest {
     // ---- the prefixes ----------------------------------------------------------------------------------------
 
     @Test
-    fun `under Meta every chord is Meta's, and the Ctrl+Shift chords fall to the terminal`() {
-        val table = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.META, ctrlWHintSeen = true))
-        assertTrue(handle(KEYCODE_F, META_META_ON, table))
-        assertTrue(handle(KEYCODE_T, META_META_ON, table))
-        assertTrue(handle(KEYCODE_SLASH, META_META_ON, table))
-        assertFalse(handle(KEYCODE_F, META_CTRL_ON or META_SHIFT_ON, table))
-        // The strip's browser conventions take no prefix and are untouched.
-        assertTrue(handle(KEYCODE_TAB, META_CTRL_ON, table))
-        assertTrue(handle(KEYCODE_T, META_CTRL_ON, table))
-        assertEquals(listOf("find", "new", "sheet", "step 1", "new"), calls)
+    fun `a Meta chord is nobody's, Android reading Meta before the app, so no action is ever bound to one, and what arrives reaches the terminal`() {
+        // Meta+F, Meta+T and Meta+/ are the system's on a device; the few Meta chords the system lets through are the terminal's.
+        assertFalse(handle(KEYCODE_F, META_META_ON))
+        assertFalse(handle(KEYCODE_T, META_META_ON))
+        assertFalse(handle(KEYCODE_SLASH, META_META_ON))
+        // The table refuses a remap onto one, so it can never come to be an action's.
+        assertTrue(defaults.conflict(ChordAction.FIND, ChordKey("F", meta = true)) is ChordConflict.System)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun `under the Leader as it comes, Right Ctrl, the Right Alt is the keyboard's own and its chords reach the terminal`() {
+        // The default Leader: nothing types with Right Ctrl, while Right Alt is AltGr on a German or Nordic layout.
+        val table = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, ctrlWHintSeen = true))
+        assertEquals(LeaderKey.RIGHT_CTRL, table.settings.leaderKey)
+        // AltGr+Q (`@` on a German layout) is the terminal's: the Right Alt is a modifier held alone, then a key under Alt, neither the app's.
+        assertFalse(handle(KEYCODE_ALT_RIGHT, META_ALT_ON or META_ALT_RIGHT_ON, table))
+        assertFalse(handle(KEYCODE_Q, META_ALT_ON or META_ALT_RIGHT_ON, table))
+        assertFalse(handle(KEYCODE_ALT_RIGHT, 0, table, action = ACTION_UP))
+        // The Leader itself works as the tapped and the held key.
+        assertTrue(handle(KEYCODE_CTRL_RIGHT, META_CTRL_ON or META_CTRL_RIGHT_ON, table))
+        assertTrue(handle(KEYCODE_F, META_CTRL_ON or META_CTRL_RIGHT_ON, table))
+        assertTrue(handle(KEYCODE_CTRL_RIGHT, 0, table, action = ACTION_UP))
+        assertEquals(listOf("find"), calls)
     }
 
     @Test
@@ -421,12 +437,19 @@ class HardwareShortcutsTest {
 
     @Test
     fun `the sheet's rows follow the prefix, and its notes name the Leader`() {
-        val meta = shortcutGroups(ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.META)))
-        assertEquals("Meta+F", meta.flatMap { it.entries }.first { it.chord == ChordAction.FIND }.keys)
-        assertEquals("Ctrl+T${CHORD_SEPARATOR}Meta+T", meta.flatMap { it.entries }.first { it.chord == ChordAction.NEW_TAB }.keys)
-        val leader = shortcutGroups(ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, leaderKey = LeaderKey.RIGHT_CTRL)))
+        val app = shortcutGroups(defaults)
+        val leader = shortcutGroups(ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)))
         assertEquals("Leader F", leader.flatMap { it.entries }.first { it.chord == ChordAction.FIND }.keys)
-        assertTrue(leader.last().note!!.contains("Right Ctrl"))
-        assertFalse(meta.last().note!!.contains("Leader"))
+        assertEquals("Ctrl+T${CHORD_SEPARATOR}Leader T", leader.flatMap { it.entries }.first { it.chord == ChordAction.NEW_TAB }.keys)
+        assertTrue(leader.last().note!!.contains("The Leader, Right Ctrl, never does"))
+        assertFalse(app.last().note!!.contains("Leader"))
+        assertEquals("the Leader, Right Ctrl, held with the key or tapped before it", ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)).prefixPhrase())
+    }
+
+    @Test
+    fun `the sheet's line for a chord the system takes says so, and the one for a bare key names the modifiers that are the app's to hold`() {
+        assertEquals("Alt+Tab is Android\u2019s: Recents.", conflictText(ChordConflict.System("Recents"), ChordKey("TAB", alt = true)))
+        assertEquals("Meta+F is Android\u2019s: the system reads Meta before any app.", conflictText(defaults.conflict(ChordAction.FIND, ChordKey("F", meta = true))!!, ChordKey("F", meta = true)))
+        assertEquals("N alone is typing. Hold Ctrl or Alt with it.", conflictText(ChordConflict.Typing, ChordKey("N")))
     }
 }

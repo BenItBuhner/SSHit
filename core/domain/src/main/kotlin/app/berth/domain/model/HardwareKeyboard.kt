@@ -15,30 +15,38 @@ enum class AltKeyMode { ESC_PREFIX, META }
 
 /**
  * What every app chord starts with (spec C22, A44). [CTRL_SHIFT] is the default, since a plain Ctrl
- * key is the shell's; [META] is the keyboard's Cmd or Win key; [LEADER] is one key of the keyboard's
- * own the app takes for itself ([HardwareKeyboardSettings.leaderKey]), held with the key or tapped
- * before it the way a multiplexer's prefix is. The strip's browser conventions (Ctrl+Tab, Ctrl+1…9,
- * Ctrl+T, Ctrl+W) take no prefix and are untouched by this.
+ * key is the shell's; [LEADER] is one key of the keyboard's own the app takes for itself
+ * ([HardwareKeyboardSettings.leaderKey]), held with the key or tapped before it the way a
+ * multiplexer's prefix is. The strip's browser conventions (Ctrl+Tab, Ctrl+1…9, Ctrl+T, Ctrl+W) take
+ * no prefix and are untouched by this. Meta, the keyboard's Cmd or Win key, is not a prefix: Android
+ * reads Meta chords before any app does (Meta+A is Assist, Meta+Tab Recents, Meta+/ the system's own
+ * shortcut sheet, Meta and a letter launches an app), and which letters has changed with each
+ * release, so a table of Meta chords would list keys that never arrive; [ChordConflict.System]
+ * refuses them one by one for the same reason.
  */
 @Serializable
 enum class ChordPrefix {
-    CTRL_SHIFT, META, LEADER;
+    CTRL_SHIFT, LEADER;
 
     /** [key] under this prefix: the chord an action has until it is remapped. */
     fun chord(key: String): ChordKey = when (this) {
         CTRL_SHIFT -> ChordKey(key, ctrl = true, shift = true)
-        META -> ChordKey(key, meta = true)
         LEADER -> ChordKey(key, leader = true)
     }
 }
 
 /**
  * The key that is the Leader under [ChordPrefix.LEADER]: a right-hand modifier, since the left ones
- * are how the shell gets Ctrl and Meta. Caps Lock is not offered: Android flips the lock itself
- * before an app sees the key.
+ * are how the shell gets Ctrl and Meta. [RIGHT_CTRL] is the default because nothing types with it.
+ * [RIGHT_ALT] is offered for a keyboard whose layout has no AltGr, and only offered: on a German,
+ * French, Nordic, Spanish or Polish layout Right Alt *is* AltGr, the key `@ { } [ ] \ | ~ €` are
+ * typed with, and a Leader there would read every one of them as half a chord. Caps Lock is not
+ * offered: Android delivers its press and release, but flips the caps lock for every app as it does,
+ * and nothing an app can call flips it back, so a tap on a Caps Lock Leader would leave the shell
+ * typing in capitals until the next tap.
  */
 @Serializable
-enum class LeaderKey { RIGHT_ALT, RIGHT_CTRL }
+enum class LeaderKey { RIGHT_CTRL, RIGHT_ALT }
 
 /**
  * Every chord the app takes under the prefix (spec C22's table), with the key each has until it is
@@ -69,7 +77,8 @@ enum class ChordAction(val defaultKey: String) {
  * One chord as the keyboard sends it: a [key] by its name (a letter or digit as itself, else one of
  * [ChordKey.NAMED]: `SLASH`, `EQUALS`, `TAB`, `F5`, …) and the modifiers held with it. [leader] is the
  * Leader (spec C22) held or tapped before the key, in place of a modifier; a chord stored with it
- * is only ever pressed while the prefix is [ChordPrefix.LEADER].
+ * is only ever pressed while the prefix is [ChordPrefix.LEADER]. [meta] is read so that a Meta chord
+ * the system lets through is the chord it is, but no action is ever bound to one ([ChordConflict.System]).
  */
 @Serializable
 data class ChordKey(
@@ -143,8 +152,8 @@ data class HardwareKeyboardSettings(
     val compactDeck: Boolean = true,
     /** What every app chord starts with (spec C22). */
     val chordPrefix: ChordPrefix = ChordPrefix.CTRL_SHIFT,
-    /** Which key is the Leader while [chordPrefix] is [ChordPrefix.LEADER]. */
-    val leaderKey: LeaderKey = LeaderKey.RIGHT_ALT,
+    /** Which key is the Leader while [chordPrefix] is [ChordPrefix.LEADER]; Right Ctrl, since Right Alt types on an AltGr layout. */
+    val leaderKey: LeaderKey = LeaderKey.RIGHT_CTRL,
     /** The chords the user rebound, whole chords in place of the prefix and the action's key; an action at its default is absent. */
     val remaps: Map<ChordAction, ChordKey> = emptyMap(),
     /** Whether the one-time hint after a first Ctrl+W closed a tab has been shown (spec C22, the readline setting). */
@@ -186,8 +195,9 @@ data class HardwareKeyboardSettings(
 
 /**
  * Why a chord cannot be an action's, or what taking it costs (spec C22, "conflict detection against
- * the shell-bound set"). [Taken], [Strip], [Signal] and [Typing] block; [Shell] is said and allowed,
- * since the readline keys are the user's to give up (the sheet already offers Ctrl+T and Ctrl+W).
+ * the shell-bound set"). [Taken], [Strip], [System], [Signal] and [Typing] block; [Shell] is said
+ * and allowed, since the readline keys are the user's to give up (the sheet already offers Ctrl+T
+ * and Ctrl+W).
  */
 sealed interface ChordConflict {
     val blocks: Boolean
@@ -199,6 +209,16 @@ sealed interface ChordConflict {
 
     /** A chord of the strip's that never reaches the shell: Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1…9, and Ctrl+T, Ctrl+W unless handed to the shell. */
     data class Strip(val what: String) : ChordConflict {
+        override val blocks: Boolean get() = true
+    }
+
+    /**
+     * A chord Android reads before the app sees it, so a row bound to it would never fire: Alt+Tab
+     * and Meta+Tab are Recents, and every Meta chord is the system's to hand out (Assist, Home, the
+     * notification shade, its shortcut sheet, an app per letter, and a different set each release),
+     * so none is one the sheet can promise. [what] is the system's use, or Meta's standing.
+     */
+    data class System(val what: String) : ChordConflict {
         override val blocks: Boolean get() = true
     }
 
@@ -240,15 +260,29 @@ class ChordTable(
 
     /**
      * What binding [action] to [chord] would collide with, or null when the chord is free. Another
-     * action's chord, the strip's, a signal and a bare key are refused; a key the shell has is named
-     * and left to the user.
+     * action's chord, the strip's, the system's, a signal and a bare key are refused; a key the
+     * shell has is named and left to the user.
      */
     fun conflict(action: ChordAction, chord: ChordKey): ChordConflict? {
         if (!chord.hasModifier && chord.key !in FUNCTION_KEYS) return ChordConflict.Typing
         actionFor(chord)?.takeIf { it != action }?.let { return ChordConflict.Taken(it) }
         stripChord(chord)?.let { return ChordConflict.Strip(it) }
+        systemChord(chord)?.let { return ChordConflict.System(it) }
         if (chord.ctrlOnly) SIGNALS[chord.key]?.let { return ChordConflict.Signal(it) }
         return shellKey(chord)?.let(ChordConflict::Shell)
+    }
+
+    /**
+     * The system's claim on [chord], as a noun phrase, or null. Alt+Tab, with or without Shift, is
+     * Recents on every Android, and Meta+Tab whatever else is held; a Leader that is Right Alt held
+     * with Tab is Alt+Tab to the system, which never lets the app see it. Every other Meta chord is
+     * refused as Meta's ([ChordConflict.System]).
+     */
+    private fun systemChord(chord: ChordKey): String? = when {
+        chord.key == "TAB" && chord.meta -> "Recents"
+        chord.key == "TAB" && !chord.ctrl && !chord.meta && (chord.alt || chord.leader && settings.leaderKey == LeaderKey.RIGHT_ALT) -> "Recents"
+        chord.meta -> "the system reads Meta before any app"
+        else -> null
     }
 
     private fun stripChord(chord: ChordKey): String? {

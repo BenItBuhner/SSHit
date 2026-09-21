@@ -19,6 +19,7 @@ import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.keyboard.ShortcutSheet
 import app.berth.android.ui.keyboard.label
+import app.berth.android.ui.keyboard.rememberRightAltTypes
 import app.berth.android.ui.theme.Berth
 import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.ChordAction
@@ -55,7 +56,9 @@ fun HardwareKeyboardPanel(vm: AppViewModel) {
             vm.updateHardwareKeyboard { it.withChordPrefix(prefix) }
         }
         if (settings.chordPrefix == ChordPrefix.LEADER) {
-            CyclePicker("Leader key", LeaderKey.entries, settings.leaderKey, { it.label() }, caption = "Held with the key, or tapped once before it", captionLines = 2) { key ->
+            // Right Alt is AltGr on most of the world's layouts (LeaderKey); when the attached keyboard's own map says so, the row says it beside the choice.
+            val typesWithRightAlt = rememberRightAltTypes()
+            CyclePicker("Leader key", LeaderKey.entries, settings.leaderKey, { it.label() }, caption = leaderKeyCaption(settings.leaderKey, typesWithRightAlt), captionLines = 2) { key ->
                 vm.updateHardwareKeyboard { it.copy(leaderKey = key) }
             }
         }
@@ -82,17 +85,31 @@ fun HardwareKeyboardPanel(vm: AppViewModel) {
 }
 
 /**
+ * Two lines beside the Leader key's value: how the key is pressed, or, when the attached keyboard's
+ * layout types with Right Alt, that it does, so that Right Alt is never taken there in silence
+ * ([LeaderKey]); the note under the rows says what AltGr is.
+ */
+private fun leaderKeyCaption(key: LeaderKey, typesWithRightAlt: Boolean): String = when {
+    !typesWithRightAlt -> "Held with the key, or tapped once before it"
+    key == LeaderKey.RIGHT_ALT -> "This keyboard types with Right Alt; pick Right Ctrl"
+    else -> "Tapped or held; this keyboard types with Right Alt"
+}
+
+/**
  * The line under the prefix rows, for what the prefix asks of the hands: nothing under Ctrl+Shift
- * and Meta beyond the way out of pass-through, and under the Leader how a tap and a hold differ and
- * that the key is no longer the shell's. The chords are the table's, so a remap reads true here.
+ * beyond the way out of pass-through, and under the Leader how a tap and a hold differ, that the
+ * key is no longer the shell's, and why the key is Right Ctrl on a layout that types with AltGr.
+ * The chords are the table's, so a remap reads true here.
  */
 private fun prefixNote(table: ChordTable): String {
     val settings = table.settings
     val passThrough = table.chord(ChordAction.PASS_THROUGH).label()
     return when (settings.chordPrefix) {
         ChordPrefix.LEADER ->
-            "${settings.leaderKey.label()} is the app\u2019s and never reaches the shell: hold it with a key, or tap it and the next key is the chord; a second tap or Esc lets a tap go. $passThrough sends every key to the shell until it is pressed again."
-        else -> "$passThrough sends every key to the shell, the chords included, until it is pressed again or its pill is tapped."
+            "${settings.leaderKey.label()} is the app\u2019s and never reaches the shell: hold it with a key, or tap it and the next key is the chord; a second tap or Esc lets a tap go. " +
+                "On a layout that types with AltGr (@, {, |, ~ on a German or Nordic keyboard) Right Alt is that key; pick Right Ctrl. " +
+                "$passThrough sends every key to the shell until it is pressed again."
+        ChordPrefix.CTRL_SHIFT -> "$passThrough sends every key to the shell, the chords included, until it is pressed again or its pill is tapped."
     }
 }
 
@@ -148,7 +165,6 @@ fun hostAltKeyLabel(mode: AltKeyMode?, appWide: AltKeyMode): String =
 /** The prefix as the picker's value: the keys, or the Leader by name. */
 fun chordPrefixLabel(prefix: ChordPrefix): String = when (prefix) {
     ChordPrefix.CTRL_SHIFT -> "Ctrl+Shift"
-    ChordPrefix.META -> "Meta"
     ChordPrefix.LEADER -> "Leader key"
 }
 

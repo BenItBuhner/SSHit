@@ -43,17 +43,53 @@ class HardwareKeyboardTest {
     }
 
     @Test
-    fun `the Meta and Leader prefixes move every chord at once, and the strip's Ctrl keys are not theirs to move`() {
-        val meta = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.META))
-        assertEquals(ChordKey("F", meta = true), meta.chord(ChordAction.FIND))
-        assertEquals("Meta+F", meta.chord(ChordAction.FIND).label())
-        assertNull(meta.actionFor(ChordKey("F", ctrl = true, shift = true)), "Ctrl+Shift+F is nobody's under Meta")
-        val leader = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, leaderKey = LeaderKey.RIGHT_CTRL))
+    fun `the Leader prefix moves every chord at once, and the strip's Ctrl keys are not its to move`() {
+        // Two prefixes: Meta is Android's (Assist, Recents, an app per letter, a different set each release) and is not offered.
+        assertEquals(listOf(ChordPrefix.CTRL_SHIFT, ChordPrefix.LEADER), ChordPrefix.entries.toList())
+        val leader = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER))
         assertEquals(ChordKey("T", leader = true), leader.chord(ChordAction.NEW_TAB))
         assertEquals("Leader T", leader.chord(ChordAction.NEW_TAB).label())
         assertEquals(ChordAction.NEW_TAB, leader.actionFor(ChordKey("T", leader = true)))
+        assertNull(leader.actionFor(ChordKey("F", ctrl = true, shift = true)), "Ctrl+Shift+F is nobody's under the Leader")
         // The browser conventions take no prefix, so the table never lists them; the strip keeps them whatever the prefix.
-        for (table in listOf(meta, leader)) assertNull(table.actionFor(ChordKey("TAB", ctrl = true)))
+        assertNull(leader.actionFor(ChordKey("TAB", ctrl = true)))
+    }
+
+    @Test
+    fun `the Leader is Right Ctrl unless chosen otherwise, since Right Alt is AltGr on most layouts`() {
+        assertEquals(LeaderKey.RIGHT_CTRL, HardwareKeyboardSettings().leaderKey)
+        assertEquals(LeaderKey.RIGHT_CTRL, HardwareKeyboardSettings().withChordPrefix(ChordPrefix.LEADER).leaderKey)
+        // Offered second, as the choice for a layout with no AltGr.
+        assertEquals(listOf(LeaderKey.RIGHT_CTRL, LeaderKey.RIGHT_ALT), LeaderKey.entries.toList())
+    }
+
+    @Test
+    fun `Android's chords are refused, Alt+Tab and Meta+Tab as Recents and every Meta chord as Meta's`() {
+        val table = ChordTable(HardwareKeyboardSettings())
+        assertEquals(ChordConflict.System("Recents"), table.conflict(ChordAction.FIND, ChordKey("TAB", alt = true)))
+        assertEquals(ChordConflict.System("Recents"), table.conflict(ChordAction.FIND, ChordKey("TAB", alt = true, shift = true)))
+        assertEquals(ChordConflict.System("Recents"), table.conflict(ChordAction.FIND, ChordKey("TAB", meta = true)))
+        assertEquals(ChordConflict.System("Recents"), table.conflict(ChordAction.FIND, ChordKey("TAB", meta = true, ctrl = true)))
+        // Ctrl+Alt+Tab is not the system's; it is the shell's Tab under modifiers.
+        assertEquals(ChordConflict.Shell("Meta and Ctrl+Tab"), table.conflict(ChordAction.FIND, ChordKey("TAB", ctrl = true, alt = true)))
+        // Meta and anything: the system reads it first, and which letters has changed with each release, so none is promised.
+        for (key in listOf("A", "F", "N", "SLASH", "SPACE", "ENTER", "BACKSPACE", "F5")) {
+            val conflict = table.conflict(ChordAction.FIND, ChordKey(key, meta = true))
+            assertEquals(ChordConflict.System("the system reads Meta before any app"), conflict, "Meta+$key")
+            assertTrue(conflict!!.blocks)
+        }
+        assertIs<ChordConflict.System>(table.conflict(ChordAction.FIND, ChordKey("F", meta = true, ctrl = true, shift = true)))
+        // A Right Alt Leader held with Tab is Alt+Tab to the system; a Right Ctrl Leader with Tab is the app's to take.
+        val rightAlt = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, leaderKey = LeaderKey.RIGHT_ALT))
+        val rightCtrl = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, leaderKey = LeaderKey.RIGHT_CTRL))
+        assertEquals(ChordConflict.System("Recents"), rightAlt.conflict(ChordAction.FIND, ChordKey("TAB", leader = true)))
+        assertEquals(ChordConflict.System("Recents"), rightAlt.conflict(ChordAction.FIND, ChordKey("TAB", leader = true, shift = true)))
+        assertNull(rightCtrl.conflict(ChordAction.FIND, ChordKey("TAB", leader = true)))
+        // No default is one of them: every action's chord under either prefix is free of the system.
+        for (prefix in ChordPrefix.entries) {
+            val defaults = ChordTable(HardwareKeyboardSettings(chordPrefix = prefix, leaderKey = LeaderKey.RIGHT_ALT))
+            for (action in ChordAction.entries) assertNull(defaults.conflict(action, defaults.chord(action)), "${defaults.chord(action).label()} under $prefix")
+        }
     }
 
     @Test
@@ -104,9 +140,8 @@ class HardwareKeyboardTest {
         assertEquals(ChordConflict.Shell("F5"), table.conflict(ChordAction.FIND, ChordKey("F5")))
         assertEquals(ChordConflict.Shell("Ctrl+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true)))
         assertEquals(ChordConflict.Shell("Ctrl+Shift+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true, shift = true)))
-        // Ctrl+Shift and a letter is the app's own family; Meta is the keyboard's spare key; the Leader is the app's by choice.
+        // Ctrl+Shift and a letter is the app's own family; the Leader is the app's by choice.
         assertNull(table.conflict(ChordAction.FIND, ChordKey("N", ctrl = true, shift = true)))
-        assertNull(table.conflict(ChordAction.FIND, ChordKey("N", meta = true)))
         assertNull(ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)).conflict(ChordAction.FIND, ChordKey("N", leader = true)))
     }
 
@@ -134,7 +169,7 @@ class HardwareKeyboardTest {
     fun `the settings document round-trips with its remaps, and a document from before these fields reads with their defaults`() {
         val settings = HardwareKeyboardSettings(
             chordPrefix = ChordPrefix.LEADER,
-            leaderKey = LeaderKey.RIGHT_CTRL,
+            leaderKey = LeaderKey.RIGHT_ALT,
             remaps = mapOf(ChordAction.FIND to ChordKey("N", ctrl = true), ChordAction.SPLIT to ChordKey("BACKSLASH", leader = true)),
             ctrlWHintSeen = true,
             volumeButtons = VolumeButtons.PAGES,
@@ -146,7 +181,7 @@ class HardwareKeyboardTest {
         val old = """{"altKey":"META","altKeyByHost":{"homelab":"ESC_PREFIX"},"compactDeck":false}"""
         val read = json.decodeFromString(HardwareKeyboardSettings.serializer(), old)
         assertEquals(ChordPrefix.CTRL_SHIFT, read.chordPrefix)
-        assertEquals(LeaderKey.RIGHT_ALT, read.leaderKey)
+        assertEquals(LeaderKey.RIGHT_CTRL, read.leaderKey)
         assertTrue(read.remaps.isEmpty())
         assertFalse(read.ctrlWHintSeen)
         assertEquals(VolumeButtons.OFF, read.volumeButtons)
