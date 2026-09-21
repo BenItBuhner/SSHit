@@ -68,6 +68,9 @@ class CrashReporter(
     private val crashHooks = CopyOnWriteArrayList<() -> Unit>()
     private var previous: Thread.UncaughtExceptionHandler? = null
 
+    /** Set on the crash path: this process is ending, and its own crash is the next launch's to show, not its. */
+    @Volatile private var crashed = false
+
     private val _reports = MutableStateFlow<List<Report>>(emptyList())
 
     /** Every report on disk, newest first. */
@@ -150,6 +153,7 @@ class CrashReporter(
 
     /** The crash path, on the thread that crashed: write, mark for the next launch, let the hooks save, then hand on. */
     internal fun onCrash(thread: Thread, error: Throwable) {
+        crashed = true
         BerthLog.e("Crash", "uncaught exception on thread ${thread.name}", error)
         val report = report(ReportKind.CRASH, "Uncaught exception on thread ${thread.name}", error, thread = thread)
         if (report != null) runCatching { synchronized(lock) { File(dir, UNREAD).writeText(report.id) } }
@@ -217,8 +221,11 @@ class CrashReporter(
         val list = files().mapNotNull { parse(it) }.sortedByDescending { it.at }
         _reports.value = list
         val unreadId = runCatching { File(dir, UNREAD).takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
-        _unread.value = unreadId?.let { id -> list.firstOrNull { it.id == id && it.kind == ReportKind.CRASH } }
-        if (unreadId != null && _unread.value == null) File(dir, UNREAD).delete()
+        val marked = unreadId?.let { id -> list.firstOrNull { it.id == id && it.kind == ReportKind.CRASH } }
+        // A process that has crashed shows nothing of its own crash, whenever the startup read lands against
+        // the crash path: the sheet is the next launch's, and the marker stays on disk for it.
+        _unread.value = if (crashed) null else marked
+        if (unreadId != null && marked == null) File(dir, UNREAD).delete()
     }
 
     private fun prune() {
