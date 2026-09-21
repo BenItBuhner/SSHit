@@ -1,8 +1,13 @@
 package app.berth.android.ui.terminal
 
+import android.view.KeyCharacterMap
 import android.view.KeyEvent.ACTION_DOWN
 import android.view.KeyEvent.ACTION_UP
 import android.view.KeyEvent.KEYCODE_0
+import android.view.KeyEvent.KEYCODE_2
+import android.view.KeyEvent.KEYCODE_3
+import android.view.KeyEvent.KEYCODE_4
+import android.view.KeyEvent.KEYCODE_5
 import android.view.KeyEvent.KEYCODE_7
 import android.view.KeyEvent.KEYCODE_8
 import android.view.KeyEvent.KEYCODE_9
@@ -13,9 +18,12 @@ import android.view.KeyEvent.KEYCODE_CTRL_RIGHT
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_ENTER
 import android.view.KeyEvent.KEYCODE_F
+import android.view.KeyEvent.KEYCODE_M
+import android.view.KeyEvent.KEYCODE_MINUS
 import android.view.KeyEvent.KEYCODE_PLUS
 import android.view.KeyEvent.KEYCODE_Q
 import android.view.KeyEvent.KEYCODE_RIGHT_BRACKET
+import android.view.KeyEvent.KEYCODE_SEMICOLON
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.META_ALT_LEFT_ON
 import android.view.KeyEvent.META_ALT_ON
@@ -31,6 +39,7 @@ import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.KeyLayout
 import app.berth.android.ui.keyboard.ShadowKeyLayout
 import app.berth.android.ui.keyboard.StageShortcutActions
+import app.berth.android.ui.keyboard.layoutTypesWithRightAlt
 import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.domain.model.ChordPrefix
 import app.berth.domain.model.ChordTable
@@ -41,6 +50,7 @@ import app.berth.terminal.TerminalKey
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,12 +59,14 @@ import org.robolectric.annotation.Config
 
 /**
  * Hardware keys reaching the terminal through [handleComposeKeyEvent] on a layout with a third
- * level: Right Alt is AltGr on a German keyboard, so AltGr+Q is `@` typed and not Meta+Q, while
- * Left Alt is Meta on every layout and Right Alt is Meta too on a key with nothing under it. The
- * layouts are the platform's own `.kcm` rows, answering through `KeyCharacterMap` itself
- * ([ShadowKeyLayout]), so Compose's `utf16CodePoint` says what the device's would. And beside AltGr
- * the Stage's Leader on Right Ctrl fires as it did (spec C22), where one chosen on Right Alt takes
- * the third level with it, the cost the Settings row names.
+ * level: Right Alt is AltGr on a German and on a Nordic keyboard, so AltGr+Q is `@` typed on the one
+ * and AltGr+2 on the other, not Meta+Q or Meta+2, while Left Alt is Meta on every layout and Right
+ * Alt is Meta too on a key with nothing under it, so a US keyboard's Right Alt reaches the terminal
+ * as Alt as it did. The layouts are the platform's own `.kcm` rows, answering through
+ * `KeyCharacterMap` itself ([ShadowKeyLayout]), so Compose's `utf16CodePoint` says what the
+ * device's would, and the Settings row's probe ([layoutTypesWithRightAlt]) reads the same map by
+ * the same rule. And beside AltGr the Stage's Leader on Right Ctrl fires as it did (spec C22),
+ * where one chosen on Right Alt takes the third level with it, the cost the Settings row names.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], shadows = [ShadowKeyLayout::class])
@@ -145,6 +157,62 @@ class TerminalInputAltGrTest {
             listOf("text:@", "text:{", "text:[", "text:]", "text:}", "text:\\", "text:\u1E9E", "text:|", "text:~", "text:\u20AC"),
             sink.sent,
         )
+    }
+
+    @Test
+    fun `on a Nordic layout, the Swedish and Finnish file, @ is on 2 and the brackets on the digits, a letter's third level types too, and a dead key under AltGr stays a dead key`() {
+        ShadowKeyLayout.layout = KeyLayout.NORDIC
+        assertEquals('@'.code, key(KEYCODE_2, altGr).utf16CodePoint)
+        type(KEYCODE_2, altGr)
+        type(KEYCODE_3, altGr) // £
+        type(KEYCODE_4, altGr) // $
+        type(KEYCODE_5, altGr) // €
+        type(KEYCODE_7, altGr)
+        type(KEYCODE_8, altGr)
+        type(KEYCODE_9, altGr)
+        type(KEYCODE_0, altGr)
+        type(KEYCODE_MINUS, altGr) // the + key: \
+        type(KEYCODE_PLUS, altGr) // the < key beside the left Shift: |
+        type(KEYCODE_E, altGr)
+        type(KEYCODE_M, altGr) // µ
+        // Q, `@` on the German layout, is â here, Â with Shift: a letter's third level is the layout's too.
+        type(KEYCODE_Q, altGr)
+        type(KEYCODE_Q, altGr or shift)
+        type(KEYCODE_SEMICOLON, altGr) // ø on the ö key
+        // The dead tilde on the ¨ key is a dead key still, left to the keyboard to compose, as a dead key under Alt was before.
+        assertFalse(type(KEYCODE_RIGHT_BRACKET, altGr))
+        // And Left Alt is Meta on the 2 that has `@` under Right Alt.
+        type(KEYCODE_2, leftAlt)
+        assertEquals(
+            listOf(
+                "text:@", "text:\u00A3", "text:\$", "text:\u20AC", "text:{", "text:[", "text:]", "text:}", "text:\\", "text:|",
+                "text:\u20AC", "text:\u00B5", "text:\u00E2", "text:\u00C2", "text:\u00F8", "chord:Alt+2",
+            ),
+            sink.sent,
+        )
+    }
+
+    @Test
+    fun `the Settings row's probe and the terminal read one rule, so a German and a Nordic keyboard type with Right Alt and their third level types, and a US keyboard's Right Alt reaches the terminal as Alt`() {
+        // The probe as the Settings row asks it of a keyboard, through the platform's own map.
+        fun keyboardTypesWithRightAlt(): Boolean = layoutTypesWithRightAlt(KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)::get)
+        for ((layout, atKey) in listOf(KeyLayout.GERMAN to KEYCODE_Q, KeyLayout.NORDIC to KEYCODE_2)) {
+            ShadowKeyLayout.layout = layout
+            assertTrue("$layout types with Right Alt", keyboardTypesWithRightAlt())
+            sink.sent.clear()
+            type(atKey, altGr)
+            type(KEYCODE_7, altGr)
+            type(KEYCODE_PLUS, altGr)
+            assertEquals("$layout", listOf("text:@", "text:{", "text:|"), sink.sent)
+        }
+        ShadowKeyLayout.layout = KeyLayout.US
+        assertFalse("a US keyboard does not type with Right Alt", keyboardTypesWithRightAlt())
+        sink.sent.clear()
+        type(KEYCODE_Q, altGr)
+        type(KEYCODE_2, altGr)
+        type(KEYCODE_7, altGr)
+        type(KEYCODE_C, altGr) // ç under either Alt on Generic.kcm: Meta+c to a terminal still
+        assertEquals(listOf("chord:Alt+q", "chord:Alt+2", "chord:Alt+7", "chord:Alt+c"), sink.sent)
     }
 
     @Test

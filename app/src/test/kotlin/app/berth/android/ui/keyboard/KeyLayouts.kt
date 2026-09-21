@@ -14,17 +14,24 @@ import android.view.KeyEvent.KEYCODE_8
 import android.view.KeyEvent.KEYCODE_9
 import android.view.KeyEvent.KEYCODE_A
 import android.view.KeyEvent.KEYCODE_APOSTROPHE
+import android.view.KeyEvent.KEYCODE_B
 import android.view.KeyEvent.KEYCODE_BACKSLASH
 import android.view.KeyEvent.KEYCODE_C
 import android.view.KeyEvent.KEYCODE_COMMA
+import android.view.KeyEvent.KEYCODE_D
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_EQUALS
+import android.view.KeyEvent.KEYCODE_F
+import android.view.KeyEvent.KEYCODE_G
 import android.view.KeyEvent.KEYCODE_GRAVE
+import android.view.KeyEvent.KEYCODE_H
 import android.view.KeyEvent.KEYCODE_I
+import android.view.KeyEvent.KEYCODE_K
 import android.view.KeyEvent.KEYCODE_LEFT_BRACKET
 import android.view.KeyEvent.KEYCODE_M
 import android.view.KeyEvent.KEYCODE_MINUS
 import android.view.KeyEvent.KEYCODE_N
+import android.view.KeyEvent.KEYCODE_O
 import android.view.KeyEvent.KEYCODE_PERIOD
 import android.view.KeyEvent.KEYCODE_PLUS
 import android.view.KeyEvent.KEYCODE_Q
@@ -33,7 +40,9 @@ import android.view.KeyEvent.KEYCODE_S
 import android.view.KeyEvent.KEYCODE_SEMICOLON
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_SPACE
+import android.view.KeyEvent.KEYCODE_T
 import android.view.KeyEvent.KEYCODE_U
+import android.view.KeyEvent.KEYCODE_V
 import android.view.KeyEvent.KEYCODE_Z
 import android.view.KeyEvent.META_ALT_LEFT_ON
 import android.view.KeyEvent.META_ALT_ON
@@ -56,10 +65,10 @@ import org.robolectric.util.ReflectionHelpers
  * the modifiers held. Every modifier a row names must be held; of Ctrl, Alt and Meta nothing else
  * may be, where `alt` is either Alt key and `ralt` the right one alone; the rows are tried from the
  * file's last to its first, so `shift+capslock` wins over `shift` and `shift+ralt` over `ralt`. So a
- * German layout's `ralt: '@'` on Q answers Right Alt and not Left, Generic.kcm's `alt: 'ç'` on C
- * answers either, and Q on that US layout answers nothing to Alt at all. Robolectric's own map knows
- * Shift and nothing else, and answers the base letter to any other modifier; [ShadowKeyLayout] puts
- * one of these in its place.
+ * German layout's `ralt: '@'` on Q answers Right Alt and not Left, a Nordic one's on 2 does, Generic.kcm's
+ * `alt: 'ç'` on C answers either, and Q on that US layout answers nothing to Alt at all. Robolectric's
+ * own map knows Shift and nothing else, and answers the base letter to any other modifier;
+ * [ShadowKeyLayout] puts one of these in its place.
  */
 class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
     /** A row of a key: the modifiers it names, as `KeyEvent` meta bits, and its character. */
@@ -102,6 +111,61 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
                 key(KEYCODE_COMMA, ',', ';'),
                 key(KEYCODE_PERIOD, '.', ':'),
                 key(KEYCODE_MINUS, '-', '_'),
+                key(KEYCODE_SPACE, ' '),
+            ),
+        )
+
+        /**
+         * keyboard_layout_swedish.kcm, which the Finnish file matches row for row, and whose third level
+         * the Norwegian and Danish files share on the digits, E and M (they move `\` and `|` and the
+         * letters beside Enter): the letters, the digits and the punctuation, with `@ £ $ €` on 2 3 4 5,
+         * `{ [ ] }` on 7 8 9 0, `\` on the `+` key (the file's `MINUS`), `|` on the `<` key beside the
+         * left Shift (its `PLUS`), `€` on E, `µ` on M, ø and æ on the ö and ä keys, the Sami letters on
+         * Q T I O A S D F G H K Z C V B N (â on Q, á on A, š on S), and a dead tilde on the `¨` key
+         * (its `RIGHT_BRACKET`), whose base and Shift are dead too. So `@` is on 2 here, where the
+         * German layout has it on Q, and Right Alt+Q is â.
+         */
+        val NORDIC: KeyLayout = KeyLayout(
+            "Nordic",
+            letters() + digits('!', '"', '#', '\u00A4', '%', '&', '/', '(', ')', '=') + listOf(
+                key(KEYCODE_2, '2', '"', ralt = '@'),
+                key(KEYCODE_3, '3', '#', ralt = '\u00A3'),
+                key(KEYCODE_4, '4', '\u00A4', ralt = '$'),
+                key(KEYCODE_5, '5', '%', ralt = '\u20AC'),
+                key(KEYCODE_7, '7', '/', ralt = '{'),
+                key(KEYCODE_8, '8', '(', ralt = '['),
+                key(KEYCODE_9, '9', ')', ralt = ']'),
+                key(KEYCODE_0, '0', '=', ralt = '}'),
+                key(KEYCODE_MINUS, '+', '?', ralt = '\\'),
+                key(KEYCODE_EQUALS, '\u0301', '\u0300'),
+                letter(KEYCODE_Q, 'q', 'Q', '\u00E2', '\u00C2'),
+                key(KEYCODE_E, 'e', 'E', ralt = '\u20AC'),
+                letter(KEYCODE_T, 't', 'T', '\u0167', '\u0166'),
+                letter(KEYCODE_I, 'i', 'I', '\u00EF', '\u00CF'),
+                letter(KEYCODE_O, 'o', 'O', '\u00F5', '\u00D5'),
+                key(KEYCODE_LEFT_BRACKET, '\u00E5', '\u00C5'),
+                key(KEYCODE_RIGHT_BRACKET, '\u0308', '\u0302', ralt = '\u0303'),
+                letter(KEYCODE_A, 'a', 'A', '\u00E1', '\u00C1'),
+                letter(KEYCODE_S, 's', 'S', '\u0161', '\u0160'),
+                letter(KEYCODE_D, 'd', 'D', '\u0111', '\u0110'),
+                letter(KEYCODE_F, 'f', 'F', '\u01E5', '\u01E4'),
+                letter(KEYCODE_G, 'g', 'G', '\u01E7', '\u01E6'),
+                letter(KEYCODE_H, 'h', 'H', '\u021F', '\u021E'),
+                letter(KEYCODE_K, 'k', 'K', '\u01E9', '\u01E8'),
+                letter(KEYCODE_SEMICOLON, '\u00F6', '\u00D6', '\u00F8', '\u00D8'),
+                letter(KEYCODE_APOSTROPHE, '\u00E4', '\u00C4', '\u00E6', '\u00C6'),
+                key(KEYCODE_BACKSLASH, '\'', '*'),
+                key(KEYCODE_PLUS, '<', '>', ralt = '|'),
+                letter(KEYCODE_Z, 'z', 'Z', '\u017E', '\u017D'),
+                letter(KEYCODE_C, 'c', 'C', '\u010D', '\u010C'),
+                letter(KEYCODE_V, 'v', 'V', '\u01EF', '\u01EE'),
+                letter(KEYCODE_B, 'b', 'B', '\u0292', '\u01B7'),
+                letter(KEYCODE_N, 'n', 'N', '\u014B', '\u014A'),
+                key(KEYCODE_M, 'm', 'M', ralt = '\u00B5'),
+                key(KEYCODE_COMMA, ',', ';'),
+                key(KEYCODE_PERIOD, '.', ':'),
+                key(KEYCODE_SLASH, '-', '_'),
+                key(KEYCODE_GRAVE, '\u00A7', '\u00BD'),
                 key(KEYCODE_SPACE, ' '),
             ),
         )
@@ -170,6 +234,15 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
                 if (shiftRalt != null) rows += Row(META_SHIFT_ON or META_ALT_RIGHT_ON, shiftRalt)
             }
             return code to rows
+        }
+
+        /**
+         * A letter with a third level, as the Nordic file writes one: the letter's rows, then `ralt`,
+         * `shift+ralt, capslock+ralt` its capital and `shift+capslock+ralt` the small one again.
+         */
+        private fun letter(code: Int, base: Char, upper: Char, ralt: Char, raltUpper: Char): Pair<Int, List<Row>> {
+            val (c, rows) = key(code, base, upper, ralt = ralt, shiftRalt = raltUpper)
+            return c to rows + Row(META_CAPS_LOCK_ON or META_ALT_RIGHT_ON, raltUpper) + Row(META_SHIFT_ON or META_CAPS_LOCK_ON or META_ALT_RIGHT_ON, ralt)
         }
 
         private const val EXACT = META_CTRL_ON or META_CTRL_LEFT_ON or META_CTRL_RIGHT_ON or

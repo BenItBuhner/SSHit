@@ -8,6 +8,7 @@ import android.view.KeyEvent.KEYCODE_BACKSLASH
 import android.view.KeyEvent.KEYCODE_C
 import android.view.KeyEvent.KEYCODE_GRAVE
 import android.view.KeyEvent.KEYCODE_MINUS
+import android.view.KeyEvent.KEYCODE_PLUS
 import android.view.KeyEvent.KEYCODE_Q
 import android.view.KeyEvent.KEYCODE_RIGHT_BRACKET
 import android.view.KeyEvent.KEYCODE_SLASH
@@ -33,16 +34,17 @@ import org.robolectric.shadows.ShadowInputDevice
 /**
  * Whether a keyboard's layout types with Right Alt (spec C22, the Leader key), read from the
  * layout's own map the way `KeyCharacterMap.get` answers it: a US layout has nothing under Right
- * Alt alone, an AltGr layout its third level. The maps are [KeyLayout]s, Android's `.kcm` rows
- * matched as the platform matches them, not Robolectric's own map, which knows Shift and nothing
- * else and answers the base letter to any other modifier; and with no keyboard attached nothing
- * types with Right Alt.
+ * Alt alone, a German or a Nordic layout its third level. The maps are [KeyLayout]s, Android's own
+ * `.kcm` rows matched as the platform matches them, not Robolectric's own map, which knows Shift and
+ * nothing else and answers the base letter to any other modifier; and with no keyboard attached
+ * nothing types with Right Alt.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AltGrTest {
     private val us = KeyLayout.US
     private val german = KeyLayout.GERMAN
+    private val nordic = KeyLayout.NORDIC
 
     @Test
     fun `the layouts answer as the platform's map does, a row's modifiers held, Ctrl Alt and Meta exact, the file's last row first`() {
@@ -82,8 +84,27 @@ class AltGrTest {
         assertEquals(0, german.get(KEYCODE_Q, META_ALT_LEFT_ON))
         assertEquals('@'.code, thirdLevelCharacter(german::get, KEYCODE_Q, META_ALT_RIGHT_ON))
         assertTrue(layoutTypesWithRightAlt(german::get))
-        // A map with the one Nordic `@` on 2 and nothing else under Right Alt types with it too.
-        val nordic = KeyLayout("Nordic", mapOf(KEYCODE_2 to listOf(KeyLayout.Row(0, '2'), KeyLayout.Row(META_ALT_RIGHT_ON, '@'))))
+        // A map with that one `@` and nothing else under Right Alt types with it too.
+        val oneKey = KeyLayout("one key", mapOf(KEYCODE_Q to listOf(KeyLayout.Row(0, 'q'), KeyLayout.Row(META_ALT_RIGHT_ON, '@'))))
+        assertTrue(layoutTypesWithRightAlt(oneKey::get))
+    }
+
+    @Test
+    fun `a Nordic layout, the Swedish and Finnish file, has its @ on 2 and a letter's third level on Q, under Right Alt alone, and types with it`() {
+        assertEquals('@'.code, nordic.get(KEYCODE_2, META_ALT_RIGHT_ON))
+        assertEquals('"'.code, nordic.get(KEYCODE_2, META_SHIFT_ON))
+        assertEquals(0, nordic.get(KEYCODE_2, META_ALT_LEFT_ON))
+        // Q is â here, Â with Shift and with Caps Lock, â again with both, as the file writes a letter's third level.
+        assertEquals('\u00E2'.code, nordic.get(KEYCODE_Q, META_ALT_RIGHT_ON))
+        assertEquals('\u00C2'.code, nordic.get(KEYCODE_Q, META_SHIFT_ON or META_ALT_RIGHT_ON))
+        assertEquals('\u00C2'.code, nordic.get(KEYCODE_Q, META_CAPS_LOCK_ON or META_ALT_RIGHT_ON))
+        assertEquals('\u00E2'.code, nordic.get(KEYCODE_Q, META_SHIFT_ON or META_CAPS_LOCK_ON or META_ALT_RIGHT_ON))
+        assertEquals(0, nordic.get(KEYCODE_Q, META_ALT_LEFT_ON))
+        // `|` on the `<` key and `\` on the `+` key, the two a shell wants most.
+        assertEquals('|'.code, nordic.get(KEYCODE_PLUS, META_ALT_RIGHT_ON))
+        assertEquals('\\'.code, nordic.get(KEYCODE_MINUS, META_ALT_RIGHT_ON))
+        assertEquals('@'.code, thirdLevelCharacter(nordic::get, KEYCODE_2, META_ALT_RIGHT_ON))
+        assertEquals('\u00E2'.code, thirdLevelCharacter(nordic::get, KEYCODE_Q, META_ALT_RIGHT_ON))
         assertTrue(layoutTypesWithRightAlt(nordic::get))
     }
 
