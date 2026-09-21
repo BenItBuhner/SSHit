@@ -18,43 +18,116 @@ import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.keyboard.ShortcutSheet
+import app.berth.android.ui.keyboard.label
+import app.berth.android.ui.keyboard.rememberRightAltTypes
 import app.berth.android.ui.theme.Berth
 import app.berth.domain.model.AltKeyMode
+import app.berth.domain.model.ChordAction
+import app.berth.domain.model.ChordPrefix
+import app.berth.domain.model.ChordTable
+import app.berth.domain.model.LeaderKey
+import app.berth.domain.model.VolumeButtons
 
 /**
- * Settings › Hardware keyboard (spec C22): what Alt does, whether the Deck a keyboard's user opens
- * from its strip is the compact row, whether readline's Ctrl+T and Ctrl+W belong to the shell, and
- * the shortcut sheet. One panel, registered
- * with one line in [SettingsScreen]; the sheet it opens is the same one Ctrl+Shift+/ opens on the
- * Stage, so the two never drift.
+ * Settings › Hardware keyboard (spec C22): what Alt does, what every app chord starts with and
+ * which key is the Leader when that is the prefix, whether the Deck a keyboard's user opens from
+ * its strip is the compact row, whether readline's Ctrl+T and Ctrl+W belong to the shell, and the
+ * shortcut sheet, which is the remap table (A44). One panel, registered with one line in
+ * [SettingsScreen]; the sheet it opens is the same one the sheet's chord opens on the Stage, so the
+ * two never drift, and every chord the panel names is read from the same [ChordTable] the Stage
+ * dispatches from, so a prefix or a remap changes the words here the moment it lands.
  */
 @Composable
 fun HardwareKeyboardPanel(vm: AppViewModel) {
     val c = Berth.colors
     val settings by vm.hardwareKeyboard.collectAsState()
     val ctrlTabKeys by vm.ctrlTabKeysReachTerminal.collectAsState()
+    val table = remember(settings, ctrlTabKeys) { ChordTable(settings, ctrlTabKeys) }
     var sheet by remember { mutableStateOf(false) }
-    if (sheet) ShortcutSheet(ctrlTabKeys, onDismiss = { sheet = false })
+    if (sheet) ShortcutSheet(table, onDismiss = { sheet = false }, onRemap = { action, chord -> vm.updateHardwareKeyboard { it.withRemap(action, chord) } })
 
     Panel(label = "Hardware keyboard") {
         CyclePicker("Alt key", AltKeyMode.entries, settings.altKey, ::altKeyLabel, caption = "What Alt does to a character; a host may say otherwise", captionLines = 2) { mode ->
             vm.updateHardwareKeyboard { it.copy(altKey = mode) }
         }
         PanelNote("Escape then the key is what every shell and editor reads as Meta. The eighth bit is for the few programs that want a Meta byte; keys outside ASCII still take the Escape prefix.")
+        // The prefix is one choice for every chord; a plain Ctrl key is never offered, since those are the shell's (C22).
+        CyclePicker("Chord prefix", ChordPrefix.entries, settings.chordPrefix, ::chordPrefixLabel, caption = "What every app chord starts with; plain Ctrl is the shell\u2019s", captionLines = 2) { prefix ->
+            vm.updateHardwareKeyboard { it.withChordPrefix(prefix) }
+        }
+        if (settings.chordPrefix == ChordPrefix.LEADER) {
+            // Right Alt is AltGr on most of the world's layouts (LeaderKey); when the attached keyboard's own map says so, the row says it beside the choice.
+            val typesWithRightAlt = rememberRightAltTypes()
+            CyclePicker("Leader key", LeaderKey.entries, settings.leaderKey, { it.label() }, caption = leaderKeyCaption(settings.leaderKey, typesWithRightAlt), captionLines = 2) { key ->
+                vm.updateHardwareKeyboard { it.copy(leaderKey = key) }
+            }
+        }
+        PanelNote(prefixNote(table))
         // A keyboard folds the Deck to its strip whatever this says (spec C4); the toggle is what the strip opens
         // to. The caption fits its two lines at 1× beside the switch; the panel's label says "keyboard" already.
         ToggleRow("Compact Deck when expanded", settings.compactDeck, { on -> vm.updateHardwareKeyboard { it.copy(compactDeck = on) } }, caption = "Opened from its strip, one row of modifiers and actions")
         // A title short enough to read whole beside its switch; the caption names the keys.
         ToggleRow("Readline keys go to the shell", ctrlTabKeys, { vm.setCtrlTabKeysReachTerminal(it) }, caption = "Ctrl+T and Ctrl+W: transpose and delete word")
-        PanelNote("Ctrl+Shift+T and Ctrl+Shift+W still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.")
+        PanelNote("${table.chord(ChordAction.NEW_TAB).label()} and ${table.chord(ChordAction.CLOSE_TAB).label()} still open and close tabs; Ctrl+Tab and Ctrl+1\u20269 always switch.")
+        val rebound = settings.remaps.size
         ListRow(
             "Keyboard shortcuts",
-            subtitle = "Ctrl+Shift+/ opens this from a session",
+            subtitle = buildString {
+                append("${table.chord(ChordAction.SHORTCUT_SHEET).label()} opens this from a session")
+                if (rebound > 0) append(" \u00B7 $rebound rebound")
+            },
             surface = Color.Transparent,
             minHeight = 44.dp,
             onClick = { sheet = true },
             trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
         )
+    }
+}
+
+/**
+ * Two lines beside the Leader key's value: how the key is pressed, or, when the attached keyboard's
+ * layout types with Right Alt, that it does, so that Right Alt is never taken there in silence
+ * ([LeaderKey]); the note under the rows says what AltGr is.
+ */
+private fun leaderKeyCaption(key: LeaderKey, typesWithRightAlt: Boolean): String = when {
+    !typesWithRightAlt -> "Held with the key, or tapped once before it"
+    key == LeaderKey.RIGHT_ALT -> "This keyboard types with Right Alt; pick Right Ctrl"
+    else -> "Tapped or held; this keyboard types with Right Alt"
+}
+
+/**
+ * The line under the prefix rows, for what the prefix asks of the hands: nothing under Ctrl+Shift
+ * beyond the way out of pass-through, and under the Leader how a tap and a hold differ, that the
+ * key is no longer the shell's, and why the key is Right Ctrl on a layout that types with AltGr.
+ * The chords are the table's, so a remap reads true here.
+ */
+private fun prefixNote(table: ChordTable): String {
+    val settings = table.settings
+    val passThrough = table.chord(ChordAction.PASS_THROUGH).label()
+    return when (settings.chordPrefix) {
+        ChordPrefix.LEADER ->
+            "${settings.leaderKey.label()} is the app\u2019s and never reaches the shell: hold it with a key, or tap it and the next key is the chord; a second tap or Esc lets a tap go. " +
+                "On a layout that types with AltGr (@, {, |, ~ on a German or Nordic keyboard) Right Alt is that key; pick Right Ctrl. " +
+                "$passThrough sends every key to the shell until it is pressed again."
+        ChordPrefix.CTRL_SHIFT -> "$passThrough sends every key to the shell, the chords included, until it is pressed again or its pill is tapped."
+    }
+}
+
+/**
+ * Settings › Volume buttons (spec A43, C20): what the phone's two buttons do while a shell tab is on
+ * stage, off by default. Its own panel beside the keyboard's, the way C20 lists it, since a phone
+ * has these buttons with no keyboard attached and the panel's label is what a user scanning for
+ * them reads.
+ */
+@Composable
+fun VolumeButtonsPanel(vm: AppViewModel) {
+    val settings by vm.hardwareKeyboard.collectAsState()
+    Panel(label = "Volume buttons") {
+        // A title short enough to stand beside the longest value; the caption says what the value's pair is, the note where else the buttons stay the volume's.
+        CyclePicker("On a shell tab", VolumeButtons.entries, settings.volumeButtons, ::volumeButtonsLabel, caption = "What Volume Up, then Volume Down, send", captionLines = 2) { choice ->
+            vm.updateHardwareKeyboard { it.copy(volumeButtons = choice) }
+        }
+        PanelNote("Every other screen, and a Files tab, leave them to the volume. A held button repeats the way a held key does.")
     }
 }
 
@@ -88,3 +161,18 @@ fun altKeyLabel(mode: AltKeyMode): String = when (mode) {
 
 fun hostAltKeyLabel(mode: AltKeyMode?, appWide: AltKeyMode): String =
     if (mode == null) "Inherit (${altKeyLabel(appWide).lowercase()})" else altKeyLabel(mode)
+
+/** The prefix as the picker's value: the keys, or the Leader by name. */
+fun chordPrefixLabel(prefix: ChordPrefix): String = when (prefix) {
+    ChordPrefix.CTRL_SHIFT -> "Ctrl+Shift"
+    ChordPrefix.LEADER -> "Leader key"
+}
+
+/** The volume setting as the picker's value: what the two buttons send, up then down. */
+fun volumeButtonsLabel(setting: VolumeButtons): String = when (setting) {
+    VolumeButtons.OFF -> "Off"
+    VolumeButtons.ARROWS -> "Up and Down arrows"
+    VolumeButtons.PAGES -> "Page Up and Down"
+    VolumeButtons.FONT_SIZE -> "Font size"
+    VolumeButtons.INTERRUPT_AND_ENTER -> "Ctrl+C and Enter"
+}

@@ -97,10 +97,12 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
 import app.berth.android.ui.files.FilesTabBody
+import app.berth.android.ui.keyboard.BindVolumeButtons
 import app.berth.android.ui.keyboard.FoldDeckOnHardwareKeyboard
 import app.berth.android.ui.keyboard.HardwareShortcuts
 import app.berth.android.ui.keyboard.KeepStageFocus
 import app.berth.android.ui.keyboard.LocalWindowFocus
+import app.berth.android.ui.keyboard.PassThroughPill
 import app.berth.android.ui.keyboard.ShortcutSheet
 import app.berth.android.ui.keyboard.LocalPaneActions
 import app.berth.android.ui.keyboard.StageFocus
@@ -126,6 +128,7 @@ import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.domain.model.ChordTable
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
@@ -180,14 +183,24 @@ fun StageScreen(
     val activeId by vm.activeTabId.collectAsState()
     val restored by vm.restored.collectAsState()
     val ctrlTabKeysReachTerminal by vm.ctrlTabKeysReachTerminal.collectAsState()
+    val hardwareKeyboard by vm.hardwareKeyboard.collectAsState()
+    // The app's chords as the settings have them (spec C22): under the prefix, as rebound, and with Ctrl+T and Ctrl+W the strip's or the shell's.
+    val table = remember(hardwareKeyboard, ctrlTabKeysReachTerminal) { ChordTable(hardwareKeyboard, ctrlTabKeysReachTerminal) }
     val strip = rememberTabStripState()
     var deckVisible by rememberSaveable { mutableStateOf(true) }
     var layerIndex by rememberSaveable { mutableIntStateOf(0) }
     var shortcutSheet by rememberSaveable { mutableStateOf(false) }
+    // Pass-through (spec C22, A46) is the Stage's across its tabs, until its chord or its pill ends it.
+    var passThroughMode by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val haptics = rememberDeckHaptics()
     // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
     val panes = LocalPaneActions.current
+    // The chords beyond the strip's act on the terminal tab on stage (spec C22), and only on one
+    // whose kind is a shell: keyed off TabKind like the overflow, so a Files tab, a tab kind with
+    // no terminal behind it, or an empty stage takes the chord and does nothing with it, since
+    // none of them means anything typed anywhere else. The volume buttons (spec A43) are bound to the same tab.
+    val session = (tab as? TerminalSession)?.takeIf { it.kind == TabKind.Ssh }
     val shortcuts = remember(vm, actions, tab, tools, panes, focus) {
         val tabs = TabShortcuts(
             step = vm::stepTab,
@@ -195,17 +208,12 @@ fun StageScreen(
                 val list = vm.stripSlots.value
                 (if (index < 0) list.lastOrNull() else list.getOrNull(index))?.let { actions.activate(it.id) }
             },
-            newTab = actions::newTab,
-            closeActive = { vm.activeTabId.value?.let(actions::close) },
-            switcher = actions::openSwitcher,
-            jumpToUnread = { vm.jumpToUnread() },
         )
-        // The chords beyond the strip's act on the terminal tab on stage (spec C22), and only on one
-        // whose kind is a shell: keyed off TabKind like the overflow, so a Files tab, a tab kind with
-        // no terminal behind it, or an empty stage takes the chord and does nothing with it, since
-        // none of them means anything typed anywhere else.
-        val session = (tab as? TerminalSession)?.takeIf { it.kind == TabKind.Ssh }
         val stage = object : StageShortcutActions {
+            override fun newTab() { actions.newTab() }
+            override fun closeTab() { vm.activeTabId.value?.let(actions::close) }
+            override fun tabSwitcher() { actions.openSwitcher() }
+            override fun jumpToUnread() { vm.jumpToUnread() }
             override fun find() { if (session != null) tools.openSearch() }
             override fun copy() {
                 session ?: return
@@ -246,10 +254,26 @@ fun StageScreen(
                     true
                 }
             }
+            override var passThrough: Boolean
+                get() = passThroughMode
+                set(value) { passThroughMode = value }
+            override fun ctrlWHint(): Boolean {
+                // Only a live shell has anything to lose to a Ctrl+W meant as readline's delete-word; a Files tab or a detached one closes as asked.
+                if (session?.state != SessionState.LIVE) return false
+                tools.hint = StageHint("Ctrl+W closes the tab here", "Shell keeps it") {
+                    vm.setCtrlTabKeysReachTerminal(true)
+                    tools.notice = "Ctrl+T and Ctrl+W go to the shell"
+                }
+                vm.updateHardwareKeyboard { it.copy(ctrlWHintSeen = true) }
+                return true
+            }
         }
         HardwareShortcuts(tabs, stage)
     }
-    if (shortcutSheet) ShortcutSheet(ctrlTabKeysReachTerminal, panes = panes.available, onDismiss = { shortcutSheet = false })
+    if (shortcutSheet) {
+        ShortcutSheet(table, panes = panes.available, onDismiss = { shortcutSheet = false }, onRemap = { action, chord -> vm.updateHardwareKeyboard { it.withRemap(action, chord) } })
+    }
+    BindVolumeButtons(session, hardwareKeyboard.volumeButtons, onFontStep = shortcuts.stage::fontStep)
     // A hardware keyboard folds the Deck to its strip (spec C4), once on attach and back on removal;
     // the Stage's visibility, so every tab's Deck folds and the user's own choice holds between.
     val hardwareKeyboardAttached = rememberHardwareKeyboardAttached()
@@ -282,7 +306,7 @@ fun StageScreen(
             // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .then(if (ownWindow != null) Modifier.windowFocus(ownWindow) else Modifier)
-            .onPreviewKeyEvent { shortcuts.handle(it, ctrlTabKeysReachTerminal) },
+            .onPreviewKeyEvent { shortcuts.handle(it, table) },
     ) {
         StageToolbar(tools, tab as? TerminalSession, focus) {
             TabHeader(
@@ -295,6 +319,8 @@ fun StageScreen(
                 // Ctrl+Shift+S lands on the active tab, or the first in view, in or out of touch mode.
                 entry = focus.entry(StageRegion.Strip),
                 trailing = {
+                    // Pass-through's one sign (spec C22, A46), and its touch way out.
+                    if (passThroughMode) PassThroughPill(onEnd = { passThroughMode = false })
                     if (slots.isNotEmpty()) {
                         // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
                         val lit by vm.attentionTabIds.collectAsState()

@@ -7,6 +7,7 @@ import android.view.KeyEvent.ACTION_UP
 import android.view.KeyEvent.KEYCODE_D
 import android.view.KeyEvent.KEYCODE_E
 import android.view.KeyEvent.KEYCODE_K
+import android.view.KeyEvent.KEYCODE_P
 import android.view.KeyEvent.KEYCODE_S
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_TAB
@@ -60,6 +61,7 @@ import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.a11y.TerminalTag
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
@@ -111,8 +113,8 @@ import java.util.concurrent.TimeUnit
  * and actions, the same with the compact setting off and the whole Deck standing, the focus a
  * keyboard shows on a tab of the strip, on a Deck key and on a Settings row, the shortcut sheet
  * Ctrl+Shift+/ opens, Settings › Hardware keyboard with its Alt key menu, a host's own Alt key in
- * its editor; and on a tablet, two panes under one compact Deck with the sheet as a dialog naming
- * the pane chords. The phone's Stage rides a live session with nowhere to send (the way
+ * its editor; and on a tablet, two panes under one compact Deck, pass-through's pill in the strip
+ * over both, and the sheet as a dialog naming the pane chords. The phone's Stage rides a live session with nowhere to send (the way
  * `TerminalToolsScreenshotTest` does), so those frames need no sshd; the tablet's two panes are two
  * shells on the local sshd, skipped unless `SSH_TEST_*` is set.
  */
@@ -210,13 +212,14 @@ class HardwareKeyboardScreenshotTest {
 
     /**
      * C22's table (design review, item 4): a row per chord with the action as its title and the keys
-     * trailing in mono, one line each on a 40 dp row, the reader hearing the action first; and the
-     * whole sheet under two screens, where the two-line rows ran to four.
+     * trailing in mono, one line each on a row of a touch target's 48 dp (the app's rows are the
+     * remap table's controls, and the fixed rows keep step), the reader hearing the action first;
+     * and the whole sheet under two screens, where the two-line rows ran to four.
      */
     private fun assertShortcutTable() {
         val row = compose.onNode(hasContentDescription("Next tab, Ctrl+Tab")).fetchSemanticsNode()
         val density = compose.density.density
-        assertTrue("a one-line row, ${row.size.height / density} dp", row.size.height / density <= 44f)
+        assertTrue("a one-line row, ${row.size.height / density} dp", row.size.height / density <= TouchTargetSize.value)
         // The row merges its texts for the reader; the two texts are found under it in the unmerged tree.
         val title = compose.onNode(hasText("Next tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()
         val keys = compose.onNode(hasText("Ctrl+Tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()
@@ -332,6 +335,19 @@ class HardwareKeyboardScreenshotTest {
         assertEquals(1, compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Paste", substring = true)).fetchSemanticsNodes().size)
         compose.onAllNodes(hasContentDescription("Close pane")).assertCountEquals(1)
         capture("stage-panes-hardware-keyboard")
+
+        // Ctrl+Shift+P on a split: pass-through is the Stage's, the pane layer being a layer over the one
+        // Stage and not a second one, so it holds for both panes (the keys go to the focused pane's
+        // terminal) and its one pill stands in the strip they share, beside the count tile (spec A46).
+        chord(KEYCODE_P, META_CTRL_ON or META_SHIFT_ON)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag(PassThroughPillTag).fetchSemanticsNodes().size == 1 }
+        compose.onAllNodes(hasContentDescription(", right pane", substring = true)).assertCountEquals(1)
+        compose.onAllNodes(hasContentDescription(", left pane", substring = true)).assertCountEquals(1)
+        awaitFocused(hasTestTag(TerminalTag) and hasAnyAncestor(hasContentDescription(", right pane", substring = true)), "the focused pane's terminal, under pass-through")
+        capture("stage-panes-pass-through")
+        // Its own chord ends it, and the sheet's chord is the app's again.
+        chord(KEYCODE_P, META_CTRL_ON or META_SHIFT_ON)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag(PassThroughPillTag).fetchSemanticsNodes().isEmpty() }
 
         // Ctrl+Shift+/ on a window that fits two panes: the sheet is a dialog, and it names the pane chords.
         chord(KEYCODE_SLASH, META_CTRL_ON or META_SHIFT_ON)
