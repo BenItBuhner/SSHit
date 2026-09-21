@@ -2,7 +2,6 @@ package app.berth.android.ui.terminal
 
 import android.content.Context
 import android.graphics.Paint
-import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -38,8 +37,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.core.content.res.ResourcesCompat
-import app.berth.android.R
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.rememberAccessibilityEnabled
@@ -70,8 +67,10 @@ import kotlin.math.roundToInt
 
 /**
  * Cell geometry and the four text paints for one font configuration. Typefaces come from a
- * process-wide cache by family, so a pinch that steps the size a dozen times never reads a font
- * file twice; instances themselves are cached by [TerminalPaintsCache] and shared.
+ * process-wide cache by family ([TypefaceCache]), so a pinch that steps the size a dozen times
+ * never reads a font file twice; instances themselves are cached by [TerminalPaintsCache] and
+ * shared. A family the setting names but the phone no longer has (an import since removed) draws
+ * as the default family, and the Nerd Font fallback (spec C20) sits behind whichever family it is.
  */
 class TerminalPaints(context: Context, font: TerminalFont, density: Float, fontScale: Float) {
     val regular = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
@@ -85,7 +84,7 @@ class TerminalPaints(context: Context, font: TerminalFont, density: Float, fontS
     val baseline: Float
 
     init {
-        val faces = TypefaceCache.forFamily(context, font.family)
+        val faces = TypefaceCache.forFamily(context, font.resolvedFamily(context), font.nerdFontFallback)
         val px = font.sizeSp.coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP) * density * fontScale
         regular.typeface = faces[0]
         bold.typeface = faces[1]
@@ -115,32 +114,6 @@ class TerminalPaints(context: Context, font: TerminalFont, density: Float, fontS
     }
 }
 
-/** The regular, bold, italic and bold-italic faces of each family, read from resources once per process. */
-private object TypefaceCache {
-    private val faces = HashMap<String, List<Typeface>>()
-
-    @Synchronized
-    fun forFamily(context: Context, family: String): List<Typeface> = faces.getOrPut(family) { load(context.applicationContext, family) }
-
-    private fun load(context: Context, family: String): List<Typeface> {
-        fun res(id: Int, fallback: Typeface): Typeface = runCatching { ResourcesCompat.getFont(context, id) }.getOrNull() ?: fallback
-        return when (family) {
-            "JetBrains Mono" -> listOf(
-                res(R.font.jetbrains_mono_regular, Typeface.MONOSPACE),
-                res(R.font.jetbrains_mono_bold, Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)),
-                res(R.font.jetbrains_mono_italic, Typeface.create(Typeface.MONOSPACE, Typeface.ITALIC)),
-                res(R.font.jetbrains_mono_bold_italic, Typeface.create(Typeface.MONOSPACE, Typeface.BOLD_ITALIC)),
-            )
-            else -> listOf(
-                Typeface.MONOSPACE,
-                Typeface.create(Typeface.MONOSPACE, Typeface.BOLD),
-                Typeface.create(Typeface.MONOSPACE, Typeface.ITALIC),
-                Typeface.create(Typeface.MONOSPACE, Typeface.BOLD_ITALIC),
-            )
-        }
-    }
-}
-
 /**
  * [TerminalPaints] by font, density and font scale, most recently used kept: a pinch steps the
  * size up and back down through sizes already measured, and every canvas at one size shares one
@@ -157,19 +130,28 @@ object TerminalPaintsCache {
     fun get(context: Context, font: TerminalFont, density: Float, fontScale: Float): TerminalPaints =
         lru.getOrPut(Key(font, density, fontScale)) { TerminalPaints(context, font, density, fontScale) }
 
+    /** Forgets every set: the families on disk changed (an import landed or went), so a set may hold the wrong faces. */
+    @Synchronized
+    fun clear() {
+        lru.clear()
+    }
+
     private const val CAPACITY = 12
 }
 
 /**
  * The cached [TerminalPaints] for [font] at the current density and the terminal's own scale: 1,
- * or the system's font scale when the font follows it (spec A11).
+ * or the system's font scale when the font follows it (spec A11). Re-read when the families on
+ * the phone change ([TerminalFonts.version]), so a terminal set in a family being imported picks
+ * up the face the moment it lands.
  */
 @Composable
 fun rememberTerminalPaints(font: TerminalFont): TerminalPaints {
     val context = LocalContext.current
     val density = LocalDensity.current.density
     val scale = terminalFontScale(font)
-    return remember(font, density, scale) { TerminalPaintsCache.get(context, font, density, scale) }
+    val version = TerminalFonts.version
+    return remember(font, density, scale, version) { TerminalPaintsCache.get(context, font, density, scale) }
 }
 
 /** How far the view is scrolled into history, in lines; 0 is the live screen. */
