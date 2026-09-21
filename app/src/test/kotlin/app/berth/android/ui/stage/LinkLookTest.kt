@@ -124,6 +124,22 @@ class LinkLookTest {
     }
 
     @Test
+    fun `a claim that is the parent of the link's host is the same site, and a stranger's host wearing it is not`() {
+        assertPlain("https://gist.github.com/x", "github.com", "Shown as \u201Cgithub.com\u201D, goes to gist.github.com")
+        assertPlain("https://www.docs.github.com/", "github.com", "Shown as \u201Cgithub.com\u201D, goes to www.docs.github.com")
+        // The host must end in `.` and the claim, not merely in the claim's letters: evil.example can carry google.com, not be under it.
+        assertWarns("https://google.com.evil.example/", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to google.com.evil.example")
+        assertWarns("https://notgithub.com/", "github.com", "Shown as \u201Cgithub.com\u201D, but goes to notgithub.com")
+    }
+
+    @Test
+    fun `an IPv6 literal keeps its brackets`() {
+        assertPlain("https://[::1]:8080/", "the dashboard", "Shown as \u201Cthe dashboard\u201D, goes to [::1]")
+        assertPlain("https://[2001:db8::1]/x", "https://[2001:db8::1]/x", "Goes to [2001:db8::1]")
+        assertEquals("[2001:db8::1]", LinkLook.hostOf("http://user@[2001:DB8::1]:80/"))
+    }
+
+    @Test
     fun `a long text is cut in the caption, the address panel showing the rest`() {
         val text = "https://accounts.google.com/signin/v2/identifier?service=mail&passive=true"
         assertWarns("https://evil.example/", text, "Shown as \u201C${text.take(40)}\u2026\u201D, but goes to evil.example")

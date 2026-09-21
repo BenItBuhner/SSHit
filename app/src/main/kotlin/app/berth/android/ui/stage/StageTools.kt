@@ -656,7 +656,9 @@ fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, ha
  * (`notes.txt`, `main.py`, `Node.js`, `report.pdf` are names, not sites) and is not a segment of
  * the link's own path, since a text that appears in the address is the address naming itself
  * (a directory listing's every entry). Version numbers and decimals end in digits and claim
- * nothing. The query is not exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
+ * nothing. A claim is the link's own when it is the link's host, give or take `www.`, or a parent
+ * of it (`github.com` over gist.github.com), which no stranger's host can be. The query is not
+ * exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
  * link [path] is the file's path, percent-decoded. An `http`, `https` or `file` address is read
  * the way the browser and Android's `Uri` that will open it read it, a `\` as a `/`, so its
  * authority ends at the first of either and `https://evil.example\@google.com/` goes to
@@ -676,7 +678,7 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
     }
 
     companion object {
-        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?([^/?#:;\s]+)""")
+        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?(\[[^\]]*\]|[^/?#:;\s]+)""")
         private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#].*)?$""")
         private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
         private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
@@ -746,8 +748,19 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
             if (namesItself) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false, posture = posture, path = path)
             // A mail address as the text claims that mailbox; the same one named itself above, so what is left is another's.
             val claim = hostClaim(shown, url) ?: EMAIL.matchEntire(shown)?.value?.lowercase()?.takeIf { mailbox != null }
-            val deceptive = claim != null && (to == null || claim.removePrefix("www.") != to.removePrefix("www."))
+            val deceptive = claim != null && (to == null || !sameSite(claim, to))
             return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, path = path)
+        }
+
+        /**
+         * [claim] names the site the link goes [to]: that host, give or take `www.`, or a parent of it,
+         * since `github.com` over gist.github.com is no lie and an attacker cannot make evil.example
+         * end in `.google.com`, only carry it. One way: a claim deeper than the host is another host.
+         */
+        private fun sameSite(claim: String, to: String): Boolean {
+            val c = claim.removePrefix("www.")
+            val t = to.removePrefix("www.")
+            return c == t || t.endsWith(".$c")
         }
 
         /**
