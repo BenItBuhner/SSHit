@@ -186,7 +186,7 @@ private fun RailSlot(
             .clearAndSetSemantics {
                 contentDescription = description
                 role = Role.Button
-                if (selected) this.selected = true
+                this.selected = selected
             },
         contentAlignment = Alignment.Center,
     ) {

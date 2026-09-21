@@ -177,7 +177,7 @@ fun SettingsScreen(
                     "Two rows on a large screen",
                     deckSettings.twoRowsOnLargeScreens,
                     { vm.setDeckSettings(deckSettings.copy(twoRowsOnLargeScreens = it)) },
-                    caption = "A second row, Nav/Fn under Base, on a tablet or a fold open; off, the layout's own rows everywhere",
+                    caption = "Nav/Fn under Base on a tablet or a fold open; off, the layout's own rows",
                 )
                 // D3 levels; Subtle keeps the key taps and drops the rest of the vocabulary.
                 CyclePicker("Haptics", HapticLevel.entries, haptics, { it.name.lowercase().replaceFirstChar(Char::uppercase) }) { vm.setHapticLevel(it) }

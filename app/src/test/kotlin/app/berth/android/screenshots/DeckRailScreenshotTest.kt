@@ -19,6 +19,8 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -165,8 +167,8 @@ class DeckRailScreenshotTest {
         // A glyph opens the screen it names; the column stays, since there is nothing to close.
         compose.onNodeWithContentDescription("Hosts").performClick()
         waitForText("Hosts")
-        compose.onNodeWithText("build box").assertIsDisplayed()
-        theNarrowRail()
+        compose.onAllNodesWithText("build box").onFirst().assertIsDisplayed()
+        theNarrowRail(besideTheStage = false)
         capture("medium-rail-hosts")
     }
 
@@ -362,6 +364,7 @@ class DeckRailScreenshotTest {
         compose.onNodeWithText("Look").performClick()
         waitForText("Theme")
         compose.onNodeWithText("Inherit is Settings \u203A Terminal, or the group's theme where the group has one. A pick here is this host's, on every tab it opens.").assertIsDisplayed()
+        compose.assertNoTextCut("the Look sheet")
         capture("look-sheet")
 
         val gruvbox = TerminalTheme.builtIns.first { it.name == "Gruvbox Dark" }
@@ -392,6 +395,8 @@ class DeckRailScreenshotTest {
         compose.waitForIdle()
         compose.onNodeWithText("Two rows on a large screen").assertIsDisplayed()
         compose.onNodeWithText("Swipe down on a Deck key").assertIsDisplayed()
+        // Each caption fits its two lines at 1× (A11), so the cap's extra lines never cut it either.
+        compose.assertNoTextCut("Settings \u203A Deck and Gestures")
         capture("settings-deck-gestures")
 
         compose.onNodeWithText("Swipe down on a Deck key").performClick()
@@ -416,9 +421,10 @@ class DeckRailScreenshotTest {
     /**
      * The drawer stands as the 72 dp column (spec C7): no row has a name (the words "New group" are
      * nowhere, not even off screen), the same rows stand as a 48 dp swatch or glyph each, named for
-     * the reader, in 12 dp of padding, and the Stage's strip begins past the column and its gutter.
+     * the reader, in 12 dp of padding, and [besideTheStage] the Stage's strip begins past the column
+     * and its gutter (a library screen has no strip to measure).
      */
-    private fun theNarrowRail() {
+    private fun theNarrowRail(besideTheStage: Boolean = true) {
         compose.onAllNodes(hasText("New group")).assertCountEquals(0)
         compose.onNodeWithContentDescription("New group").assertIsDisplayed()
         for (glyph in listOf("Hosts", "Keys", "Tunnels", "Snippets", "Settings")) {
@@ -429,8 +435,10 @@ class DeckRailScreenshotTest {
         assertEquals("a 48 dp slot", 48f, hosts.width / density, 0.5f)
         assertEquals(48f, hosts.height / density, 0.5f)
         assertEquals("in the column's 12 dp of padding", 12f, hosts.left / density, 0.5f)
-        val strip = compose.onNode(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNode().boundsInRoot
-        assertEquals("the strip starts past the 72 dp column and the 12 dp gutter", 84f, strip.left / density, 0.5f)
+        if (besideTheStage) {
+            val strip = compose.onNode(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNode().boundsInRoot
+            assertEquals("the strip starts past the 72 dp column and the 12 dp gutter", 84f, strip.left / density, 0.5f)
+        }
     }
 
     private fun themed(content: @Composable () -> Unit) {
