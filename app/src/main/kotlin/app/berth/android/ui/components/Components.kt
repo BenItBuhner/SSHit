@@ -93,6 +93,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
@@ -539,6 +540,8 @@ fun BerthMenu(
 fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false, leading: (@Composable () -> Unit)? = null) {
     val c = Berth.colors
     DropdownMenuItem(
+        // The accent says selected to the eye; a screen reader hears it from the state.
+        modifier = Modifier.semantics { this.selected = selected },
         text = {
             Text(
                 text,

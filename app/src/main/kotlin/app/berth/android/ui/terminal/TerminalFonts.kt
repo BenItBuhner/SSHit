@@ -24,16 +24,21 @@ enum class FontFace(val fileStem: String) { REGULAR("regular"), BOLD("bold"), IT
 data class FontChoice(val name: String, val kind: Kind, val faces: Int, val licence: String? = null, val monospaced: Boolean = true) {
     enum class Kind { BUNDLED, SYSTEM, IMPORTED }
 
-    /** The caption under the name: its provenance, its faces when not all four, a warning for a proportional face. */
+    /**
+     * The caption under the name: its provenance, its faces when not all four, a warning for a
+     * proportional face. Two lines at most beside the sample at 1× and at the interface's font cap,
+     * so the longest (an import of one proportional face) is kept short; that imports stay on the
+     * phone is the sheet's footer's to say once, not every row's.
+     */
     val note: String
         get() {
             val parts = ArrayList<String>()
             parts += when (kind) {
                 Kind.BUNDLED -> "Bundled" + (licence?.let { " \u00B7 $it" } ?: "")
                 Kind.SYSTEM -> "The device's monospace font"
-                Kind.IMPORTED -> "Imported \u00B7 stays on this phone"
+                Kind.IMPORTED -> "Imported"
             }
-            if (kind != Kind.SYSTEM && faces < 4) parts += if (faces == 1) "one face, bold and italic made from it" else "$faces faces, the rest made from them"
+            if (kind != Kind.SYSTEM && faces < 4) parts += if (faces == 1) "one face, the rest made from it" else "$faces faces, the rest made from them"
             if (!monospaced) parts += "not monospaced, columns will drift"
             return parts.joinToString(" \u00B7 ")
         }

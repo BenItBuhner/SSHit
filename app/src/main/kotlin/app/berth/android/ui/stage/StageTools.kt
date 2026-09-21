@@ -10,6 +10,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -47,6 +49,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -56,6 +59,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
@@ -175,10 +179,13 @@ fun StageToolbar(tools: StageTools, session: TerminalSession?, focus: StageFocus
 
 /**
  * `24 chars · Copy · Paste · Search · Share · ⋮ · ×` where the tab strip was (spec C18). Copy
- * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all and, when the
- * selection is a link, Open. Paste is there only while the session is Live: on a frozen frame there
- * is nothing to paste into, and its absence says so. Same height and fill as the header so nothing
- * below moves.
+ * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all, Rectangular
+ * and, when the selection is a link, Open. Paste is there only while the session is Live: on a
+ * frozen frame there is nothing to paste into, and its absence says so. Same height and fill as
+ * the header so nothing below moves. Where the row is too narrow for all of them (a phone at the
+ * interface's font cap), Share and then Search step into the overflow rather than squeeze the
+ * buttons after them under their 48 dp: the bar measures what its actions need against the width
+ * it has, so nothing is cut and nothing is guessed from the scale.
  */
 @Composable
 private fun SelectionBar(tools: StageTools, session: TerminalSession) {
@@ -202,59 +209,66 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
         }
         selection.clear()
     }
+    fun search() {
+        val t = text()
+        selection.clear()
+        tools.openSearch(t)
+    }
+    fun shareText() {
+        val t = text()
+        selection.clear()
+        if (t.isNotEmpty()) share(context, t)
+    }
     val row: @Composable (Modifier) -> Unit = { m ->
-        Row(m.height(style.height), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                selection.summary,
-                style = BerthType.label,
-                color = c.text2,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 12.dp, end = 4.dp).semantics { contentDescription = "Selection, ${selection.summary}" },
-            )
-            Spacer(Modifier.weight(1f))
-            BarAction("Copy", onClick = ::copy)
-            if (live) {
-                BarAction("Paste") {
-                    clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
-                    selection.clear()
-                }
-            }
-            BarAction("Search") {
-                val t = text()
-                selection.clear()
-                tools.openSearch(t)
-            }
-            BarAction("Share") {
-                val t = text()
-                selection.clear()
-                if (t.isNotEmpty()) share(context, t)
-            }
-            Box {
-                IconAction(onClick = { menu = true }, description = "Selection options") { BerthIcon(BerthIcons.moreVert) }
-                BerthMenu(expanded = menu, onDismiss = { menu = false }) {
-                    BerthMenuItem("Select all", onClick = {
-                        menu = false
-                        synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
-                    })
-                    // The block between the selection's corners instead of the stream from one to the
-                    // other (review #9: a toggle, not a second-finger gesture); on, in accent, until
-                    // switched off, for this tab's later selections too.
-                    BerthMenuItem(StageTools.RECTANGULAR, selected = selection.rectangular, onClick = {
-                        menu = false
-                        synchronized(session.emulator.lock) { selection.setRectangular(session.emulator, !selection.rectangular) }
-                    })
-                    val link = remember(selection.range, selection.rectangular) { linkIn(text()) }
-                    if (link != null) {
-                        BerthMenuItem("Open link", onClick = {
-                            menu = false
-                            selection.clear()
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        })
+        BoxWithConstraints(m.height(style.height)) {
+            val kept = barActionsThatFit(constraints.maxWidth, selection.summary, listOfNotNull("Copy", if (live) "Paste" else null), listOf("Search", "Share"))
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    selection.summary,
+                    style = BerthType.label,
+                    color = c.text2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = SUMMARY_PAD_START, end = SUMMARY_PAD_END).semantics { contentDescription = "Selection, ${selection.summary}" },
+                )
+                Spacer(Modifier.weight(1f))
+                BarAction("Copy", onClick = ::copy)
+                if (live) {
+                    BarAction("Paste") {
+                        clipboard.getText()?.text?.let { tools.paste(session, it, haptics) }
+                        selection.clear()
                     }
                 }
+                if (kept >= 1) BarAction("Search", onClick = ::search)
+                if (kept >= 2) BarAction("Share", onClick = ::shareText)
+                Box {
+                    IconAction(onClick = { menu = true }, description = "Selection options") { BerthIcon(BerthIcons.moreVert) }
+                    BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+                        if (kept < 1) BerthMenuItem("Search", onClick = { menu = false; search() })
+                        if (kept < 2) BerthMenuItem("Share", onClick = { menu = false; shareText() })
+                        BerthMenuItem("Select all", onClick = {
+                            menu = false
+                            synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
+                        })
+                        // The block between the selection's corners instead of the stream from one to the
+                        // other (review #9: a toggle, not a second-finger gesture); on, in accent, until
+                        // switched off, for this tab's later selections too.
+                        BerthMenuItem(StageTools.RECTANGULAR, selected = selection.rectangular, onClick = {
+                            menu = false
+                            synchronized(session.emulator.lock) { selection.setRectangular(session.emulator, !selection.rectangular) }
+                        })
+                        val link = remember(selection.range, selection.rectangular) { linkIn(text()) }
+                        if (link != null) {
+                            BerthMenuItem("Open link", onClick = {
+                                menu = false
+                                selection.clear()
+                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            })
+                        }
+                    }
+                }
+                IconAction(onClick = { selection.clear() }, description = "Clear selection") { BerthIcon(BerthIcons.close) }
             }
-            IconAction(onClick = { selection.clear() }, description = "Clear selection") { BerthIcon(BerthIcons.close) }
         }
     }
     when (style.chrome) {
@@ -287,10 +301,37 @@ private fun BarAction(label: String, onClick: () -> Unit) {
             .semantics { role = Role.Button }
             // A short word (Copy) still answers to a 48 dp column; the longer ones set their own width.
             .defaultMinSize(minWidth = TouchTargetSize)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = BAR_ACTION_PAD),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, style = BerthType.label, color = c.accent, maxLines = 1)
+    }
+}
+
+private val BAR_ACTION_PAD = 8.dp
+private val SUMMARY_PAD_START = 12.dp
+private val SUMMARY_PAD_END = 4.dp
+
+/**
+ * How many of the bar's [optional] actions, taken from the front, stand in a row [width] pixels
+ * wide beside [summary], the [always] actions and the two icon actions after them, each text
+ * action as wide as [BarAction] makes it: its label in the Label style plus its padding, and 48 dp
+ * at the least. The rest go into the overflow. Measured, not read off the font scale, so a wider
+ * bar (a tablet, landscape) keeps them all at any scale and a narrow one sheds only what it must.
+ */
+@Composable
+private fun barActionsThatFit(width: Int, summary: String, always: List<String>, optional: List<String>): Int {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(width, summary, always, optional, density) {
+        with(density) {
+            fun action(label: String) = maxOf(TouchTargetSize.roundToPx(), measurer.measure(label, BerthType.label).size.width + (BAR_ACTION_PAD * 2).roundToPx())
+            val fixed = measurer.measure(summary, BerthType.label).size.width + (SUMMARY_PAD_START + SUMMARY_PAD_END).roundToPx() +
+                always.sumOf { action(it) } + 2 * TouchTargetSize.roundToPx()
+            var kept = optional.size
+            while (kept > 0 && fixed + optional.take(kept).sumOf { action(it) } > width) kept--
+            kept
+        }
     }
 }
 
@@ -516,7 +557,7 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
  * Cancel in the resting kind with Open anyway plain beside it, as the clipboard notice weighs its
  * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
     val c = Berth.colors
@@ -549,12 +590,15 @@ fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
                     modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${link.url}" },
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (look.warning) {
+            if (look.warning) {
+                // Three answers side by side, wrapping where they will not fit (the interface's font cap), as the paste warning's do.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     BerthButton("Cancel", onClick = onDismiss)
                     BerthButton("Open anyway", kind = ButtonKind.TEXT, onClick = ::open)
                     BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
-                } else {
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     BerthButton("Open", kind = ButtonKind.PRIMARY, onClick = ::open)
                     BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
                     Spacer(Modifier.weight(1f))
