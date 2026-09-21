@@ -331,7 +331,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("Duplicate").assertExists()
         compose.onNodeWithText("Share as ssh:// link").assertExists()
         compose.onNodeWithText("Delete").assertExists()
-        capture("hosts-row-menu")
+        capture("hosts-row-menu-library")
         assertNoTextCut("the host row's menu")
         compose.onNodeWithText("Connect in new group").performClick()
         waitForNoText("Connect in new group")
@@ -609,7 +609,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText("Show visual fingerprint")
         compose.onNodeWithText("Compare on the server".uppercase()).assertExists()
         compose.onNodeWithText("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub").assertExists()
-        capture("prompt-trust-host-key")
+        capture("trust-sheet")
         assertNoTextCut("the trust sheet")
 
         compose.onNodeWithText("Show visual fingerprint").performClick()
@@ -618,7 +618,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertEquals(Randomart.of(key), art.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text })
         compose.onNodeWithText("Trust and connect").performScrollTo()
         compose.waitForIdle()
-        capture("prompt-trust-host-key-randomart")
+        capture("trust-sheet-randomart")
         assertNoTextCut("the trust sheet with its randomart")
 
         compose.onNodeWithContentDescription("Copy Compare on the server").performClick()
@@ -644,7 +644,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText(label)
         compose.onNodeWithText(label).performScrollTo()
         settle(400)
-        capture("prompt-host-key-changed")
+        capture("changed-key-sheet")
         assertNoTextCut("the changed-key sheet")
 
         // Under the test clock: a tap, or a hold let go early, replaces nothing.
@@ -666,7 +666,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(500)
         compose.waitForIdle()
-        capture("prompt-host-key-changed-holding")
+        capture("changed-key-sheet-holding")
         compose.mainClock.advanceTimeBy(700)
         compose.waitForIdle()
         compose.mainClock.autoAdvance = true
