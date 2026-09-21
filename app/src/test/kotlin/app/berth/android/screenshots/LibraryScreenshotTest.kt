@@ -486,6 +486,10 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         hasNoText("Host")
         hasNoText("Tunnels")
         compose.onNodeWithText("root@198.51.100.7:2202").assertExists()
+        // The sheet opens whole: the offer and Close are on screen at the cap as well, no drag first
+        // (half-open, its second row of pills stood below the fold at that size).
+        compose.onNodeWithText("Save as host").assertIsDisplayed()
+        compose.onNodeWithText("Close").assertIsDisplayed()
         capture("session-sheet-save-as-host")
         assertNoTextCut("the Session sheet of a quick-connected tab")
 

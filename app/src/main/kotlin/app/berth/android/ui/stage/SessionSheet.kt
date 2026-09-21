@@ -7,8 +7,11 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -75,10 +78,14 @@ fun SessionSheet(
     var snippets by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
 
-    BerthSheet(onDismiss = onDismiss) {
+    // The sheet opens whole, as the prompts do, rather than at half the window with its second row of
+    // pills below the fold at the interface cap; and the column scrolls, for a window shorter than the
+    // facts and the pills at that size (a half-open sheet without a scroll would lay them out unreached).
+    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
