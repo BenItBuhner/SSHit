@@ -45,13 +45,16 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionState
 
 /**
- * The session sheet from the Grip or the ribbon title: the tab's facts and actions, then the other
- * tabs in the workspace for a quick switch. A terminal tab offers Detach or Reconnect, Files (the
- * host's Files tab, opened or brought on stage), Snippets, History and Look (the host's theme, font
- * and size over a live Stage, [LookSheet]); a Files tab offers Connect or Reconnect for the
- * terminal it rides and Terminal to go there. Half-height by default (spec C6); [expanded] opens it
- * at its full height, as the grip's drag up asks (spec C4), where a group with many tabs has them
- * all in view at once.
+ * The session sheet from the Grip, its tap or its drag up (spec C4), or the ribbon title: the tab's
+ * facts and actions, then the host's look and the tab's Predictive text toggle (C6's order), then
+ * the other tabs in the group for a quick switch. A
+ * terminal tab offers Detach or Reconnect, Files (the host's Files tab, opened or brought on stage),
+ * Snippets and History, and under the pills the Look row (the host's theme, font and size over a
+ * live Stage, [LookSheet]); a Files tab offers Connect or Reconnect for the terminal it rides and
+ * Terminal to go there. The sheet opens at its content height and scrolls when the window is
+ * shorter (spec C6 as ruled for #19 and #20: its content is a fixed set of controls, not a list, so
+ * there is no fold to hide a row of pills or the Look row under), and the actions are pills at their
+ * own width that wrap as they must, so a label is never cut, at 1× or at the interface's 1.3× cap (A11).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -65,7 +68,6 @@ fun SessionSheet(
     onOpenTunnels: (String) -> Unit = {},
     onOpenFiles: (tabId: String) -> Unit = {},
     onOpenTerminal: (filesTabId: String) -> Unit = {},
-    expanded: Boolean = false,
 ) {
     val c = Berth.colors
     val record by tab.record.collectAsState()
@@ -187,9 +189,9 @@ fun SessionSheet(
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() })
                 }
             }
-            // The host's look (spec C6, Look): a row rather than a sixth button, since it has something
-            // to say, the theme, font and size the terminal draws with now, and opens the Look sheet
-            // over the live Stage. Only a saved host has a look of its own; Quick connect's has none.
+            // The host's look (spec C6, Look): a row under the pills rather than a sixth of them, since
+            // it has something to say, the theme, font and size the terminal draws with now, and opens
+            // the Look sheet over the live Stage. Only a saved host has a look of its own; Quick connect's has none.
             if (session != null && lookHostId != null) {
                 ListRow(
                     title = "Look",
@@ -213,7 +215,8 @@ fun SessionSheet(
             }
             val rest = others.filter { it.id != tab.id }
             if (rest.isNotEmpty()) {
-                Text("Also in this workspace".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
+                // "Group", not "workspace": C3's word for it (#19 review, nit 11).
+                Text("Also in this group".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (t in rest) {
                         SessionRow(

@@ -159,8 +159,6 @@ fun StageScreen(
     onEditHost: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
-    /** Opens the Session sheet at its full height, as the grip's drag up asks (spec C4); the plain opening where a caller has no taller form. */
-    onOpenSessionSheetExpanded: () -> Unit = onOpenSessionSheet,
     /** The terminal tab's selection, search and paste state (spec C16 to C18); a test hands in its own to drive them. */
     tools: StageTools = rememberStageTools((tab as? TerminalSession)?.id),
     /** Overflow › Split and Unsplit (spec C3, C23), offered when the window fits two panes; one at a time. */
@@ -334,7 +332,6 @@ fun StageScreen(
             onLayerIndexChange = { layerIndex = it },
             onLendOverflow = { lentRows = it },
             onOpenSessionSheet = onOpenSessionSheet,
-            onOpenSessionSheetExpanded = onOpenSessionSheetExpanded,
             onEditHost = onEditHost,
             onOpenDeckEditor = onOpenDeckEditor,
             actions = actions,
@@ -376,7 +373,6 @@ class StageBodies internal constructor(
     internal val onLayerIndexChange: (Int) -> Unit,
     private val onLendOverflow: (OverflowRows?) -> Unit,
     private val onOpenSessionSheet: () -> Unit,
-    private val onOpenSessionSheetExpanded: () -> Unit,
     private val onEditHost: (String) -> Unit,
     private val onOpenDeckEditor: () -> Unit,
     private val actions: TabActions,
@@ -413,7 +409,6 @@ class StageBodies internal constructor(
                     layerIndex = layerIndex,
                     onLayerIndexChange = onLayerIndexChange,
                     onOpenSessionSheet = onOpenSessionSheet,
-                    onOpenSessionSheetExpanded = onOpenSessionSheetExpanded,
                     onEditHost = onEditHost,
                     onOpenDeckEditor = onOpenDeckEditor,
                     modifier = modifier,
@@ -571,7 +566,6 @@ private fun StageBody(
     layerIndex: Int,
     onLayerIndexChange: (Int) -> Unit,
     onOpenSessionSheet: () -> Unit,
-    onOpenSessionSheetExpanded: () -> Unit,
     onEditHost: (String) -> Unit,
     onOpenDeckEditor: () -> Unit,
     modifier: Modifier = Modifier,
@@ -788,8 +782,8 @@ private fun StageBody(
                         modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                         enabled = live,
                         settings = deckSettings,
+                        // The grip's tap and its drag up (spec C4) open the one Session sheet, which opens whole.
                         onGripTap = onOpenSessionSheet,
-                        onGripDragUp = onOpenSessionSheetExpanded,
                         onGripSwipeDown = {
                             keyboard?.hide()
                             onDeckVisibleChange(false)

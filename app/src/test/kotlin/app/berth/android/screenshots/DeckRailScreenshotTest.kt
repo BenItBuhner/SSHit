@@ -19,6 +19,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -225,7 +226,7 @@ class DeckRailScreenshotTest {
      * The gestures a key takes, offline: the tertiary's glyph stands at the key's foot once swipe down
      * is on, a swipe down previews it on the key, a hold raises the alternates as a popover whose chip
      * under the finger fills accent, a swipe across steps the layer, and the grip's drag up asks for
-     * the Session sheet at its full height where its tap asks for the half one.
+     * the Session sheet as its tap does (spec C4; the sheet opens at its content height either way).
      */
     @Test
     fun `a key's swipe down, hold and swipe across, and the grip's drag up, on a phone`() {
@@ -234,10 +235,9 @@ class DeckRailScreenshotTest {
         graph.settings.deckGestures.value = DeckSettings(swipeDown = true)
         runBlocking { graph.settings.setDeckLayout(layoutWithTertiaries()) }
         val live = StageFixture.liveHomelab()
-        var taps = 0
-        var dragsUp = 0
+        var opens = 0
         themed {
-            StageScreen(graph.viewModel, live, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = { taps++ }, onEditHost = {}, onOpenSessionSheetExpanded = { dragsUp++ })
+            StageScreen(graph.viewModel, live, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = { opens++ }, onEditHost = {})
         }
         awaitDeck()
         // The glyphs: the swipe-up's at the top right as ever, the swipe-down's at the bottom right.
@@ -272,16 +272,18 @@ class DeckRailScreenshotTest {
         key("|").performTouchInput { down(center); moveBy(Offset(-60.dp.px(), 0f)); up() }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Layer") and hasStateDescription("Base")).fetchSemanticsNodes().isNotEmpty() }
 
-        // The grip: a tap opens the sheet, a drag up opens it expanded (spec C4).
+        // The grip: a tap opens the sheet, and so does a drag up (spec C4), the one sheet that opens
+        // whole; a swipe down is the keyboard's and opens nothing.
         val grip = compose.onNode(hasContentDescription("Grip", substring = true))
         grip.performTouchInput { down(center); up() }
         compose.waitForIdle()
-        assertEquals(1, taps)
-        assertEquals(0, dragsUp)
+        assertEquals(1, opens)
         grip.performTouchInput { down(center); moveBy(Offset(0f, -40.dp.px())); up() }
         compose.waitForIdle()
-        assertEquals(1, taps)
-        assertEquals(1, dragsUp)
+        assertEquals(2, opens)
+        grip.performTouchInput { down(center); moveBy(Offset(0f, 40.dp.px())); up() }
+        compose.waitForIdle()
+        assertEquals(2, opens)
     }
 
     /**
@@ -330,11 +332,15 @@ class DeckRailScreenshotTest {
         assertTrue(session.emulator.screenText().any { it.endsWith("$ _?") })
         capture("deck-live-after-gestures")
 
-        // The grip's drag up: the Session sheet, expanded, with the Look row on it.
+        // The grip's drag up: the Session sheet at its content height, its two rows of pills and the
+        // Look row all in view, and every one of its verbs whole (the tab's title behind it ellipsizes
+        // by design, so the sheet is held alone).
         compose.onNode(hasContentDescription("Grip", substring = true)).performTouchInput { down(center); moveBy(Offset(0f, -40.dp.px())); up() }
         waitForText("Look")
         compose.onNodeWithText("Berth Dark \u00B7 JetBrains Mono \u00B7 13 sp").assertIsDisplayed()
         settle(400)
+        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) compose.onNodeWithText(verb).assertIsDisplayed()
+        compose.assertNoTextCut("the Session sheet over a live tab", within = isDialog())
         capture("session-sheet-expanded-live")
 
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
@@ -359,6 +365,8 @@ class DeckRailScreenshotTest {
         }
         waitForText("Look")
         compose.onNodeWithText("Berth Dark \u00B7 JetBrains Mono \u00B7 13 sp").assertIsDisplayed()
+        // The actions are pills at their own width (C6), so none of the seven verbs is cut (A11).
+        compose.assertNoTextCut("the Session sheet", within = isDialog())
         capture("session-sheet-look-row")
 
         compose.onNodeWithText("Look").performClick()

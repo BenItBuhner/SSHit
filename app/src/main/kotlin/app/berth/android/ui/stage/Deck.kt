@@ -620,8 +620,10 @@ private fun Modifier.editableSlot(
     }
 
 /**
- * The Deck's grip (spec C4): tap for the Session sheet, drag up to open it expanded, swipe down to
- * hide the keyboard and Deck, hold to jump to the most recent unread tab. The vertical gestures
+ * The Deck's grip (spec C4): tap or drag up for the Session sheet (the drag up is C4's gesture; the
+ * sheet opens at its content height either way, so [onDragUp] is [onTap] unless a caller has a
+ * taller form to offer), swipe down to hide the keyboard and Deck, hold to jump to the most recent
+ * unread tab. The vertical gestures
  * are decided at release, from where the finger is then, so a finger can come back to a tap; a hold
  * that fires swallows the release, and a finger that has moved past the slop is a swipe in the
  * making, never a hold.

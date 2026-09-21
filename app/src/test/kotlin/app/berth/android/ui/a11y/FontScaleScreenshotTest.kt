@@ -45,6 +45,7 @@ import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
+import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
@@ -84,7 +85,8 @@ import java.util.concurrent.TimeUnit
  * things that clipped at the cap are held: a Deck key's alternate hint stays clear of its label,
  * no text on the Settings screen is cut (a title ellipsized, a caption stopped at one line), and
  * the two tallest sheets, the changed-key sheet with a link's row and the crash sheet, scroll to
- * their buttons rather than measuring them to nothing.
+ * their buttons rather than measuring them to nothing. The Session sheet's verbs, pills that wrap
+ * rather than cut (#20 review), and the Look sheet under it are held to no cut text the same way.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -201,6 +203,36 @@ class FontScaleScreenshotTest {
             if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)
             addAll(child.textDescendants())
         }
+    }
+
+    /**
+     * The Session sheet at the cap, open at its content height as it always is (C6 as ruled for #19
+     * and #20): its actions are pills at their own width, so at 1.3× they take another line and lose
+     * no letter, and the Look row's summary wraps to its second line rather than cutting; then the
+     * Look sheet it opens, held the same. Each sheet is held on its own: the tab's title behind it
+     * ellipsizes by design.
+     */
+    @Test
+    fun `the Session sheet and the Look sheet at 2x keep every verb and every line whole`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            SessionSheet(graph.viewModel, live, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Look")).fetchSemanticsNodes().isNotEmpty() }
+        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) {
+            compose.onNodeWithText(verb).assertExists()
+        }
+        compose.assertNoTextCut("the Session sheet at the interface's font cap", within = isDialog())
+        capture("session-sheet-font-scale-2x")
+
+        compose.onNodeWithText("Look").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Theme")).fetchSemanticsNodes().isNotEmpty() }
+        compose.assertNoTextCut("the Look sheet at the interface's font cap", within = isDialog())
+        capture("look-sheet-font-scale-2x")
     }
 
     @Test

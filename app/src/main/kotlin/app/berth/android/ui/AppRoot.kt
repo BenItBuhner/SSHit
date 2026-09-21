@@ -164,13 +164,6 @@ private fun Shell(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     val active by vm.activeTab.collectAsState()
     var sessionSheet by remember { mutableStateOf(false) }
-    // Whether the sheet opens at its full height (spec C4: the grip's drag up expands it) or, as a tap
-    // opens it, at half. Read when the sheet is composed, so the form is the one the gesture asked for.
-    var sessionSheetExpanded by remember { mutableStateOf(false) }
-    fun openSessionSheet(expanded: Boolean) {
-        sessionSheetExpanded = expanded
-        sessionSheet = true
-    }
     val tabUi = rememberTabUiState()
 
     LaunchedEffect(Unit) { vm.sessions.restore() }
@@ -287,8 +280,7 @@ private fun Shell(vm: AppViewModel) {
                                 vm = vm,
                                 actions = tabActions,
                                 onOpenDrawer = onOpenDrawer,
-                                onOpenSessionSheet = { openSessionSheet(expanded = false) },
-                                onOpenSessionSheetExpanded = { openSessionSheet(expanded = true) },
+                                onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
                                 onGroups = { go(Screen.Groups) },
@@ -299,8 +291,7 @@ private fun Shell(vm: AppViewModel) {
                                 tab = active,
                                 actions = tabActions,
                                 onOpenDrawer = onOpenDrawer,
-                                onOpenSessionSheet = { openSessionSheet(expanded = false) },
-                                onOpenSessionSheetExpanded = { openSessionSheet(expanded = true) },
+                                onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
                                 onGroups = { go(Screen.Groups) },
@@ -448,7 +439,6 @@ private fun Shell(vm: AppViewModel) {
         SessionSheet(
             vm = vm,
             tab = sheetTab,
-            expanded = sessionSheetExpanded,
             onDismiss = { sessionSheet = false },
             onSwitch = { vm.setActive(it) },
             onEditHost = { go(Screen.HostEditor(it)) },

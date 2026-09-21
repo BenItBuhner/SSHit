@@ -112,8 +112,9 @@ private object ScrolledPastTheEdge : TypeSafeMatcher<AccessibilityViewCheckResul
 
 /**
  * And in a sheet's window only: a list sheet opens at half height by the spec (the New tab sheet,
- * the Session sheet: "drag up for the full list"), and the row it cuts at the screen's bottom edge
- * is one it has not shown yet, not a short control. The sheet's handle carries Expand for a reader,
+ * the Files sheets' longer lists; the Session sheet did until it opened whole, its content being
+ * controls and not a list), and the row it cuts at the screen's bottom edge is one it has not
+ * shown yet, not a short control. The sheet's handle carries Expand for a reader,
  * which is the route to the rest of the list. A sheet's content ends in padding, so nothing that
  * is whole ever touches that edge; a finding there is the cut alone.
  */
