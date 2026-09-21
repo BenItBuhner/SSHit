@@ -92,10 +92,17 @@ class TerminalInputConnection(private val targetView: View, private val sink: Te
      * eventual commit would send the word a second time.
      */
     fun flushComposing() {
+        if (composing.isNotEmpty()) restart()
+    }
+
+    /**
+     * Has the keyboard start over against the terminal's attributes as they are now (predictive
+     * text turned on or off, spec C6), a word it was composing sent first rather than lost.
+     */
+    fun restart() {
         val word = composing
         composing = ""
-        if (word.isEmpty()) return
-        sendTextWithEnter(word)
+        if (word.isNotEmpty()) sendTextWithEnter(word)
         targetView.context.getSystemService(InputMethodManager::class.java)?.restartInput(targetView)
     }
 
@@ -254,13 +261,18 @@ fun handleComposeKeyEvent(event: androidx.compose.ui.input.key.KeyEvent, sink: T
     return handleKeyDown(native.keyCode, unicode, mods, sink)
 }
 
-/** Attaches the terminal input connection to a focusable node; the IME session lives while focused. */
-fun Modifier.terminalInput(sink: TerminalInputSink): Modifier = this then TerminalInputElement(sink)
+/**
+ * Attaches the terminal input connection to a focusable node; the IME session lives while focused.
+ * With [predictive] on (spec C6, the Session sheet's row) the keyboard may suggest words; a flip
+ * while the keyboard is up restarts the input so it reads the change at once.
+ */
+fun Modifier.terminalInput(sink: TerminalInputSink, predictive: Boolean = false): Modifier = this then TerminalInputElement(sink, predictive)
 
-private data class TerminalInputElement(val sink: TerminalInputSink) : ModifierNodeElement<TerminalInputNode>() {
-    override fun create(): TerminalInputNode = TerminalInputNode(sink)
+private data class TerminalInputElement(val sink: TerminalInputSink, val predictive: Boolean) : ModifierNodeElement<TerminalInputNode>() {
+    override fun create(): TerminalInputNode = TerminalInputNode(sink, predictive)
     override fun update(node: TerminalInputNode) {
         node.sink = sink
+        node.setPredictive(predictive)
     }
 }
 
@@ -268,12 +280,16 @@ private data class TerminalInputElement(val sink: TerminalInputSink) : ModifierN
  * What the terminal tells the keyboard about itself: plain text with no suggestions, no autocorrect
  * and no capitalisation (the visible-password variation is the one flag every keyboard, Samsung's
  * included, honours as "do not correct this"), nothing learned from what is typed here, no
- * full-screen or extracted editor, and Enter as a key rather than an action.
+ * full-screen or extracted editor, and Enter as a key rather than an action. With [predictive] on
+ * (spec C6) it is plain text the keyboard may suggest for, still without autocorrect or
+ * capitalisation, and still nothing learned: what is typed into a shell stays out of its dictionary.
  */
-fun configureTerminalEditorInfo(outAttributes: EditorInfo) {
-    outAttributes.inputType = InputType.TYPE_CLASS_TEXT or
-        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
-        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+fun configureTerminalEditorInfo(outAttributes: EditorInfo, predictive: Boolean = false) {
+    outAttributes.inputType = if (predictive) InputType.TYPE_CLASS_TEXT else {
+        InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    }
     outAttributes.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or
         EditorInfo.IME_FLAG_NO_EXTRACT_UI or
         EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
@@ -284,9 +300,16 @@ fun configureTerminalEditorInfo(outAttributes: EditorInfo) {
     outAttributes.initialCapsMode = 0
 }
 
-private class TerminalInputNode(var sink: TerminalInputSink) : Modifier.Node(), PlatformTextInputModifierNode, FocusEventModifierNode {
+private class TerminalInputNode(var sink: TerminalInputSink, private var predictive: Boolean) : Modifier.Node(), PlatformTextInputModifierNode, FocusEventModifierNode {
     private var session: Job? = null
     private var connection: TerminalInputConnection? = null
+
+    /** A keyboard already up re-reads the attributes through a restart; the next one reads them as it connects. */
+    fun setPredictive(on: Boolean) {
+        if (predictive == on) return
+        predictive = on
+        connection?.restart()
+    }
 
     override fun onFocusEvent(focusState: FocusState) {
         if (focusState.isFocused) {
@@ -297,7 +320,7 @@ private class TerminalInputNode(var sink: TerminalInputSink) : Modifier.Node(), 
                             object : PlatformTextInputMethodRequest {
                                 // Called again on every restart of the input, so the connection is always the live one.
                                 override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
-                                    configureTerminalEditorInfo(outAttributes)
+                                    configureTerminalEditorInfo(outAttributes, predictive)
                                     val c = TerminalInputConnection(view, sink)
                                     connection = c
                                     (sink as? ImeAwareSink)?.imeConnection = c

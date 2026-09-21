@@ -72,6 +72,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -924,6 +925,31 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch {
             val current = settings.terminalFont.first()
             settings.setTerminalFont(current.copy(sizeSp = sizeSp.coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP)))
+        }
+    }
+
+    // ---- predictive text (spec C6) ----------------------------------------------------------------
+
+    private val _predictiveTextTabIds = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The terminal tabs whose keyboard may suggest words (spec C6, the Session sheet's row): the
+     * Stage tells the keyboard and lights the grip from the one flag. Off for every tab until asked,
+     * and the tab's alone: not saved with it, so a shell told to suggest is told again next launch,
+     * and the privacy default is the one a restored tab comes back to.
+     */
+    val predictiveTextTabIds: StateFlow<Set<String>> = _predictiveTextTabIds.asStateFlow()
+
+    fun setPredictiveText(tabId: String, on: Boolean) {
+        _predictiveTextTabIds.update { if (on) it + tabId else it - tabId }
+    }
+
+    init {
+        // A closed tab's flag goes with it. Ids are never reused, so this is tidiness, not correctness.
+        viewModelScope.launch {
+            sessions.records.collect { list ->
+                _predictiveTextTabIds.update { on -> if (on.isEmpty()) on else on.filterTo(HashSet()) { id -> list.any { it.id == id } } }
+            }
         }
     }
 

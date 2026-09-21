@@ -231,6 +231,8 @@ fun TerminalCanvas(
     onSelectionStarted: () -> Unit = {},
     /** The screen reader's view of the screen; the Stage shares it with the live region beside the canvas. */
     accessibility: TerminalAccessibility = remember(session.id) { TerminalAccessibility() },
+    /** Whether the soft keyboard may suggest words here (spec C6); a flip while it is up restarts the input so it takes at once. */
+    predictiveText: Boolean = false,
 ) {
     val density = LocalDensity.current
     val paints = rememberTerminalPaints(font)
@@ -332,7 +334,7 @@ fun TerminalCanvas(
             .fillMaxSize()
             .terminalAccessibility(accessibility)
             .onSizeChanged { canvasSize = it }
-            .terminalInput(sink)
+            .terminalInput(sink, predictiveText)
             .focusRequester(focusRequester)
             .focusable(interactionSource = interaction)
             .onPreviewKeyEvent { handleComposeKeyEvent(it, currentSink) }

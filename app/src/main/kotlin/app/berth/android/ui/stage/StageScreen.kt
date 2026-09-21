@@ -669,6 +669,10 @@ private fun StageBody(
 
     BackHandler(enabled = imeVisible) { keyboard?.hide() }
 
+    // Predictive text is the tab's own (spec C6, the Session sheet's row): the keyboard is told, and the grip lit, from the one flag.
+    val predictiveTabIds by vm.predictiveTextTabIds.collectAsState()
+    val predictiveText = session.id in predictiveTabIds
+
     val live = record.state == SessionState.LIVE
     val frameAlpha = when (record.state) {
         SessionState.LIVE -> 1f
@@ -716,6 +720,7 @@ private fun StageBody(
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },
                 accessibility = accessibility,
+                predictiveText = predictiveText,
             )
             TerminalAnnouncer(accessibility, session, Modifier.align(Alignment.TopStart))
             if (swipeGesture == TabSwipeGesture.RIGHT_EDGE) {
@@ -776,6 +781,7 @@ private fun StageBody(
                         onGripLongPress = { if (vm.jumpToUnread()) patterns.hold() },
                         snippets = pinnedSnippets,
                         onOpenDeckEditor = onOpenDeckEditor,
+                        predictiveText = predictiveText,
                     )
                 }
                 if (!deckVisible && deckStateOk) {
