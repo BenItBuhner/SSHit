@@ -2,6 +2,7 @@ package app.berth.android.ui.rail
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -11,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
@@ -89,11 +91,16 @@ fun SessionRow(
                     SessionState.FAILED -> "Failed"
                     SessionState.CLOSED -> "Closed"
                 }
-                if (trailing != null) {
-                    Text(trailing, style = BerthType.caption, color = if (record.state == SessionState.FAILED) c.danger else c.text3)
-                }
-                if (record.state == SessionState.DETACHED && record.lastLiveAt != null) {
-                    Text(ageText(record.lastLiveAt, now), style = BerthType.caption, color = c.text3)
+                val age = if (record.state == SessionState.DETACHED && record.lastLiveAt != null) ageText(record.lastLiveAt, now) else null
+                // The state word over the age, not beside it (#20 review, nit 10): the row measures its
+                // trailing before the title's column, so the two captions side by side left the title
+                // and subtitle a cut at 360 dp and the interface's font cap; stacked, they stand one
+                // caption wide and the title keeps the rest.
+                if (trailing != null || age != null) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        if (trailing != null) Text(trailing, style = BerthType.caption, color = if (record.state == SessionState.FAILED) c.danger else c.text3)
+                        if (age != null) Text(age, style = BerthType.caption, color = c.text3)
+                    }
                 }
             },
         )

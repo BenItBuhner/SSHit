@@ -20,6 +20,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
@@ -242,12 +244,47 @@ fun SessionSheet(
     }
 }
 
+/**
+ * A fact of the panel: its label in text.2 and its value at the trailing edge. The two share the
+ * line while both fit it whole with 12 dp between; when they do not (a command's line at the
+ * interface's font cap on a 360 dp phone), the value takes the line under the label, set to the
+ * trailing edge and wrapping as it must, so neither breaks inside a word. A row that measured the
+ * value first and gave the label what was left broke the label instead, "Run / ning" beside
+ * "docker compose ps", a break no overflow or ellipsis check can see (#20 review, nit 11); the
+ * shape is the prompt sheets' name-and-endpoint line (#15, N12).
+ */
 @Composable
 private fun Fact(label: String, value: String, valueColor: Color = Berth.colors.text1) {
     val c = Berth.colors
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(label, style = BerthType.body, color = c.text2, modifier = Modifier.weight(1f))
-        Text(value, style = BerthType.body, color = valueColor)
+    Layout(
+        content = {
+            Text(label, style = BerthType.body, color = c.text2)
+            Text(value, style = BerthType.body, color = valueColor, textAlign = TextAlign.End)
+        },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) { measurables, constraints ->
+        val (labelM, valueM) = measurables
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val labelWidth = labelM.maxIntrinsicWidth(constraints.maxHeight)
+        val valueWidth = valueM.maxIntrinsicWidth(constraints.maxHeight)
+        val apart = labelWidth + 12.dp.roundToPx() + valueWidth
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else apart
+        if (apart <= width) {
+            val labelP = labelM.measure(loose)
+            val valueP = valueM.measure(loose)
+            val height = maxOf(labelP.height, valueP.height)
+            layout(width, height) {
+                labelP.placeRelative(0, (height - labelP.height) / 2)
+                valueP.placeRelative(width - valueP.width, (height - valueP.height) / 2)
+            }
+        } else {
+            val labelP = labelM.measure(loose)
+            val valueP = valueM.measure(loose.copy(maxWidth = width))
+            layout(width, labelP.height + valueP.height) {
+                labelP.placeRelative(0, 0)
+                valueP.placeRelative(width - valueP.width, labelP.height)
+            }
+        }
     }
 }
 
