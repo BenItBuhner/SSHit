@@ -15,10 +15,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,7 +47,9 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -52,8 +57,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -69,12 +74,18 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import app.berth.android.ui.a11y.alwaysFocusable
 import app.berth.android.ui.a11y.keyPressable
@@ -92,6 +103,8 @@ import app.berth.domain.model.DeckKeyCode
 import app.berth.domain.model.DeckLayer
 import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckReach
+import app.berth.domain.model.DeckSettings
+import app.berth.domain.model.DeckKey.Companion.alternateLabel
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.describe
 import app.berth.domain.model.isEmpty
@@ -136,9 +149,11 @@ class DeckEditing(
 
 /**
  * The keyboard accessory bar, rendered from [DeckLayout] rather than a hardcoded row. Each key has
- * tap, swipe-up and hold gestures; modifiers latch one-shot or locked; the Nub sends arrows.
- * [snippets] are the pinned snippets for the session on stage: the snippets slot expands to one
- * key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
+ * the gestures of spec D2, as [DeckKeyGesture] reads them and [settings] allow them: tap, swipe up,
+ * swipe down for the tertiary, hold for the hold action, the autorepeat or the alternates popover,
+ * and a swipe across the keys for the layer; modifiers latch one-shot or locked; the Nub sends
+ * arrows. [snippets] are the pinned snippets for the session on stage: the snippets slot expands
+ * to one key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
  * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
  */
@@ -152,8 +167,10 @@ fun Deck(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     predictiveText: Boolean = false,
+    settings: DeckSettings = DeckSettings(),
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
+    onGripDragUp: () -> Unit = onGripTap,
     onGripLongPress: () -> Unit = {},
     snippets: List<Snippet> = emptyList(),
     onOpenDeckEditor: (() -> Unit)? = null,
@@ -214,7 +231,8 @@ fun Deck(
                 enabled = enabled,
                 haptics = haptics,
                 height = rowHeight,
-                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onLongPress = onGripLongPress) },
+                settings = settings,
+                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
                 onNext = { strip = null; onLayerIndexChange((index + 1) % layers.size) },
                 onPrevious = { strip = null; onLayerIndexChange((index - 1 + layers.size) % layers.size) },
                 onLayerHold = onOpenDeckEditor,
@@ -224,6 +242,7 @@ fun Deck(
             )
             if (layout.rows >= 2 && layers.size > 1) {
                 val second = secondIndex.coerceIn(0, layers.lastIndex).let { if (it == index) (it + 1) % layers.size else it }
+                // The second row's layer is its own (spec C4: both rows swipe layers independently).
                 DeckRow(
                     layout = layout,
                     layer = layers[second],
@@ -232,6 +251,7 @@ fun Deck(
                     enabled = enabled,
                     haptics = haptics,
                     height = rowHeight,
+                    settings = settings,
                     grip = null,
                     onNext = { secondIndex = (second + 1) % layers.size },
                     onPrevious = { secondIndex = (second - 1 + layers.size) % layers.size },
@@ -289,8 +309,18 @@ private val DeckEdge = 8.dp
 private val GripWidth = 20.dp
 
 /**
+ * The most a key grows to on a wide row (#15 review, nit 8): on a phone seven keys divide the row
+ * and each is 43 dp; on a tablet the same seven would be 170 and the five of the compact Deck
+ * 290, `Ctrl` wider than the word `Paste` is tall. Past this the run stops growing and sits
+ * centred between the grip and the layer key, the way a keyboard's keys keep their size on a
+ * wider keyboard. The snippets slot is the exception: its chips scroll, and it takes the row.
+ */
+private val KeyMaxWidth = 120.dp
+
+/**
  * One row of the Deck: grip or its spacer, the layer's slots, then the layer key, or on a Deck of
- * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]).
+ * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]). A swipe across
+ * a key steps this row's layer (spec D2), the way its layer key's tap and swipe do.
  */
 @Composable
 private fun DeckRow(
@@ -301,6 +331,7 @@ private fun DeckRow(
     enabled: Boolean,
     haptics: HapticFeedback,
     height: Dp,
+    settings: DeckSettings,
     grip: (@Composable () -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -315,6 +346,9 @@ private fun DeckRow(
     val editingState = rememberUpdatedState(editing)
     val keyCount = rememberUpdatedState(layer.keys.size)
     val mirror = LocalLayoutDirection.current == LayoutDirection.Rtl
+    // Right is the next layer and left the one before (spec D2), in the hand: a pointer's axis is not
+    // mirrored with a left-reach row, and the layers have no side of their own.
+    val onLayerStep: ((Int) -> Unit)? = if (settings.layerSwipe && layerCount > 1) { dir -> if (dir > 0) onNext() else onPrevious() } else null
     Row(
         Modifier
             .fillMaxWidth()
@@ -324,46 +358,60 @@ private fun DeckRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (grip != null) grip() else Spacer(Modifier.width(GripWidth))
-        layer.keys.forEachIndexed { slot, key ->
-            val weight = if (key.nub) {
-                when (layout.arrows) {
-                    DeckArrows.NUB -> 1f
-                    DeckArrows.FOUR_KEYS -> 3f
-                    DeckArrows.BOTH -> 4f
+        // The keys share what is left between the grip and the layer key; capped, the run is centred in it.
+        Row(
+            Modifier.weight(1f).fillMaxHeight(),
+            horizontalArrangement = Arrangement.spacedBy(DeckGap, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            layer.keys.forEachIndexed { slot, key ->
+                val weight = if (key.nub) {
+                    when (layout.arrows) {
+                        DeckArrows.NUB -> 1f
+                        DeckArrows.FOUR_KEYS -> 3f
+                        DeckArrows.BOTH -> 4f
+                    }
+                } else 1f
+                val base = if (key.snippets) {
+                    Modifier.weight(weight).fillMaxHeight()
+                } else {
+                    Modifier
+                        .weight(weight, fill = false)
+                        .widthIn(min = if (weight == 1f) 40.dp else 0.dp, max = KeyMaxWidth * weight + DeckGap * (weight - 1))
+                        .fillMaxWidth()
+                        .fillMaxHeight()
                 }
-            } else 1f
-            val base = Modifier
-                .weight(weight)
-                .then(if (weight == 1f) Modifier.widthIn(min = 40.dp) else Modifier)
-                .fillMaxHeight()
-            val selected = editing != null && editing.selectedSlot == slot
-            Box(
-                if (editing == null) base else base.editableSlot(slot, key.editorLabel(snippets), editingState, keyCount, drag, patterns, mirror),
-                contentAlignment = Alignment.Center,
-            ) {
-                SlotContent(
-                    key = key,
-                    arrows = layout.arrows,
-                    layer = layer,
-                    input = input,
-                    enabled = enabled && editing == null,
-                    haptics = haptics,
-                    selected = selected,
-                    onStrip = onStrip,
-                    snippets = snippets,
-                )
-                if (editing != null && key.isEmpty) {
-                    Text("empty", style = BerthType.caption.keySized(), color = c.text3)
-                }
-                if (selected) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 4.dp)
-                            .size(4.dp)
-                            .clip(CircleShape)
-                            .background(c.accent),
+                val selected = editing != null && editing.selectedSlot == slot
+                Box(
+                    if (editing == null) base else base.editableSlot(slot, key.editorLabel(snippets), editingState, keyCount, drag, patterns, mirror),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    SlotContent(
+                        key = key,
+                        arrows = layout.arrows,
+                        layer = layer,
+                        input = input,
+                        enabled = enabled && editing == null,
+                        haptics = haptics,
+                        selected = selected,
+                        settings = settings,
+                        onLayerStep = onLayerStep,
+                        onStrip = onStrip,
+                        snippets = snippets,
                     )
+                    if (editing != null && key.isEmpty) {
+                        Text("empty", style = BerthType.caption.keySized(), color = c.text3)
+                    }
+                    if (selected) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 4.dp)
+                                .size(4.dp)
+                                .clip(CircleShape)
+                                .background(c.accent),
+                        )
+                    }
                 }
             }
         }
@@ -401,6 +449,8 @@ private fun SlotContent(
     enabled: Boolean,
     haptics: HapticFeedback,
     selected: Boolean,
+    settings: DeckSettings,
+    onLayerStep: ((Int) -> Unit)?,
     onStrip: (List<DeckKeyCode>) -> Unit,
     snippets: List<Snippet>,
 ) {
@@ -417,6 +467,7 @@ private fun SlotContent(
                     selected = selected,
                     onAction = { input.dispatch(it, layer) },
                     onHold = {},
+                    onLayerStep = onLayerStep,
                 )
             }
         }
@@ -430,6 +481,7 @@ private fun SlotContent(
                 arrowKeys(Modifier.weight(3f).fillMaxHeight())
             }
         }
+        // The snippet chips scroll sideways, so a swipe across them is the scroll's and not the layer's.
         key.snippets -> if (snippets.isNotEmpty()) {
             Row(
                 Modifier.fillMaxSize().horizontalScroll(rememberScrollState()),
@@ -459,6 +511,8 @@ private fun SlotContent(
             selected = selected,
             onAction = { input.dispatch(it, layer) },
             onHold = { held -> if (held is DeckAction.Strip) onStrip(held.strip) },
+            swipeDown = settings.swipeDown,
+            onLayerStep = onLayerStep,
         )
     }
 }
@@ -566,17 +620,23 @@ private fun Modifier.editableSlot(
     }
 
 /**
- * The Deck's grip (spec C4): tap for the Session sheet, swipe down to hide the keyboard and Deck,
- * hold to jump to the most recent unread tab. A hold that fires swallows the release, and a
- * finger that has moved past the slop is a swipe in the making, never a hold.
+ * The Deck's grip (spec C4): tap for the Session sheet, drag up to open it expanded, swipe down to
+ * hide the keyboard and Deck, hold to jump to the most recent unread tab. The vertical gestures
+ * are decided at release, from where the finger is then, so a finger can come back to a tap; a hold
+ * that fires swallows the release, and a finger that has moved past the slop is a swipe in the
+ * making, never a hold.
  */
 @Composable
-private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onLongPress: () -> Unit) {
+private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
     val focused = interaction.showsFocus()
     val color by animateColorAsState(if (accent || focused) c.accent else c.text3, tween(120), label = "grip")
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnSwipeDown by rememberUpdatedState(onSwipeDown)
+    val currentOnDragUp by rememberUpdatedState(onDragUp)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
     Box(
         Modifier
             .width(GripWidth)
@@ -586,28 +646,35 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     val slop = viewConfiguration.touchSlop
-                    var swipedDown = false
+                    val threshold = SwipeThreshold.toPx()
+                    // Where the finger stands: 1 dragged up past the threshold, -1 swiped down past it, 0 neither.
+                    var vertical = 0
                     var moved = false
                     var held = false
                     while (true) {
                         val event = withTimeoutOrNull(if (moved || held) Long.MAX_VALUE else viewConfiguration.longPressTimeoutMillis) { awaitPointerEvent() }
                         if (event == null) {
                             held = true
-                            onLongPress()
+                            currentOnLongPress()
                             continue
                         }
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
                             when {
                                 held -> Unit
-                                swipedDown -> onSwipeDown()
-                                else -> onTap()
+                                vertical < 0 -> currentOnSwipeDown()
+                                vertical > 0 -> currentOnDragUp()
+                                else -> currentOnTap()
                             }
                             break
                         }
                         val dy = change.position.y - down.position.y
                         if (!moved && (change.position - down.position).getDistance() > slop) moved = true
-                        if (dy > 24.dp.toPx()) swipedDown = true
+                        vertical = when {
+                            dy > threshold -> -1
+                            dy < -threshold -> 1
+                            else -> 0
+                        }
                         change.consume()
                     }
                 }
@@ -634,9 +701,16 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
     }
 }
 
+/** A swipe on a key or the grip is 24 dp of travel (spec C4, D2); the way across a key for the layer is twice that. */
+private val SwipeThreshold = 24.dp
+
 /**
- * One Deck slot. Tap fires [DeckKey.tap]; a swipe of 24 dp up or down fires [DeckKey.up] or
- * [DeckKey.down] on release; holding fires [DeckKey.hold] or autorepeats repeating keys.
+ * One Deck slot, on [DeckKeyGesture] (spec D2). Tap fires [DeckKey.tap]; a swipe of [SwipeThreshold]
+ * up fires [DeckKey.up] on release and, with [swipeDown] on, one down fires [DeckKey.down]; holding
+ * fires [DeckKey.hold], autorepeats a repeating key on the Nub's cadence, or raises the key's
+ * alternates as a popover to slide onto; a swipe across the key steps the layer through
+ * [onLayerStep] when the row offers it. What the finger is doing shows on the key: the label
+ * becomes the alternate a swipe would send, and the popover's chip under the finger fills accent.
  */
 @Composable
 fun DeckKeyView(
@@ -649,11 +723,18 @@ fun DeckKeyView(
     onAction: (DeckAction) -> Unit,
     onHold: (DeckAction) -> Unit,
     labelPadding: Dp = 0.dp,
+    swipeDown: Boolean = false,
+    onLayerStep: ((Int) -> Unit)? = null,
 ) {
     val c = Berth.colors
     val patterns = rememberDeckHaptics(haptics)
     var pressed by remember { mutableStateOf(false) }
-    var swipe by remember { mutableStateOf(0) }
+    // What the touch in progress shows, mirrored out of the machine after every event it takes.
+    var swipe by remember { mutableIntStateOf(0) }
+    var popover by remember { mutableStateOf<List<DeckAction>?>(null) }
+    var hovered by remember { mutableStateOf<Int?>(null) }
+    // The machine of the touch in progress, for the popover to tell where its chips are.
+    val touch = remember { TouchInProgress() }
     val modifierAction = key.tap as? DeckAction.Modifier
     val latchState = modifierAction?.let { latch.state(it.modifier) } ?: LatchState.NONE
     val latched = latchState != LatchState.NONE
@@ -679,11 +760,33 @@ fun DeckKeyView(
     val currentKey by rememberUpdatedState(key)
     val currentOnAction by rememberUpdatedState(onAction)
     val currentOnHold by rememberUpdatedState(onHold)
+    val currentOnLayerStep by rememberUpdatedState(onLayerStep)
     // One path for a release and for a screen reader's activation, so both feel the same pattern.
     val fire: (DeckAction) -> Unit = { action ->
         currentOnAction(action)
         // The latch has settled by now, so the pattern can tell one-shot from lock.
         if (action is DeckAction.Modifier) patterns.modifier(latch.state(action.modifier)) else patterns.keyTap()
+    }
+    // What the machine decided, done: sent, held, repeated, raised or stepped, each with its pattern.
+    val apply: (DeckKeyGesture.Effect?) -> Unit = { effect ->
+        when (effect) {
+            null -> Unit
+            is DeckKeyGesture.Effect.Fire -> fire(effect.action)
+            is DeckKeyGesture.Effect.Hold -> {
+                patterns.hold()
+                currentOnHold(effect.action)
+            }
+            is DeckKeyGesture.Effect.Repeat -> {
+                currentOnAction(effect.action)
+                patterns.repeatTick()
+            }
+            // The popover rising is the hold resolving, and feels like one.
+            is DeckKeyGesture.Effect.Alternates -> patterns.hold()
+            is DeckKeyGesture.Effect.LayerStep -> {
+                patterns.keyTap()
+                currentOnLayerStep?.invoke(effect.direction)
+            }
+        }
     }
     // The key's name and latch state; its swipe and hold alternates are actions rather than
     // gesture instructions, since a screen reader's user reaches them from the actions menu.
@@ -720,74 +823,70 @@ fun DeckKeyView(
                 }
                 // Enter, Space or the D-pad's centre from a keyboard is the tap; the alternates stay the reader's actions.
                 .keyPressable(enabled, interaction) { currentKey.tap?.let(fire) }
-                .pointerInput(enabled) {
+                .pointerInput(enabled, swipeDown, onLayerStep != null) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
                         val down = awaitFirstDown()
-                        pressed = true
-                        swipe = 0
-                        var moved = false
-                        var holdFired = false
-                        val threshold = 24.dp.toPx()
-                        val slop = viewConfiguration.touchSlop
                         val k = currentKey
-                        val repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true
+                        val machine = DeckKeyGesture(
+                            key = k,
+                            repeating = (k.tap as? DeckAction.Key)?.key?.repeats == true,
+                            swipeDown = swipeDown,
+                            layerSwipe = onLayerStep != null,
+                            threshold = SwipeThreshold.toPx(),
+                            slop = viewConfiguration.touchSlop,
+                            layerThreshold = SwipeThreshold.toPx() * 2,
+                        )
+                        touch.machine = machine
+                        pressed = true
+                        // The machine's clock is the events' uptime; a wait that ran out moves it by the wait.
+                        var now = down.uptimeMillis
+                        machine.down(down.position.x, down.position.y, now)
+                        fun show() {
+                            swipe = machine.swipe
+                            popover = machine.popover
+                            hovered = machine.hovered
+                        }
                         try {
-                            while (true) {
-                                val timeout = when {
-                                    holdFired && repeating -> 55L
-                                    !holdFired && !moved && (k.hold != null || repeating) -> 400L
-                                    else -> Long.MAX_VALUE
-                                }
-                                val event = withTimeoutOrNull(timeout) { awaitPointerEvent() }
+                            while (!machine.done) {
+                                val wait = machine.waitMs(now)
+                                val event = if (wait == null) awaitPointerEvent() else withTimeoutOrNull(wait) { awaitPointerEvent() }
                                 if (event == null) {
-                                    if (!holdFired) {
-                                        holdFired = true
-                                        val hold = k.hold
-                                        if (hold != null) {
-                                            patterns.hold()
-                                            currentOnHold(hold)
-                                        } else if (repeating) {
-                                            k.tap?.let(currentOnAction)
-                                        }
-                                    } else if (repeating) {
-                                        k.tap?.let(currentOnAction)
-                                        patterns.repeatTick()
-                                    }
+                                    now += wait!!
+                                    apply(machine.timeout())
+                                    show()
                                     continue
                                 }
-                                val change: PointerInputChange = event.changes.firstOrNull { it.id == down.id } ?: break
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                now = change.uptimeMillis
                                 if (!change.pressed) {
-                                    if (!holdFired) {
-                                        val action = when (swipe) {
-                                            1 -> k.up ?: k.tap
-                                            -1 -> k.down ?: k.tap
-                                            else -> k.tap
-                                        }
-                                        if (action != null) fire(action)
-                                    }
+                                    apply(machine.up())
                                     break
                                 }
-                                val dy = change.position.y - down.position.y
-                                val dx = change.position.x - down.position.x
-                                if (abs(dy) > slop || abs(dx) > slop) moved = true
-                                swipe = when {
-                                    dy < -threshold -> 1
-                                    dy > threshold -> -1
-                                    else -> 0
-                                }
+                                apply(machine.move(change.position.x, change.position.y))
+                                show()
                                 change.consume()
                             }
                         } finally {
+                            touch.machine = null
                             pressed = false
                             swipe = 0
+                            popover = null
+                            hovered = null
                         }
                     }
                 },
         ) {
             val secondary = key.secondaryLabel
-            val previewing = swipe == 1 && secondary != null
-            val shown = if (previewing) secondary!! else key.label
+            val tertiary = key.tertiaryLabel?.takeIf { swipeDown }
+            val previewUp = swipe == 1 && secondary != null
+            val previewDown = swipe == -1 && tertiary != null
+            // The label is what a release would send: the alternate while the swipe stands, else the primary.
+            val shown = when {
+                previewUp -> secondary!!
+                previewDown -> tertiary!!
+                else -> key.label
+            }
             Text(
                 text = shown,
                 style = (if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
@@ -795,18 +894,15 @@ fun DeckKeyView(
                 maxLines = 1,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
             )
-            if (secondary != null && !previewing) {
-                // A8: text alternates in Caption, symbols in Mono; both at the top-right in text.3.
-                Text(
-                    text = secondary,
-                    style = (if (secondary.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
-                    color = secondaryColor,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 3.dp, end = 6.dp),
-                )
+            if (secondary != null && !previewUp) {
+                // A8: text alternates in Caption, symbols in Mono; the swipe-up's at the top right in text.3.
+                AlternateHint(secondary, secondaryColor, Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp))
             }
+            if (tertiary != null && !previewDown) {
+                // The swipe-down's at the bottom right (spec D2), the way the swipe-up's sits at the top.
+                AlternateHint(tertiary, secondaryColor, Modifier.align(Alignment.BottomEnd).padding(bottom = 3.dp, end = 6.dp))
+            }
+            popover?.let { chips -> AlternatesPopover(chips, hovered, onPlaced = { left, width -> touch.machine?.chipsAt(left, width) }) }
             if (latchState == LatchState.LOCKED) {
                 // The lock bar hangs 3 dp under the label's baseline; the label itself does not move.
                 Box(
@@ -824,6 +920,79 @@ fun DeckKeyView(
 
 /** Label-centre to lock-bar-centre distance: half the 13 sp label's cap height plus the 3 dp gap plus half the bar. */
 private val LockBarOffset = 9.dp
+
+/** The [DeckKeyGesture] of the touch on a key while there is one; what the popover reports its chips to. */
+private class TouchInProgress {
+    var machine: DeckKeyGesture? = null
+}
+
+/** An alternate's glyph in a key's corner (spec C4, A8): Caption, symbols in Mono, text.3. */
+@Composable
+private fun AlternateHint(text: String, color: Color, modifier: Modifier) {
+    Text(
+        text = text,
+        style = (if (text.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
+        color = color,
+        maxLines = 1,
+        modifier = modifier,
+    )
+}
+
+/** A popover chip is a key's height by a snippet chip's width; the row of them sits this far above the key. */
+private val ChipWidth = 56.dp
+private val ChipHeight = 44.dp
+private val PopoverRise = 8.dp
+
+/**
+ * A key's alternates, risen on a hold (spec D2): one chip per alternate in a row over the key, on
+ * the surface two tonal steps above the Deck the way a menu is, each in the key's own radius, the
+ * one under the finger filled accent. No panel around them: a row of keys lifted off the Deck,
+ * not a box of boxes. Centred on the key and kept inside the window; where the row lands is
+ * reported through [onPlaced] in the key's coordinates, the first chip's left edge and the width
+ * of each chip's span (its width and the gap), so the machine can tell which chip a finger is over.
+ */
+@Composable
+private fun AlternatesPopover(chips: List<DeckAction>, hovered: Int?, onPlaced: (left: Float, width: Float) -> Unit) {
+    val c = Berth.colors
+    val density = LocalDensity.current
+    val currentOnPlaced by rememberUpdatedState(onPlaced)
+    val provider = remember(density) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+                val x = (anchorBounds.left + (anchorBounds.width - popupContentSize.width) / 2).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                val y = anchorBounds.top - popupContentSize.height - with(density) { PopoverRise.roundToPx() }
+                val gap = with(density) { DeckGap.toPx() }
+                val chip = with(density) { ChipWidth.toPx() }
+                // Each chip's span is its width and the gap, beginning half a gap before its left edge.
+                currentOnPlaced((x - anchorBounds.left) - gap / 2, chip + gap)
+                return IntOffset(x, y)
+            }
+        }
+    }
+    Popup(popupPositionProvider = provider, properties = PopupProperties(focusable = false)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(DeckGap)) {
+            chips.forEachIndexed { i, action ->
+                val label = action.alternateLabel()
+                val over = hovered == i
+                Box(
+                    Modifier
+                        .size(ChipWidth, ChipHeight)
+                        .clip(RoundedCornerShape(BerthRadius.key))
+                        .background(if (over) c.accent else c.surface3)
+                        .semantics { contentDescription = action.describe() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        style = (if (label.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
+                        color = if (over) c.onAccent else c.text1,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * Symbols, key chords and function keys (`|`, `\`, `:w`, `^C`, `M-x`, `F1`, `F12`) set in Mono; words
@@ -1042,9 +1211,22 @@ private fun LayerKey(
     }
 }
 
+/** The collapsed Deck's strip is 20 dp (spec C4); its tap reaches up to 24 dp below it, a 44 dp target (spec A11, #15 review nit 9). */
+val DeckStripHeight: Dp = 20.dp
+val DeckStripReach: Dp = 24.dp
+
 /**
  * The collapsed Deck (C4 "hardware keyboard attached", also the hidden-Deck state in either
- * orientation): layer name plus latched modifiers on a 20 dp strip; tap to expand.
+ * orientation): layer name plus latched modifiers on a 20 dp strip; tap to expand. The strip is
+ * drawn at its 20 dp and the layout around it sees 20 dp, so the terminal keeps the rows the strip
+ * gave back; the box that takes the tap reaches down under the strip, into the navigation bar's
+ * inset the chrome pays below it, as far as that inset goes and [DeckStripReach] at most: a 44 dp
+ * target under a 24 dp bar. Down and not up: above the strip is the terminal's last line, or the
+ * state pill's Detach while a session reconnects, and a reach there would take their touches;
+ * under it is the bar's inset, which is nobody's, and which is there whenever the strip is, since
+ * the strip stands for a keyboard that is not on the screen. Under a soft keyboard's own window
+ * there is nothing to reach into, and the strip is its 20 dp. (A reader and a switch measure 48 dp
+ * either way: Compose reports a small control's touch bounds grown to the minimum.)
  */
 @Composable
 fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, modifier: Modifier = Modifier) {
@@ -1057,11 +1239,19 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused = interaction.showsFocus()
+    val fill = if (pressed || focused) c.surface2 else c.surface1
+    // The window's own insets, not what the chrome above has consumed: the room is there whether or not it was paid here.
+    val density = LocalDensity.current
+    val barBelow = WindowInsets.navigationBars.getBottom(density)
+    val keyboardBelow = WindowInsets.ime.getBottom(density)
+    val reach = if (keyboardBelow > 0) 0.dp else with(density) { barBelow.toDp() }.coerceAtMost(DeckStripReach)
     Row(
         modifier
             .fillMaxWidth()
-            .height(20.dp)
-            .background(if (pressed || focused) c.surface2 else c.surface1)
+            .reachingDown(reach)
+            .height(DeckStripHeight + reach)
+            // Only the strip's own 20 dp are painted; the reach under it draws nothing.
+            .drawBehind { drawRect(fill, size = Size(size.width, size.height - reach.toPx())) }
             // Where Ctrl+Shift+K lands while the Deck is hidden, and where a Deck hidden under the
             // keyboard's focus hands it: taken in touch mode too, or the chord would find nothing here.
             .alwaysFocusable()
@@ -1069,6 +1259,7 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             // open the Deck, and the announced button can be activated.
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
             .semantics { contentDescription = "Deck collapsed, tap to show it" }
+            .padding(bottom = reach)
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1076,4 +1267,21 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
         Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption.keySized(), color = if (focused) c.accent else c.text3)
         Spacer(Modifier.weight(1f))
     }
+}
+
+/**
+ * Lets a control reach [reach] below its place without moving what is around it: the control is
+ * measured [reach] taller than the room it is given and the layout is told the height it would
+ * have had, so its bottom lies over whatever the parent has under it (an inset's padding) while
+ * nothing else moves. The reach takes a touch; the control draws there or not as it likes.
+ */
+private fun Modifier.reachingDown(reach: Dp): Modifier = layout { measurable, constraints ->
+    val extra = reach.roundToPx()
+    val taller = constraints.copy(
+        minHeight = 0,
+        maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight + extra else constraints.maxHeight,
+    )
+    val placeable = measurable.measure(taller)
+    val height = (placeable.height - extra).coerceIn(constraints.minHeight, constraints.maxHeight)
+    layout(placeable.width, height) { placeable.place(0, 0) }
 }

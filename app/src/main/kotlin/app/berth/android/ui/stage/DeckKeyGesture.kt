@@ -11,8 +11,10 @@ import kotlin.math.abs
  *
  * A tap sends the primary. A swipe of [threshold] up sends the secondary and, with [swipeDown] on,
  * one down sends the tertiary; a vertical swipe is decided at release, so a finger can come back.
- * A swipe of [threshold] across the key, with [layerSwipe] on, steps the layer once, right away,
- * and the rest of the touch is spent. A finger still for [HoldMs] fires the key's hold action, or
+ * A swipe of [layerThreshold] across the key, with [layerSwipe] on, steps the layer once, right
+ * away, and the rest of the touch is spent; the way across is longer than the way up (twice, by
+ * default), so a swipe up that leans sideways is still the swipe up it meant to be. A finger still
+ * for [HoldMs] fires the key's hold action, or
  * autorepeats a repeating key on the Nub's cadence (180, 90, then 45 ms as the hold goes on, spec
  * C4), or raises the alternates as a popover: the finger slides onto one and lets go to send it,
  * or lets go anywhere else to send nothing. A finger that has moved past the slop is a swipe in
@@ -30,6 +32,7 @@ class DeckKeyGesture(
     private val layerSwipe: Boolean,
     private val threshold: Float,
     private val slop: Float,
+    private val layerThreshold: Float = threshold * 2,
 ) {
     /** What one event came to; the caller sends, ticks or shows accordingly. */
     sealed interface Effect {
@@ -118,7 +121,7 @@ class DeckKeyGesture(
             return null
         }
         if (holdFired) return null
-        if (layerSwipe && abs(dx) >= threshold && abs(dx) > abs(dy)) {
+        if (layerSwipe && abs(dx) >= layerThreshold && abs(dx) > abs(dy)) {
             done = true
             swipe = 0
             return Effect.LayerStep(if (dx > 0) 1 else -1)

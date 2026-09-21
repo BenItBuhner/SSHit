@@ -240,28 +240,42 @@ class DeckKeyGestureTest {
     fun `a swipe across the key steps the layer once and spends the touch`() {
         val g = gesture(DeckKey(tap = esc, up = tick), layerSwipe = true)
         g.press()
-        assertNull("inside the threshold nothing happens", g.move(Cx + Threshold - 1f, Cy))
-        assertEquals(Effect.LayerStep(1), g.move(Cx + Threshold, Cy + 2f))
+        assertNull("inside the threshold nothing happens", g.move(Cx + LayerThreshold - 1f, Cy))
+        assertEquals(Effect.LayerStep(1), g.move(Cx + LayerThreshold, Cy + 2f))
         assertTrue(g.done)
-        assertNull("the rest of the touch is spent", g.move(Cx + Threshold * 2, Cy))
+        assertNull("the rest of the touch is spent", g.move(Cx + LayerThreshold * 2, Cy))
         assertNull(g.up())
+    }
+
+    @Test
+    fun `the way across is twice the way up, so a swipe up that leans sideways is still a swipe up`() {
+        val g = gesture(DeckKey(tap = esc, up = tick), layerSwipe = true)
+        g.press()
+        // Past the vertical threshold sideways, but short of the layer's: no step, and no swipe yet either.
+        assertNull(g.move(Cx + Threshold + 4f, Cy))
+        assertFalse(g.done)
+        assertEquals(0, g.swipe)
+        // The same finger then goes up: the swipe up it meant.
+        assertNull(g.move(Cx + Threshold + 4f, Cy - Threshold - 30f))
+        assertEquals(1, g.swipe)
+        assertEquals(Effect.Fire(tick), g.up())
     }
 
     @Test
     fun `left is the layer before, right the next`() {
         val left = gesture(DeckKey(tap = esc), layerSwipe = true)
         left.press()
-        assertEquals(Effect.LayerStep(-1), left.move(Cx - Threshold, Cy))
+        assertEquals(Effect.LayerStep(-1), left.move(Cx - LayerThreshold, Cy))
         val right = gesture(DeckKey(tap = esc), layerSwipe = true)
         right.press()
-        assertEquals(Effect.LayerStep(1), right.move(Cx + Threshold, Cy))
+        assertEquals(Effect.LayerStep(1), right.move(Cx + LayerThreshold, Cy))
     }
 
     @Test
     fun `a diagonal that is more up than across is a swipe up, not a layer step`() {
         val g = gesture(DeckKey(tap = esc, up = tick), layerSwipe = true)
         g.press()
-        assertNull(g.move(Cx + Threshold, Cy - Threshold - 5f))
+        assertNull(g.move(Cx + LayerThreshold, Cy - LayerThreshold - 5f))
         assertEquals(1, g.swipe)
         assertEquals(Effect.Fire(tick), g.up())
     }
@@ -270,7 +284,7 @@ class DeckKeyGestureTest {
     fun `a swipe across the key is nothing while the setting is off`() {
         val g = gesture(DeckKey(tap = esc), layerSwipe = false)
         g.press()
-        assertNull(g.move(Cx + Threshold * 3, Cy))
+        assertNull(g.move(Cx + LayerThreshold * 3, Cy))
         assertFalse(g.done)
         assertEquals(Effect.Fire(esc), g.up())
     }
@@ -280,7 +294,7 @@ class DeckKeyGestureTest {
         val shift = DeckKey(tap = DeckAction.Modifier(DeckModifier.SHIFT), hold = strip)
         val g = gesture(shift, layerSwipe = true)
         g.press(now = 0L)
-        assertEquals(Effect.LayerStep(1), g.move(Cx + Threshold, Cy))
+        assertEquals(Effect.LayerStep(1), g.move(Cx + LayerThreshold, Cy))
         assertNull(g.waitMs(0L))
         assertNull(g.timeout())
     }
@@ -291,7 +305,7 @@ class DeckKeyGestureTest {
         val g = gesture(shift, layerSwipe = true)
         g.press(now = 0L)
         assertEquals(Effect.Hold(strip), g.timeout())
-        assertNull(g.move(Cx + Threshold * 2, Cy))
+        assertNull(g.move(Cx + LayerThreshold * 2, Cy))
         assertFalse(g.done)
         assertNull(g.up())
     }
@@ -306,6 +320,8 @@ class DeckKeyGestureTest {
 
     private companion object {
         const val Threshold = 24f
+        /** The machine's default for the way across: twice the way up. */
+        const val LayerThreshold = Threshold * 2
         const val Slop = 8f
         const val Cx = 40f
         const val Cy = 22f

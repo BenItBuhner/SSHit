@@ -164,7 +164,13 @@ class HardwareKeyboardScreenshotTest {
         // A keyboard attached folds the Deck to its strip (C4): the Keyboard layer's name on it, no key on the Stage, the terminal focused.
         awaitDeckStrip()
         assertTrue("no Deck key stands under a keyboard", compose.onAllNodesWithTag(DeckKeyTag).fetchSemanticsNodes().isEmpty())
-        assertEquals("the strip is 20 dp", 20f, compose.onNode(deckStrip()).fetchSemanticsNode().size.height / compose.density.density, 0.5f)
+        // The strip takes 20 dp of the window (C4), from its top to the window's foot. Its tap reaches
+        // down into a navigation bar's inset for a 44 dp target (A11); Robolectric's window sends no
+        // bar, so here the strip is its 20 dp and no more (DeckStripTest gives it the bar).
+        val strip = compose.onNode(deckStrip()).fetchSemanticsNode()
+        val root = compose.onRoot().fetchSemanticsNode()
+        assertEquals("the strip is 20 dp", 20f, (root.size.height - strip.boundsInRoot.top) / compose.density.density, 0.5f)
+        assertEquals("with no bar under it the strip reaches nowhere", 20f, strip.size.height / compose.density.density, 0.5f)
         awaitFocused(hasTestTag(TerminalTag), "the terminal, with a keyboard attached and a shell tab on stage")
         capture("stage-hardware-keyboard")
 
