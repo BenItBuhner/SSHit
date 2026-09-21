@@ -10,15 +10,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -152,6 +155,12 @@ class ConnectionScreenshotTest {
         compose.waitForIdle()
     }
 
+    /** Taps the modal sheet's scrim near the top of the screen, where the sheet itself is not. */
+    private fun dismissSheet() {
+        compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(width / 2f, 60f)) }
+        compose.waitForIdle()
+    }
+
     private fun connectionSettings() = runBlocking { graph.settings.connectionSettings.first() }
 
     /**
@@ -265,6 +274,7 @@ class ConnectionScreenshotTest {
         waitForText("The system may sleep Berth when the screen is off, which drops idle connections. Exempting Berth keeps them up.")
         compose.onNodeWithText("Allow").assertExists()
         compose.onNodeWithText("Battery settings").assertExists()
+        assertTrue("not exempt: two buttons and no third; the handle and the scrim dismiss", compose.onAllNodesWithText("Done").fetchSemanticsNodes().isEmpty())
         assertTrue("stock Android has no extra step", compose.onAllNodes(oemSectionLabel()).fetchSemanticsNodes().isEmpty())
         capture(name)
         compose.assertNoTextCut("the Background sheet")
@@ -300,6 +310,7 @@ class ConnectionScreenshotTest {
         waitForText("ON SAMSUNG")
         waitForText("Settings \u203A Battery \u203A Background usage limits", substring = true)
         assertTrue("exempt already: nothing to allow", compose.onAllNodesWithText("Allow").fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithText("Done").assertExists()
         capture("background-sheet-exempt-samsung")
         compose.assertNoTextCut("the Background sheet, exempt")
     }
@@ -394,7 +405,9 @@ class ConnectionScreenshotTest {
         capture("background-sheet-raised-on-return")
         // The sheet's own texts; under it the strip's one tab carries the shell's title, ellipsized at the tab's width by design.
         compose.assertNoTextCut("the Background sheet over the Stage", within = isDialog())
-        compose.onNodeWithText("Done").performClick()
+        // Not exempt, the sheet has Allow and Battery settings and no Done: the scrim takes it down, as on every sheet.
+        assertTrue(compose.onAllNodesWithText("Done").fetchSemanticsNodes().isEmpty())
+        dismissSheet()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("How Berth stays connected when the screen is off").fetchSemanticsNodes().isEmpty() }
 
         // Lost again while away: explained is explained, and nothing comes up on the next return.

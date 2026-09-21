@@ -75,11 +75,13 @@ fun BackgroundSheet(vm: AppViewModel, onDismiss: () -> Unit) {
         )
 
         SectionLabel("Battery optimisation", Modifier.padding(start = 4.dp, top = 4.dp))
+        // The one-line status is a state and takes the state's colour; the paragraph that follows when
+        // there is none is prose, and its words carry the weight (A1: state colours are for state).
         Text(
             if (exempt) "Berth is exempt: the system leaves it running when the screen is off."
             else "The system may sleep Berth when the screen is off, which drops idle connections. Exempting Berth keeps them up.",
             style = BerthType.caption,
-            color = if (exempt) c.live else c.attention,
+            color = if (exempt) c.live else c.text2,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
         if (!exempt) {
@@ -95,9 +97,9 @@ fun BackgroundSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             Text(oem.step, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            BerthButton("Done", kind = if (exempt) ButtonKind.PRIMARY else ButtonKind.TEXT, onClick = onDismiss)
-        }
+        // Exempt, there is nothing to do here but leave, and Done is the one button. With the two
+        // above it there is no third: the handle and the scrim take the sheet down, as on every sheet.
+        if (exempt) BerthButton("Done", kind = ButtonKind.PRIMARY, onClick = onDismiss)
     }
 }
 
