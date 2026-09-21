@@ -159,6 +159,8 @@ fun StageScreen(
     onEditHost: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
+    /** Opens the Session sheet at its full height, as the grip's drag up asks (spec C4); the plain opening where a caller has no taller form. */
+    onOpenSessionSheetExpanded: () -> Unit = onOpenSessionSheet,
     /** The terminal tab's selection, search and paste state (spec C16 to C18); a test hands in its own to drive them. */
     tools: StageTools = rememberStageTools((tab as? TerminalSession)?.id),
     /** Overflow › Split and Unsplit (spec C3, C23), offered when the window fits two panes; one at a time. */
@@ -332,6 +334,7 @@ fun StageScreen(
             onLayerIndexChange = { layerIndex = it },
             onLendOverflow = { lentRows = it },
             onOpenSessionSheet = onOpenSessionSheet,
+            onOpenSessionSheetExpanded = onOpenSessionSheetExpanded,
             onEditHost = onEditHost,
             onOpenDeckEditor = onOpenDeckEditor,
             actions = actions,
@@ -373,6 +376,7 @@ class StageBodies internal constructor(
     internal val onLayerIndexChange: (Int) -> Unit,
     private val onLendOverflow: (OverflowRows?) -> Unit,
     private val onOpenSessionSheet: () -> Unit,
+    private val onOpenSessionSheetExpanded: () -> Unit,
     private val onEditHost: (String) -> Unit,
     private val onOpenDeckEditor: () -> Unit,
     private val actions: TabActions,
@@ -409,6 +413,7 @@ class StageBodies internal constructor(
                     layerIndex = layerIndex,
                     onLayerIndexChange = onLayerIndexChange,
                     onOpenSessionSheet = onOpenSessionSheet,
+                    onOpenSessionSheetExpanded = onOpenSessionSheetExpanded,
                     onEditHost = onEditHost,
                     onOpenDeckEditor = onOpenDeckEditor,
                     modifier = modifier,
@@ -566,6 +571,7 @@ private fun StageBody(
     layerIndex: Int,
     onLayerIndexChange: (Int) -> Unit,
     onOpenSessionSheet: () -> Unit,
+    onOpenSessionSheetExpanded: () -> Unit,
     onEditHost: (String) -> Unit,
     onOpenDeckEditor: () -> Unit,
     modifier: Modifier = Modifier,
@@ -588,14 +594,17 @@ private fun StageBody(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
-    val hosts by vm.hosts.collectAsState()
     // The saved host as it is now, not as it was when the tab opened: a pinch writes the host's own
-    // size (review #15) and the terminal under the fingers has to follow it. A quick-connect tab
-    // has no saved host and keeps the snapshot the record carries.
+    // size (review #15) and the Look sheet's picks land on the saved host (spec C6), and the terminal
+    // under the fingers or under the sheet has to follow them. A quick-connect tab has no saved host
+    // and keeps the snapshot the record carries.
+    val hosts by vm.hosts.collectAsState()
     val host = record.hostId?.let { id -> hosts.firstOrNull { it.id == id } } ?: record.hostSnapshot
-    // Host override, then the workspace's theme, then the app default; all three flows are live, so a theme edit lands here at once.
-    val theme = AppViewModel.resolveTerminalTheme(themes, defaultTheme, host, workspaces.byId(record.workspaceId))
-    val font: TerminalFont = host.appearance.fontSizeSp?.let { fontSetting.copy(sizeSp = it) } ?: fontSetting
+    // Host override, then the workspace's theme, then the app default, and the host's font size and
+    // family over the app's font; every flow is live, so a theme edit, a pinch or a Look pick lands here at once.
+    val look = resolveLook(themes, defaultTheme, fontSetting, host, workspaces.byId(record.workspaceId))
+    val theme = look.theme
+    val font: TerminalFont = look.font
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
     val imeVisible = WindowInsets.isImeVisible

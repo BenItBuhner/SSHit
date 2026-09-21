@@ -26,10 +26,14 @@ import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.byId
 import app.berth.android.ui.snippets.SnippetPickerSheet
 import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
@@ -43,8 +47,11 @@ import app.berth.domain.model.SessionState
 /**
  * The session sheet from the Grip or the ribbon title: the tab's facts and actions, then the other
  * tabs in the workspace for a quick switch. A terminal tab offers Detach or Reconnect, Files (the
- * host's Files tab, opened or brought on stage) and Snippets; a Files tab offers Connect or
- * Reconnect for the terminal it rides and Terminal to go there.
+ * host's Files tab, opened or brought on stage), Snippets, History and Look (the host's theme, font
+ * and size over a live Stage, [LookSheet]); a Files tab offers Connect or Reconnect for the
+ * terminal it rides and Terminal to go there. Half-height by default (spec C6); [expanded] opens it
+ * at its full height, as the grip's drag up asks (spec C4), where a group with many tabs has them
+ * all in view at once.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -58,6 +65,7 @@ fun SessionSheet(
     onOpenTunnels: (String) -> Unit = {},
     onOpenFiles: (tabId: String) -> Unit = {},
     onOpenTerminal: (filesTabId: String) -> Unit = {},
+    expanded: Boolean = false,
 ) {
     val c = Berth.colors
     val record by tab.record.collectAsState()
@@ -78,6 +86,24 @@ fun SessionSheet(
     val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
     var snippets by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
+    var lookOpen by remember { mutableStateOf(false) }
+    val lookHostId = record.hostId
+    // The look the terminal draws with now, from the host as it is saved (a pick in the Look sheet
+    // lands there; the record's snapshot is the host as it was at connect) over the group's theme.
+    val hosts by vm.hosts.collectAsState()
+    val themes by vm.terminalThemes.collectAsState()
+    val defaultTheme by vm.defaultTerminalTheme.collectAsState()
+    val fontSetting by vm.terminalFont.collectAsState()
+    val workspaces by vm.workspaces.collectAsState()
+    fun lookOf(hostId: String): TerminalLook =
+        resolveLook(themes, defaultTheme, fontSetting, hosts.firstOrNull { it.id == hostId } ?: host, workspaces.byId(record.workspaceId))
+
+    // The Look sheet stands in for this one while it is up: one sheet over the Stage, and the Stage
+    // in view under it is the preview. Closing Look brings this sheet back where it was.
+    if (lookOpen && session != null && lookHostId != null) {
+        LookSheet(vm, lookHostId, onDismiss = { lookOpen = false })
+        return
+    }
 
     // The sheet opens whole, as the prompts do, rather than at half the window with its second row of
     // pills below the fold at the interface cap; and the column scrolls, for a window shorter than the
@@ -160,6 +186,19 @@ fun SessionSheet(
                     }
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() })
                 }
+            }
+            // The host's look (spec C6, Look): a row rather than a sixth button, since it has something
+            // to say, the theme, font and size the terminal draws with now, and opens the Look sheet
+            // over the live Stage. Only a saved host has a look of its own; Quick connect's has none.
+            if (session != null && lookHostId != null) {
+                ListRow(
+                    title = "Look",
+                    subtitle = lookOf(lookHostId).summary,
+                    surface = c.surface1,
+                    minHeight = 44.dp,
+                    onClick = { lookOpen = true },
+                    trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
+                )
             }
             // C6's toggle row: this tab's keyboard may suggest words; the Stage tells the keyboard and lights the grip.
             if (session != null && !session.tunnelsOnly) {

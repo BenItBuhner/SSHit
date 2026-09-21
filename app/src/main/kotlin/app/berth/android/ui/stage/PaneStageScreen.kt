@@ -147,6 +147,8 @@ fun PaneStageScreen(
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
     onGroups: () -> Unit = {},
+    /** The Session sheet at its full height, for the grip's drag up (spec C4); handed through to the Stage. */
+    onOpenSessionSheetExpanded: () -> Unit = onOpenSessionSheet,
 ) {
     val active by vm.activeTab.collectAsState()
     val panes by vm.panes.collectAsState()
@@ -226,6 +228,7 @@ fun PaneStageScreen(
             actions = actions,
             onOpenDrawer = onOpenDrawer,
             onOpenSessionSheet = onOpenSessionSheet,
+            onOpenSessionSheetExpanded = onOpenSessionSheetExpanded,
             onEditHost = onEditHost,
             modifier = modifier,
             onOpenDeckEditor = onOpenDeckEditor,
