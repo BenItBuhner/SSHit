@@ -193,12 +193,15 @@ class FrameBuffers {
     }
 }
 
+/** An OSC 8 link tapped on the canvas (spec A60): where it goes, and the text that stood for it on screen. */
+data class LinkTap(val url: String, val text: String)
+
 /**
  * Draws a [TerminalSession]'s screen cell by cell on a Canvas, sizes the PTY to the available
  * space, and owns the touch gestures: drag scrolls history (or sends wheel events to full-screen
- * apps), pinch changes the font size, tap focuses and shows the keyboard, long-press selects a
- * word and places handles, double-tap selects a word, double-tap and drag selects lines, a
- * two-finger tap pastes (spec C18, D1).
+ * apps), pinch changes the font size, tap focuses and shows the keyboard (or, on an OSC 8 link,
+ * offers to open it), long-press selects a word and places handles, double-tap selects a word,
+ * double-tap and drag selects lines, a two-finger tap pastes (spec A60, C18, D1).
  *
  * Output never recomposes the canvas: frames are captured on a worker as the screen version
  * changes and a tick state read in the draw scope alone invalidates the drawing.
@@ -217,6 +220,11 @@ fun TerminalCanvas(
     onTap: () -> Unit = {},
     onTwoFingerSwipe: ((forward: Boolean) -> Unit)? = null,
     onTwoFingerTap: (() -> Unit)? = null,
+    /**
+     * A tap on a cell printed under an OSC 8 link, with the link's URL and its text on screen; the
+     * link is underlined while the finger is down. Null leaves links as plain text.
+     */
+    onLinkTap: ((LinkTap) -> Unit)? = null,
     selection: TerminalSelection? = null,
     search: TerminalSearch? = null,
     onSelectionStarted: () -> Unit = {},
@@ -233,6 +241,8 @@ fun TerminalCanvas(
     val emulator = session.emulator
     val frames = remember(session.id) { FrameBuffers() }
     var frameTick by remember(session.id) { mutableIntStateOf(0) }
+    // The OSC 8 link under a finger, by id, for the draw to underline; 0 between presses.
+    var pressedLink by remember(session.id) { mutableIntStateOf(0) }
     val overlay = remember { FrameOverlay() }
     val accent = Berth.colors.accent.toArgb()
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -299,6 +309,7 @@ fun TerminalCanvas(
     val handleReachPx = with(density) { HANDLE_REACH.toPx() }
     val currentSwipe by rememberUpdatedState(onTwoFingerSwipe)
     val currentTwoFingerTap by rememberUpdatedState(onTwoFingerTap)
+    val currentLinkTap by rememberUpdatedState(onLinkTap)
     val currentSelectionStarted by rememberUpdatedState(onSelectionStarted)
     val currentOnTap by rememberUpdatedState(onTap)
     val currentFontStep by rememberUpdatedState(onFontSizeStep)
@@ -344,6 +355,14 @@ fun TerminalCanvas(
                         (down.position - lastTapAt).getDistance() <= slop * 2
                     lastTapUp = 0L
 
+                    // A link under the finger is underlined from the moment it lands and until the
+                    // gesture turns out to be anything but a tap on it (spec A60).
+                    val (downCol, downRow) = p.cellAt(down.position)
+                    val linkId = if (currentLinkTap != null && sel?.active != true) frames.front.linkAt(downRow, downCol) else 0
+                    pressedLink = linkId
+                    val linkUrl = if (linkId != 0) emulator.links.url(linkId) else null
+                    if (linkUrl == null) pressedLink = 0
+
                     var mode = GestureMode.NONE
                     var lastY = down.position.y
                     var acc = 0f
@@ -364,6 +383,7 @@ fun TerminalCanvas(
                         }
                         if (event == null) {
                             // Long-press: a word selection at the pressed cell, then a drag grows it by words.
+                            pressedLink = 0
                             synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.WORD) }
                             currentSelectionStarted()
                             dragSelection(emulator, viewport, size.height.toFloat(), place)
@@ -372,6 +392,7 @@ fun TerminalCanvas(
                         val pressed = event.changes.filter { it.pressed }
                         if (pressed.isEmpty()) {
                             val up = event.changes.firstOrNull()?.uptimeMillis ?: down.uptimeMillis
+                            pressedLink = 0
                             when (mode) {
                                 GestureMode.SWIPE -> currentSwipe?.invoke(swipeForward)
                                 GestureMode.PINCH -> if (!zoomed && twoTravel < slop && up - down.uptimeMillis < TAP_MS) currentTwoFingerTap?.invoke()
@@ -383,6 +404,8 @@ fun TerminalCanvas(
                                             synchronized(emulator.lock) { sel.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.WORD) }
                                             currentSelectionStarted()
                                         }
+                                        // A tap on a link offers to open it (spec A60); the keyboard stays as it was.
+                                        linkUrl != null -> currentLinkTap?.invoke(LinkTap(linkUrl, frames.front.linkText(downRow, downCol)))
                                         else -> {
                                             lastTapUp = up
                                             lastTapAt = down.position
@@ -403,6 +426,7 @@ fun TerminalCanvas(
                             break
                         }
                         if (pressed.size >= 2) {
+                            pressedLink = 0
                             val a = pressed[0]
                             val b = pressed[1]
                             val dist = (a.position - b.position).getDistance()
@@ -441,6 +465,7 @@ fun TerminalCanvas(
                                 val dx = c.position.x - down.position.x
                                 val dy = c.position.y - down.position.y
                                 if (abs(dx) > slop || abs(dy) > slop) {
+                                    pressedLink = 0
                                     if (secondTap && sel != null) {
                                         // Double-tap and drag: whole lines from the tapped one to the finger.
                                         synchronized(emulator.lock) { sel.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.LINE) }
@@ -493,6 +518,9 @@ fun TerminalCanvas(
                 }
             }
             overlay.selectionColor = opaqueRgb(theme.selection)
+            // The link under a finger, underlined in the theme's links colour for as long as it is held.
+            overlay.pressedLink = pressedLink
+            overlay.linkColor = theme.links
             if (search != null && search.open) {
                 val a = search.anchor
                 val ms = search.matches

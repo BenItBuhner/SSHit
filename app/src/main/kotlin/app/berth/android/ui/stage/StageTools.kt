@@ -82,6 +82,7 @@ import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
+import app.berth.android.ui.terminal.LinkTap
 import app.berth.android.ui.terminal.TerminalSearch
 import app.berth.android.ui.terminal.TerminalSelection
 import app.berth.android.ui.terminal.TerminalViewport
@@ -108,6 +109,9 @@ class StageTools {
     var pendingPaste by mutableStateOf<PasteAnalysis?>(null)
     var notice by mutableStateOf<String?>(null)
     var historyOpen by mutableStateOf(false)
+
+    /** The OSC 8 link tapped on the canvas and waiting for a look in [LinkOpenSheet] (spec A60). */
+    var pendingLink by mutableStateOf<LinkTap?>(null)
 
     /**
      * Sends [text] to the session as a paste, or holds it for the preview sheet when it is more
@@ -499,6 +503,102 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
                 }
             }
         }
+    }
+}
+
+/**
+ * The look before an OSC 8 link opens (spec A60), on the paste preview's posture: the address in
+ * full, since the text it wore on screen is the remote's choice and need not be where it goes. The
+ * caption names the destination's host, and the text on screen when that was not the address
+ * itself. Open is the filled button while the two agree. When the text on screen is itself an
+ * address or a host that is not the destination's (a link dressed as another site), the sheet is
+ * a warning: the caption says so in the danger colour and the weight goes to the safe answer,
+ * Cancel in the resting kind with Open anyway plain beside it, as the clipboard notice weighs its
+ * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LinkOpenSheet(link: LinkTap, tools: StageTools, onDismiss: () -> Unit) {
+    val c = Berth.colors
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val look = remember(link) { LinkLook.of(link) }
+    fun open() {
+        onDismiss()
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+    fun copy() {
+        clipboard.setText(AnnotatedString(link.url))
+        tools.notice = "Copied"
+        onDismiss()
+    }
+    BerthSheet(onDismiss = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetTitle("Open link", look.caption, captionColor = if (look.warning) c.danger else c.text2)
+            Panel {
+                Text(
+                    link.url,
+                    style = MonoBody,
+                    color = c.text1,
+                    modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${link.url}" },
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (look.warning) {
+                    BerthButton("Cancel", onClick = onDismiss)
+                    BerthButton("Open anyway", kind = ButtonKind.TEXT, onClick = ::open)
+                    BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
+                } else {
+                    BerthButton("Open", kind = ButtonKind.PRIMARY, onClick = ::open)
+                    BerthButton("Copy", kind = ButtonKind.TEXT, onClick = ::copy)
+                    Spacer(Modifier.weight(1f))
+                    BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What the link sheet says over the address: where the link goes, whether the text on screen was
+ * something else, and whether that something else was an address of its own. Pure, so the rule is
+ * tested on its own.
+ */
+class LinkLook(val caption: String, val warning: Boolean) {
+    companion object {
+        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?([^/?#:\s]+)""")
+        private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#].*)?$""")
+
+        fun of(link: LinkTap): LinkLook {
+            val to = hostOf(link.url)
+            val where = if (to != null) "goes to $to" else "a ${link.url.substringBefore(':').lowercase().ifEmpty { "plain" }} link"
+            val shown = link.text.trim()
+            if (shown.isEmpty() || sameAddress(shown, link.url)) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false)
+            val shownHost = hostOf(shown) ?: BARE_HOST.matchEntire(shown)?.groupValues?.get(1)?.lowercase()
+            val deceptive = shownHost != null && to != null && shownHost.removePrefix("www.") != to.removePrefix("www.")
+            return if (deceptive) {
+                LinkLook("Shown as $shownHost, but $where", warning = true)
+            } else {
+                LinkLook("Shown as \u201C${shown.take(SHOWN_CHARS)}${if (shown.length > SHOWN_CHARS) "\u2026" else ""}\u201D, $where", warning = false)
+            }
+        }
+
+        /** The host of an address with a scheme, lowercased; null for one without (`mailto:`, a bare word). */
+        fun hostOf(url: String): String? = SCHEME_HOST.find(url.trim())?.groupValues?.get(1)?.lowercase()
+
+        /** The text is the address itself, give or take the scheme, `www.` and a closing slash. */
+        private fun sameAddress(text: String, url: String): Boolean {
+            fun norm(s: String) = s.trim().lowercase().replace(Regex("""^[a-z][a-z0-9+.\-]*://"""), "").removePrefix("www.").trimEnd('/')
+            return norm(text) == norm(url)
+        }
+
+        private const val SHOWN_CHARS = 40
     }
 }
 

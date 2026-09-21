@@ -33,14 +33,22 @@ class FrameOverlay {
     /** The glyph colour inside [current], as 0xRRGGBB: the theme's background, which the accent is chosen to read against. */
     var currentFg: Int = 0
 
+    /**
+     * The OSC 8 link a finger is down on, by id, underlined in [linkColor] (the theme's `links`)
+     * for as long as it is held (spec A60; links are underlined on hover or press only). 0 for none.
+     */
+    var pressedLink: Int = 0
+    var linkColor: Int = 0
+
     fun clear() {
         selection = null
         selectionRectangular = false
         matches.clear()
         current = null
+        pressedLink = 0
     }
 
-    val isEmpty: Boolean get() = selection == null && matches.isEmpty() && current == null
+    val isEmpty: Boolean get() = selection == null && matches.isEmpty() && current == null && pressedLink == 0
 }
 
 /**
@@ -190,6 +198,25 @@ object TerminalRenderer {
                     nc.drawLine(x * cw, sy, end * cw, sy, paints.line)
                 }
                 x = maxOf(end, x + 1)
+            }
+
+            // The link under a finger: one underline in the theme's links colour per run of its
+            // cells on this row, over whatever the cells' own underline was.
+            val pressed = overlay?.pressedLink ?: 0
+            if (pressed != 0 && line.links != null) {
+                paints.line.color = opaque(overlay!!.linkColor)
+                val uy = top + paints.baseline + paints.line.strokeWidth * 1.5f
+                x = 0
+                while (x < lineCols) {
+                    if (line.linkAt(x) != pressed) {
+                        x++
+                        continue
+                    }
+                    var end = x + 1
+                    while (end < lineCols && line.linkAt(end) == pressed) end++
+                    nc.drawLine(x * cw, uy, end * cw, uy, paints.line)
+                    x = end
+                }
             }
         }
 

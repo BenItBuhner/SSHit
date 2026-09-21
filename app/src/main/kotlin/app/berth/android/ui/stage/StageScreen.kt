@@ -681,6 +681,8 @@ private fun StageBody(
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
                 onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },
+                // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
+                onLinkTap = { tools.pendingLink = it },
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },
@@ -772,6 +774,7 @@ private fun StageBody(
 
     pendingSnippet?.let { p -> SnippetRunSheet(vm, session, p, onDismiss = { pendingSnippet = null }) }
     tools.pendingPaste?.let { p -> PastePreviewSheet(p, session, patterns, onDismiss = { tools.pendingPaste = null }) }
+    tools.pendingLink?.let { l -> LinkOpenSheet(l, tools, onDismiss = { tools.pendingLink = null }) }
     if (tools.historyOpen) CommandHistorySheet(vm, session, onDismiss = { tools.historyOpen = false }, onNotice = { tools.notice = it })
 }
 
