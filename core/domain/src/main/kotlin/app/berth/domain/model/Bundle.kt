@@ -135,9 +135,10 @@ sealed class BundleFormatException(message: String) : RuntimeException(message) 
  * What the import sheet decides for the user, as the sheet leaves it: the three things in a bundle
  * that are not records with an id but this phone's one copy, and so are replaced rather than added
  * to, each a switch on by default; and the bundled known hosts that differ from a key this phone
- * trusts for their endpoint ([BundleImportPlan.knownHostsConflicting]), each the changed-key
- * decision (spec C13) offered unticked, [replaceKnownHosts] naming the ones ticked to take the
- * saved key's place ([BundledKnownHost.id]).
+ * trusts for their endpoint ([BundleImportPlan.knownHostsConflicting]), each a decision (spec C13)
+ * offered unticked, [replaceKnownHosts] naming the ones ticked ([BundledKnownHost.id]): a key of a
+ * type this phone holds takes the saved key's place, and one of a type it holds none of is added
+ * beside the saved key ([BundledKnownHost.addsBeside]).
  */
 data class BundleImportOptions(
     val deck: Boolean = true,
@@ -175,7 +176,8 @@ data class BundleImportPlan(
 
     /**
      * Bundled keys that differ from a key this phone trusts for their endpoint, the pin aside: the
-     * changed-key case (spec C13), each offered as a Replace decision the sheet starts unticked.
+     * changed-key case (spec C13), each offered as a decision the sheet starts unticked, the Replace
+     * for a key of a type this phone holds, the add beside for one it holds none of ([BundledKnownHost.addsBeside]).
      */
     val knownHostsConflicting: List<BundledKnownHost> get() = knownHosts.filter { it.standing is KnownHostStanding.Conflicting }
 
@@ -191,6 +193,14 @@ data class BundleImportPlan(
  */
 data class BundledKnownHost(val key: KnownHostKey, val standing: KnownHostStanding) {
     val id: String get() = "${key.host.lowercase()}:${key.port}:${key.publicKeyBase64}"
+
+    /**
+     * Whether a tick on this key adds it beside the saved key rather than in its place: a
+     * [KnownHostStanding.Conflicting] key of a type this phone holds none of for the endpoint,
+     * which live is the first-connection question and an accept there saves beside what is held
+     * (spec C13's additional key). A tick on a key of a type this phone holds is the Replace.
+     */
+    val addsBeside: Boolean get() = standing is KnownHostStanding.Conflicting && standing.saved.keyType != key.keyType
 }
 
 /**

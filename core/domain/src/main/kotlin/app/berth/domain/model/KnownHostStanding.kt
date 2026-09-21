@@ -7,7 +7,9 @@ package app.berth.domain.model
  * [Conflicting] key is the Replace decision the changed-key sheet makes, a row that starts
  * unticked, and a [Pinned] endpoint takes nothing. The bundle import lays one rule of its own over
  * [of]: a key of a type this phone holds none of, for an endpoint it does hold a key for, stands
- * as [Conflicting] with what is held, since live that case asks the user and a bundle's row can.
+ * as [Conflicting] with what is held, since live that case asks the user and a bundle's row can;
+ * that row's tick adds the key beside what is held, as the live accept does, where a key of a held
+ * type ticked takes the saved key's place.
  *
  * [of] is the one rule; the callers decide what each answer means for them.
  */

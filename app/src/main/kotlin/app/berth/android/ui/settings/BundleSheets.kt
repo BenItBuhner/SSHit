@@ -42,7 +42,9 @@ import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.importer.keyFacts
 import app.berth.android.ui.importer.pinnedToLine
 import app.berth.android.ui.importer.replacesSavedKeyLine
+import app.berth.android.ui.importer.shortFingerprint
 import app.berth.android.ui.keys.NewKeyPrefill
+import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.data.bundle.BundleException
@@ -53,6 +55,7 @@ import app.berth.domain.model.BundleImportOptions
 import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.Identity
+import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.RecreateNotice
 import kotlinx.coroutines.Dispatchers
@@ -228,8 +231,11 @@ fun ImportBundleSheet(
     var options by remember { mutableStateOf(BundleImportOptions()) }
     var report by remember { mutableStateOf<BundleImportReport?>(null) }
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
-    // The conflicts ticked to take a saved key's place, which the button names.
-    val replacing = plan?.knownHostsConflicting?.count { it.id in options.replaceKnownHosts } ?: 0
+    // What the ticks do, which the button names: a key of a held type takes the saved key's place, one of a type this
+    // phone holds none of is added beside it.
+    val ticked = plan?.knownHostsConflicting?.filter { it.id in options.replaceKnownHosts }.orEmpty()
+    val replacing = ticked.count { !it.addsBeside }
+    val adding = ticked.count { it.addsBeside }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
@@ -322,7 +328,7 @@ fun ImportBundleSheet(
                     )
                     if (error != null) Text(error!!, style = BerthType.caption, color = c.danger, modifier = Modifier.padding(horizontal = 4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        BerthButton(if (busy) "Importing\u2026" else importBundleLabel(replacing), kind = ButtonKind.PRIMARY, enabled = !busy && !opened.isEmpty, onClick = ::import)
+                        BerthButton(if (busy) "Importing\u2026" else importBundleLabel(replacing, adding), kind = ButtonKind.PRIMARY, enabled = !busy && !opened.isEmpty, onClick = ::import)
                         BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
                     }
                 }
@@ -363,9 +369,11 @@ fun ImportBundleSheet(
  * under the tunnels, saying it comes in switched off. The known hosts take the `known_hosts`
  * import's shape (spec A16, C13) once [plan] has been read: one count row for the keys that need
  * no decision, a bundle being a restore and a new key routine; then the decisions, a row each, a
- * key that differs from one this phone trusts for its endpoint as an unticked [TickRow] whose
- * danger line names the saved key and whose tick is the Replace, and a pinned endpoint as a lock
- * row, read and not offered, since a pin takes no other key.
+ * key that differs from one this phone trusts for its endpoint as an unticked [TickRow], its line
+ * in the danger tint naming the saved key when the tick is the Replace, and in the subtitle's own
+ * tone when the key is of a type this phone holds none of and the tick adds it beside the saved
+ * key ([BundledKnownHost.addsBeside]); and a pinned endpoint as a lock row, read and not offered,
+ * since a pin takes no other key.
  */
 @Composable
 private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options: BundleImportOptions, defaultThemeHere: String, onOptions: (BundleImportOptions) -> Unit) {
@@ -437,13 +445,15 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
                 when (val standing = bundled.standing) {
                     // Written or nothing to do: the count row above has them.
                     KnownHostStanding.NEW, KnownHostStanding.EXISTING -> Unit
-                    // C13's changed-key decision, unticked until it is made; the tick is the Replace.
+                    // C13's decision, unticked until it is made: the Replace for a key of a held type, said in the danger
+                    // tint; the add beside for a key of a type this phone holds none of, which takes nothing away.
                     is KnownHostStanding.Conflicting -> TickRow(
                         title = bundled.key.endpoint,
                         subtitle = facts,
                         ticked = bundled.id in options.replaceKnownHosts,
                         onTicked = { onOptions(options.copy(replaceKnownHosts = if (it) options.replaceKnownHosts + bundled.id else options.replaceKnownHosts - bundled.id)) },
-                        warning = replacesSavedKeyLine(standing.saved),
+                        warning = if (bundled.addsBeside) null else replacesSavedKeyLine(standing.saved),
+                        note = if (bundled.addsBeside) addedBesideSavedKeyLine(standing.saved) else null,
                         surface = Color.Transparent,
                     )
                     // A pin means no other key for the endpoint: the row is read, not offered, and says where the pin is undone.
@@ -489,14 +499,29 @@ internal fun knownHostsCaption(endpoints: List<String>, existing: Int): String =
 }
 
 /**
- * The import button's word: `Import`, or `Import, replace 1 key` when the sheet's ticks take a
- * saved key's place, the way the `known_hosts` import's button names what it replaces.
+ * The import button's word for what the sheet's ticks do, the way the `known_hosts` import's
+ * button names what it replaces: `Import`; `Import, replace 1 key` when [replacing] ticks take a
+ * saved key's place; `Import, add 1 key` when [adding] ticks add a key beside the saved one; and
+ * `Import, replace 1 key, add 1` for both.
  */
-internal fun importBundleLabel(replacing: Int): String = when (replacing) {
-    0 -> "Import"
-    1 -> "Import, replace 1 key"
-    else -> "Import, replace $replacing keys"
+internal fun importBundleLabel(replacing: Int, adding: Int = 0): String {
+    fun keys(n: Int) = if (n == 1) "1 key" else "$n keys"
+    return when {
+        replacing == 0 && adding == 0 -> "Import"
+        adding == 0 -> "Import, replace ${keys(replacing)}"
+        replacing == 0 -> "Import, add ${keys(adding)}"
+        else -> "Import, replace ${keys(replacing)}, add $adding"
+    }
 }
+
+/**
+ * The line under the row of a bundled key of a type this phone holds none of for its endpoint, in
+ * the subtitle's own tone since the tick takes nothing away: the [saved] key of another type it
+ * would be added beside, since when, and that the saved key stays. The live first-connection
+ * sheet's accept saves such a key the same way (spec C13's additional key).
+ */
+internal fun addedBesideSavedKeyLine(saved: KnownHostKey): String =
+    "Ticked, it is added beside the saved ${saved.algorithmLabel} key ${shortFingerprint(saved.fingerprintSha256)} (trusted ${formatDate(saved.firstSeenAt)}), which stays."
 
 /** The default terminal theme switch's caption: what new terminals would open in, and what they open in now. */
 internal fun defaultTerminalThemeCaption(bundled: String, here: String): String = "New terminals open in $bundled instead of $here"

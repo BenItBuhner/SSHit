@@ -512,7 +512,9 @@ fun PanelNote(text: String, modifier: Modifier = Modifier) {
  * that toggles as a checkbox, so a screen reader hears `checked, git.example.com` rather than a
  * button whose description changes, with the dot as its only mark. A [warning] under the facts,
  * in the danger tint, is what ticking the row would undo: the saved key a conflicting one replaces.
- * [surface] is the row's own tone; inside a [Panel] it is transparent, the panel's being the tone.
+ * A [note] is the same line in the subtitle's own tone, for a tick that takes nothing away: the
+ * saved key a bundled one of another type is added beside. [surface] is the row's own tone;
+ * inside a [Panel] it is transparent, the panel's being the tone.
  */
 @Composable
 fun TickRow(
@@ -521,18 +523,23 @@ fun TickRow(
     ticked: Boolean,
     onTicked: (Boolean) -> Unit,
     warning: String? = null,
+    note: String? = null,
     surface: Color = Berth.colors.surface2,
 ) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     ListRow(
         title = title,
-        subtitle = if (warning == null) subtitle else buildAnnotatedString {
-            append(subtitle)
-            append("\n")
-            withStyle(SpanStyle(color = c.danger)) { append(warning) }
+        subtitle = when {
+            warning != null -> buildAnnotatedString {
+                append(subtitle)
+                append("\n")
+                withStyle(SpanStyle(color = c.danger)) { append(warning) }
+            }
+            note != null -> "$subtitle\n$note"
+            else -> subtitle
         },
-        subtitleMaxLines = if (warning == null) 2 else 4,
+        subtitleMaxLines = if (warning == null && note == null) 2 else 4,
         minHeight = 52.dp,
         surface = surface,
         modifier = Modifier.toggleable(value = ticked, role = Role.Checkbox, interactionSource = interaction, indication = null, onValueChange = onTicked),

@@ -44,11 +44,14 @@ import kotlinx.coroutines.flow.first
  *   carried, whether it differs from the key of its type, from a pin, or is of a type this phone
  *   holds none of for that endpoint ([standings]); the key this phone holds is the check between
  *   the user and a wrong key, and a bundle does not override it on its own. A key that differs
- *   from an unpinned one is the changed-key case (spec C13), which the sheet offers as the Replace
- *   decision the changed-key sheet makes, unticked; ticked ([BundleImportOptions.replaceKnownHosts]),
+ *   from an unpinned one of its type is the changed-key case (spec C13), which the sheet offers as
+ *   the Replace decision the changed-key sheet makes, unticked; ticked ([BundleImportOptions.replaceKnownHosts]),
  *   the saved key is deleted and the bundle's written in its place, as #19's `known_hosts` import
- *   and the live sheet's Replace do. A pinned endpoint takes nothing and is not offered. The same
- *   key is nothing to do, and a key for an endpoint held nothing of is written.
+ *   and the live sheet's Replace do. A key of a type this phone holds none of for the endpoint is
+ *   offered the same way, unticked, and its tick adds it beside the saved key, which stays, as an
+ *   accept on the live first-connection sheet does (C13's additional key). A pinned endpoint takes
+ *   nothing and is not offered. The same key is nothing to do, and a key for an endpoint held
+ *   nothing of is written.
  * - Tunnels bound to every interface that the bundle had switched on come in switched off, so
  *   nothing an import brings listens on the network until the user turns it on where the binding shows.
  *
@@ -138,8 +141,9 @@ class BerthBundles(
      * type this phone holds none of, for an endpoint it does hold a key for, is NEW to `of`: live,
      * that is the case the policy asks the user about, the trust sheet handed what is held for the
      * endpoint; here it stands as [KnownHostStanding.Conflicting] with what is held, so the sheet
-     * asks the same way it asks about any key that differs. The shared rule stays as it is. Read
-     * against this phone once, so the write judges every key as the sheet showed it.
+     * asks the same way it asks about any key that differs, and its tick adds the key beside what
+     * is held, as the live accept does ([BundledKnownHost.addsBeside]). The shared rule stays as it
+     * is. Read against this phone once, so the write judges every key as the sheet showed it.
      */
     private suspend fun standings(bundled: List<KnownHostKey>): List<BundledKnownHost> {
         val here = knownHosts.observeAll().first().groupBy { it.host.lowercase() to it.port }
@@ -240,14 +244,18 @@ class BerthBundles(
                     knownHostsWritten++
                 }
                 KnownHostStanding.EXISTING -> Unit
-                // Ticked, the changed-key sheet's Replace: the saved key goes, the bundle's is written in its place under
-                // the address as the saved key spelt it, which is the spelling the live lookup reads. Two ticked keys for
-                // one endpoint both stand: the saved key goes once and each is written.
+                // Ticked. A key of a type this phone holds: the changed-key sheet's Replace, the saved key goes and the
+                // bundle's is written in its place. One of a type it holds none of: added beside the saved key, which
+                // stays, as an accept on the live first-connection sheet saves it. Either way under the address as the
+                // saved key spelt it, which is the spelling the live lookup reads. Two ticked keys for one endpoint both
+                // stand: the saved key goes once, on the tick that replaces it, and each is written.
                 is KnownHostStanding.Conflicting -> if (bundled.id in options.replaceKnownHosts) {
-                    knownHosts.delete(standing.saved.id)
+                    if (!bundled.addsBeside) {
+                        knownHosts.delete(standing.saved.id)
+                        knownHostsReplaced++
+                    }
                     knownHosts.upsert(bundled.key.copy(host = standing.saved.host))
                     knownHostsWritten++
-                    knownHostsReplaced++
                 } else {
                     knownHostsKept++
                 }

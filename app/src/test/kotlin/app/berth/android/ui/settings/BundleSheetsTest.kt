@@ -1,5 +1,7 @@
 package app.berth.android.ui.settings
 
+import app.berth.android.ui.prompts.formatDate
+import app.berth.domain.model.KnownHostKey
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -12,7 +14,8 @@ import java.io.InputStream
  * The import sheet's reading of a picked file, and its lines: the picker is `*∕*`, so the pick may
  * be anything on the phone and the read stops at the bundle limit instead of holding the pick
  * whole to measure it; the rows for what an import does not take as carried count in the singular
- * and the plural, and the button names the keys the ticks replace.
+ * and the plural, and the button names the keys the ticks replace and the keys they add beside a
+ * saved one.
  */
 class BundleSheetsTest {
     @Test
@@ -53,10 +56,15 @@ class BundleSheetsTest {
         assertEquals("203.0.113.10 \u00B7 trusted already", knownHostsCaption(listOf("203.0.113.10"), existing = 1))
         assertEquals("a, b \u00B7 all trusted already", knownHostsCaption(listOf("a", "b"), existing = 2))
         assertEquals("a, b, c \u00B7 1 trusted already", knownHostsCaption(listOf("a", "b", "c"), existing = 1))
-        // The conflicts are rows of their own; the button counts the ticked ones, as the known_hosts import's does.
+        // The conflicts are rows of their own; the button counts the ticked ones, as the known_hosts import's does:
+        // the ticks that take a saved key's place, and the ticks that add a key of another type beside it (nit 19).
         assertEquals("Import", importBundleLabel(0))
         assertEquals("Import, replace 1 key", importBundleLabel(1))
         assertEquals("Import, replace 2 keys", importBundleLabel(2))
+        assertEquals("Import, add 1 key", importBundleLabel(0, adding = 1))
+        assertEquals("Import, add 2 keys", importBundleLabel(0, adding = 2))
+        assertEquals("Import, replace 1 key, add 1", importBundleLabel(1, adding = 1))
+        assertEquals("Import, replace 2 keys, add 3", importBundleLabel(2, adding = 3))
     }
 
     @Test
@@ -77,6 +85,15 @@ class BundleSheetsTest {
         assertEquals(
             "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed.",
             IMPORT_DISCLOSURE,
+        )
+    }
+
+    @Test
+    fun `the line under a key of a type this phone holds none of names the saved key it is added beside, and that it stays`() {
+        val saved = KnownHostKey("kh-1", "203.0.113.10", 22, "ssh-ed25519", "AAAAsaved", "SHA256:L6ErsL0LWje5zGabcdefghijklmnopqrstuvwxyz0123", firstSeenAt = 0L, lastSeenAt = 0L)
+        assertEquals(
+            "Ticked, it is added beside the saved ED25519 key SHA256:L6Er sL0L Wje5 zGab\u2026 (trusted ${formatDate(0L)}), which stays.",
+            addedBesideSavedKeyLine(saved),
         )
     }
 }
