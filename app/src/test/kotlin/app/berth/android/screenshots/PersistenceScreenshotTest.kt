@@ -305,7 +305,7 @@ class PersistenceScreenshotTest {
         compose.onNodeWithText("Import").performScrollTo().performClick()
         waitForText("MAKE AGAIN IN KEYS")
         // No known host in the line: the one the bundle carried differed from this phone's and was not taken.
-        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme and the Deck.")
+        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme, the Deck and the interface theme.")
         waitForText("db-primary asks each time until you pick a key", substring = true)
         capture("$name-recreate")
         compose.assertNoTextCut("the import's report")

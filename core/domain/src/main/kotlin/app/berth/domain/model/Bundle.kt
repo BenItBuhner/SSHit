@@ -173,6 +173,8 @@ data class BundleImportReport(
     val knownHostsKept: Int = 0,
     /** Tunnels bound to every interface, imported switched off. */
     val tunnelsHeldOff: Int = 0,
+    /** Whether the bundle's interface theme was taken over this phone's ([BundleImportOptions.interfaceTheme]). */
+    val interfaceTheme: Boolean = false,
 ) {
     /** One line for a notice: `Imported 12 hosts, 3 keys and 8 snippets.` */
     val summary: String
@@ -186,6 +188,7 @@ data class BundleImportReport(
                 if (terminalThemes > 0) add(count(terminalThemes, "theme"))
                 if (knownHosts > 0) add(count(knownHosts, "known host"))
                 if (deck) add("the Deck")
+                if (interfaceTheme) add("the interface theme")
             }
             return when (parts.size) {
                 0 -> "Nothing to import."

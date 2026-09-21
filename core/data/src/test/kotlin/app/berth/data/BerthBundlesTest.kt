@@ -193,12 +193,13 @@ class BerthBundlesTest {
         assertEquals(1, report.terminalThemes)
         assertEquals(1, report.knownHosts)
         assertTrue(report.deck)
+        assertTrue(report.interfaceTheme)
         assertEquals(1, report.needsRecreation.size)
         val notice = report.needsRecreation.single()
         assertEquals("Phone key", notice.identityName)
         assertEquals(KeyAlgorithm.ECDSA_P256, notice.algorithm)
         assertEquals(listOf("db-primary"), notice.hostNames)
-        assertEquals("Imported 3 hosts, 1 key, 2 workspaces, 2 snippets, 2 tunnels, 1 theme, 1 known host and the Deck.", report.summary)
+        assertEquals("Imported 3 hosts, 1 key, 2 workspaces, 2 snippets, 2 tunnels, 1 theme, 1 known host, the Deck and the interface theme.", report.summary)
     }
 
     @Test
@@ -366,12 +367,17 @@ class BerthBundlesTest {
         assertEquals(mineDeck, new.settings.deckLayout.first())
         assertEquals(mineLook, new.settings.interfaceTheme.first())
         assertFalse(report.deck)
+        assertFalse(report.interfaceTheme)
         assertEquals(3, report.hosts, "everything else came in")
         assertFalse("the Deck" in report.summary)
+        assertFalse("the interface theme" in report.summary)
 
-        new.bundles.apply(bundle, BundleImportOptions(deck = true, interfaceTheme = false))
+        val deckOnly = new.bundles.apply(bundle, BundleImportOptions(deck = true, interfaceTheme = false))
         assertEquals(deck, new.settings.deckLayout.first())
         assertEquals(mineLook, new.settings.interfaceTheme.first())
+        assertTrue(deckOnly.deck)
+        assertFalse(deckOnly.interfaceTheme)
+        assertTrue(deckOnly.summary.endsWith(" and the Deck."), deckOnly.summary)
     }
 
     @Test
@@ -383,6 +389,7 @@ class BerthBundlesTest {
         assertEquals(0, report.hosts)
         assertEquals(1, report.workspaces, "the default workspace is one")
         assertTrue(report.deck, "the Deck is always carried")
-        assertEquals("Imported 1 workspace and the Deck.", report.summary)
+        assertTrue(report.interfaceTheme, "and so is the interface theme")
+        assertEquals("Imported 1 workspace, the Deck and the interface theme.", report.summary)
     }
 }

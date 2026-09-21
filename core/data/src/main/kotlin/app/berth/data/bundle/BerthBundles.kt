@@ -217,6 +217,7 @@ class BerthBundles(
             },
             knownHostsKept = knownHostsKept,
             tunnelsHeldOff = tunnelsHeldOff,
+            interfaceTheme = options.interfaceTheme && bundle.interfaceTheme != null,
         )
     }
 
