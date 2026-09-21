@@ -1,0 +1,1057 @@
+package app.berth.android.screenshots
+
+import android.app.Application
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ComposeHostRule
+import app.berth.android.createBerthComposeRule
+import app.berth.android.security.FakeKeystore
+import app.berth.android.session.AuthResolver
+import app.berth.android.session.HostKeyChangedDecision
+import app.berth.android.session.Prompt
+import app.berth.android.session.SessionEnvironment
+import app.berth.android.session.TerminalSession
+import app.berth.android.ui.groups.GroupsScreen
+import app.berth.android.ui.hosts.HostEditorFields
+import app.berth.android.ui.hosts.HostEditorScreen
+import app.berth.android.ui.hosts.HostsScreen
+import app.berth.android.ui.keys.KeyInstall
+import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.prompts.PromptHost
+import app.berth.android.ui.rail.Drawer
+import app.berth.android.ui.stage.SessionSheet
+import app.berth.android.ui.tabs.GroupEditorSheet
+import app.berth.android.ui.tabs.TabActions
+import app.berth.android.ui.theme.BerthTheme
+import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.Host
+import app.berth.domain.model.Identity
+import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.KeyAlgorithm
+import app.berth.domain.model.KeyProtection
+import app.berth.domain.model.KeyStorage
+import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.PersistenceLayer
+import app.berth.domain.model.SessionRecord
+import app.berth.domain.model.SessionState
+import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Workspace
+import app.berth.ssh.AcceptAllHostKeys
+import app.berth.ssh.HostKeyPolicy
+import app.berth.ssh.HostKeyRequest
+import app.berth.ssh.KnownHostsFile
+import app.berth.ssh.Randomart
+import app.berth.ssh.SshAuth
+import app.berth.ssh.SshKeys
+import app.berth.ssh.SshLink
+import app.berth.ssh.SshSecurity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.ParameterizedRobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import java.io.File
+import java.security.KeyPair
+import java.security.SecureRandom
+import java.util.Base64
+import java.util.concurrent.TimeUnit
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * The library's third wave (spec C8, C9, C10, C11, C12, C13, A16) through Robolectric's native
+ * graphics, each surface at the system's 1× and at 2×, where interface text stops at its 1.3× cap
+ * (A11): the Hosts screen's search, tag chips and sort with the row menu's Connect in new group,
+ * Duplicate and Share as `ssh://` link; the host editor's Tags beside the name and Environment
+ * and Mute bell under Advanced; Save as host from Quick connect and from the Session sheet of a
+ * quick-connected tab; a key's detail with its randomart and the `ssh-keygen -lf` line, its QR
+ * and Install on host; the trust sheet's visual fingerprint and compare-on-the-server command,
+ * and the changed-key sheet's Replace held to confirm; the known_hosts import beside the ssh
+ * config import; the groups overview with its Edit mode and the group editor's Reconnect tabs at
+ * launch. Every capture is the accessibility audit too, and no text on a new surface is cut at
+ * either size except the one line that elides by design. `install on host over the local sshd`
+ * types the command into a real shell and logs in with the key it installed when the
+ * `SSH_TEST_*` variables are set.
+ */
+@RunWith(ParameterizedRobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], application = Application::class, qualifiers = "w411dp-h914dp-420dpi")
+class LibraryScreenshotTest(private val systemFontScale: Float) {
+    companion object {
+        @JvmStatic
+        @ParameterizedRobolectricTestRunner.Parameters(name = "system font scale {0}")
+        fun scales(): List<Array<Any>> = listOf(arrayOf(1f), arrayOf(2f))
+    }
+
+    @get:Rule(order = 0)
+    val host = ComposeHostRule()
+
+    @get:Rule(order = 1)
+    val compose = createBerthComposeRule()
+
+    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val context: Context = ApplicationProvider.getApplicationContext()
+    private lateinit var graph: TestGraph
+
+    private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
+    private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
+    private val sshUser = System.getenv("SSH_TEST_USER").orEmpty()
+    private val sshPassword = System.getenv("SSH_TEST_PASSWORD").orEmpty()
+
+    /** Captures at 2× carry the suffix the other suites' font-cap captures do. */
+    private val suffix = if (systemFontScale > 1f) "-font-scale-2x" else ""
+
+    @Before
+    fun setUp() {
+        if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
+            System.setProperty("roborazzi.test.record", "true")
+        }
+        SshSecurity.ensureProviders()
+        outDir.mkdirs()
+        // Set before the first composition reads the configuration, as the system's setting would be.
+        RuntimeEnvironment.setFontScale(systemFontScale)
+        graph = TestGraph(context)
+    }
+
+    @After
+    fun tearDown() {
+        compose.mainClock.autoAdvance = true
+        graph.close()
+        RuntimeEnvironment.setFontScale(1f)
+    }
+
+    private fun capture(name: String) = compose.captureAudited(File(outDir, "$name$suffix.png"))
+
+    private fun themed(content: @Composable () -> Unit) {
+        compose.setContent {
+            BerthTheme(InterfaceTheme.DEFAULT) {
+                Box(Modifier.fillMaxSize()) { content() }
+            }
+        }
+    }
+
+    private val clipboard: ClipboardManager get() = context.getSystemService(ClipboardManager::class.java)
+    private val clipText: String? get() = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+
+    private fun hasNoText(text: String) = compose.onAllNodesWithText(text).assertCountEquals(0)
+    private fun waitForText(text: String, timeout: Long = 5_000) =
+        compose.waitUntil(timeout) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForNoText(text: String, timeout: Long = 5_000) =
+        compose.waitUntil(timeout) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isEmpty() }
+
+    /** The one text field in the sheet's own window, whatever fields the screen under it has. */
+    private val sheetField get() = compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog()))
+
+    /** A tag chip: the selectable with that label, as the section label of the same name is not. */
+    private fun chip(text: String) = compose.onNode(hasText(text) and isSelectable())
+
+    /** A section label, which [SectionLabel] sets in capitals. */
+    private fun section(text: String) = compose.onNodeWithText(text.uppercase())
+
+    /** Real time passes while the compose clock keeps ticking. */
+    private fun settle(ms: Long) {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            compose.mainClock.advanceTimeBy(64)
+            compose.waitForIdle()
+            Thread.sleep(16)
+        }
+    }
+
+    /**
+     * No text on [where] is cut at this size, except one a caller names as eliding by design (the
+     * QR sheet's key line stops at three lines, since its base64 middle says nothing).
+     */
+    private fun assertNoTextCutBut(where: String, vararg allowed: String) {
+        val cut = compose.cutTexts().filter { text -> allowed.none { text.startsWith(it) } }
+        assertTrue("text cut on $where at ${systemFontScale}x: $cut", cut.isEmpty())
+    }
+
+    private fun assertNoTextCut(where: String) = assertNoTextCutBut(where)
+
+    // ---- hosts (C9) -------------------------------------------------------------------------------
+
+    @Test
+    fun `hosts search, tag chips and sort`() {
+        seedLibrary()
+        themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
+        waitForText("homelab")
+        // Every tag once, alphabetically, All first and chosen; the hosts under Recent then All.
+        chip("All").assertIsSelected()
+        chip("dns").assertExists()
+        chip("lab").assertExists()
+        chip("prod").assertExists()
+        section("Recent").assertExists()
+        capture("hosts-library")
+        assertNoTextCut("the Hosts library")
+
+        // Search reads name, address, user and tags: `hole` leaves pi-hole by its name (`pi` would keep
+        // prod-api too), `deploy` prod-api by its user, `dns` pi-hole by its tag. A narrowed list is one
+        // list: no Recent over it, so a match connected lately is not said twice.
+        val search = compose.onNode(hasSetTextAction())
+        search.performTextInput("hole")
+        waitForNoText("prod-api")
+        compose.onAllNodesWithText("pi-hole").assertCountEquals(1)
+        compose.onNodeWithText("pi-hole").assertIsDisplayed()
+        hasNoText("homelab")
+        section("Recent").assertDoesNotExist()
+        capture("hosts-search")
+        search.performTextReplacement("deploy")
+        waitForText("prod-api")
+        hasNoText("pi-hole")
+        search.performTextReplacement("dns")
+        waitForText("pi-hole")
+        hasNoText("prod-api")
+        search.performTextReplacement("nowhere")
+        waitForText("No host matches.")
+        search.performTextClearance()
+        waitForText("homelab")
+
+        // A chip narrows to its tag, one list again; a second tap on it lets go, and Recent is back.
+        chip("lab").performClick()
+        waitForNoText("prod-api")
+        compose.onNodeWithText("homelab").assertIsDisplayed()
+        compose.onNodeWithText("pi-hole").assertIsDisplayed()
+        hasNoText("build box")
+        section("Recent").assertDoesNotExist()
+        chip("lab").assertIsSelected()
+        capture("hosts-tag-chip")
+        search.performTextInput("zzz")
+        waitForText("No host is tagged lab and matches.")
+        search.performTextClearance()
+        chip("lab").performClick()
+        waitForText("prod-api")
+        chip("All").assertIsSelected()
+        section("Recent").assertExists()
+
+        // Sort from the overflow: the row names the sort in force, the submenu the three orders.
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Sort \u00B7 Recent")
+        compose.onNodeWithText("Import ssh config").assertExists()
+        compose.onNodeWithText("Import known_hosts").assertExists()
+        capture("hosts-more-menu")
+        compose.onNodeWithText("Sort \u00B7 Recent").performClick()
+        waitForText("Sort by tag")
+        compose.onNodeWithText("Sort by name").assertExists()
+        capture("hosts-sort-menu")
+        compose.onNodeWithText("Sort by tag").performClick()
+        waitForText("DNS")
+        // A section per tag, alphabetically, the untagged last; no Recent section in this order.
+        section("Recent").assertDoesNotExist()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("UNTAGGED"))
+        section("Untagged").assertIsDisplayed()
+        capture("hosts-sorted-by-tag")
+        assertNoTextCut("the Hosts library sorted by tag")
+
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Sort \u00B7 Tag")
+        compose.onNodeWithText("Sort \u00B7 Tag").performClick()
+        waitForText("Sort by name")
+        compose.onNodeWithText("Sort by name").performClick()
+        waitForNoText("UNTAGGED")
+        section("Recent").assertDoesNotExist()
+    }
+
+    @Test
+    fun `host row menu connects in a new group, duplicates, and shares an ssh link`() {
+        seedLibrary()
+        val inNewGroup = ArrayList<String>()
+        val edited = ArrayList<String>()
+        themed {
+            HostsScreen(
+                graph.viewModel,
+                onConnect = {},
+                onAddHost = {},
+                onEditHost = { edited += it },
+                onBack = null,
+                onOpenDrawer = {},
+                onKnownHosts = {},
+                onConnectInNewGroup = { inNewGroup += it.id },
+            )
+        }
+        waitForText("homelab")
+
+        // The row's menu (C9), in the spec's order, Delete last and apart.
+        compose.onAllNodesWithText("homelab")[0].performTouchInput { longClick() }
+        waitForText("Connect in new group")
+        compose.onNodeWithText("Edit").assertExists()
+        compose.onNodeWithText("Duplicate").assertExists()
+        compose.onNodeWithText("Share as ssh:// link").assertExists()
+        compose.onNodeWithText("Delete").assertExists()
+        capture("hosts-row-menu")
+        assertNoTextCut("the host row's menu")
+        compose.onNodeWithText("Connect in new group").performClick()
+        waitForNoText("Connect in new group")
+        assertEquals(listOf("homelab"), inNewGroup)
+
+        // Duplicate: a copy named after the original, its password under a secret of its own, opened in the editor to be named.
+        compose.onAllNodesWithText("homelab")[0].performTouchInput { longClick() }
+        waitForText("Duplicate")
+        compose.onNodeWithText("Duplicate").performClick()
+        compose.waitUntil(5_000) { graph.hosts.items.value.any { it.name == "homelab copy" } }
+        val original = graph.hosts.items.value.first { it.id == "homelab" }
+        val copy = graph.hosts.items.value.first { it.name == "homelab copy" }
+        assertEquals(listOf(copy.id), edited)
+        assertNotEquals(original.id, copy.id)
+        assertEquals(original.tags, copy.tags)
+        assertEquals(original.address, copy.address)
+        assertNull("a copy has never connected", copy.lastConnectedAt)
+        val copyAuth = copy.auth as AuthMethod.Password
+        assertNotEquals((original.auth as AuthMethod.Password).secretId, copyAuth.secretId)
+        assertEquals("hunter2", String(runBlocking { graph.secrets.get(copyAuth.secretId!!) }!!))
+        waitForText("homelab copy")
+        capture("hosts-duplicated")
+
+        // Share as ssh:// link: the system share sheet with the link as its text, the trusted key's fingerprint in it.
+        compose.onAllNodesWithText("prod-api")[0].performTouchInput { longClick() }
+        waitForText("Share as ssh:// link")
+        compose.onNodeWithText("Share as ssh:// link").performClick()
+        compose.waitUntil(5_000) { shadowOf(context.applicationContext as Application).peekNextStartedActivity() != null }
+        val chooser = shadowOf(context.applicationContext as Application).nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
+        val send = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("prod-api", send.getStringExtra(Intent.EXTRA_SUBJECT))
+        val link = send.getStringExtra(Intent.EXTRA_TEXT)!!
+        // The plain `ssh://user@host` for any client, the fingerprint percent-encoded (its base64 may hold a `/`), the name in the fragment.
+        assertTrue(link, link.startsWith("ssh://deploy;fingerprint=SHA256%3A") && link.endsWith("@203.0.113.10#prod-api"))
+        assertFalse(link, link.substringAfter(";fingerprint=").substringBefore('@').any { it == '/' || it == '+' || it == ':' })
+        val parsed = (SshLink.parse(link) as SshLink.Result.Parsed).link
+        assertEquals("deploy", parsed.user)
+        assertEquals("203.0.113.10", parsed.host)
+        assertEquals(22, parsed.port)
+        assertEquals(graph.knownHosts.items.value.first { it.host == "203.0.113.10" }.fingerprintSha256, parsed.fingerprint)
+        assertEquals("prod-api", parsed.name)
+    }
+
+    // ---- host editor (C10) ------------------------------------------------------------------------
+
+    @Test
+    fun `host editor has tags beside the name, environment and mute bell under Advanced`() {
+        seedLibrary()
+        var done = 0
+        themed { HostEditorScreen(graph.viewModel, hostId = "pi-hole", onDone = { done++ }) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasSetTextAction() and hasText("lab, dns")).fetchSemanticsNodes().isNotEmpty() }
+        section("Tags").assertExists() // a field's label, set in capitals as a section label is
+        capture("host-editor-tags")
+        assertNoTextCut("the host editor's top")
+
+        // Advanced: the environment as NAME=value lines, its helper, and Mute bell with its caption.
+        compose.onNodeWithText("Mute bell").performScrollTo()
+        compose.waitForIdle()
+        compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8")).assertExists()
+        compose.onNodeWithText("One NAME=value per line; the server's AcceptEnv decides which arrive.").assertExists()
+        compose.onNodeWithText("No buzz when the shell rings; off stage the tab still lights.").assertExists()
+        hasNoText("Agent forwarding")
+        capture("host-editor-advanced")
+        assertNoTextCut("the host editor's Advanced panel")
+
+        // The panel's end: the Alt key's caption whole beside the widest value the editor has, then Delete host.
+        compose.onNodeWithText("Alt key").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("For a hardware keyboard").assertExists()
+        compose.onNodeWithText("Inherit (escape prefix)").assertExists()
+        capture("host-editor-advanced-end")
+
+        // A line that is not NAME=value stops Save and says what a line is.
+        compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8")).performTextReplacement("LANG=C.UTF-8\n1BAD=x")
+        waitForText(HostEditorFields.ENVIRONMENT_HELP)
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+        capture("host-editor-environment-error")
+        assertNoTextCut("the host editor with an environment error")
+
+        // Fixed, tagged and muted: Save writes all three.
+        compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8\n1BAD=x")).performTextReplacement("LANG=C.UTF-8\nTERM_PROGRAM=berth")
+        waitForNoText(HostEditorFields.ENVIRONMENT_HELP)
+        compose.onNodeWithText("Mute bell").performClick()
+        section("Tags").performScrollTo()
+        compose.onNode(hasSetTextAction() and hasText("lab, dns")).performTextReplacement("lab, dns, Home, dns")
+        compose.onNodeWithText("Save").assertIsEnabled()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { done == 1 }
+        val saved = graph.hosts.items.value.first { it.id == "pi-hole" }
+        assertEquals(listOf("lab", "dns", "Home"), saved.tags)
+        assertEquals(mapOf("LANG" to "C.UTF-8", "TERM_PROGRAM" to "berth"), saved.environment)
+        assertTrue(saved.muteBell)
+        assertFalse("no agent-forwarding toggle: the protocol is deferred", saved.agentForwarding)
+    }
+
+    // ---- save as host (C11) -----------------------------------------------------------------------
+
+    @Test
+    fun `quick connect saves the address as a host`() {
+        seedLibrary()
+        val edited = ArrayList<String>()
+        themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = { edited += it }, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
+        waitForText("homelab")
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Quick connect")
+        compose.onNodeWithText("Quick connect").performClick()
+        waitForText("Save as host")
+        compose.onNodeWithText("Save as host").assertIsNotEnabled()
+        sheetField.performTextInput("deploy@203.0.113.99:2200")
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Save as host").fetchSemanticsNodes().isNotEmpty() && runCatching { compose.onNodeWithText("Save as host").assertIsEnabled() }.isSuccess }
+        capture("quick-connect-save-as-host")
+        assertNoTextCut("the Quick connect sheet")
+
+        // Saved under the address's name with the identity picked (none: ask on connect), and handed to the editor; no tab opens.
+        compose.onNodeWithText("Save as host").performClick()
+        compose.waitUntil(5_000) { graph.hosts.items.value.any { it.address == "203.0.113.99" } }
+        val saved = graph.hosts.items.value.first { it.address == "203.0.113.99" }
+        assertEquals("203.0.113.99", saved.name)
+        assertEquals(2200, saved.port)
+        assertEquals("deploy", saved.user)
+        assertEquals(AuthMethod.AskEachTime, saved.auth)
+        assertEquals(listOf(saved.id), edited)
+        assertTrue("nothing connected", graph.sessions.sessions.value.isEmpty())
+        waitForNoText("Quick connect")
+
+        // A spec that does not parse says why under the field and saves nothing.
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Quick connect")
+        compose.onNodeWithText("Quick connect").performClick()
+        waitForText("Save as host")
+        sheetField.performTextInput("deploy@[::1")
+        compose.onNodeWithText("Save as host").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("bracket", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(1, graph.hosts.items.value.count { it.user == "deploy" && it.id != "prod-api" })
+    }
+
+    @Test
+    fun `the session sheet of a quick-connected tab offers Save as host`() {
+        seedLibrary()
+        val edited = ArrayList<String>()
+        var dismissed = 0
+        val tab = quickTab()
+        themed {
+            SessionSheet(graph.viewModel, tab, onDismiss = { dismissed++ }, onSwitch = {}, onEditHost = { edited += it }, onNewSession = {})
+        }
+        waitForText("Save as host")
+        // The tab's host is nobody's in the library: no Host button, no Tunnels, the offer to save instead.
+        hasNoText("Host")
+        hasNoText("Tunnels")
+        compose.onNodeWithText("root@198.51.100.7:2202").assertExists()
+        capture("session-sheet-save-as-host")
+        assertNoTextCut("the Session sheet of a quick-connected tab")
+
+        // Saved under the id the tab carries, so the tab is the host's from here on, and opened in the editor.
+        compose.onNodeWithText("Save as host").performClick()
+        compose.waitUntil(5_000) { graph.hosts.items.value.any { it.id == tab.record.value.hostId } }
+        val saved = graph.hosts.items.value.first { it.id == tab.record.value.hostId }
+        assertEquals("198.51.100.7", saved.address)
+        assertEquals(2202, saved.port)
+        assertEquals("root", saved.user)
+        compose.waitUntil(5_000) { edited == listOf(saved.id) }
+        assertEquals(1, dismissed)
+    }
+
+    // ---- keys (C12) -------------------------------------------------------------------------------
+
+    @Test
+    fun `key detail shows the fingerprint, the randomart and the ssh-keygen line`() {
+        seedLibrary()
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        waitForText("laptop ed25519")
+        compose.onNodeWithText("laptop ed25519").performClick()
+        waitForText("Show visual fingerprint")
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Ed25519 \u00B7 passphrase \u00B7 used by prod-api").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("As ssh-keygen prints it".uppercase()).assertExists()
+        val keygenLine = SshKeys.keygenLine(laptopKey.public, "ben@laptop")
+        compose.onNodeWithText(keygenLine).assertExists()
+        compose.onNodeWithText("Show QR").assertExists()
+        compose.onNodeWithText("Install on host").assertExists()
+        capture("key-detail")
+        assertNoTextCut("the key detail sheet")
+
+        // The randomart behind the reveal, drawn as ssh-keygen -lv draws it, and the way back.
+        compose.onNodeWithText("Show visual fingerprint").performClick()
+        waitForText("Hide visual fingerprint")
+        val art = compose.onNode(hasContentDescription("Visual fingerprint", substring = true), useUnmergedTree = true).fetchSemanticsNode()
+        assertEquals(Randomart.of(laptopKey.public), art.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text })
+        compose.onNodeWithText("Install on host").performScrollTo()
+        compose.waitForIdle()
+        capture("key-detail-randomart")
+        assertNoTextCut("the key detail sheet with its randomart")
+
+        // The line is copied whole, the fingerprint the tool would print for the file.
+        compose.onNodeWithContentDescription("Copy As ssh-keygen prints it").performClick()
+        compose.waitUntil(5_000) { clipText == keygenLine }
+        assertTrue(keygenLine.startsWith("256 ${SshKeys.fingerprintSha256(laptopKey.public)} ben@laptop (ED25519)"))
+    }
+
+    @Test
+    fun `a key's public line as a QR code`() {
+        seedLibrary()
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        waitForText("this phone")
+        // The row's menu, every action of it (C12); the private key is offered nowhere.
+        compose.onNodeWithText("this phone").performTouchInput { longClick() }
+        waitForText("Show QR")
+        for (item in listOf("Copy public key", "Share public key", "Save public key\u2026", "Install on host", "Delete")) compose.onNodeWithText(item).assertExists()
+        hasNoText("Export private key")
+        capture("keys-row-menu")
+        assertNoTextCut("the key row's menu")
+
+        compose.onNodeWithText("Show QR").performClick()
+        waitForText("Public key as QR")
+        val qr = compose.onNodeWithContentDescription("QR code of this phone's public key").fetchSemanticsNode()
+        assertTrue("the code is square, ${qr.size}", qr.size.width == qr.size.height && qr.size.width > 0)
+        compose.onNodeWithText("this phone \u00B7 scan it into another device's authorized_keys or key list. The private key is not in it.").assertExists()
+        capture("key-qr")
+        // The key line under the code is the one text that elides by design: three lines of base64, its whole copied.
+        val line = graph.identities.items.value.first { it.id == "id-phone" }.publicKeyOpenSsh.trim()
+        assertNoTextCutBut("the QR sheet", line)
+        compose.onNodeWithContentDescription("Copy Public key").performClick()
+        compose.waitUntil(5_000) { clipText == line }
+        compose.onNodeWithText("Done").performClick()
+        waitForNoText("Public key as QR")
+    }
+
+    @Test
+    fun `install on host picks a saved host and previews the command`() {
+        seedLibrary()
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        waitForText("laptop ed25519")
+        compose.onNodeWithText("laptop ed25519").performTouchInput { longClick() }
+        waitForText("Install on host")
+        compose.onNodeWithText("Install on host").performClick()
+        waitForText("Adds laptop ed25519's public key to ~/.ssh/authorized_keys on the host you pick, typed into its shell.")
+        // No shell is up: every saved host under SAVED, none under CONNECTED, and the button waits for a pick.
+        compose.onNodeWithText("Saved".uppercase()).assertExists()
+        hasNoText("Connected".uppercase())
+        compose.onNodeWithText("Install").assertIsNotEnabled()
+        compose.onNodeWithText("Runs in the shell".uppercase()).assertExists()
+        capture("key-install")
+        assertNoTextCut("the Install on host sheet")
+
+        // A saved host without a shell: the button says it will connect first.
+        compose.onNode(hasText("homelab") and hasAnyAncestor(isDialog())).performClick()
+        waitForText("Connect and install")
+        compose.onNodeWithText("Connect and install").assertIsEnabled()
+        capture("key-install-picked")
+        assertNoTextCut("the Install on host sheet with a host picked")
+
+        // The preview elides the key's base64 middle; what is copied, and typed, is the whole command.
+        val publicLine = graph.identities.items.value.first { it.id == "id-laptop" }.publicKeyOpenSsh
+        compose.onNodeWithContentDescription("Copy Runs in the shell").performClick()
+        compose.waitUntil(5_000) { clipText == KeyInstall.command(publicLine) }
+        assertTrue(clipText!!.contains(publicLine.trim()))
+        compose.onNodeWithText("Cancel").performClick()
+        waitForNoText("Connect and install")
+    }
+
+    // ---- trust sheets (C13) -----------------------------------------------------------------------
+
+    @Test
+    fun `the trust sheet has a visual fingerprint and the compare-on-the-server command`() {
+        seedLibrary()
+        val prodApi = graph.hosts.items.value.first { it.id == "prod-api" }
+        val key = SshKeys.generate(KeyAlgorithm.ED25519).public
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
+        val asking = CoroutineScope(Dispatchers.IO).async { graph.prompts.trustHostKey(prodApi, request(prodApi, key), emptyList()) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        waitForText("Show visual fingerprint")
+        compose.onNodeWithText("Compare on the server".uppercase()).assertExists()
+        compose.onNodeWithText("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub").assertExists()
+        capture("prompt-trust-host-key")
+        assertNoTextCut("the trust sheet")
+
+        compose.onNodeWithText("Show visual fingerprint").performClick()
+        waitForText("Hide visual fingerprint")
+        val art = compose.onNode(hasContentDescription("Visual fingerprint", substring = true), useUnmergedTree = true).fetchSemanticsNode()
+        assertEquals(Randomart.of(key), art.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text })
+        compose.onNodeWithText("Trust and connect").performScrollTo()
+        compose.waitForIdle()
+        capture("prompt-trust-host-key-randomart")
+        assertNoTextCut("the trust sheet with its randomart")
+
+        compose.onNodeWithContentDescription("Copy Compare on the server").performClick()
+        compose.waitUntil(5_000) { clipText == "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" }
+        compose.onNodeWithText("Cancel").performClick()
+        assertFalse(runBlocking { asking.await() })
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+    }
+
+    @Test
+    fun `the changed-key sheet's Replace is held to confirm`() {
+        seedLibrary()
+        val prodApi = graph.hosts.items.value.first { it.id == "prod-api" }
+        val offered = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val saved = graph.knownHosts.items.value.first { it.host == prodApi.address }
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
+        val asking = CoroutineScope(Dispatchers.IO).async { graph.prompts.hostKeyChanged(prodApi, request(prodApi, offered), saved) }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
+        val label = "Replace saved key \u2014 hold to confirm"
+        waitForText(label)
+        compose.onNodeWithText(label).performScrollTo()
+        settle(400)
+        capture("prompt-host-key-changed")
+        assertNoTextCut("the changed-key sheet")
+
+        // Under the test clock: a tap, or a hold let go early, replaces nothing.
+        compose.mainClock.autoAdvance = false
+        val button = compose.onNodeWithText(label)
+        button.performTouchInput { down(center) }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitForIdle()
+        button.performTouchInput { up() }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.waitForIdle()
+        assertTrue("let go at 400 ms of 1000: still asking", graph.prompts.current.value is Prompt.HostKeyChanged)
+        assertTrue(asking.isActive)
+
+        // Held: the progress fills under the label; at the end the saved key is replaced.
+        button.performTouchInput { down(center) }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(500)
+        compose.waitForIdle()
+        capture("prompt-host-key-changed-holding")
+        compose.mainClock.advanceTimeBy(700)
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = true
+        assertEquals(HostKeyChangedDecision.REPLACE_SAVED, runBlocking { asking.await() })
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+    }
+
+    // ---- known_hosts import (A16) -----------------------------------------------------------------
+
+    @Test
+    fun `known_hosts import beside the ssh config import`() {
+        seedLibrary()
+        themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
+        waitForText("homelab")
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Import known_hosts")
+        compose.onNodeWithText("Import ssh config").assertExists()
+        compose.onNodeWithText("Import known_hosts").performClick()
+        waitForText("Import known hosts")
+        compose.onNodeWithText("Paste your ~/.ssh/known_hosts, or choose the file").assertExists()
+        compose.onNodeWithText("Choose file").assertExists()
+        compose.onNodeWithText("Import 0 keys").assertIsNotEnabled()
+        capture("import-known-hosts-empty")
+        assertNoTextCut("the empty known_hosts import sheet")
+
+        // A file as a laptop writes one: plain names, a bracketed port, two hashed names (one a saved
+        // host's, one nobody's), a key Berth already trusts, a CA line and a wildcard.
+        val git = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val nas = SshKeys.generate(KeyAlgorithm.ECDSA_P256).public
+        val prodRsa = SshKeys.generate(KeyAlgorithm.RSA_3072).public
+        val stranger = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val trusted = graph.knownHosts.items.value.first { it.host == "203.0.113.10" }
+        val text = listOf(
+            "# from ben@laptop",
+            "git.example.com ${SshKeys.openSshPublic(git)}",
+            "[10.0.0.12]:2222 ${SshKeys.openSshPublic(nas)}",
+            "${hashed("203.0.113.10")} ${SshKeys.openSshPublic(prodRsa)}",
+            "203.0.113.10 ssh-ed25519 ${trusted.publicKeyBase64}",
+            "${hashed("unknown.example.net")} ${SshKeys.openSshPublic(stranger)}",
+            "@cert-authority *.example.com ${SshKeys.openSshPublic(git)}",
+            "*.example.org ${SshKeys.openSshPublic(git)}",
+        ).joinToString("\n")
+        sheetField.performTextInput(text)
+        waitForText("Import 3 keys")
+        compose.onNodeWithText("4 keys".uppercase()).assertExists()
+        compose.onNodeWithText("git.example.com").assertExists()
+        compose.onNodeWithText("10.0.0.12:2222").assertExists()
+        compose.onNode(hasText("matched by hash", substring = true)).assertExists()
+        compose.onNode(hasText("trusted already", substring = true)).assertExists()
+        compose.onNodeWithContentDescription("Will not import").assertExists()
+        compose.onAllNodesWithContentDescription("Will import").assertCountEquals(3)
+        compose.onNodeWithText("1 hashed name matches no saved host and is left out; save the host first, then import again.").assertExists()
+        compose.onNodeWithText("Line 7: a certificate authority, not a host key.\nLine 8: a wildcard pattern \u201C*.example.org\u201D.").assertExists()
+        compose.onNodeWithText("Import 3 keys").performScrollTo()
+        compose.waitForIdle()
+        capture("import-known-hosts")
+        assertNoTextCut("the known_hosts import sheet")
+
+        // Imported: three new keys, the RSA one for prod-api beside its ed25519, the trusted one left as it was.
+        compose.onNodeWithText("Import 3 keys").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.size == 4 }
+        waitForNoText("Import known hosts")
+        val keys = graph.knownHosts.items.value
+        assertEquals(setOf("203.0.113.10" to 22, "git.example.com" to 22, "10.0.0.12" to 2222), keys.map { it.host to it.port }.toSet())
+        assertEquals(listOf("ssh-ed25519", "ssh-rsa"), keys.filter { it.host == "203.0.113.10" }.map { it.keyType }.sorted())
+        assertEquals(trusted, keys.first { it.id == trusted.id })
+        assertEquals(SshKeys.fingerprintSha256(prodRsa), keys.first { it.keyType == "ssh-rsa" }.fingerprintSha256)
+    }
+
+    // ---- groups overview (C8) ---------------------------------------------------------------------
+
+    @Test
+    fun `groups overview cards, their edit mode and the menu`() {
+        seedLibrary()
+        seedTabs()
+        // A bell in a tab off stage: the tab needs the user, and its group's card says so.
+        graph.sessions.get("s-pihole")!!.emulator.write("\u0007")
+        compose.waitUntil(5_000) { graph.sessions.records.value.any { it.id == "s-pihole" && it.needsAttention } }
+        val actions = RecordingTabActions()
+        val opened = ArrayList<String>()
+        var newGroup = 0
+        themed { GroupsScreen(graph.viewModel, actions, onBack = {}, onOpenGroup = { opened += it }, onNewGroup = { newGroup++ }) }
+        waitForText("Groups")
+        waitForText("2 tabs \u00B7 1 needs you")
+        compose.onNodeWithText("Work").assertExists()
+        compose.onNodeWithText("1 tab").assertExists()
+        compose.onNodeWithText("New group").assertExists()
+        compose.onNodeWithContentDescription("needs you").assertExists()
+        compose.onNodeWithContentDescription("current group").assertExists()
+        // The tab lines: the one needing the user first, then the rest in strip order with their ages.
+        compose.onNodeWithText("pi-hole").assertExists()
+        compose.onNodeWithText("homelab").assertExists()
+        compose.onNodeWithText("build box").assertExists()
+        compose.onNodeWithText("12m").assertExists()
+        capture("groups")
+        assertNoTextCut("the groups overview")
+
+        // A tap switches to the group; New group asks for one.
+        compose.onNodeWithText("Work").performClick()
+        assertEquals(listOf("ws-work"), opened)
+        compose.onNodeWithText("New group").performClick()
+        assertEquals(1, newGroup)
+
+        // Edit: every card wears the menu glyph and a tap opens its menu; the last group cannot move down.
+        compose.onNodeWithText("Edit").performClick()
+        waitForText("Done")
+        capture("groups-edit")
+        compose.onNodeWithText("Work").performClick()
+        waitForText("Move up")
+        for (item in listOf("Rename", "Colour", "New tab here", "Close group", "Delete group")) compose.onNodeWithText(item).assertExists()
+        hasNoText("Move down")
+        capture("groups-card-menu")
+        assertNoTextCut("a group card's menu")
+        compose.onNodeWithText("Move up").performClick()
+        waitForNoText("Move up")
+        assertEquals(listOf("ws-work" to 0), actions.moved)
+        assertEquals(listOf("ws-work"), opened)
+
+        // The first group's menu has Move down and no Move up; a long-press opens it in either mode.
+        compose.onNodeWithText("Done").performClick()
+        waitForText("Edit")
+        compose.onNodeWithText("Home").performTouchInput { longClick() }
+        waitForText("Move down")
+        hasNoText("Move up")
+        compose.onNodeWithText("Rename").performClick()
+        assertEquals(listOf(Workspace.DEFAULT_ID), actions.edited)
+    }
+
+    @Test
+    fun `the group editor has Reconnect tabs at launch for a saved group only`() {
+        seedLibrary()
+        val work = graph.workspaces.items.value.first { it.id == "ws-work" }
+        val reconnect = ArrayList<Boolean>()
+        themed {
+            GroupEditorSheet(group = work, onCreate = { _, _ -> }, onRename = {}, onRecolor = {}, onDismiss = {}, onReconnectAtLaunch = { reconnect += it })
+        }
+        waitForText("Reconnect tabs at launch")
+        compose.onNodeWithText("Off, its tabs come back as saved frames and reconnect when tapped.").assertExists()
+        capture("group-editor-reconnect")
+        assertNoTextCut("the group editor")
+        compose.onNodeWithText("Reconnect tabs at launch").performClick()
+        compose.waitUntil(5_000) { reconnect == listOf(true) }
+        compose.onNodeWithText("Reconnect tabs at launch").performClick()
+        compose.waitUntil(5_000) { reconnect == listOf(true, false) }
+    }
+
+    @Test
+    fun `a new group's editor has no Reconnect row`() {
+        seedLibrary()
+        themed { GroupEditorSheet(group = null, onCreate = { _, _ -> }, onRename = {}, onRecolor = {}, onDismiss = {}) }
+        waitForText("Create")
+        hasNoText("Reconnect tabs at launch")
+    }
+
+    @Test
+    fun `the drawer's Groups label opens the overview`() {
+        seedLibrary()
+        seedTabs()
+        var groups = 0
+        themed { Drawer(graph.viewModel, RecordingTabActions(), onGroupTap = {}, onNewGroup = {}, onGroups = { groups++ }, onLibrary = {}) }
+        waitForText("GROUPS")
+        section("Groups").performClick()
+        assertEquals(1, groups)
+        capture("drawer-groups-label")
+    }
+
+    // ---- live against the local sshd --------------------------------------------------------------
+
+    /**
+     * Install on host end to end: the key typed into the demo user's shell through the session's
+     * own send path, its answer read off the screen, and then a login with that very key, which the
+     * sshd accepts only if the line landed in `authorized_keys`. The line is removed again through
+     * the same shell, so the sshd's file is as it was.
+     */
+    @Test
+    fun `install on host over the local sshd, then the key signs in`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        assumeTrue("2x is the same sshd and the same shell; the surfaces are held at 1x", systemFontScale == 1f)
+        seedLibrary()
+        val marker = "berth-install-" + java.util.UUID.randomUUID().toString().take(8)
+        val pair = SshKeys.generate(KeyAlgorithm.ED25519)
+        runBlocking {
+            graph.identities.insert(
+                Identity("id-install", "install test", KeyAlgorithm.ED25519, KeyStorage.SOFTWARE_ENCRYPTED, KeyProtection.NONE, SshKeys.openSshPublic(pair.public, marker), SshKeys.fingerprintSha256(pair.public), marker, createdAt = now),
+                SshKeys.openSshPrivate(pair, marker).toByteArray(),
+            )
+            graph.secrets.put(AuthResolver.passwordSecretId("berth-test-box"), sshPassword.toByteArray())
+            graph.hosts.upsert(
+                Host(
+                    id = "berth-test-box",
+                    name = "Berth test box",
+                    color = SwatchColor.TEAL,
+                    monogram = Host.monogramFor("Berth test box"),
+                    address = sshHost,
+                    port = sshPort,
+                    user = sshUser,
+                    auth = AuthMethod.Password(AuthResolver.passwordSecretId("berth-test-box")),
+                    tags = listOf("local"),
+                    createdAt = now - TimeUnit.HOURS.toMillis(1),
+                ),
+            )
+            graph.sessions.restore()
+        }
+        val opened = ArrayList<String>()
+        themed {
+            KeysScreen(graph.viewModel, onBack = {}, onOpenTab = { opened += it })
+            PromptHost(graph.prompts)
+        }
+        waitForText("install test")
+        compose.onNodeWithText("install test").performTouchInput { longClick() }
+        waitForText("Install on host")
+        compose.onNodeWithText("Install on host").performClick()
+        waitForText("Berth test box")
+        compose.onNode(hasText("Berth test box") and hasAnyAncestor(isDialog())).performClick()
+        waitForText("Connect and install")
+        compose.onNodeWithText("Connect and install").performClick()
+
+        // The login's prompts come up over the sheet: the server's key first.
+        compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        waitForText("Trust and connect")
+        settle(300)
+        capture("key-install-connecting-live")
+        compose.onNodeWithText("Trust and connect").performClick()
+        var session: TerminalSession? = null
+        try {
+            compose.waitUntil(90_000) { compose.onAllNodesWithText("Installed").fetchSemanticsNodes().isNotEmpty() }
+            session = graph.sessions.sessions.value.filterIsInstance<TerminalSession>().single { it.host.id == "berth-test-box" }
+            assertEquals(SessionState.LIVE, session.state)
+            compose.onNodeWithText("install test is in ~/.ssh/authorized_keys on Berth test box. Logging in there as $sshUser with this key works from the next connection.").assertExists()
+            settle(300)
+            capture("key-install-installed-live")
+            assertNoTextCut("the Installed sheet")
+            // The shell printed the answer, not the typed line: the words are on screen once, put together by printf.
+            val rows = KeyInstall.rowsFrom(session.emulator, 0)
+            assertEquals(1, rows.count { it.contains(KeyInstall.INSTALLED) })
+            assertEquals(0, rows.count { it.contains(KeyInstall.NOT_INSTALLED) })
+            compose.onNodeWithText("Open tab").performClick()
+            assertEquals(listOf(session.id), opened)
+
+            // The proof: the same host with the key just installed logs in, no password asked.
+            val withKey = graph.hosts.items.value.first { it.id == "berth-test-box" }.copy(auth = AuthMethod.Key("id-install"))
+            runBlocking { graph.hosts.upsert(withKey) }
+            val second = runBlocking { graph.sessions.open(withKey) }
+            compose.waitUntil(45_000) { second.state == SessionState.LIVE || second.state == SessionState.FAILED }
+            assertEquals(second.failure.value?.plain ?: "live", SessionState.LIVE, second.state)
+            assertNull("no prompt stood in the way", graph.prompts.current.value)
+            settle(800)
+            second.sendText("echo signed in with $marker\n")
+            compose.waitUntil(15_000) { KeyInstall.rowsFrom(second.emulator, 0).any { it.contains("signed in with $marker") && !it.contains("echo") } }
+        } finally {
+            // Leave the sshd's authorized_keys as it was: the line this test added goes, through the shell that wrote it.
+            val shell = session ?: graph.sessions.sessions.value.filterIsInstance<TerminalSession>().firstOrNull { it.host.id == "berth-test-box" && it.state == SessionState.LIVE }
+            if (shell != null) {
+                shell.sendText("grep -v '$marker' ~/.ssh/authorized_keys > ~/.ssh/.ak.tmp; cat ~/.ssh/.ak.tmp > ~/.ssh/authorized_keys; rm ~/.ssh/.ak.tmp; grep -c '$marker' ~/.ssh/authorized_keys; echo berth-cleanup-done\n")
+                compose.waitUntil(15_000) { KeyInstall.rowsFrom(shell.emulator, 0).any { it.trim() == "berth-cleanup-done" } }
+                val after = KeyInstall.rowsFrom(shell.emulator, 0)
+                val done = after.indexOfLast { it.trim() == "berth-cleanup-done" }
+                assertEquals("the installed line is gone again", "0", after[done - 1].trim())
+            }
+            graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+        }
+    }
+
+    // ---- fixtures ---------------------------------------------------------------------------------
+
+    private val now = System.currentTimeMillis()
+    private lateinit var laptopKey: KeyPair
+
+    private fun host(id: String, name: String, address: String, user: String, color: SwatchColor, auth: AuthMethod, tags: List<String>, lastConnectedAgoMinutes: Long? = null, environment: Map<String, String> = emptyMap()) = Host(
+        id = id,
+        name = name,
+        color = color,
+        monogram = Host.monogramFor(name),
+        address = address,
+        port = 22,
+        user = user,
+        auth = auth,
+        tags = tags,
+        environment = environment,
+        lastConnectedAt = lastConnectedAgoMinutes?.let { now - TimeUnit.MINUTES.toMillis(it) },
+        createdAt = now - TimeUnit.DAYS.toMillis(30),
+    )
+
+    /** Four hosts tagged three ways with one untagged, two keys, two groups and one trusted server key. */
+    private fun seedLibrary() = runBlocking {
+        laptopKey = SshKeys.generate(KeyAlgorithm.ED25519)
+        graph.identities.insert(
+            Identity("id-laptop", "laptop ed25519", KeyAlgorithm.ED25519, KeyStorage.SOFTWARE_ENCRYPTED, KeyProtection.PASSPHRASE, SshKeys.openSshPublic(laptopKey.public, "ben@laptop"), SshKeys.fingerprintSha256(laptopKey.public), "ben@laptop", createdAt = now - TimeUnit.DAYS.toMillis(200)),
+            SshKeys.openSshPrivate(laptopKey, "ben@laptop", "correct horse".toCharArray()).toByteArray(),
+        )
+        val phone = FakeKeystore.newP256()
+        graph.identities.insert(
+            Identity("id-phone", "this phone", KeyAlgorithm.ECDSA_P256, KeyStorage.ANDROID_KEYSTORE, KeyProtection.BIOMETRIC, SshKeys.openSshPublic(phone.public, "berth@pixel"), SshKeys.fingerprintSha256(phone.public), "berth@pixel", keystoreAlias = "berth-id-phone", createdAt = now - TimeUnit.DAYS.toMillis(12)),
+            null,
+        )
+        graph.secrets.put(AuthResolver.passwordSecretId("homelab"), "hunter2".toByteArray())
+        graph.hosts.upsert(host("prod-api", "prod-api", "203.0.113.10", "deploy", SwatchColor.COPPER, AuthMethod.Key("id-laptop"), tags = listOf("prod"), lastConnectedAgoMinutes = 130))
+        graph.hosts.upsert(host("homelab", "homelab", "192.168.1.20", "ben", SwatchColor.VERDIGRIS, AuthMethod.Password(AuthResolver.passwordSecretId("homelab")), tags = listOf("lab"), lastConnectedAgoMinutes = 18))
+        graph.hosts.upsert(host("pi-hole", "pi-hole", "192.168.1.2", "pi", SwatchColor.MOSS, AuthMethod.Key("id-phone"), tags = listOf("lab", "dns"), lastConnectedAgoMinutes = 60 * 26, environment = mapOf("LANG" to "C.UTF-8")))
+        graph.hosts.upsert(host("build-box", "build box", "build.internal", "ci", SwatchColor.SLATE, AuthMethod.AskEachTime, tags = emptyList()))
+        graph.workspaces.upsert(Workspace(Workspace.DEFAULT_ID, Workspace.DEFAULT_NAME, SwatchColor.COPPER, "H", sortOrder = 0, createdAt = now - TimeUnit.DAYS.toMillis(30)))
+        graph.workspaces.upsert(Workspace("ws-work", "Work", SwatchColor.SLATE, "W", sortOrder = 1, createdAt = now - TimeUnit.DAYS.toMillis(20)))
+        graph.settings.setCurrentWorkspaceId(Workspace.DEFAULT_ID)
+        val server = SshKeys.generate(KeyAlgorithm.ED25519).public
+        graph.knownHosts.upsert(KnownHostKey("kh-1", "203.0.113.10", 22, "ssh-ed25519", SshKeys.openSshPublic(server).split(" ")[1], SshKeys.fingerprintSha256(server), now - TimeUnit.DAYS.toMillis(90), now - TimeUnit.HOURS.toMillis(2)))
+    }
+
+    /** Three detached tabs, two in Home and one in Work, restored so the manager holds them. */
+    private fun seedTabs() = runBlocking {
+        val hosts = graph.hosts.items.value.associateBy { it.id }
+        fun record(id: String, hostId: String, ws: String, order: Int, lastLiveMinutesAgo: Long, cwd: String, lastCommand: String) = SessionRecord(
+            id = id, workspaceId = ws, hostId = hostId, hostSnapshot = hosts.getValue(hostId), state = SessionState.DETACHED, layer = PersistenceLayer.LOCAL_FRAME, title = hosts.getValue(hostId).name,
+            cwd = cwd, lastCommand = lastCommand, sortOrder = order, createdAt = now - TimeUnit.HOURS.toMillis(5), lastLiveAt = now - TimeUnit.MINUTES.toMillis(lastLiveMinutesAgo),
+        )
+        graph.sessionRecords.upsert(record("s-homelab", "homelab", Workspace.DEFAULT_ID, 0, 12, "~/srv", "docker compose ps"))
+        graph.sessionRecords.upsert(record("s-pihole", "pi-hole", Workspace.DEFAULT_ID, 1, 95, "/etc/pihole", "tail -f pihole.log"))
+        graph.sessionRecords.upsert(record("s-build", "build-box", "ws-work", 0, 400, "~/work/berth", "./gradlew assembleDebug"))
+        graph.sessionRecords.saveFrame("s-homelab", frame(listOf("ben@homelab:~/srv$ docker compose ps", "ben@homelab:~/srv$ ")))
+        graph.sessionRecords.saveFrame("s-pihole", frame(listOf("pi@pi-hole:/etc/pihole$ tail -f pihole.log")))
+        graph.sessionRecords.saveFrame("s-build", frame(listOf("ci@build:~/work/berth$ ./gradlew assembleDebug", "BUILD SUCCESSFUL in 1m 12s")))
+        graph.sessions.restore()
+        compose.waitUntil(10_000) { graph.sessions.restored.value && graph.sessions.records.value.size == 3 }
+    }
+
+    /**
+     * A tab as Quick connect opens one: its host under a `quick-` id no library holds, Live by its
+     * record with no socket behind it, since the sheet reads the record and the emulator only.
+     */
+    private fun quickTab(): TerminalSession {
+        val quick = Host(
+            id = "quick-" + java.util.UUID.randomUUID(),
+            name = "198.51.100.7",
+            color = SwatchColor.forName("198.51.100.7"),
+            monogram = Host.monogramFor("198.51.100.7"),
+            address = "198.51.100.7",
+            port = 2202,
+            user = "root",
+            auth = AuthMethod.AskEachTime,
+            createdAt = now,
+        )
+        val record = SessionRecord(
+            id = "s-quick", workspaceId = Workspace.DEFAULT_ID, hostId = quick.id, hostSnapshot = quick, state = SessionState.LIVE, layer = PersistenceLayer.IN_APP, title = quick.name,
+            cwd = "~", lastCommand = null, sortOrder = 0, createdAt = now - TimeUnit.MINUTES.toMillis(3), lastLiveAt = now,
+        )
+        val env = object : SessionEnvironment {
+            override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
+            override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
+            override val networkAvailable: Flow<Unit> = emptyFlow()
+            override fun onClipboardText(host: Host, text: String) = Unit
+        }
+        return TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), env) {}
+    }
+
+    private fun request(host: Host, key: java.security.PublicKey) = HostKeyRequest(
+        host = host.address,
+        port = host.port,
+        keyType = SshKeys.keyTypeName(key),
+        publicKey = key,
+        publicKeyBase64 = SshKeys.openSshPublic(key).split(" ")[1],
+        fingerprintSha256 = SshKeys.fingerprintSha256(key),
+    )
+
+    /** A host name hashed as `ssh-keygen -H` writes it: `|1|salt|HMAC-SHA1(salt, name)`, both base64. */
+    private fun hashed(name: String): String {
+        val salt = ByteArray(20).also { SecureRandom().nextBytes(it) }
+        val mac = Mac.getInstance("HmacSHA1").apply { init(SecretKeySpec(salt, "HmacSHA1")) }
+        val b64 = Base64.getEncoder()
+        return "|1|${b64.encodeToString(salt)}|${b64.encodeToString(mac.doFinal(KnownHostsFile.patternFor(name, 22).toByteArray()))}"
+    }
+
+    private fun frame(lines: List<String>): ByteArray {
+        val out = ByteArrayOutputStream()
+        DataOutputStream(out).use { d ->
+            d.writeInt(1)
+            d.writeInt(lines.size)
+            lines.forEach(d::writeUTF)
+        }
+        return out.toByteArray()
+    }
+
+    /** The overview's actions as the Stage would take them, recorded. */
+    private class RecordingTabActions : TabActions {
+        val moved = ArrayList<Pair<String, Int>>()
+        val edited = ArrayList<String>()
+        override fun moveGroup(groupId: String, toIndex: Int) { moved += groupId to toIndex }
+        override fun editGroup(groupId: String) { edited += groupId }
+    }
+}
