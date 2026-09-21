@@ -11,8 +11,8 @@ import java.io.InputStream
 /**
  * The import sheet's reading of a picked file, and its lines: the picker is `*∕*`, so the pick may
  * be anything on the phone and the read stops at the bundle limit instead of holding the pick
- * whole to measure it; the two rows for what an import does not take as carried count in the
- * singular and the plural.
+ * whole to measure it; the rows for what an import does not take as carried count in the singular
+ * and the plural, and the button names the keys the ticks replace.
  */
 class BundleSheetsTest {
     @Test
@@ -47,11 +47,20 @@ class BundleSheetsTest {
     }
 
     @Test
-    fun `the rows for what stays as this phone has it count one and many, a title of one line and a caption that says why`() {
-        assertEquals("1 known host stays yours", knownHostsKeptLine(1))
-        assertEquals("2 known hosts stay yours", knownHostsKeptLine(2))
-        assertEquals("203.0.113.10 \u00B7 the bundle's key differs from the one this phone trusts", knownHostsKeptCaption(listOf("203.0.113.10")))
-        assertEquals("a, b \u00B7 the bundle's keys differ from the ones this phone trusts", knownHostsKeptCaption(listOf("a", "b")))
+    fun `the known hosts count row says how many of its keys this phone trusts already, and the button how many keys the ticks replace`() {
+        // The count row is the keys that need no decision: new ones, and the ones trusted already, which the import leaves alone.
+        assertEquals("db.internal:2200", knownHostsCaption(listOf("db.internal:2200"), existing = 0))
+        assertEquals("203.0.113.10 \u00B7 trusted already", knownHostsCaption(listOf("203.0.113.10"), existing = 1))
+        assertEquals("a, b \u00B7 all trusted already", knownHostsCaption(listOf("a", "b"), existing = 2))
+        assertEquals("a, b, c \u00B7 1 trusted already", knownHostsCaption(listOf("a", "b", "c"), existing = 1))
+        // The conflicts are rows of their own; the button counts the ticked ones, as the known_hosts import's does.
+        assertEquals("Import", importBundleLabel(0))
+        assertEquals("Import, replace 1 key", importBundleLabel(1))
+        assertEquals("Import, replace 2 keys", importBundleLabel(2))
+    }
+
+    @Test
+    fun `the row for the tunnels that come in switched off counts one and many, a title of one line and a caption that says why`() {
         assertEquals("1 tunnel comes in switched off", tunnelsHeldOffLine(1))
         assertEquals("3 tunnels come in switched off", tunnelsHeldOffLine(3))
         assertEquals("*:9090 \u2192 localhost:9090 \u00B7 it listens on every interface; it stays off until you turn it on", tunnelsHeldOffCaption(listOf("*:9090 \u2192 localhost:9090")))

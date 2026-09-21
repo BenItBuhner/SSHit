@@ -132,24 +132,29 @@ sealed class BundleFormatException(message: String) : RuntimeException(message) 
 }
 
 /**
- * The three things in a bundle that are not records with an id but this phone's one copy, and so
- * are replaced rather than added to: the import sheet offers each as a switch, on by default.
+ * What the import sheet decides for the user, as the sheet leaves it: the three things in a bundle
+ * that are not records with an id but this phone's one copy, and so are replaced rather than added
+ * to, each a switch on by default; and the bundled known hosts that differ from a key this phone
+ * trusts for their endpoint ([BundleImportPlan.knownHostsConflicting]), each the changed-key
+ * decision (spec C13) offered unticked, [replaceKnownHosts] naming the ones ticked to take the
+ * saved key's place ([BundledKnownHost.id]).
  */
-data class BundleImportOptions(val deck: Boolean = true, val interfaceTheme: Boolean = true, val defaultTerminalTheme: Boolean = true)
+data class BundleImportOptions(
+    val deck: Boolean = true,
+    val interfaceTheme: Boolean = true,
+    val defaultTerminalTheme: Boolean = true,
+    val replaceKnownHosts: Set<String> = emptySet(),
+)
 
 /**
  * What an import of a bundle would do here beyond writing its records, read before it is done so
- * the sheet can say so: the known hosts by where they stand against this phone's ([KnownHostStanding]),
- * the tunnels that would listen on every interface, which come in switched off, and the theme that
- * would become the default for new terminals.
+ * the sheet can say so: every bundled known host by where it stands against this phone's keys for
+ * its endpoint ([KnownHostStanding]), the tunnels that would listen on every interface, which come
+ * in switched off, and the theme that would become the default for new terminals.
  */
 data class BundleImportPlan(
-    /** Bundled keys for endpoints this phone holds nothing for: written. */
-    val knownHostsNew: Int,
-    /** Bundled keys this phone already trusts as they are: nothing to do. */
-    val knownHostsExisting: Int,
-    /** Bundled keys for endpoints this phone holds another key for: left as this phone has them. */
-    val knownHostsKept: List<KnownHostKey>,
+    /** The bundled known hosts, each with its standing, in the bundle's order. */
+    val knownHosts: List<BundledKnownHost>,
     /** Bundled tunnels bound to every interface that the bundle had switched on: imported switched off. */
     val tunnelsOnEveryInterface: List<Tunnel>,
     /**
@@ -158,7 +163,35 @@ data class BundleImportPlan(
      * bundle's being this phone's already or none this phone will have.
      */
     val defaultTerminalTheme: String? = null,
-)
+) {
+    /** Bundled keys for endpoints this phone holds nothing for: written, no decision to make. */
+    val knownHostsNew: Int get() = knownHosts.count { it.standing == KnownHostStanding.NEW }
+
+    /** Bundled keys this phone already trusts as they are: nothing to do. */
+    val knownHostsExisting: Int get() = knownHosts.count { it.standing == KnownHostStanding.EXISTING }
+
+    /** The endpoints of the keys that need no decision, [knownHostsNew] and [knownHostsExisting], for the sheet's one count row. */
+    val knownHostsRoutine: List<BundledKnownHost> get() = knownHosts.filter { it.standing == KnownHostStanding.NEW || it.standing == KnownHostStanding.EXISTING }
+
+    /**
+     * Bundled keys that differ from a key this phone trusts for their endpoint, the pin aside: the
+     * changed-key case (spec C13), each offered as a Replace decision the sheet starts unticked.
+     */
+    val knownHostsConflicting: List<BundledKnownHost> get() = knownHosts.filter { it.standing is KnownHostStanding.Conflicting }
+
+    /** Bundled keys for an endpoint this phone pins another key for: not offered, since a pin takes no other key. */
+    val knownHostsPinned: List<BundledKnownHost> get() = knownHosts.filter { it.standing is KnownHostStanding.Pinned }
+}
+
+/**
+ * One known host as a bundle carries it, with where it stands against the keys this phone holds
+ * for its endpoint. [id] names it in [BundleImportOptions.replaceKnownHosts]: the endpoint and the
+ * public key, so two copies of one key in a bundle are one decision, and the bundle's own record
+ * ids, another phone's, decide nothing here.
+ */
+data class BundledKnownHost(val key: KnownHostKey, val standing: KnownHostStanding) {
+    val id: String get() = "${key.host.lowercase()}:${key.port}:${key.publicKeyBase64}"
+}
 
 /**
  * What an import did (spec C20, Data): the counts, and the identities that were hardware-backed
@@ -172,12 +205,14 @@ data class BundleImportReport(
     val snippets: Int,
     val tunnels: Int,
     val terminalThemes: Int,
-    /** Known hosts written; the ones kept as this phone had them are [knownHostsKept]. */
+    /** Known hosts written, the [knownHostsReplaced] among them; the ones kept as this phone had them are [knownHostsKept]. */
     val knownHosts: Int,
     val deck: Boolean,
     val needsRecreation: List<RecreateNotice>,
-    /** Bundled known-host keys that differed from what this phone trusts and were not taken. */
+    /** Bundled known-host keys that differed from what this phone trusts and were not taken: the conflicts left unticked, and every pinned endpoint's. */
     val knownHostsKept: Int = 0,
+    /** Bundled known-host keys that took the place of a key this phone trusted, on the sheet's tick ([BundleImportOptions.replaceKnownHosts]). */
+    val knownHostsReplaced: Int = 0,
     /** Tunnels bound to every interface that the bundle had switched on, imported switched off. */
     val tunnelsHeldOff: Int = 0,
     /** Whether the bundle's interface theme was taken over this phone's ([BundleImportOptions.interfaceTheme]). */
@@ -185,7 +220,7 @@ data class BundleImportReport(
     /** Whether the bundle's default terminal theme became this phone's ([BundleImportOptions.defaultTerminalTheme]); false when it was already. */
     val defaultTerminalTheme: Boolean = false,
 ) {
-    /** One line for a notice: `Imported 12 hosts, 3 keys and 8 snippets.` */
+    /** One line for a notice: `Imported 12 hosts, 3 keys and 8 snippets.`; a known host that took a saved key's place is said so, `2 known hosts (1 replaced)`. */
     val summary: String
         get() {
             val parts = buildList {
@@ -195,7 +230,7 @@ data class BundleImportReport(
                 if (snippets > 0) add(count(snippets, "snippet"))
                 if (tunnels > 0) add(count(tunnels, "tunnel"))
                 if (terminalThemes > 0) add(count(terminalThemes, "theme"))
-                if (knownHosts > 0) add(count(knownHosts, "known host"))
+                if (knownHosts > 0) add(count(knownHosts, "known host") + if (knownHostsReplaced > 0) " ($knownHostsReplaced replaced)" else "")
                 if (deck) add("the Deck")
                 if (interfaceTheme) add("the interface theme")
                 if (defaultTerminalTheme) add("the default terminal theme")

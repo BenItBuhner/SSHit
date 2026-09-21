@@ -4,10 +4,10 @@ package app.berth.domain.model
  * Where a key offered for an endpoint stands against the keys Berth already trusts for it (spec
  * A16). It is the answer the live policy gives a server's key, and the answer the two imports give
  * a key read from a file: a `known_hosts` file's rows and a `.berth` bundle's known hosts, where a
- * [Conflicting] key is the Replace decision the changed-key sheet makes and starts unticked, and a
- * [Pinned] endpoint takes nothing. The bundle import lays one rule of its own over [of]: a key of
- * a type this phone holds none of, for an endpoint it does hold a key for, stands as [Conflicting]
- * with what is held and is kept, since live that case asks the user and an import cannot.
+ * [Conflicting] key is the Replace decision the changed-key sheet makes, a row that starts
+ * unticked, and a [Pinned] endpoint takes nothing. The bundle import lays one rule of its own over
+ * [of]: a key of a type this phone holds none of, for an endpoint it does hold a key for, stands
+ * as [Conflicting] with what is held, since live that case asks the user and a bundle's row can.
  *
  * [of] is the one rule; the callers decide what each answer means for them.
  */
@@ -23,9 +23,6 @@ sealed interface KnownHostStanding {
 
     /** The endpoint has a pinned key and this is not it: a pin takes no other key, of any type. */
     data class Pinned(val saved: KnownHostKey) : KnownHostStanding
-
-    /** The key differs from one this phone already trusts for the endpoint, pinned or not. */
-    val differs: Boolean get() = this is Conflicting || this is Pinned
 
     companion object {
         /** Where a key of [keyType] with [publicKeyBase64] stands against [here], the keys held for its endpoint. */

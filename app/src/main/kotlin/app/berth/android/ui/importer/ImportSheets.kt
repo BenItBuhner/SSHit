@@ -5,20 +5,14 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,27 +27,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
-import app.berth.android.ui.KnownHostsCandidate
 import app.berth.android.ui.KnownHostsImport
 import app.berth.android.ui.KnownHostsImported
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
-import app.berth.android.ui.components.BerthIcon
-import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
+import app.berth.android.ui.components.PinLock
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.components.TickRow
 import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
@@ -302,8 +290,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                     for (cand in candidates) {
                         val selected = cand.key in selection
                         val facts = buildList {
-                            add(KnownHostKey.algorithmLabelFor(cand.entry.keyType))
-                            add(shortFingerprint(cand.entry.fingerprintSha256))
+                            add(keyFacts(cand.entry.keyType, cand.entry.fingerprintSha256))
                             if (cand.existing) add("trusted already")
                             if (cand.entry.hashed) add("matched by hash")
                         }.joinToString(" \u00B7 ")
@@ -311,7 +298,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                             // A pin means no other key for the address: the row is read, not offered, and says where the pin is undone.
                             is KnownHostStanding.Pinned -> ListRow(
                                 title = cand.entry.address,
-                                subtitle = "$facts\nPinned to ${standing.saved.algorithmLabel} ${shortFingerprint(standing.saved.fingerprintSha256)}; unpin it under Known hosts first.",
+                                subtitle = "$facts\n" + pinnedToLine(standing.saved),
                                 subtitleMaxLines = 4,
                                 minHeight = 52.dp,
                                 leading = { PinLock() },
@@ -322,7 +309,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                                 subtitle = facts,
                                 ticked = selected,
                                 onTicked = { selection = if (it) selection + cand.key else selection - cand.key },
-                                warning = "Differs from the saved ${standing.saved.algorithmLabel} key ${shortFingerprint(standing.saved.fingerprintSha256)} (trusted ${formatDate(standing.saved.firstSeenAt)}). Ticked, it replaces that key.",
+                                warning = replacesSavedKeyLine(standing.saved),
                             )
                             else -> TickRow(
                                 title = cand.entry.address,
@@ -389,59 +376,24 @@ internal fun importKnownHostsLabel(picked: Int, replacing: Int): String {
 }
 
 /** `SHA256:` and the first four groups of the hash, enough to tell keys apart on a row. */
-private fun shortFingerprint(fingerprint: String): String =
+internal fun shortFingerprint(fingerprint: String): String =
     "SHA256:" + fingerprint.removePrefix("SHA256:").chunked(4).take(4).joinToString(" ") + "\u2026"
 
-/**
- * A candidate row that is ticked or not: a [ListRow] that toggles as a checkbox, so a screen reader
- * hears `checked, git.example.com` rather than a button whose description changes, with the dot
- * as its only mark. A [warning] under the facts, in the danger tint, is what ticking the row would
- * undo: the saved key a conflicting one replaces.
- */
-@Composable
-private fun TickRow(title: String, subtitle: String, ticked: Boolean, onTicked: (Boolean) -> Unit, warning: String? = null) {
-    val c = Berth.colors
-    val interaction = remember { MutableInteractionSource() }
-    ListRow(
-        title = title,
-        subtitle = if (warning == null) subtitle else buildAnnotatedString {
-            append(subtitle)
-            append("\n")
-            withStyle(SpanStyle(color = c.danger)) { append(warning) }
-        },
-        subtitleMaxLines = if (warning == null) 2 else 4,
-        minHeight = 52.dp,
-        modifier = Modifier.toggleable(value = ticked, role = Role.Checkbox, interactionSource = interaction, indication = null, onValueChange = onTicked),
-        interactionSource = interaction,
-        leading = { TickDot(ticked) },
-    )
-}
+/** A key's facts on its row: the algorithm the way the UI names it and the short fingerprint. */
+internal fun keyFacts(keyType: String, fingerprintSha256: String): String =
+    KnownHostKey.algorithmLabelFor(keyType) + " \u00B7 " + shortFingerprint(fingerprintSha256)
 
 /**
- * The mark on a pinned endpoint's row, in the tick's place: a lock, in the subtitle's tone, since
- * the row is read and not offered, and an unticked dot there would read as a box that will not
- * tick. Decorative; the row's second line says what the lock means.
+ * The line under a conflicting key's row, in the danger tint (C13's changed-key case in a file):
+ * the [saved] key it differs from, since when, and that the tick is the Replace decision. One line
+ * for both imports, the `known_hosts` file's and the bundle's, so the same case reads the same.
  */
-@Composable
-private fun PinLock() {
-    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
-        BerthIcon(BerthIcons.lock, tint = Berth.colors.text2, size = 16.dp)
-    }
-}
+internal fun replacesSavedKeyLine(saved: KnownHostKey): String =
+    "Differs from the saved ${saved.algorithmLabel} key ${shortFingerprint(saved.fingerprintSha256)} (trusted ${formatDate(saved.firstSeenAt)}). Ticked, it replaces that key."
 
-/** The tick on a candidate row: an 8 dp dot, accent when the key or host will import, text.3 when it will not. The row's own state says which; the dot is the picture. */
-@Composable
-private fun TickDot(ticked: Boolean) {
-    val c = Berth.colors
-    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (ticked) c.accent else c.text3),
-        )
-    }
-}
+/** The second line of a pinned endpoint's row: the pin it is held to, and where the pin is undone. */
+internal fun pinnedToLine(saved: KnownHostKey): String =
+    "Pinned to ${saved.algorithmLabel} ${shortFingerprint(saved.fingerprintSha256)}; unpin it under Known hosts first."
 
 /**
  * A `ProxyJump` hop that is not an alias: `[user@]host[:port]`, the host in brackets when it is an

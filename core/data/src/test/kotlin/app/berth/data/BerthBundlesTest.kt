@@ -19,6 +19,7 @@ import app.berth.domain.model.Base64Codec
 import app.berth.domain.model.BerthBundle
 import app.berth.domain.model.BundleFormatException
 import app.berth.domain.model.BundledIdentity
+import app.berth.domain.model.BundledKnownHost
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayer
@@ -31,6 +32,7 @@ import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
@@ -270,12 +272,13 @@ class BerthBundlesTest {
     // ---- what is not written as carried ------------------------------------------------------------
 
     /**
-     * The check between the user and a wrong key is the key this phone holds; a bundle never
-     * overrides it. The standings, before the import in the plan and after it in the report: a
-     * different key for a pinned endpoint, a different key of the same type for an unpinned one,
-     * and a key of another type for an endpoint this phone holds a key for (live, the case the
-     * policy asks about; an import cannot ask) all stay as this phone has them, the very key is
-     * nothing to do, a new endpoint is written.
+     * The check between the user and a wrong key is the key this phone holds; a bundle does not
+     * override it on its own. The standings, before the import in the plan and after it in the
+     * report: a different key for a pinned endpoint is not offered and stays; a different key of
+     * the same type for an unpinned one, and a key of another type for an endpoint this phone holds
+     * a key for (live, the case the policy asks about), are the changed-key case, offered as the
+     * Replace decision and kept while it is not made; the very key is nothing to do; a new endpoint
+     * is written.
      */
     @Test
     fun `a bundled known host for an endpoint this phone trusts another key for stays as this phone has it, and the sheet is told so first`() = runTest {
@@ -293,7 +296,14 @@ class BerthBundlesTest {
         val plan = new.bundles.plan(bundle)
         assertEquals(1, plan.knownHostsNew)
         assertEquals(1, plan.knownHostsExisting)
-        assertEquals(listOf(rotatedWeb, dbBundled, dbRsa), plan.knownHostsKept)
+        assertEquals(listOf(nasKey, sameWeb), plan.knownHostsRoutine.map { it.key }, "the count row's keys, in the bundle's order")
+        assertEquals(listOf(BundledKnownHost(rotatedWeb, KnownHostStanding.Pinned(known))), plan.knownHostsPinned)
+        assertEquals(
+            listOf(BundledKnownHost(dbBundled, KnownHostStanding.Conflicting(dbHere)), BundledKnownHost(dbRsa, KnownHostStanding.Conflicting(dbHere))),
+            plan.knownHostsConflicting,
+            "both differ from the ed25519 key this phone holds, the RSA one by the import's own rule",
+        )
+        assertEquals(listOf(rotatedWeb, dbBundled, dbRsa, nasKey, sameWeb), plan.knownHosts.map { it.key }, "every bundled key, as the bundle has them")
 
         val report = new.bundles.apply(bundle)
         val here = new.knownHosts.observeAll().first()
@@ -301,7 +311,56 @@ class BerthBundlesTest {
         assertEquals(listOf(dbHere), here.filter { it.host == "db.internal" }, "one key for the endpoint, the one this phone had; the RSA one was not added beside it")
         assertEquals(1, report.knownHosts)
         assertEquals(3, report.knownHostsKept)
+        assertEquals(0, report.knownHostsReplaced)
         assertEquals("Imported 1 known host.", report.summary)
+    }
+
+    /**
+     * The tick on a conflicting row is the changed-key sheet's Replace (spec C13), as #19's
+     * `known_hosts` import takes it: the saved key goes and the bundle's is written in its place,
+     * under the address as the saved key spelt it, which is the spelling the live lookup reads.
+     * A tick names one key; the other conflict for the same endpoint stays kept, and a pinned
+     * endpoint's key is never taken, ticked or not. Two ticks for one endpoint both stand.
+     */
+    @Test
+    fun `a conflicting known host ticked to replace takes the saved key's place under its spelling, and only that one`() = runTest {
+        val dbHere = KnownHostKey("k-db", "DB.Internal", 2200, "ssh-ed25519", "AAAAdbhere", "SHA256:dbhere", 1, 2)
+        val dbBundled = KnownHostKey("k-db-theirs", "db.internal", 2200, "ssh-ed25519", "AAAAdbtheirs", "SHA256:dbtheirs", 3, 4)
+        val dbRsa = KnownHostKey("k-db-rsa", "db.internal", 2200, "ssh-rsa", "AAAAdbrsa", "SHA256:dbrsa", 5, 6)
+        val rotatedWeb = known.copy(id = "k-web-old", publicKeyBase64 = "AAAAoldwebkey", fingerprintSha256 = "SHA256:oldwebkey", pinned = false)
+        val nasKey = KnownHostKey("k-nas", "10.0.0.5", 22, "ssh-ed25519", "AAAAnas", "SHA256:nas", 3, 4)
+        new.knownHosts.upsert(known)
+        new.knownHosts.upsert(dbHere)
+        val bundle = BerthBundle(exportedAt = 1, knownHosts = listOf(rotatedWeb, dbBundled, dbRsa, nasKey))
+        val plan = new.bundles.plan(bundle)
+        val (theirs, rsa) = plan.knownHostsConflicting
+        assertEquals(dbBundled, theirs.key)
+        assertEquals("db.internal:2200:AAAAdbtheirs", theirs.id, "the decision is named by endpoint and public key, not by the other phone's record id")
+
+        // The pinned endpoint's key ticked as well: a pin is not offered, and a tick that never was on the sheet changes nothing.
+        val report = new.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = setOf(theirs.id, plan.knownHostsPinned.single().id)))
+
+        val here = new.knownHosts.observeAll().first()
+        assertEquals(listOf(dbBundled.copy(host = "DB.Internal")), here.filter { it.host.equals("db.internal", ignoreCase = true) }, "the bundle's key in the saved key's place, spelt as the saved key was; the RSA one, unticked, was not added beside it")
+        assertEquals(setOf(known, nasKey, dbBundled.copy(host = "DB.Internal")), here.toSet())
+        assertEquals(2, report.knownHosts, "the new endpoint and the replaced key were written")
+        assertEquals(1, report.knownHostsReplaced)
+        assertEquals(2, report.knownHostsKept, "the pinned endpoint's and the unticked RSA key")
+        assertEquals("Imported 2 known hosts (1 replaced).", report.summary)
+
+        // Both conflicts ticked: the saved key goes once and each of the two is written.
+        val other = Phone()
+        try {
+            other.knownHosts.upsert(dbHere)
+            val both = other.bundles.plan(bundle).knownHostsConflicting.map { it.id }.toSet()
+            val twice = other.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = both))
+            assertEquals(setOf(dbBundled.copy(host = "DB.Internal"), dbRsa.copy(host = "DB.Internal")), other.knownHosts.observeAll().first().filter { it.port == 2200 }.toSet())
+            assertEquals(2, twice.knownHostsReplaced)
+            assertEquals(4, twice.knownHosts, "rotatedWeb is new on this phone, which has no key for it, beside the nas key and the two")
+            assertEquals("Imported 4 known hosts (2 replaced).", twice.summary)
+        } finally {
+            other.db.close()
+        }
     }
 
     /** A software key is what its bytes say it is; the document's claim about them is not taken. */

@@ -98,11 +98,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -500,6 +503,68 @@ fun ToggleRow(
 @Composable
 fun PanelNote(text: String, modifier: Modifier = Modifier) {
     Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 12.dp, top = 4.dp))
+}
+
+// ---- Candidate rows -----------------------------------------------------------------------------------
+
+/**
+ * A candidate row that is ticked or not, for what an import offers (spec A16, C13): a [ListRow]
+ * that toggles as a checkbox, so a screen reader hears `checked, git.example.com` rather than a
+ * button whose description changes, with the dot as its only mark. A [warning] under the facts,
+ * in the danger tint, is what ticking the row would undo: the saved key a conflicting one replaces.
+ * [surface] is the row's own tone; inside a [Panel] it is transparent, the panel's being the tone.
+ */
+@Composable
+fun TickRow(
+    title: String,
+    subtitle: String,
+    ticked: Boolean,
+    onTicked: (Boolean) -> Unit,
+    warning: String? = null,
+    surface: Color = Berth.colors.surface2,
+) {
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    ListRow(
+        title = title,
+        subtitle = if (warning == null) subtitle else buildAnnotatedString {
+            append(subtitle)
+            append("\n")
+            withStyle(SpanStyle(color = c.danger)) { append(warning) }
+        },
+        subtitleMaxLines = if (warning == null) 2 else 4,
+        minHeight = 52.dp,
+        surface = surface,
+        modifier = Modifier.toggleable(value = ticked, role = Role.Checkbox, interactionSource = interaction, indication = null, onValueChange = onTicked),
+        interactionSource = interaction,
+        leading = { TickDot(ticked) },
+    )
+}
+
+/**
+ * The mark on a pinned endpoint's row, in the tick's place: a lock, in the subtitle's tone, since
+ * the row is read and not offered, and an unticked dot there would read as a box that will not
+ * tick. Decorative; the row's second line says what the lock means.
+ */
+@Composable
+fun PinLock() {
+    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+        BerthIcon(BerthIcons.lock, tint = Berth.colors.text2, size = 16.dp)
+    }
+}
+
+/** The tick on a candidate row: an 8 dp dot, accent when the key or host will import, text.3 when it will not. The row's own state says which; the dot is the picture. */
+@Composable
+private fun TickDot(ticked: Boolean) {
+    val c = Berth.colors
+    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(if (ticked) c.accent else c.text3),
+        )
+    }
 }
 
 // ---- Menus ------------------------------------------------------------------------------------------

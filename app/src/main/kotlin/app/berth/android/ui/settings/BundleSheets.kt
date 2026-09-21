@@ -34,9 +34,14 @@ import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
+import app.berth.android.ui.components.PinLock
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.components.TickRow
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.importer.keyFacts
+import app.berth.android.ui.importer.pinnedToLine
+import app.berth.android.ui.importer.replacesSavedKeyLine
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.data.bundle.BundleException
@@ -47,6 +52,7 @@ import app.berth.domain.model.BundleImportOptions
 import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.Identity
+import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.RecreateNotice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -213,6 +219,8 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
     var options by remember { mutableStateOf(BundleImportOptions()) }
     var report by remember { mutableStateOf<BundleImportReport?>(null) }
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
+    // The conflicts ticked to take a saved key's place, which the button names.
+    val replacing = plan?.knownHostsConflicting?.count { it.id in options.replaceKnownHosts } ?: 0
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch {
@@ -301,7 +309,7 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                     )
                     if (error != null) Text(error!!, style = BerthType.caption, color = c.danger, modifier = Modifier.padding(horizontal = 4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        BerthButton(if (busy) "Importing\u2026" else "Import", kind = ButtonKind.PRIMARY, enabled = !busy && !opened.isEmpty, onClick = ::import)
+                        BerthButton(if (busy) "Importing\u2026" else importBundleLabel(replacing), kind = ButtonKind.PRIMARY, enabled = !busy && !opened.isEmpty, onClick = ::import)
                         BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
                     }
                 }
@@ -338,9 +346,13 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
  * not by boxes), with the names where they fit in a caption. The three things that are this
  * phone's one copy, the default terminal theme, the Deck and the interface theme, are switches,
  * the first only where the bundle's would change what new terminals open in ([defaultThemeHere]
- * names what they open in now); what the import will not take as carried, a known host for an
- * endpoint this phone trusts another key for and a tunnel that would listen on every interface,
- * has its own row under the kind it belongs to once [plan] has been read.
+ * names what they open in now); a tunnel that would listen on every interface has its own row
+ * under the tunnels, saying it comes in switched off. The known hosts take the `known_hosts`
+ * import's shape (spec A16, C13) once [plan] has been read: one count row for the keys that need
+ * no decision, a bundle being a restore and a new key routine; then the decisions, a row each, a
+ * key that differs from one this phone trusts for its endpoint as an unticked [TickRow] whose
+ * danger line names the saved key and whose tick is the Replace, and a pinned endpoint as a lock
+ * row, read and not offered, since a pin takes no other key.
  */
 @Composable
 private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options: BundleImportOptions, defaultThemeHere: String, onOptions: (BundleImportOptions) -> Unit) {
@@ -402,9 +414,37 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
                 caption = "Replaces this phone's look with the bundle's",
             )
         }
-        row(bundle.knownHosts.size, "known host", bundle.knownHosts.map { it.endpoint })
-        val kept = plan?.knownHostsKept.orEmpty()
-        if (kept.isNotEmpty()) row(knownHostsKeptLine(kept.size), knownHostsKeptCaption(kept.map { it.endpoint }))
+        if (plan == null) {
+            row(bundle.knownHosts.size, "known host", bundle.knownHosts.map { it.endpoint })
+        } else {
+            val routine = plan.knownHostsRoutine
+            if (routine.isNotEmpty()) row(BundleImportReport.count(routine.size, "known host"), knownHostsCaption(routine.map { it.key.endpoint }, plan.knownHostsExisting))
+            for (bundled in plan.knownHosts) {
+                val facts = keyFacts(bundled.key.keyType, bundled.key.fingerprintSha256)
+                when (val standing = bundled.standing) {
+                    // Written or nothing to do: the count row above has them.
+                    KnownHostStanding.NEW, KnownHostStanding.EXISTING -> Unit
+                    // C13's changed-key decision, unticked until it is made; the tick is the Replace.
+                    is KnownHostStanding.Conflicting -> TickRow(
+                        title = bundled.key.endpoint,
+                        subtitle = facts,
+                        ticked = bundled.id in options.replaceKnownHosts,
+                        onTicked = { onOptions(options.copy(replaceKnownHosts = if (it) options.replaceKnownHosts + bundled.id else options.replaceKnownHosts - bundled.id)) },
+                        warning = replacesSavedKeyLine(standing.saved),
+                        surface = Color.Transparent,
+                    )
+                    // A pin means no other key for the endpoint: the row is read, not offered, and says where the pin is undone.
+                    is KnownHostStanding.Pinned -> ListRow(
+                        title = bundled.key.endpoint,
+                        subtitle = "$facts\n" + pinnedToLine(standing.saved),
+                        subtitleMaxLines = 4,
+                        minHeight = 52.dp,
+                        surface = Color.Transparent,
+                        leading = { PinLock() },
+                    )
+                }
+            }
+        }
     }
     if (hardware.isNotEmpty()) {
         val used = bundle.hosts.filter { host -> hardware.any { (host.auth as? AuthMethod.Key)?.identityId == it.id } }
@@ -425,11 +465,25 @@ internal const val IMPORT_DISCLOSURE =
 internal fun namesLine(names: List<String>): String =
     names.take(6).joinToString(", ") + if (names.size > 6) " and ${names.size - 6} more" else ""
 
-/** The row for bundled known hosts the import leaves as this phone has them: a title of a row's one line, and the caption that names them and says why. */
-internal fun knownHostsKeptLine(n: Int): String = if (n == 1) "1 known host stays yours" else "$n known hosts stay yours"
+/**
+ * The count row's caption for the bundled known hosts that need no decision: their [endpoints],
+ * and how many of them this phone trusts already, which the import leaves as they are.
+ */
+internal fun knownHostsCaption(endpoints: List<String>, existing: Int): String = namesLine(endpoints) + when {
+    existing == 0 -> ""
+    existing == endpoints.size -> " \u00B7 " + if (existing == 1) "trusted already" else "all trusted already"
+    else -> " \u00B7 $existing trusted already"
+}
 
-internal fun knownHostsKeptCaption(endpoints: List<String>): String =
-    namesLine(endpoints) + " \u00B7 " + if (endpoints.size == 1) "the bundle's key differs from the one this phone trusts" else "the bundle's keys differ from the ones this phone trusts"
+/**
+ * The import button's word: `Import`, or `Import, replace 1 key` when the sheet's ticks take a
+ * saved key's place, the way the `known_hosts` import's button names what it replaces.
+ */
+internal fun importBundleLabel(replacing: Int): String = when (replacing) {
+    0 -> "Import"
+    1 -> "Import, replace 1 key"
+    else -> "Import, replace $replacing keys"
+}
 
 /** The default terminal theme switch's caption: what new terminals would open in, and what they open in now. */
 internal fun defaultTerminalThemeCaption(bundled: String, here: String): String = "New terminals open in $bundled instead of $here"

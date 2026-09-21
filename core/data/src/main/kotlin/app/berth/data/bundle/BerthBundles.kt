@@ -7,6 +7,7 @@ import app.berth.domain.model.BundleImportOptions
 import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.BundledIdentity
+import app.berth.domain.model.BundledKnownHost
 import app.berth.domain.model.BundledSecret
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
@@ -39,11 +40,15 @@ import kotlinx.coroutines.flow.first
  *   public half and fingerprint read from its private bytes, never the ones the document claims;
  *   and a hardware-backed identity, which comes without a key by construction, is not created,
  *   the hosts that used it ask each time and the report names both so the user knows what to make again.
- * - Known hosts: a bundled key for an endpoint this phone already holds a key for is not taken
- *   unless it is that very key, whether it differs from the key of its type, from a pin, or is of
- *   a type this phone holds none of for that endpoint ([standings]); the key this phone holds is
- *   the check between the user and a wrong key, and a bundle is not the place that check is
- *   overridden. The same key is nothing to do, and a key for an endpoint held nothing of is written.
+ * - Known hosts: a bundled key for an endpoint this phone already holds a key for is not taken as
+ *   carried, whether it differs from the key of its type, from a pin, or is of a type this phone
+ *   holds none of for that endpoint ([standings]); the key this phone holds is the check between
+ *   the user and a wrong key, and a bundle does not override it on its own. A key that differs
+ *   from an unpinned one is the changed-key case (spec C13), which the sheet offers as the Replace
+ *   decision the changed-key sheet makes, unticked; ticked ([BundleImportOptions.replaceKnownHosts]),
+ *   the saved key is deleted and the bundle's written in its place, as #19's `known_hosts` import
+ *   and the live sheet's Replace do. A pinned endpoint takes nothing and is not offered. The same
+ *   key is nothing to do, and a key for an endpoint held nothing of is written.
  * - Tunnels bound to every interface that the bundle had switched on come in switched off, so
  *   nothing an import brings listens on the network until the user turns it on where the binding shows.
  *
@@ -120,11 +125,8 @@ class BerthBundles(
     suspend fun plan(bundle: BerthBundle): BundleImportPlan {
         // Read for the refusal alone: a key Berth cannot read fails the plan, so the sheet never offers the import.
         readIdentities(bundle)
-        val standings = standings(bundle.knownHosts)
         return BundleImportPlan(
-            knownHostsNew = standings.count { it.second == KnownHostStanding.NEW },
-            knownHostsExisting = standings.count { it.second == KnownHostStanding.EXISTING },
-            knownHostsKept = standings.filter { it.second.differs }.map { it.first },
+            knownHosts = standings(bundle.knownHosts),
             tunnelsOnEveryInterface = bundle.tunnels.filter { it.exposed && it.enabled },
             defaultTerminalTheme = newDefaultTerminalTheme(bundle)?.name,
         )
@@ -135,15 +137,16 @@ class BerthBundles(
      * its endpoint: [KnownHostStanding.of], with one rule of the import's own over it. A key of a
      * type this phone holds none of, for an endpoint it does hold a key for, is NEW to `of`: live,
      * that is the case the policy asks the user about, the trust sheet handed what is held for the
-     * endpoint; an import cannot ask, so here it stands as [KnownHostStanding.Conflicting] with
-     * what is held and is kept like any other key that differs. The shared rule stays as it is.
+     * endpoint; here it stands as [KnownHostStanding.Conflicting] with what is held, so the sheet
+     * asks the same way it asks about any key that differs. The shared rule stays as it is. Read
+     * against this phone once, so the write judges every key as the sheet showed it.
      */
-    private suspend fun standings(bundled: List<KnownHostKey>): List<Pair<KnownHostKey, KnownHostStanding>> {
+    private suspend fun standings(bundled: List<KnownHostKey>): List<BundledKnownHost> {
         val here = knownHosts.observeAll().first().groupBy { it.host.lowercase() to it.port }
         return bundled.map { key ->
             val held = here[key.host.lowercase() to key.port].orEmpty()
             val standing = KnownHostStanding.of(key, held)
-            key to if (standing == KnownHostStanding.NEW && held.isNotEmpty()) KnownHostStanding.Conflicting(held.first()) else standing
+            BundledKnownHost(key, if (standing == KnownHostStanding.NEW && held.isNotEmpty()) KnownHostStanding.Conflicting(held.first()) else standing)
         }
     }
 
@@ -228,15 +231,27 @@ class BerthBundles(
         for (snippet in bundle.snippets) snippets.upsert(snippet)
 
         var knownHostsWritten = 0
+        var knownHostsReplaced = 0
         var knownHostsKept = 0
-        for ((key, standing) in standings(bundle.knownHosts)) {
-            when (standing) {
+        for (bundled in standings(bundle.knownHosts)) {
+            when (val standing = bundled.standing) {
                 KnownHostStanding.NEW -> {
-                    knownHosts.upsert(key)
+                    knownHosts.upsert(bundled.key)
                     knownHostsWritten++
                 }
                 KnownHostStanding.EXISTING -> Unit
-                is KnownHostStanding.Conflicting, is KnownHostStanding.Pinned -> knownHostsKept++
+                // Ticked, the changed-key sheet's Replace: the saved key goes, the bundle's is written in its place under
+                // the address as the saved key spelt it, which is the spelling the live lookup reads. Two ticked keys for
+                // one endpoint both stand: the saved key goes once and each is written.
+                is KnownHostStanding.Conflicting -> if (bundled.id in options.replaceKnownHosts) {
+                    knownHosts.delete(standing.saved.id)
+                    knownHosts.upsert(bundled.key.copy(host = standing.saved.host))
+                    knownHostsWritten++
+                    knownHostsReplaced++
+                } else {
+                    knownHostsKept++
+                }
+                is KnownHostStanding.Pinned -> knownHostsKept++
             }
         }
 
@@ -259,6 +274,7 @@ class BerthBundles(
                 RecreateNotice(identity.name, identity.algorithm, usedAbsent[identity.id].orEmpty())
             },
             knownHostsKept = knownHostsKept,
+            knownHostsReplaced = knownHostsReplaced,
             tunnelsHeldOff = tunnelsHeldOff,
             interfaceTheme = options.interfaceTheme && bundle.interfaceTheme != null,
             defaultTerminalTheme = newDefault != null,
