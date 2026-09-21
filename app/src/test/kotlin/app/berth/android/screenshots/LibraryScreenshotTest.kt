@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -234,6 +236,29 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     }
 
     private fun assertNoTextCut(where: String) = assertNoTextCutBut(where)
+
+    /**
+     * The sheet's buttons, [labels] among them, are measured to a size and stand whole in the
+     * window as the sheet opened (#15's B8 fault, seen again on the group editor): a sheet that
+     * opened at half the window left its buttons below the fold, one a sliver a few dp tall. Each
+     * label's bounds in the window must be its whole measured size, and nothing is scrolled first,
+     * since a scroll inside a half-open sheet expands it and would hide the fault the check is for.
+     */
+    private fun assertSheetButtonsReachable(vararg labels: String) {
+        val buttons = compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and hasAnyAncestor(isDialog())).fetchSemanticsNodes()
+        assertTrue("the sheet's buttons, ${labels.size} named, were on it: ${buttons.size} found", buttons.size >= labels.size)
+        val flat = buttons.filter { it.size.height <= 0 || it.size.width <= 0 }
+        assertTrue("buttons measured to no size: ${flat.map { it.config.getOrNull(SemanticsProperties.Text)?.joinToString() }}", flat.isEmpty())
+        for (label in labels) {
+            val node = compose.onNodeWithText(label).fetchSemanticsNode()
+            val shown = node.boundsInWindow
+            assertTrue("'$label' is measured to no size: ${node.size}", node.size.height > 0 && node.size.width > 0)
+            assertTrue(
+                "'$label' is cut by the window at ${systemFontScale}x: ${shown.height.toInt()} of ${node.size.height} px tall, ${shown.width.toInt()} of ${node.size.width} wide shown",
+                shown.height >= node.size.height - 1 && shown.width >= node.size.width - 1,
+            )
+        }
+    }
 
     /**
      * [node]'s text is drawn glyph for glyph as its ASCII: the layout it was measured with has
@@ -964,6 +989,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("Off, its tabs come back as saved frames and reconnect when tapped.").assertExists()
         capture("group-editor-reconnect")
         assertNoTextCut("the group editor")
+        // The sheet opens whole: Done and Cancel are measured and on screen at the cap, not below a half-open sheet's fold.
+        assertSheetButtonsReachable("Done", "Cancel")
         compose.onNodeWithText("Reconnect tabs at launch").performClick()
         compose.waitUntil(5_000) { reconnect == listOf(true) }
         compose.onNodeWithText("Reconnect tabs at launch").performClick()
@@ -976,6 +1003,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         themed { GroupEditorSheet(group = null, onCreate = { _, _ -> }, onRename = {}, onRecolor = {}, onDismiss = {}) }
         waitForText("Create")
         hasNoText("Reconnect tabs at launch")
+        assertSheetButtonsReachable("Create", "Cancel")
     }
 
     @Test

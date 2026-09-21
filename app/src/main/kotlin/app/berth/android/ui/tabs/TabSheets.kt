@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -96,7 +99,10 @@ fun RenameTabSheet(
  * Create or edit a group (spec C3, Groups; C8, the editor): name and colour, the colour picked
  * from the twelve swatches, and for an existing [group] the spec's Reconnect at launch switch,
  * which is off by default so a launch restores the group's frames and reconnects on a tap.
- * Editing an existing group applies as you go; creating one commits on Create.
+ * Editing an existing group applies as you go; creating one commits on Create. The sheet is a
+ * fixed set of controls, so it opens at its content height rather than at half the window, where
+ * Done and Cancel stood below the fold at the interface's font cap (A11), and its column scrolls
+ * for a window shorter than the controls.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,10 +126,11 @@ fun GroupEditorSheet(
         if (group == null) onCreate(trimmed, previewColor) else if (trimmed != group.name) onRename(trimmed)
         onDismiss()
     }
-    BerthSheet(onDismiss = onDismiss) {
+    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
