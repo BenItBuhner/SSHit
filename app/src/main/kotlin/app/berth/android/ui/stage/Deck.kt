@@ -1268,8 +1268,10 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .padding(horizontal = DeckEdge + GripWidth + DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Sized from the 20 dp strip like a key's text from its key, so the line holds at the interface's font cap.
-        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption.keySized(), color = if (focused) c.accent else c.text3)
+        // Sized from the 20 dp strip like a key's text from its key, so the line holds at the interface's
+        // font cap; in `text.2`, since `Base · Ctrl` is the one place a latched modifier shows while the
+        // Deck is down and `text.3` does not carry meaning alone (A11; #20 review).
+        Text((listOf(layerName) + mods).joinToString(" \u00B7 "), style = BerthType.caption.keySized(), color = if (focused) c.accent else c.text2)
         Spacer(Modifier.weight(1f))
     }
 }
