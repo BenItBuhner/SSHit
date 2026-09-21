@@ -83,12 +83,13 @@ import app.berth.android.ui.tabs.GroupEditorRequest
 import app.berth.android.ui.tabs.LocalBottomEdge
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
-import app.berth.android.ui.tabs.NoticeBar
-import app.berth.android.ui.tabs.ReopenBar
+import app.berth.android.ui.tabs.Notice
+import app.berth.android.ui.tabs.NoticeSlot
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabSheets
 import app.berth.android.ui.tabs.TabStripStyle
 import app.berth.android.ui.tabs.rememberTabUiState
+import app.berth.android.ui.tabs.reopenNotice
 import app.berth.android.ui.tunnels.TunnelsScreen
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
@@ -131,6 +132,9 @@ private val RailGutter = 12.dp
 
 /** What Back says, once, the first time it would leave the app with a login up (spec Part B). */
 const val BACKGROUND_NOTICE = "Sessions keep running. Detach all from the notification."
+
+/** The four sources of the shell's notice slot, the keys their notices go up under. */
+private enum class ShellNotice { REOPEN, LINK, BACK, LANDED }
 
 /**
  * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
@@ -514,40 +518,29 @@ private fun Shell(vm: AppViewModel) {
             },
         )
     }
+    // Everything that shares the Stage's bottom edge, in the one slot (NoticeSlot): of what is up
+    // the notice raised last shows, and the one under it is back when it goes. Reopen, for six
+    // seconds after a tab closes; a link's line, which is the parser's reason alone (`The IPv6
+    // address is missing its closing bracket.`), since the bar has one line and the reason says it
+    // was the link; Back's line, read whole on two; and a dropped file's path that landed while its
+    // terminal was off stage or in the alternate screen, for as long as that terminal is on stage
+    // with it unpasted: the line says it landed, Paste puts it on the shell's line
+    // (AppViewModel.landDroppedPath).
+    val reopen = reopenNotice(tabUi, vm)
+    val heldPaths by vm.heldPaths.collectAsState()
+    val landed = active?.takeIf { onStage }?.let { tab ->
+        heldPaths[tab.id]?.let { held ->
+            Notice(AppViewModel.landedNotice(held.count), if (held.count == 1) AppViewModel.PASTE_PATH else AppViewModel.PASTE_PATHS) { vm.pasteHeld(tab.id) }
+        }
+    }
     Box(Modifier.fillMaxSize()) {
-        ReopenBar(ui = tabUi, vm = vm, modifier = Modifier.align(Alignment.BottomCenter))
-        // The link notice is kept through the bar's exit, so the text does not blank as it slides away.
-        // It is the parser's reason alone (`The IPv6 address is missing its closing bracket.`): the
-        // bar has one line, and the reason says it was the link.
-        val shownNotice = remember { mutableStateOf(linkNotice) }
-        if (linkNotice != null) shownNotice.value = linkNotice
-        NoticeBar(
-            visible = linkNotice != null,
-            text = shownNotice.value ?: "",
-            action = "OK",
-            onAction = { linkNotice = null },
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
-        NoticeBar(
-            visible = backNotice,
-            text = BACKGROUND_NOTICE,
-            action = "OK",
-            onAction = { backNotice = false },
-            modifier = Modifier.align(Alignment.BottomCenter),
-            maxLines = 2,
-        )
-        // A dropped file's path that landed while its terminal was off stage or in the alternate
-        // screen waits here, for as long as that terminal is on stage with it unpasted: the line
-        // says it landed, Paste puts it on the shell's line (AppViewModel.landDroppedPath).
-        val heldPaths by vm.heldPaths.collectAsState()
-        val held = active?.let { heldPaths[it.id] }
-        val shownHeld = remember { mutableStateOf(held) }
-        if (held != null) shownHeld.value = held
-        NoticeBar(
-            visible = held != null && onStage,
-            text = shownHeld.value?.let { AppViewModel.landedNotice(it.count) } ?: AppViewModel.LANDED_IN_TMP,
-            action = if ((shownHeld.value?.count ?: 1) == 1) AppViewModel.PASTE_PATH else AppViewModel.PASTE_PATHS,
-            onAction = { active?.let { vm.pasteHeld(it.id) } },
+        NoticeSlot(
+            notices = mapOf(
+                ShellNotice.REOPEN to reopen,
+                ShellNotice.LINK to linkNotice?.let { reason -> Notice(reason, "OK") { linkNotice = null } },
+                ShellNotice.BACK to if (backNotice) Notice(BACKGROUND_NOTICE, "OK", maxLines = 2) { backNotice = false } else null,
+                ShellNotice.LANDED to landed,
+            ),
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }

@@ -359,31 +359,65 @@ private fun plural(n: Int, noun: String) = if (n == 1) "1 $noun" else "$n ${noun
 const val NOTICE_BAR_MS = 6_000L
 
 /**
- * "Closed prod-web · Reopen" for six seconds after a connected tab closes (spec C3, Closing).
- * Reopen recreates the tab in its old slot and connects again.
+ * "Closed prod-web · Reopen" for six seconds after a connected tab closes (spec C3, Closing), as
+ * the [NoticeSlot]'s notice while it is up: Reopen recreates the tab in its old slot and connects again.
  */
 @Composable
-fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
+fun reopenNotice(ui: TabUiState, vm: AppViewModel): Notice? {
     val closed = ui.closed
     LaunchedEffect(closed) {
         if (closed == null) return@LaunchedEffect
         delay(NOTICE_BAR_MS)
         if (ui.closed === closed) ui.closed = null
     }
-    // The last closed tab is kept through the bar's exit, so the text does not blank as it slides away.
-    val shown = remember { mutableStateOf(closed) }
-    if (closed != null) shown.value = closed
-    NoticeBar(
-        visible = closed != null,
-        text = "Closed ${shown.value?.record?.displayTitle ?: ""}",
-        action = "Reopen",
-        onAction = {
-            shown.value?.let(vm::reopen)
+    return closed?.let { tab ->
+        Notice("Closed ${tab.record.displayTitle}", "Reopen") {
+            vm.reopen(tab)
             ui.closed = null
-        },
+        }
+    }
+}
+
+/** What a [NoticeBar] says and offers: its line, how many lines it may take, and the one action beside it. */
+class Notice(val text: String, val action: String, val maxLines: Int = 1, val onAction: () -> Unit)
+
+/**
+ * The one bar at the Stage's bottom edge, for everything that shares it: `Closed prod-web · Reopen`,
+ * a link's reason, `Sessions keep running…`, `Landed in /tmp · Paste path`. [notices] are those
+ * sources under a key each, up (a [Notice]) or down (null). Of the ones up at once the one raised
+ * last shows, and when it goes the one raised before it is back if it is still up: closing a tab
+ * whose neighbour holds paths raises Reopen over Landed, and Landed is there again when Reopen's
+ * six seconds are done. One bar, so two never draw over each other and the state pill has one
+ * band to stand clear of ([BottomEdge]). A source's notice may change while up (a count growing)
+ * and keeps its place; the last notice shown is kept through the bar's exit, so the text does not
+ * blank as it slides away.
+ */
+@Composable
+fun NoticeSlot(notices: Map<Any, Notice?>, modifier: Modifier = Modifier) {
+    val up = notices.filterValues { it != null }.keys
+    // The keys up in the order they were raised: one that went down leaves, one just up goes on the
+    // end. Brought up to date in the composition itself rather than an effect after it, so a notice
+    // shows on the frame it is raised; the same inputs give the same order, so a composition run
+    // again or thrown away leaves it right.
+    val raised = remember { ArrayList<Any>() }
+    raised.retainAll(up)
+    for (key in up) if (key !in raised) raised += key
+    val shown = raised.lastOrNull()?.let { notices[it] }
+    val kept = remember { Kept<Notice?>(null) }
+    if (shown != null) kept.value = shown
+    val bar = kept.value
+    NoticeBar(
+        visible = shown != null,
+        text = bar?.text ?: "",
+        action = bar?.action ?: "",
+        onAction = { bar?.onAction?.invoke() },
         modifier = modifier,
+        maxLines = bar?.maxLines ?: 1,
     )
 }
+
+/** A value remembered across compositions and written in them, that nothing subscribes to: not snapshot state. */
+private class Kept<T>(var value: T)
 
 /**
  * What stands at the window's bottom edge, above the keyboard and the navigation bar, so the two
