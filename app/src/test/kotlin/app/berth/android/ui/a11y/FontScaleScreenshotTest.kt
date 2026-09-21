@@ -242,7 +242,7 @@ class FontScaleScreenshotTest {
         assertTextWhole("deploy@203.0.113.10")
         // As opened: the title, the host on two lines, the three fingerprints; then scrolled to the answers.
         capture("prompt-host-key-changed-font-scale-2x")
-        assertSheetButtonsReachable("Disconnect", "Connect once without saving", "Replace the saved key")
+        assertSheetButtonsReachable("Disconnect", "Connect once without saving", "Replace saved key \u2014 hold to confirm")
         capture("prompt-host-key-changed-font-scale-2x-scrolled")
         (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
         compose.waitUntil(5_000) { graph.prompts.current.value == null }

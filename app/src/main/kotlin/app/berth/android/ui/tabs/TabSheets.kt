@@ -37,6 +37,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -92,8 +93,10 @@ fun RenameTabSheet(
 }
 
 /**
- * Create or edit a group (spec C3, Groups): name and colour, the colour picked from the twelve
- * swatches. Editing an existing [group] applies as you go; creating one commits on Create.
+ * Create or edit a group (spec C3, Groups; C8, the editor): name and colour, the colour picked
+ * from the twelve swatches, and for an existing [group] the spec's Reconnect at launch switch,
+ * which is off by default so a launch restores the group's frames and reconnects on a tap.
+ * Editing an existing group applies as you go; creating one commits on Create.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,11 +106,13 @@ fun GroupEditorSheet(
     onRename: (String) -> Unit,
     onRecolor: (SwatchColor) -> Unit,
     onDismiss: () -> Unit,
+    onReconnectAtLaunch: (Boolean) -> Unit = {},
 ) {
     val c = Berth.colors
     var name by remember { mutableStateOf(group?.name ?: "") }
     var color by remember { mutableStateOf(group?.color ?: SwatchColor.SLATE) }
     var touchedColor by remember { mutableStateOf(group != null) }
+    var reconnect by remember { mutableStateOf(group?.reconnectAtLaunch ?: false) }
     val trimmed = name.trim()
     val previewColor = if (touchedColor || group != null) color else SwatchColor.forName(trimmed.ifBlank { "Group" })
     fun commit() {
@@ -142,6 +147,14 @@ fun GroupEditorSheet(
             }
             Row(Modifier.fillMaxWidth()) {
                 for (swatch in SwatchColor.entries.drop(6)) SwatchOption(swatch, previewColor == swatch) { color = swatch; touchedColor = true; if (group != null) onRecolor(swatch) }
+            }
+            if (group != null) {
+                ToggleRow(
+                    "Reconnect tabs at launch",
+                    reconnect,
+                    { reconnect = it; onReconnectAtLaunch(it) },
+                    caption = "Off, its tabs come back as saved frames and reconnect when tapped.",
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton(if (group == null) "Create" else "Done", kind = ButtonKind.PRIMARY, enabled = trimmed.isNotEmpty(), onClick = ::commit)

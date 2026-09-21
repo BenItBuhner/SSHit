@@ -466,6 +466,9 @@ class AppViewModel @Inject constructor(
     fun renameWorkspace(id: String, name: String) = sessions.renameWorkspace(id, name)
     fun setWorkspaceColor(id: String, color: SwatchColor) = sessions.setWorkspaceColor(id, color)
     fun setWorkspaceCollapsed(id: String, collapsed: Boolean) = sessions.setWorkspaceCollapsed(id, collapsed)
+
+    /** The group editor's Reconnect tabs at launch (spec C8): restore honours it per group when the app starts. */
+    fun setWorkspaceReconnectAtLaunch(id: String, reconnect: Boolean) = sessions.updateWorkspace(id) { copy(reconnectAtLaunch = reconnect) }
     fun moveGroup(id: String, toIndex: Int) = sessions.moveGroup(id, toIndex)
     fun closeGroup(id: String) = sessions.closeGroup(id)
     fun deleteWorkspace(id: String, closeTabs: Boolean) = sessions.deleteWorkspace(id, closeTabs)

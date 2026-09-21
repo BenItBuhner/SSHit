@@ -191,6 +191,7 @@ fun TabSheets(vm: AppViewModel, ui: TabUiState, actions: TabActions, onAddHost: 
                         onRename = { vm.renameWorkspace(group.id, it) },
                         onRecolor = { vm.setWorkspaceColor(group.id, it) },
                         onDismiss = { ui.groupEditor = null },
+                        onReconnectAtLaunch = { vm.setWorkspaceReconnectAtLaunch(group.id, it) },
                     )
                 }
             }
