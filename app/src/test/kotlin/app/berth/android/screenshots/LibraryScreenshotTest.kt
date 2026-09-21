@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -30,6 +32,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isOff
 import androidx.compose.ui.test.isOn
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.longClick
@@ -67,8 +70,11 @@ import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.stage.SessionSheet
+import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorSheet
+import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
+import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.AuthMethod
@@ -976,6 +982,52 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         hasNoText("Move up")
         compose.onNodeWithText("Rename").performClick()
         assertEquals(listOf(Workspace.DEFAULT_ID), actions.edited)
+    }
+
+    /**
+     * The overview's second door (C8, "from the rail ... and from the Overflow"): the Stage's ⋮ has
+     * Groups, after Tabs and before Library, with a tab on stage and without one, so a window whose
+     * drawer stands as a column with no GROUPS label (C7, C23) still reaches the screen.
+     */
+    @Test
+    fun `the groups overview opens from the Stage's overflow`() {
+        seedLibrary()
+        seedTabs()
+        val tab = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(tab.id)
+        var groups = 0
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, tab, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}, onGroups = { groups++ })
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Groups")
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals("Groups follows Tabs and leads Library", listOf("Tabs", "Groups", "Library"), rows.dropWhile { it != "Tabs" }.take(3))
+        capture("stage-overflow-groups")
+        compose.assertNoTextCut("the Stage's overflow at ${systemFontScale}x", within = isPopup())
+        compose.onNodeWithText("Groups").performClick()
+        waitForNoText("Groups")
+        assertEquals("the row opens the overview", 1, groups)
+    }
+
+    @Test
+    fun `the empty Stage's overflow has Groups too`() {
+        seedLibrary()
+        var groups = 0
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, tab = null, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}, onGroups = { groups++ })
+        }
+        waitForText("No tabs")
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Groups")
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals(listOf("New tab", "Groups", "Library"), rows)
+        compose.onNodeWithText("Groups").performClick()
+        waitForNoText("Groups")
+        assertEquals(1, groups)
     }
 
     @Test

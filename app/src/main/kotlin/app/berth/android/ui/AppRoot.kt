@@ -280,6 +280,7 @@ private fun Shell(vm: AppViewModel) {
                                 onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
+                                onGroups = { go(Screen.Groups) },
                             )
                         } else {
                             StageScreen(
@@ -290,6 +291,7 @@ private fun Shell(vm: AppViewModel) {
                                 onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
+                                onGroups = { go(Screen.Groups) },
                             )
                         }
                     }
