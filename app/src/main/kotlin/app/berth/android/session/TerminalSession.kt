@@ -27,8 +27,6 @@ import app.berth.ssh.SshError
 import app.berth.ssh.SshHop
 import app.berth.ssh.isTransientSshFailure
 import app.berth.terminal.CellPos
-import app.berth.terminal.CommandEntry
-import app.berth.terminal.CommandHistory
 import app.berth.terminal.Mod
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalKey
@@ -101,6 +99,19 @@ interface SessionEnvironment {
 
     /** Whether sessions keep the commands they run (spec C16, the Settings toggle). */
     fun commandHistoryEnabled(): Boolean = true
+
+    /**
+     * The session ran [text] at [at] on the host whose history key is [hostId] (spec C16, History
+     * per host). Called from the emulator's thread, in the order the commands ran; the store keeps
+     * the cap and treats a repeat of the host's latest as one. A stand-in may keep nothing.
+     */
+    fun recordCommand(hostId: String, text: String, at: Long) = Unit
+
+    /**
+     * Commands an older build kept in this tab's frame, as (text, time) oldest first, to be handed
+     * to the host's history once the frame is restored; entries already there are not added again.
+     */
+    fun importCommands(hostId: String, entries: List<Pair<String, Long>>) = Unit
 
     /**
      * The transport failed on [host]: a connect attempt refused for good, a live connection that
@@ -294,41 +305,24 @@ class TerminalSession(
 
     // ---- command history (spec C16) ------------------------------------------------------------
 
-    private val history = CommandHistory()
-    private val _commands = MutableStateFlow<List<CommandEntry>>(emptyList())
-
     /**
-     * The commands this session ran, oldest first: read off the shell's OSC 133 marks, or for a
-     * shell without them from what was typed and then seen echoed on the line it was typed on, so
-     * a password never lands here and nothing typed into a full-screen program does. Kept with
-     * the session's frame.
+     * The history this tab's commands go to: its host's, shared by every tab on the host and read
+     * by the History sheet from the store ([Host.commandHistoryKey]). The commands are read off
+     * the shell's OSC 133 marks, or for a shell without them from what was typed and then seen
+     * echoed on the line it was typed on, so a password never lands there and nothing typed into
+     * a full-screen program does.
      */
-    val commands: StateFlow<List<CommandEntry>> = _commands.asStateFlow()
+    val commandHistoryKey: String get() = _record.value.hostSnapshot.commandHistoryKey
 
     /** Once the shell has sent an OSC 133 mark it reports its commands itself and the typed-line fallback stands down. */
     @Volatile private var shellHasMarks = false
     private val typedLine = TypedLine()
 
-    fun removeCommand(entry: CommandEntry) {
-        val changed = synchronized(history) { history.remove(entry) }
-        if (changed) publishCommands()
-    }
-
-    fun clearCommands() {
-        synchronized(history) { history.clear() }
-        publishCommands()
-    }
-
     private fun recordCommand(text: String) {
         val command = text.trim()
         if (command.isEmpty() || !env.commandHistoryEnabled()) return
-        val added = synchronized(history) { history.record(command, env.now()) }
-        if (added) publishCommands()
+        env.recordCommand(commandHistoryKey, command, env.now())
         if (_record.value.lastCommand != command) patch { copy(lastCommand = command) }
-    }
-
-    private fun publishCommands() {
-        _commands.value = synchronized(history) { history.snapshot() }
     }
 
     private fun trackTyped(text: String, modifiers: Int) {
@@ -981,7 +975,8 @@ class TerminalSession(
 
     /**
      * Scrollback plus screen as text, enough to bring a detached session's frame back after a
-     * restart, followed since version 2 by the session's command history (spec C16).
+     * restart. Version 2 carried the session's command history behind the text; since version 3
+     * the history is the host's and lives in its own table (spec C16), so the frame is text again.
      */
     fun snapshotFrame(): ByteArray {
         val lines = ArrayList<String>()
@@ -991,47 +986,42 @@ class TerminalSession(
             lines += emulator.screenText()
         }
         while (lines.isNotEmpty() && lines.last().isBlank()) lines.removeAt(lines.lastIndex)
-        val commands = synchronized(history) { history.snapshot() }
         val out = ByteArrayOutputStream()
         DataOutputStream(out).use { d ->
             d.writeInt(FRAME_VERSION)
             d.writeInt(lines.size)
             for (l in lines) d.writeUTF(l.take(MAX_FRAME_LINE))
-            d.writeInt(commands.size)
-            for (e in commands) {
-                d.writeUTF(e.text.take(MAX_FRAME_LINE))
-                d.writeLong(e.at)
-            }
         }
         return out.toByteArray()
     }
 
     /**
-     * Replays a saved frame into the emulator, dimmed: this version's, or the one before it, which
-     * had no history. [detachedAt] is set for a tab that was connected when the process died: the
-     * frame then ends in a `detached 14:07` marker stamped with the last moment it was known to be
-     * live, the same word as the pill above it, Detach all and tmux, so the relaunch reads as a
-     * session that was cut rather than one that vanished (vision §4.3, L0). Reconnect opens a fresh
-     * shell, so the marker promises nothing more.
+     * Replays a saved frame into the emulator, dimmed: this version's or either before it. A
+     * version 2 frame ends in the commands the tab had run when history was per tab; they are
+     * handed to the host's history ([SessionEnvironment.importCommands]), once, and the next save
+     * writes the frame without them. [detachedAt] is set for a tab that was connected when the
+     * process died: the frame then ends in a `detached 14:07` marker stamped with the last moment
+     * it was known to be live, the same word as the pill above it, Detach all and tmux, so the
+     * relaunch reads as a session that was cut rather than one that vanished (vision §4.3, L0).
+     * Reconnect opens a fresh shell, so the marker promises nothing more.
      */
     fun restoreFrame(frame: ByteArray?, detachedAt: Long? = null) {
         if (frame != null) {
             runCatching {
                 DataInputStream(frame.inputStream()).use { d ->
                     val version = d.readInt()
-                    if (version != FRAME_VERSION && version != FRAME_VERSION_TEXT_ONLY) return@runCatching
+                    if (version !in FRAME_VERSION_TEXT_ONLY..FRAME_VERSION) return@runCatching
                     val n = d.readInt()
                     val text = StringBuilder()
                     repeat(n) { text.append(d.readUTF()).append("\r\n") }
                     emulator.write("\u001b[2m")
                     emulator.write(text.toString())
                     emulator.write("\u001b[0m")
-                    if (version >= FRAME_VERSION) {
+                    if (version == FRAME_VERSION_WITH_HISTORY) {
                         val m = d.readInt()
-                        val saved = ArrayList<CommandEntry>(m)
-                        repeat(m) { saved += CommandEntry(d.readUTF(), d.readLong()) }
-                        synchronized(history) { history.load(saved) }
-                        publishCommands()
+                        val saved = ArrayList<Pair<String, Long>>(m)
+                        repeat(m) { saved += d.readUTF() to d.readLong() }
+                        if (saved.isNotEmpty()) env.importCommands(commandHistoryKey, saved)
                     }
                 }
             }
@@ -1047,7 +1037,8 @@ class TerminalSession(
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
         private const val BIND_RETRIES = 2
         private const val BIND_RETRY_DELAY_MS = 250L
-        private const val FRAME_VERSION = 2
+        private const val FRAME_VERSION = 3
+        private const val FRAME_VERSION_WITH_HISTORY = 2
         private const val FRAME_VERSION_TEXT_ONLY = 1
         private const val MAX_FRAME_LINE = 4096
 

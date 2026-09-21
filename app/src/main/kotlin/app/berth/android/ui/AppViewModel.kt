@@ -29,6 +29,7 @@ import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyAlgorithm
@@ -46,6 +47,7 @@ import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -103,6 +105,7 @@ class AppViewModel @Inject constructor(
     private val links: LinkInbox,
     /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
     val reports: CrashReporter,
+    private val commandHistory: CommandHistoryRepository,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
@@ -187,6 +190,21 @@ class AppViewModel @Inject constructor(
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val commandHistoryEnabled: StateFlow<Boolean> = settings.commandHistoryEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** The commands the host under [key] ran (spec C16), oldest first; [key] is a [Host.commandHistoryKey]. */
+    fun commandHistoryOf(key: String): Flow<List<HostCommand>> = commandHistory.observeForHost(key)
+
+    /** The newest commands across every host, oldest first, for the History sheet's All hosts view. */
+    val allCommandHistory: Flow<List<HostCommand>> = commandHistory.observeAll()
+
+    fun deleteCommand(id: Long) {
+        viewModelScope.launch { commandHistory.delete(id) }
+    }
+
+    /** Clears one host's history, or every host's with [key] null (Settings › Data). */
+    fun clearCommandHistory(key: String?) {
+        viewModelScope.launch { if (key == null) commandHistory.clearAll() else commandHistory.clear(key) }
+    }
 
     /** Alt key behaviour, its per-host overrides and the compact Deck (spec C22); Settings › Hardware keyboard and the host editor write it. */
     val hardwareKeyboard: StateFlow<HardwareKeyboardSettings> =

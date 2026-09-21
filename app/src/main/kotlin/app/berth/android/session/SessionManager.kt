@@ -26,6 +26,7 @@ import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabOrder
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.KnownHostRepository
 import app.berth.domain.repository.SessionRepository
@@ -42,6 +43,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
@@ -106,6 +108,7 @@ class SessionManager @Inject constructor(
     val notifier: SessionNotifier,
     @ProcessLifecycle private val processLifecycle: Lifecycle,
     private val reports: CrashReporter,
+    private val commandHistory: CommandHistoryRepository,
 ) : SessionCommands {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -269,8 +272,21 @@ class SessionManager @Inject constructor(
     private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
     private val hardwareKeyboard = settings.hardwareKeyboardSettings.stateIn(scope, SharingStarted.Eagerly, HardwareKeyboardSettings())
 
+    /**
+     * History writes in the order the sessions made them (spec C16): one consumer, so two commands
+     * a moment apart land as they ran and a repeat of the host's latest is seen as one, which two
+     * coroutines racing to the table could not promise.
+     */
+    private val historyWrites = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
     private val environment = object : SessionEnvironment {
         override fun commandHistoryEnabled(): Boolean = this@SessionManager.commandHistoryEnabled.value
+        override fun recordCommand(hostId: String, text: String, at: Long) {
+            historyWrites.trySend { commandHistory.record(hostId, text, at) }
+        }
+        override fun importCommands(hostId: String, entries: List<Pair<String, Long>>) {
+            historyWrites.trySend { commandHistory.importEntries(hostId, entries) }
+        }
         override fun altKeyFor(hostId: String?): AltKeyMode = hardwareKeyboard.value.altKeyFor(hostId)
         override suspend fun authFor(host: Host): List<SshAuth> = authResolver.resolve(host)
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = KnownHostsPolicy(host, knownHosts, prompts)
@@ -339,6 +355,7 @@ class SessionManager @Inject constructor(
 
     init {
         reports.addCrashHook { saveAllFramesNow() }
+        scope.launch { for (write in historyWrites) runCatching { write() }.onFailure { BerthLog.w(LOG_TAG, "command history write failed", it) } }
         scope.launch { restore() }
         scope.launch {
             // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its

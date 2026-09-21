@@ -32,6 +32,7 @@ import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
+import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KnownHostKey
@@ -45,6 +46,7 @@ import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
+import app.berth.domain.repository.CommandHistoryRepository
 import app.berth.domain.repository.HostRepository
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.KnownHostRepository
@@ -121,6 +123,35 @@ class InMemoryTunnels : TunnelRepository {
     override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
     override suspend fun setEnabled(id: String, enabled: Boolean) =
         items.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
+}
+
+class InMemoryCommandHistory : CommandHistoryRepository {
+    val items = MutableStateFlow<List<HostCommand>>(emptyList())
+    private var nextId = 1L
+    override fun observeForHost(hostId: String): Flow<List<HostCommand>> = items.map { list -> list.filter { it.hostId == hostId } }
+    override fun observeAll(): Flow<List<HostCommand>> = items.map { list -> list.takeLast(CommandHistoryRepository.CAP) }
+    override suspend fun record(hostId: String, text: String, at: Long): Boolean {
+        val command = text.trim()
+        if (command.isEmpty() || items.value.lastOrNull { it.hostId == hostId }?.text == command) return false
+        items.update { list -> (list + HostCommand(nextId++, hostId, command, at)).trimmed(hostId) }
+        return true
+    }
+    override suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>) {
+        val present = items.value.filter { it.hostId == hostId }.mapTo(HashSet()) { it.text to it.at }
+        val fresh = entries.filter { (text, _) -> text.isNotBlank() }.filter { it !in present }.distinct()
+        if (fresh.isEmpty()) return
+        items.update { list -> (list + fresh.map { (text, at) -> HostCommand(nextId++, hostId, text.trim(), at) }).sortedWith(compareBy({ it.at }, { it.id })).trimmed(hostId) }
+    }
+    override suspend fun delete(id: Long) = items.update { list -> list.filter { it.id != id } }
+    override suspend fun clear(hostId: String) = items.update { list -> list.filter { it.hostId != hostId } }
+    override suspend fun clearAll() { items.value = emptyList() }
+
+    private fun List<HostCommand>.trimmed(hostId: String): List<HostCommand> {
+        val over = count { it.hostId == hostId } - CommandHistoryRepository.CAP
+        if (over <= 0) return this
+        var drop = over
+        return filter { if (it.hostId == hostId && drop > 0) { drop--; false } else true }
+    }
 }
 
 class InMemorySnippets : SnippetRepository {
@@ -271,6 +302,7 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val settings = InMemorySettings()
     val tunnels = InMemoryTunnels()
     val snippets = InMemorySnippets()
+    val commandHistory = InMemoryCommandHistory()
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
 
@@ -291,14 +323,14 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val reportsDir: File = createTempDirectory("berth-reports").toFile()
     val reports = CrashReporter(reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
     private val manager = lazy {
-        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports)
+        SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports, commandHistory)
     }
     val sessions: SessionManager by manager
     val files: FilesCenter by lazy { FilesCenter(context, sessions, settings) }
     /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
     val links = LinkInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports, commandHistory)
     }
 
     private companion object {
