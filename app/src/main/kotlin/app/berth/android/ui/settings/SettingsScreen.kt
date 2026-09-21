@@ -37,6 +37,7 @@ import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
+import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.ToggleRow
@@ -44,6 +45,7 @@ import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
+import app.berth.android.ui.terminal.resolvedFamily
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -54,6 +56,7 @@ import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
 @Composable
@@ -76,13 +79,17 @@ fun SettingsScreen(
     val deck by vm.deckLayout.collectAsState()
     val haptics by vm.hapticLevel.collectAsState()
     val tabSwipe by vm.tabSwipeGesture.collectAsState()
+    val terminal by vm.terminalSettings.collectAsState()
+    val context = LocalContext.current
     var importConfig by remember { mutableStateOf(false) }
     var importKnownHosts by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
+    var fontPicker by remember { mutableStateOf(false) }
 
     if (importConfig) ImportHostsSheet(vm, onDismiss = { importConfig = false })
     if (importKnownHosts) ImportKnownHostsSheet(vm, onDismiss = { importKnownHosts = false })
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
+    if (fontPicker) FontPickerSheet(vm, onDismiss = { fontPicker = false })
 
     Column(
         modifier
@@ -144,12 +151,19 @@ fun SettingsScreen(
             Panel(label = "Terminal") {
                 ListRow("Terminal themes", subtitle = "${themes.size} themes \u00B7 ${defaultTheme.name} is the default", surface = Color.Transparent, minHeight = 44.dp, onClick = onThemes, trailing = chevron)
                 CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
-                CyclePicker("Font", listOf("JetBrains Mono", "System monospace"), font.family, { it }) { vm.setTerminalFont(font.copy(family = it)) }
+                // The family opens its own sheet (spec C20, Fonts): a list with each family set in its own face, and the import.
+                PickerRow("Terminal font", font.resolvedFamily(context), onClick = { fontPicker = true })
                 CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
                 ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
                 CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
                 ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
+                ToggleRow("Nerd Font fallback", font.nerdFontFallback, { vm.setTerminalFont(font.copy(nerdFontFallback = it)) }, caption = "Prompt separators from a Nerd Font when the family has none; import one for its icons too")
                 ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
+                // The cursor the user chose stands until the program on the other end asks for its own (DECSCUSR).
+                Text("Cursor", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
+                SegmentedControl(CURSOR_SHAPES.map { it.second }, CURSOR_SHAPES.indexOfFirst { it.first == font.cursorShape.lowercase() }.coerceAtLeast(0), { vm.setTerminalFont(font.copy(cursorShape = CURSOR_SHAPES[it].first)) })
+                ToggleRow("Blink", font.cursorBlink, { vm.setTerminalFont(font.copy(cursorBlink = it)) })
+                CyclePicker("Scrollback", TerminalSettings.SCROLLBACK_CHOICES, terminal.scrollbackLines, { "%,d lines".format(it) }, caption = "History kept above each terminal's screen") { lines -> vm.updateTerminalSettings { it.copy(scrollbackLines = lines) } }
             }
 
             CommandHistorySettings(vm)
@@ -164,6 +178,8 @@ fun SettingsScreen(
 
             Panel(label = "Gestures") {
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
+                // Spec D1's optional drag: off, a sideways drag on the terminal does nothing, as it always has.
+                ToggleRow("Drag for arrow keys", terminal.horizontalDragArrows, { on -> vm.updateTerminalSettings { it.copy(horizontalDragArrows = on) } }, caption = "A one-finger sideways drag on the terminal sends Left and Right, one per cell")
                 PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
@@ -196,11 +212,10 @@ fun SettingsScreen(
             }
 
             Panel(label = "About") {
-                val context = LocalContext.current
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
                 Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
                 Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text3)
-                Text("Fonts: IBM Plex Sans and JetBrains Mono under the SIL Open Font License. SSH transport: sshj (Apache 2.0).", style = BerthType.caption, color = c.text3)
+                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack and the Powerline symbols from Nerd Fonts under the MIT licence. SSH transport: sshj (Apache 2.0).", style = BerthType.caption, color = c.text3)
             }
         }
     }
@@ -215,6 +230,9 @@ private val ACCENTS = listOf(
     "Periwinkle" to 0x89A7E0,
     "Lilac" to 0xC79BD8,
 )
+
+/** The cursor shapes as [TerminalFont.cursorShape] stores them and as the control names them (spec C20: block, underline, bar). */
+private val CURSOR_SHAPES = listOf("block" to "Block", "underline" to "Underline", "bar" to "Bar")
 
 private fun swipeLabel(gesture: TabSwipeGesture): String = when (gesture) {
     TabSwipeGesture.TWO_FINGER -> "Two-finger swipe"
