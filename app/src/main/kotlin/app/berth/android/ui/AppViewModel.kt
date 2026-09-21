@@ -595,9 +595,8 @@ class AppViewModel @Inject constructor(
         val saved = hostRepository.observeAll().first().map { it.address to it.port }
         val known = knownHostRepository.observeAll().first()
         val parsed = KnownHostsFile.parse(text, saved + known.map { it.host to it.port })
-        val byEndpoint = known.groupBy { it.host.lowercase() to it.port }
         return KnownHostsImport(
-            parsed.entries.map { entry -> KnownHostsCandidate(entry, standingOf(entry, byEndpoint[entry.host.lowercase() to entry.port].orEmpty())) },
+            parsed.entries.map { entry -> KnownHostsCandidate(entry, standingOf(entry, known.forEndpoint(entry.host, entry.port))) },
             parsed.skipped,
             parsed.hashedUnresolved,
         )
@@ -606,28 +605,35 @@ class AppViewModel @Inject constructor(
     /**
      * Saves [entries] as trusted keys, first seen now. One already held for its address is left as
      * it is; one that differs from the saved key of its type replaces it, the way Replace on the
-     * changed-key sheet does (the saved key deleted, the new one saved), since a ticked conflict is
-     * that decision. A pinned endpoint takes nothing; the sheet does not offer those rows, and the
-     * import holds the line if one arrives. Returns how many keys were added and how many replaced.
+     * changed-key sheet does (the saved key deleted, the new one saved in its place, under the
+     * address as the saved key spelt it, which is the spelling the live lookup reads), since a
+     * ticked conflict is that decision. A pinned endpoint takes nothing; the sheet does not offer
+     * those rows, and the import holds the line if one arrives. Each entry is judged as the sheet
+     * judged it ([forEndpoint], the name case-blind), read afresh so a key this import has just
+     * written is seen. Returns how many keys were added and how many replaced.
      */
     suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): KnownHostsImported {
         var added = 0
         var replaced = 0
         val now = System.currentTimeMillis()
         for (entry in entries) {
-            val here = knownHostRepository.find(entry.host, entry.port)
-            when (val standing = standingOf(entry, here)) {
+            val here = knownHostRepository.observeAll().first().forEndpoint(entry.host, entry.port)
+            val host = when (val standing = standingOf(entry, here)) {
                 KnownHostsCandidate.Standing.EXISTING, is KnownHostsCandidate.Standing.Pinned -> continue
                 is KnownHostsCandidate.Standing.Conflicting -> {
                     knownHostRepository.delete(standing.saved.id)
                     replaced++
+                    standing.saved.host
                 }
-                KnownHostsCandidate.Standing.NEW -> added++
+                KnownHostsCandidate.Standing.NEW -> {
+                    added++
+                    entry.host
+                }
             }
             knownHostRepository.upsert(
                 KnownHostKey(
                     id = UUID.randomUUID().toString(),
-                    host = entry.host,
+                    host = host,
                     port = entry.port,
                     keyType = entry.keyType,
                     publicKeyBase64 = entry.publicKeyBase64,
@@ -639,6 +645,15 @@ class AppViewModel @Inject constructor(
         }
         return KnownHostsImported(added, replaced)
     }
+
+    /**
+     * The keys held for `host:port`, the name compared case-blind as DNS reads it: OpenSSH writes
+     * a `known_hosts` name in lowercase, and a host saved as `Prod-API.example.com` is the same
+     * endpoint. The parse and the import judge by this one reading, so what the sheet showed as a
+     * conflict is what the write replaces.
+     */
+    private fun List<KnownHostKey>.forEndpoint(host: String, port: Int): List<KnownHostKey> =
+        filter { it.port == port && it.host.equals(host, ignoreCase = true) }
 
     /** Where [entry] stands against the keys Berth holds for its endpoint ([here]), as the live policy would judge the same key from the server. */
     private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostsCandidate.Standing {
