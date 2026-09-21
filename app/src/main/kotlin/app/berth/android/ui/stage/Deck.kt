@@ -83,15 +83,14 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import app.berth.android.ui.a11y.alwaysFocusable
 import app.berth.android.ui.a11y.keyPressable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthPopover
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -974,7 +973,7 @@ private fun AlternatesPopover(chips: List<DeckAction>, hovered: Int?, onPlaced: 
             }
         }
     }
-    Popup(popupPositionProvider = provider, properties = PopupProperties(focusable = false)) {
+    BerthPopover(provider) {
         Row(horizontalArrangement = Arrangement.spacedBy(DeckGap)) {
             chips.forEachIndexed { i, action ->
                 val label = action.alternateLabel()
