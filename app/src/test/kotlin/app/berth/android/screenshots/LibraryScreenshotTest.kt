@@ -894,7 +894,6 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     @Test
     fun `install on host over the local sshd, then the key signs in`() {
         assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
-        assumeTrue("2x is the same sshd and the same shell; the surfaces are held at 1x", systemFontScale == 1f)
         seedLibrary()
         val marker = "berth-install-" + java.util.UUID.randomUUID().toString().take(8)
         val pair = SshKeys.generate(KeyAlgorithm.ED25519)
@@ -932,14 +931,14 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText("Berth test box")
         compose.onNode(hasText("Berth test box") and hasAnyAncestor(isDialog())).performClick()
         waitForText("Connect and install")
-        compose.onNodeWithText("Connect and install").performClick()
+        compose.onNodeWithText("Connect and install").performScrollTo().performClick()
 
         // The login's prompts come up over the sheet: the server's key first.
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         waitForText("Trust and connect")
         settle(300)
         capture("key-install-connecting-live")
-        compose.onNodeWithText("Trust and connect").performClick()
+        compose.onNodeWithText("Trust and connect").performScrollTo().performClick()
         var session: TerminalSession? = null
         try {
             compose.waitUntil(90_000) { compose.onAllNodesWithText("Installed").fetchSemanticsNodes().isNotEmpty() }
@@ -953,7 +952,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
             val rows = KeyInstall.rowsFrom(session.emulator, 0)
             assertEquals(1, rows.count { it.contains(KeyInstall.INSTALLED) })
             assertEquals(0, rows.count { it.contains(KeyInstall.NOT_INSTALLED) })
-            compose.onNodeWithText("Open tab").performClick()
+            compose.onNodeWithText("Open tab").performScrollTo().performClick()
             assertEquals(listOf(session.id), opened)
 
             // The proof: the same host with the key just installed logs in, no password asked.
