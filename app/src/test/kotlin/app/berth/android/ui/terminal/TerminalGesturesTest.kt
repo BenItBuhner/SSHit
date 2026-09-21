@@ -49,6 +49,7 @@ import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
 import app.berth.ssh.SshSecurity
+import app.berth.terminal.MouseTracking
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,7 +78,9 @@ import java.util.concurrent.TimeUnit
  * keeps quiet: three fingers down and up together are one three-finger tap and never a paste, a
  * reset or a zoom; two two-finger taps within the double-tap window are one reset and neither
  * pastes; one two-finger tap pastes once the window has passed and not before, and at once when no
- * reset is wired; a pinch and a two-finger swipe are what they were. Through the Stage, where each
+ * reset is wired, the first tap's lift telling the finger it landed while the window runs (review
+ * #16); a pinch and a two-finger swipe are what they were; and a tap on an OSC 8 link is the link's
+ * until the application takes the mouse, when it is the application's click. Through the Stage, where each
  * gesture lands: the three-finger tap hides the Deck and shows it again (the Deck's own state stays
  * in the Stage, not in Deck.kt), the two-finger double-tap takes a host's own font size away, and
  * the drag sends nothing while Settings has it off and arrows once it is on, which on a detached
@@ -163,10 +166,13 @@ class TerminalGesturesTest {
         var threeFingerTaps = 0
         var twoFingerDoubleTaps = 0
         var twoFingerTaps = 0
+        var twoFingerTapsArmed = 0
         var taps = 0
+        val linkTaps = ArrayList<LinkTap>()
         val fontSteps = ArrayList<Int>()
         val swipes = ArrayList<Boolean>()
-        override fun toString() = "three-finger taps $threeFingerTaps, two-finger double-taps $twoFingerDoubleTaps, two-finger taps $twoFingerTaps, taps $taps, font steps $fontSteps, swipes $swipes"
+        override fun toString() =
+            "three-finger taps $threeFingerTaps, two-finger double-taps $twoFingerDoubleTaps, two-finger taps $twoFingerTaps (armed $twoFingerTapsArmed), taps $taps, link taps $linkTaps, font steps $fontSteps, swipes $swipes"
     }
 
     /**
@@ -201,8 +207,10 @@ class TerminalGesturesTest {
                         onTwoFingerSwipe = { heard.swipes += it },
                         onTwoFingerTap = { heard.twoFingerTaps++ },
                         onTwoFingerDoubleTap = if (resetWired) ({ heard.twoFingerDoubleTaps++ }) else null,
+                        onTwoFingerTapArmed = { heard.twoFingerTapsArmed++ },
                         onThreeFingerTap = { heard.threeFingerTaps++ },
                         horizontalDragArrows = dragArrows,
+                        onLinkTap = { heard.linkTaps += it },
                     )
                 }
             }
@@ -361,6 +369,92 @@ class TerminalGesturesTest {
         twoFingerTap()
         assertEquals(heard.toString(), 2, heard.twoFingerTaps)
         assertEquals(heard.toString(), 0, heard.twoFingerDoubleTaps)
+        // Nothing waits, so nothing is armed: the paste itself is what the finger feels.
+        assertEquals(heard.toString(), 0, heard.twoFingerTapsArmed)
+    }
+
+    @Test
+    fun `the first two-finger tap's lift is reported while the window runs, so the finger is told it landed, and the second's is not`() {
+        val heard = Heard()
+        canvasAlone(heard)
+        val window = ViewConfiguration.getDoubleTapTimeout().toLong()
+        compose.mainClock.autoAdvance = false
+        try {
+            // Lifted: armed at once, with the paste still a window away.
+            twoFingerTap()
+            assertEquals("armed on the lift: $heard", 1, heard.twoFingerTapsArmed)
+            assertEquals("not yet pasted: $heard", 0, heard.twoFingerTaps)
+            compose.mainClock.advanceTimeBy(window + 50)
+            assertEquals("pasted once the window passed: $heard", 1, heard.twoFingerTaps)
+            assertEquals("and armed only the once: $heard", 1, heard.twoFingerTapsArmed)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        windowPasses()
+        // A double-tap: the first lift arms, the second is the reset and arms nothing.
+        compose.onNodeWithTag(TerminalTag).performTouchInput {
+            down(0, cellCenter(6, 4))
+            down(1, cellCenter(6, 24))
+            up(0)
+            up(1)
+            advanceEventTime(120)
+            down(0, cellCenter(6, 5))
+            down(1, cellCenter(6, 25))
+            up(0)
+            up(1)
+        }
+        compose.waitUntil(5_000) { heard.twoFingerDoubleTaps == 1 }
+        windowPasses()
+        assertEquals(heard.toString(), 2, heard.twoFingerTapsArmed)
+        assertEquals(heard.toString(), 1, heard.twoFingerTaps)
+        // Three fingers arm nothing either: that gesture has no window to wait out.
+        threeFingerTap()
+        compose.waitUntil(5_000) { heard.threeFingerTaps == 1 }
+        windowPasses()
+        assertEquals(heard.toString(), 2, heard.twoFingerTapsArmed)
+    }
+
+    /** The view row and column where [token] first shows on the screen. */
+    private fun cellOf(session: TerminalSession, token: String): Pair<Int, Int> {
+        val rows = synchronized(session.emulator.lock) { session.emulator.screenText() }
+        val row = rows.indexOfFirst { it.contains(token) }
+        assertTrue("'$token' is on screen in $rows", row >= 0)
+        return row to rows[row].indexOf(token)
+    }
+
+    @Test
+    fun `a tap on a link is the link's until the application takes the mouse, when it is the application's click`() {
+        val heard = Heard()
+        val session = canvasAlone(heard)
+        val url = "https://caddyserver.com/docs/"
+        // A link printed at the restored prompt, the way a program prints one.
+        session.emulator.write("\u001b]8;;$url\u001b\\the docs\u001b]8;;\u001b\\ \r\n")
+        compose.waitUntil(5_000) { synchronized(session.emulator.lock) { session.emulator.screenText() }.any { it.contains("the docs") } }
+        settle(300)
+        val (row, col) = cellOf(session, "the docs")
+        val onLink = cellCenter(row, col + 2)
+
+        // Nobody has the mouse: the tap is the link's, and never a plain tap.
+        compose.onNodeWithTag(TerminalTag).performTouchInput { down(onLink); up() }
+        compose.waitUntil(5_000) { heard.linkTaps.size == 1 }
+        assertEquals(heard.toString(), LinkTap(url, "the docs"), heard.linkTaps.single())
+        assertEquals(heard.toString(), 0, heard.taps)
+
+        // The application asks for mouse clicks (a TUI, tmux): the same tap is its click, sent to it,
+        // and the link is plain text to the finger; the selection bar's Open link is the way to it then.
+        session.emulator.write("\u001b[?1000h")
+        compose.waitUntil(5_000) { synchronized(session.emulator.lock) { session.emulator.mouseTracking } != MouseTracking.NONE }
+        compose.onNodeWithTag(TerminalTag).performTouchInput { down(onLink); up() }
+        compose.waitUntil(5_000) { heard.taps == 1 }
+        windowPasses()
+        assertEquals(heard.toString(), 1, heard.linkTaps.size)
+
+        // The application lets the mouse go: the link is the finger's again.
+        session.emulator.write("\u001b[?1000l")
+        compose.waitUntil(5_000) { synchronized(session.emulator.lock) { session.emulator.mouseTracking } == MouseTracking.NONE }
+        compose.onNodeWithTag(TerminalTag).performTouchInput { down(onLink); up() }
+        compose.waitUntil(5_000) { heard.linkTaps.size == 2 }
+        assertEquals(heard.toString(), 1, heard.taps)
     }
 
     @Test

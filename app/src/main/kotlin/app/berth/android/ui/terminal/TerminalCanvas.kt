@@ -214,6 +214,11 @@ fun TerminalCanvas(
      * set, one two-finger tap waits the window out before it pastes, so the two never both happen.
      */
     onTwoFingerDoubleTap: (() -> Unit)? = null,
+    /**
+     * The first two-finger tap lifted while a reset is wired, the window for a second now running:
+     * the Stage's chance to tell the finger it landed, since the paste it will become is a window away.
+     */
+    onTwoFingerTapArmed: (() -> Unit)? = null,
     /** A tap of three fingers at once (spec D1: toggle the Deck); the Stage owns the Deck and takes it from here. */
     onThreeFingerTap: (() -> Unit)? = null,
     /**
@@ -223,7 +228,9 @@ fun TerminalCanvas(
     horizontalDragArrows: Boolean = false,
     /**
      * A tap on a cell printed under an OSC 8 link, with the link's URL and its text on screen; the
-     * link is underlined while the finger is down. Null leaves links as plain text.
+     * link is underlined while the finger is down. Null leaves links as plain text. While the
+     * application has the mouse (a TUI with tracking on), a tap is its click and links are plain;
+     * a long-press selection's bar offers Open link then.
      */
     onLinkTap: ((LinkTap) -> Unit)? = null,
     selection: TerminalSelection? = null,
@@ -320,6 +327,7 @@ fun TerminalCanvas(
     val currentSwipe by rememberUpdatedState(onTwoFingerSwipe)
     val currentTwoFingerTap by rememberUpdatedState(onTwoFingerTap)
     val currentTwoFingerDoubleTap by rememberUpdatedState(onTwoFingerDoubleTap)
+    val currentTwoFingerTapArmed by rememberUpdatedState(onTwoFingerTapArmed)
     val currentThreeFingerTap by rememberUpdatedState(onThreeFingerTap)
     val currentDragArrows by rememberUpdatedState(horizontalDragArrows)
     val currentLinkTap by rememberUpdatedState(onLinkTap)
@@ -374,9 +382,10 @@ fun TerminalCanvas(
                     lastTapUp = 0L
 
                     // A link under the finger is underlined from the moment it lands and until the
-                    // gesture turns out to be anything but a tap on it (spec A60).
+                    // gesture turns out to be anything but a tap on it (spec A60). While the application
+                    // tracks the mouse a tap is its click, so a link is plain text to the finger.
                     val (downCol, downRow) = p.cellAt(down.position)
-                    val linkId = if (currentLinkTap != null && sel?.active != true) frames.front.linkAt(downRow, downCol) else 0
+                    val linkId = if (currentLinkTap != null && sel?.active != true && emulator.mouseTracking == MouseTracking.NONE) frames.front.linkAt(downRow, downCol) else 0
                     pressedLink = linkId
                     val linkUrl = if (linkId != 0) emulator.links.url(linkId) else null
                     if (linkUrl == null) pressedLink = 0
@@ -439,6 +448,7 @@ fun TerminalCanvas(
                                             }
                                             else -> {
                                                 lastTwoTapUp = up
+                                                currentTwoFingerTapArmed?.invoke()
                                                 pendingTwoTap = scope.launch {
                                                     delay(viewConfiguration.doubleTapTimeoutMillis)
                                                     pendingTwoTap = null

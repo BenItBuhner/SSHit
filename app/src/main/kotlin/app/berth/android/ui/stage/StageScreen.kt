@@ -714,6 +714,7 @@ private fun StageBody(
                     patterns.fontStep()
                     vm.resetFontSize(record.hostId)
                 },
+                onTwoFingerTapArmed = { patterns.twoFingerTapArmed() },
                 onThreeFingerTap = { if (deckStateOk) onDeckVisibleChange(!deckVisible) },
                 horizontalDragArrows = terminalSettings.horizontalDragArrows,
                 // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
