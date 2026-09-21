@@ -855,7 +855,9 @@ class TerminalSession(
             // A detached tab does not eat what is typed into it: the first key reconnects, as the pill
             // would, and the Stage is told the key itself went nowhere. Later keys, while the connection
             // is being made, are dropped the way they always were: there is no shell to hold them for.
-            if (state == SessionState.DETACHED) {
+            // The state leaves Detached on the loop's own thread, so a burst that lands before it does
+            // (a drag's arrows, a paste) is told apart by the job the first key started.
+            if (state == SessionState.DETACHED && connectJob?.isActive != true) {
                 reconnectNow()
                 _keyReconnected.tryEmit(Unit)
             }

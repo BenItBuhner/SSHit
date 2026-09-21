@@ -17,7 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import org.junit.After
@@ -47,7 +47,9 @@ class DetachedKeyTest {
     private val env = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
-        override val networkAvailable: Flow<Unit> = emptyFlow()
+        // Never completes and never emits, as the real network monitor's flow does not: an empty flow
+        // would end the reconnect's `first()` wait with NoSuchElementException on a later retry.
+        override val networkAvailable: Flow<Unit> = MutableSharedFlow()
         override fun onClipboardText(host: Host, text: String) = Unit
     }
 
@@ -104,6 +106,18 @@ class DetachedKeyTest {
         Thread.sleep(200)
         assertEquals(1, reports.size)
         assertNotEquals(SessionState.DETACHED, session.state)
+    }
+
+    @Test
+    fun `a burst of keys landing before the tab has left Detached reconnects it once and is reported once`() {
+        val session = session(SessionState.DETACHED)
+        val reports = reportsOf(session)
+        // A drag's five arrows arrive in one pointer event, before the loop's own thread has moved the state.
+        repeat(5) { session.sendKey(TerminalKey.LEFT) }
+        await("the burst reported") { reports.size == 1 }
+        await("the tab leaves Detached") { session.state != SessionState.DETACHED }
+        Thread.sleep(200)
+        assertEquals(1, reports.size)
     }
 
     @Test
