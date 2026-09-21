@@ -54,8 +54,9 @@ import kotlin.io.path.createTempDirectory
  * is a notice and copies nothing. Against the local sshd (`SSH_TEST_*`), a shared file lands in a
  * folder of the login's own under `/tmp` on the host (0700, the file 0600, a same-name drop kept
  * beside the first, a link planted at `/tmp/<name>` never touched) through the transfer queue and
- * its path is pasted into the shell, quoted; shared text waits for the Stage's paste gate (spec
- * C18) and reaches the shell through nothing else.
+ * its path is pasted into the shell, quoted, while that shell is on stage and out of the alternate
+ * screen, and held for the notice's Paste otherwise; shared text waits for the Stage's paste gate
+ * (spec C18) and reaches the shell through nothing else.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -244,6 +245,91 @@ class ShortcutAndShareTest {
             Files.deleteIfExists(planted)
             // Cleared through the shell, since the folder is the login's alone.
             folder?.let { dir ->
+                session.sendText("\u0015rm -rf ${TransferManager.shellQuote(dir)}\r")
+                await("the shell removes the folder") { !File(dir).exists() }
+            }
+            local.deleteRecursively()
+        }
+    }
+
+    /**
+     * The copy takes time, and when it lands the terminal that took the drop may not be the one to
+     * paste into any more (review #18 nit 3): `vim` up, the alternate screen, where a pasted path is
+     * keystrokes; or another tab on stage. The path is held instead ([AppViewModel.heldPaths]), for
+     * the shell's notice and its Paste, every later path joining what is held in landing order so
+     * one Paste sends them all to the shell that took the drop; a tab closed takes its held paths
+     * with it. The bar and its button are `ShortcutAndShareScreenshotTest`'s.
+     */
+    @Test
+    fun `a path landing in the alternate screen or with another tab on stage is held, and one Paste sends all of them in order`() {
+        val session = live()
+        val local = createTempDirectory("berth-share").toFile()
+        val stem = "berth held ${UUID.randomUUID().toString().take(8)}"
+        val one = File(local, "$stem one.txt").apply { writeText("one\n") }
+        val two = File(local, "${stem.replace(' ', '-')}-two.txt").apply { writeText("two\n") }
+        var folder: String? = null
+        try {
+            // The shell takes the alternate screen, as vim does on opening; two files shared to it land while it is there.
+            session.sendText("printf '\\033[?1049h'\r")
+            await("the alternate screen") { session.emulator.isAlternateScreen }
+            runBlocking { vm.arrive(Arrival.Files(listOf(Uri.fromFile(one), Uri.fromFile(two)))) }
+            assertEquals(LinkOutcome.Staged, vm.linkOutcome.value)
+            val rows = awaitTransfers(2)
+            assertTrue(rows.all { it.state == TransferState.DONE })
+            folder = SftpPaths.parent(rows[0].remotePath)
+            val quoted = TransferManager.shellQuote(rows[0].remotePath)
+            assertEquals("'$folder/${one.name}'", quoted)
+            val both = "$quoted ${rows[1].remotePath}"
+            await("both paths held for the shell") { vm.heldPaths.value[session.id]?.count == 2 }
+            assertEquals(HeldPaths(both, 2), vm.heldPaths.value[session.id])
+            Thread.sleep(1_000)
+            assertTrue("nothing reached the alternate screen", session.emulator.screenText().none { it.contains(stem) })
+
+            // Back on the main screen, the notice's Paste: both on the shell's line, in the order they landed, and nothing held after; a second Paste is nothing.
+            session.sendText("printf '\\033[?1049l'\r")
+            await("the main screen") { !session.emulator.isAlternateScreen }
+            await("the prompt back") { session.emulator.cursorLineText().trimEnd().endsWith("$") }
+            vm.pasteHeld(session.id)
+            assertNull(vm.heldPaths.value[session.id])
+            await("both paths on the shell's line") { session.emulator.cursorLineText().endsWith(both) }
+            vm.pasteHeld(session.id)
+            Thread.sleep(300)
+            assertTrue("a Paste with nothing held pastes nothing", session.emulator.cursorLineText().endsWith(both))
+            session.sendText("\u0015")
+
+            // Another tab on stage when a path lands: held, not pasted behind the user's back; a path landing
+            // once the shell is back on stage joins what is held rather than jumping ahead of it.
+            runBlocking { vm.arrive(Arrival.OpenHost(homelab.id)) }
+            val other = staged()
+            assertNotEquals(session.id, other.id)
+            await("the other tab on stage") { graph.sessions.activeSession.value !== session }
+            vm.landDroppedPath(session, quoted)
+            assertEquals(HeldPaths(quoted, 1), vm.heldPaths.value[session.id])
+            graph.sessions.setActive(session.id)
+            await("the shell back on stage") { graph.sessions.activeSession.value === session }
+            vm.landDroppedPath(session, " ${rows[1].remotePath}")
+            assertEquals(HeldPaths(both, 2), vm.heldPaths.value[session.id])
+            Thread.sleep(500)
+            assertTrue("nothing reached the shell while paths were held", !session.emulator.cursorLineText().contains(stem))
+            vm.pasteHeld(session.id)
+            await("the held pair on the shell's line") { session.emulator.cursorLineText().endsWith(both) }
+            session.sendText("\u0015")
+
+            // On stage, the main screen, nothing held: a path lands on the line at once.
+            vm.landDroppedPath(session, quoted)
+            assertNull(vm.heldPaths.value[session.id])
+            await("the path pasted at once") { session.emulator.cursorLineText().endsWith(quoted) }
+            session.sendText("\u0015")
+
+            // A path held for a tab that closes goes with it.
+            val otherSession = graph.sessions.get(other.id)!!
+            vm.landDroppedPath(otherSession, "/tmp/nowhere")
+            assertEquals(HeldPaths("/tmp/nowhere", 1), vm.heldPaths.value[other.id])
+            graph.sessions.close(other.id)
+            awaitOnMain("the closed tab's held path to go") { other.id !in vm.heldPaths.value }
+        } finally {
+            folder?.let { dir ->
+                if (session.emulator.isAlternateScreen) session.sendText("printf '\\033[?1049l'\r")
                 session.sendText("\u0015rm -rf ${TransferManager.shellQuote(dir)}\r")
                 await("the shell removes the folder") { !File(dir).exists() }
             }

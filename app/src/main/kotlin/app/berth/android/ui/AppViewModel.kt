@@ -308,15 +308,63 @@ class AppViewModel @Inject constructor(
 
     /**
      * The share sheet's file drop (spec C24): the files land in `/tmp` on the host of the terminal on
-     * stage, through the transfer queue, and each path is pasted into it as its copy lands
-     * (`TransferManager.dropIntoTmp`). The tab on stage has to be a live terminal: a frozen frame, a
-     * Files or Tunnels tab, or an empty Stage has nowhere to put the file and no prompt to paste
-     * into, so the drop ends in a notice and the share can be made again once one is up.
+     * stage, through the transfer queue, and each path comes back to [landDroppedPath] as its copy
+     * lands (`TransferManager.dropIntoTmp`). The tab on stage has to be a live terminal: a frozen
+     * frame, a Files or Tunnels tab, or an empty Stage has nowhere to put the file and no prompt to
+     * paste into, so the drop ends in a notice and the share can be made again once one is up.
      */
     private fun dropFiles(uris: List<Uri>) {
         val session = liveSessionOnStage() ?: return
-        files.transfers.dropIntoTmp(session, uris)
+        files.transfers.dropIntoTmp(session, uris, ::landDroppedPath)
         _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    private val _heldPaths = MutableStateFlow<Map<String, HeldPaths>>(emptyMap())
+
+    init {
+        // Paths held for a tab go with the tab: a closed terminal has no line for them and no notice to offer.
+        viewModelScope.launch {
+            sessions.tabs.collect { tabs ->
+                _heldPaths.update { held -> if (held.keys.all { id -> tabs.any { it.id == id } }) held else held.filterKeys { id -> tabs.any { it.id == id } } }
+            }
+        }
+    }
+
+    /**
+     * A drop's paths held back from the terminal, by the session's id ([landDroppedPath]): the shell
+     * shows a session's entry as a notice with Paste while that session is on stage, and [pasteHeld]
+     * sends it. An entry goes when its paths are pasted or its tab closes.
+     */
+    val heldPaths: StateFlow<Map<String, HeldPaths>> = _heldPaths.asStateFlow()
+
+    /**
+     * A dropped file's path as its copy lands, in the shape the terminal should get it (quoted, a
+     * space ahead when it follows another). The copy took time, and [session], the terminal that
+     * took the drop, may not be the one to paste into any more: another tab may be on stage, or
+     * `vim` may be up (the alternate screen), where a pasted path is keystrokes. So the path is
+     * pasted only while [session] is the live terminal on stage, out of the alternate screen, with
+     * nothing of an earlier landing held for it; otherwise it is held for the notice's Paste
+     * ([heldPaths], [pasteHeld]), every later path joining what is held so one tap pastes them all,
+     * in the order they landed. Called off the main thread, from the transfer queue's scope.
+     */
+    internal fun landDroppedPath(session: TerminalSession, text: String) {
+        val landsOnStage = session.id !in _heldPaths.value &&
+            sessions.activeSession.value === session && session.state == SessionState.LIVE && !session.emulator.isAlternateScreen
+        if (landsOnStage) {
+            session.paste(text)
+            return
+        }
+        _heldPaths.update { held -> held + (session.id to (held[session.id]?.plus(text) ?: HeldPaths(text.trimStart(), 1))) }
+    }
+
+    /**
+     * The notice's Paste: the paths held for [sessionId] go to its terminal as one paste, if it is
+     * still live to take them; either way nothing is held for it after.
+     */
+    fun pasteHeld(sessionId: String) {
+        val held = _heldPaths.value[sessionId] ?: return
+        _heldPaths.update { it - sessionId }
+        sessions.get(sessionId)?.takeIf { it.state == SessionState.LIVE }?.paste(held.text)
     }
 
     /**
@@ -1256,6 +1304,14 @@ class AppViewModel @Inject constructor(
          */
         const val NO_LIVE_SESSION_FOR_SHARE = "Nothing live on stage to share into."
 
+        /** The notice for a dropped file whose path was held rather than pasted ([heldPaths]), and its one action. */
+        const val LANDED_IN_TMP = "Landed in /tmp"
+        const val PASTE_PATH = "Paste path"
+        const val PASTE_PATHS = "Paste paths"
+
+        /** The held notice's line: one path landed, or [count] files did. */
+        fun landedNotice(count: Int): String = if (count == 1) LANDED_IN_TMP else "$count files landed in /tmp"
+
         /**
          * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
          * not a plain address. [SshLink.parse] reads it, the same parser an `ssh://` link goes
@@ -1306,6 +1362,15 @@ data class KnownHostsImported(val added: Int, val replaced: Int) {
 
 /** Text shared to Berth, for the Stage of [sessionId] to paste through its preview gate ([AppViewModel.sharedPaste]). */
 data class SharedPaste(val sessionId: String, val text: String)
+
+/**
+ * The paths of [count] dropped files held back from one terminal ([AppViewModel.heldPaths]): [text]
+ * is what one paste of them all is, each path quoted for the shell, a space between one and the next.
+ */
+data class HeldPaths(val text: String, val count: Int) {
+    /** With one more path's [landed] text after these, in the shape the drop hands it over (a space ahead when it followed another). */
+    operator fun plus(landed: String): HeldPaths = HeldPaths("$text ${landed.trimStart()}", count + 1)
+}
 
 /** What an arrival (a link, a launcher shortcut, a share) came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {

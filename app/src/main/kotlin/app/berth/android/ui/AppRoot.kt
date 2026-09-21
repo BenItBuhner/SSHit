@@ -536,6 +536,20 @@ private fun Shell(vm: AppViewModel) {
             modifier = Modifier.align(Alignment.BottomCenter),
             maxLines = 2,
         )
+        // A dropped file's path that landed while its terminal was off stage or in the alternate
+        // screen waits here, for as long as that terminal is on stage with it unpasted: the line
+        // says it landed, Paste puts it on the shell's line (AppViewModel.landDroppedPath).
+        val heldPaths by vm.heldPaths.collectAsState()
+        val held = active?.let { heldPaths[it.id] }
+        val shownHeld = remember { mutableStateOf(held) }
+        if (held != null) shownHeld.value = held
+        NoticeBar(
+            visible = held != null && onStage,
+            text = shownHeld.value?.let { AppViewModel.landedNotice(it.count) } ?: AppViewModel.LANDED_IN_TMP,
+            action = if ((shownHeld.value?.count ?: 1) == 1) AppViewModel.PASTE_PATH else AppViewModel.PASTE_PATHS,
+            onAction = { active?.let { vm.pasteHeld(it.id) } },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
     if (batterySheet) BackgroundSheet(vm, onDismiss = { batterySheet = false })
     // On the launch after a crash the restore reconnects while the crash sheet is up, and a password,

@@ -40,6 +40,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.HeldPaths
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.theme.BerthType
@@ -80,9 +81,10 @@ import kotlin.io.path.createTempDirectory
  * The surfaces of share-to-session and the launcher's shortcuts (spec C24, Part B App shortcuts,
  * A80): the notice a share meets with nothing live on stage, at 1× and at the interface's 1.3×
  * font cap (A11), the Stage after a file shared to Berth has landed in a folder of the login's own
- * under the live shell's `/tmp` with its path pasted, the paste preview a shared note of two lines
- * meets (both of which need the sshd), and the five icons a long press on Berth offers, drawn as a
- * launcher masks them. The icons do not scale with the font, so they are held once.
+ * under the live shell's `/tmp` with its path pasted, the notice with Paste path a file landing
+ * while the shell holds the alternate screen comes to, the paste preview a shared note of two lines
+ * meets (the three of which need the sshd), and the five icons a long press on Berth offers, drawn
+ * as a launcher masks them. The icons do not scale with the font, so they are held once.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -230,6 +232,57 @@ class ShortcutAndShareScreenshotTest {
             }
         } finally {
             folder?.let { dir ->
+                session.sendText("\u0015rm -rf ${TransferManager.shellQuote(dir)}\r")
+                compose.waitUntil(10_000) { !File(dir).exists() }
+            }
+            local.deleteRecursively()
+        }
+    }
+
+    /**
+     * The shell on stage has the alternate screen up, as `vim` would, when a shared file's copy
+     * lands: a pasted path there would be keystrokes, so the path is held and the Stage says so on
+     * its notice bar, `Landed in /tmp` with Paste path beside it, for as long as the shell is on
+     * stage with the path unpasted. Back on the main screen, Paste path puts it on the shell's line
+     * and the bar goes. The folder is removed through the shell afterwards.
+     */
+    @Test
+    fun `a file landing while the shell holds the alternate screen is a notice with Paste path, and Paste path puts it on the line`() {
+        val session = liveOnStage()
+        val local = createTempDirectory("berth-share").toFile()
+        val report = File(local, "berth held ${UUID.randomUUID().toString().take(8)}.txt").apply { writeText("held numbers\n") }
+        var folder: String? = null
+        try {
+            session.sendText("printf '\\033[?1049h'\r")
+            compose.waitUntil(10_000) { session.emulator.isAlternateScreen }
+            graph.inbox.offer(Arrival.Files(listOf(Uri.fromFile(report))))
+            compose.waitUntil(45_000) {
+                val rows = graph.files.transfers.transfers.value
+                rows.size == 1 && rows.single().state == TransferState.DONE
+            }
+            val landed = graph.files.transfers.transfers.value.single().remotePath
+            folder = SftpPaths.parent(landed)
+            val quoted = TransferManager.shellQuote(landed)
+            waitForText(AppViewModel.LANDED_IN_TMP)
+            assertEquals(HeldPaths(quoted, 1), graph.viewModel.heldPaths.value[session.id])
+            settle(600)
+            assertFalse("nothing reached the alternate screen", session.emulator.screenText().any { it.contains(report.name) })
+            capture("share-landed-held")
+            val line = compose.onNode(hasText(AppViewModel.LANDED_IN_TMP), useUnmergedTree = true).fetchSemanticsNode().textLayout()
+            assertNotNull("the notice has a layout", line)
+            assertEquals("the notice is one line", 1, line!!.lineCount)
+            assertFalse("the notice is cut", line.didOverflowHeight || line.isLineEllipsized(0))
+
+            // The shell back on its main screen, and the bar's one action: the path on the line, nothing held, the bar gone.
+            session.sendText("printf '\\033[?1049l'\r")
+            compose.waitUntil(10_000) { !session.emulator.isAlternateScreen && session.emulator.cursorLineText().trimEnd().endsWith("$") }
+            compose.onNodeWithText(AppViewModel.PASTE_PATH).performClick()
+            compose.waitUntil(10_000) { session.emulator.cursorLineText().endsWith(quoted) }
+            waitForNoText(AppViewModel.LANDED_IN_TMP)
+            assertTrue("nothing is held once pasted", graph.viewModel.heldPaths.value.isEmpty())
+        } finally {
+            folder?.let { dir ->
+                if (session.emulator.isAlternateScreen) session.sendText("printf '\\033[?1049l'\r")
                 session.sendText("\u0015rm -rf ${TransferManager.shellQuote(dir)}\r")
                 compose.waitUntil(10_000) { !File(dir).exists() }
             }

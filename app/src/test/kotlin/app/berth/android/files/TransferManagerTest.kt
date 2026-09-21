@@ -75,6 +75,10 @@ class TransferManagerTest {
     private val server = FakeSftpFileSystem()
     /** Every path downloaded or uploaded through any channel, in the order the copies started. */
     private val moved: MutableList<String> = Collections.synchronizedList(ArrayList())
+
+    /** What a drop hands over as each copy lands, as (session id, the text the terminal should get), in landing order. */
+    private val landed: MutableList<Pair<String, String>> = Collections.synchronizedList(ArrayList())
+    private val onLanded: (TerminalSession, String) -> Unit = { session, text -> landed += session.id to text }
     private val env = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
@@ -548,7 +552,7 @@ class TransferManagerTest {
         val changed = ArrayList<Pair<String, String>>()
         val watcher = scope.launch(start = CoroutineStart.UNDISPATCHED) { manager.changedFolders.collect { synchronized(changed) { changed += it } } }
 
-        val ids = manager.dropIntoTmp(session, listOf(Uri.fromFile(report), Uri.fromFile(notes)))
+        val ids = manager.dropIntoTmp(session, listOf(Uri.fromFile(report), Uri.fromFile(notes)), onLanded)
         assertEquals(2, ids.size)
         val rows = ids.map(::awaitFinished)
         assertEquals(listOf(TransferState.DONE, TransferState.DONE), rows.map { it.state })
@@ -558,6 +562,10 @@ class TransferManagerTest {
         assertTrue(dir, Regex("/tmp/berth-[0-9a-f]{8}").matches(dir))
         assertEquals(listOf("$dir/my report (1).pdf", "$dir/notes.txt"), rows.map { it.remotePath })
         assertEquals(listOf("$dir/my report (1).pdf", "$dir/notes.txt"), moved.toList())
+        // Handed over as each copy landed, in the order shared, for the session that took the drop: the
+        // path with spaces and parentheses in quotes, the plain one bare, a space ahead of the second.
+        await("both paths handed over") { landed.size == 2 }
+        assertEquals(listOf("s1" to "'$dir/my report (1).pdf'", "s1" to " $dir/notes.txt"), landed.toList())
         assertEquals(SftpFileType.DIRECTORY, server.nodes[dir]?.type)
         assertEquals(0b111_000_000, server.nodes[dir]?.permissions)
         assertEquals(0b110_000_000, server.nodes["$dir/notes.txt"]?.permissions)
@@ -573,19 +581,23 @@ class TransferManagerTest {
 
         // The same name again on the same session: the folder is kept, the first copy is kept, and the second is saved beside it.
         moved.clear()
+        landed.clear()
         notes.writeText("shared again\n")
-        val again = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes))).single())
+        val again = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
         assertEquals(TransferState.DONE, again.state)
         assertEquals("$dir/notes (1).txt", again.remotePath)
         assertEquals("notes (1).txt", again.name)
         assertEquals("notes.txt was there \u00B7 saved as notes (1).txt", again.note)
         assertEquals(listOf("$dir/notes (1).txt"), moved.toList())
+        // A drop of its own: the kept copy's path, quoted for its parentheses, with no space ahead.
+        await("the kept copy's path handed over") { landed.size == 1 }
+        assertEquals(listOf("s1" to "'$dir/notes (1).txt'"), landed.toList())
         assertEquals("shared\n", server.nodes["$dir/notes.txt"]?.content?.toString(Charsets.UTF_8))
         assertEquals("shared again\n", server.nodes["$dir/notes (1).txt"]?.content?.toString(Charsets.UTF_8))
         assertEquals(0b110_000_000, server.nodes["$dir/notes (1).txt"]?.permissions)
 
         // Another session's drops go to a folder of their own.
-        val other = awaitFinished(manager.dropIntoTmp(session("s2"), listOf(Uri.fromFile(notes))).single())
+        val other = awaitFinished(manager.dropIntoTmp(session("s2"), listOf(Uri.fromFile(notes)), onLanded).single())
         assertEquals(TransferState.DONE, other.state)
         val otherDir = SftpPaths.parent(other.remotePath)
         assertTrue(otherDir, Regex("/tmp/berth-[0-9a-f]{8}").matches(otherDir))
@@ -594,7 +606,7 @@ class TransferManagerTest {
 
         // The folder gone meanwhile (a reboot, a tmp cleaner): the next drop makes a new one rather than failing on the old name.
         runBlocking { server.delete(dir) }
-        val remade = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes))).single())
+        val remade = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
         assertEquals(TransferState.DONE, remade.state)
         val remadeDir = SftpPaths.parent(remade.remotePath)
         assertTrue(remadeDir, Regex("/tmp/berth-[0-9a-f]{8}").matches(remadeDir))
@@ -611,7 +623,7 @@ class TransferManagerTest {
 
         // The first two names are taken (by anyone; mkdir is the check): the third is the folder.
         mkdirsRefused = 2
-        val row = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes))).single())
+        val row = awaitFinished(manager.dropIntoTmp(session, listOf(Uri.fromFile(notes)), onLanded).single())
         assertEquals(TransferState.DONE, row.state)
         assertEquals(0, mkdirsRefused)
         assertEquals(3, mkdirs.size)
@@ -622,10 +634,12 @@ class TransferManagerTest {
         // Every name taken, past what the drop will try: the row fails with the server's word for it, and nothing is pasted.
         val other = session("s2")
         mkdirsRefused = Int.MAX_VALUE
-        val failed = awaitFinished(manager.dropIntoTmp(other, listOf(Uri.fromFile(notes))).single())
+        val failed = awaitFinished(manager.dropIntoTmp(other, listOf(Uri.fromFile(notes)), onLanded).single())
         assertEquals(TransferState.FAILED, failed.state)
         assertNotNull(failed.error)
         assertTrue(failed.error!!, failed.error!!.contains("already exists"))
+        await("the first drop's path handed over") { landed.any { it.first == "s1" } }
+        assertTrue("nothing is handed over for a copy that failed", landed.none { it.first == "s2" })
     }
 
     @Test

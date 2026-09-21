@@ -302,10 +302,13 @@ class TransferManager(
     /**
      * The share sheet's quick file drop (spec C24): [uris] land under `/tmp` on [session]'s host
      * through the same queue as any upload, so the transfers sheet and the notification see them,
-     * and as each copy lands its path is pasted into the terminal, quoted where the shell would
-     * need it (`'/tmp/berth-3fa9c2d1/my report.pdf'`), in the order the files were shared, a space
-     * between one path and the next so several land as several words. A copy that fails or is
-     * cancelled pastes nothing; its row says what happened. Returns the transfer ids.
+     * and as each copy lands its path is handed to [onLanded] as the terminal should get it, quoted
+     * where the shell would need it (`'/tmp/berth-3fa9c2d1/my report.pdf'`), in the order the files
+     * were shared, a space ahead of every path after the first so several land as several words
+     * ([landedText]). Whether that text is pasted at once or held is the caller's to decide from
+     * what is on stage when the copy lands ([app.berth.android.ui.AppViewModel.landDroppedPath]);
+     * the copy took time. A copy that fails or is cancelled hands over nothing; its row says what
+     * happened. Returns the transfer ids.
      *
      * `/tmp` is every user's, so nothing lands in it directly: the first drop on a session makes
      * `/tmp/berth-<8 hex>/` for the login alone (0700, the mode sent with the create, the name
@@ -313,9 +316,9 @@ class TransferManager(
      * same folder, and each file is made new there at 0600 ([SftpPermissions.PRIVATE_FILE]), never
      * opened over something already at its name, so a link another user planted is neither followed
      * nor written to. A second file of a name already dropped is kept beside the first as
-     * `report (1).pdf`, the way a folder transfer keeps both, since the first path was pasted already.
+     * `report (1).pdf`, the way a folder transfer keeps both, since the first path was handed over already.
      */
-    fun dropIntoTmp(session: TerminalSession, uris: List<Uri>): List<String> {
+    fun dropIntoTmp(session: TerminalSession, uris: List<Uri>, onLanded: (TerminalSession, String) -> Unit): List<String> {
         val ids = uris.map { uri ->
             val (described, size) = describe(uri)
             val name = described ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { SftpPaths.isValidName(it) } ?: "upload"
@@ -337,12 +340,12 @@ class TransferManager(
             }
         }
         scope.launch {
-            var pasted = 0
+            var landed = 0
             for (id in ids) {
-                // Wait for this copy to end; a row cleared from the sheet meanwhile ends the wait with nothing to paste.
+                // Wait for this copy to end; a row cleared from the sheet meanwhile ends the wait with nothing to hand over.
                 val ended = transfers.first { list -> list.firstOrNull { it.id == id }?.state?.isActive != true }.firstOrNull { it.id == id }
                 if (ended?.state != TransferState.DONE) continue
-                pastePath(session, ended.remotePath, first = pasted++ == 0)
+                onLanded(session, landedText(ended.remotePath, first = landed++ == 0))
             }
         }
         return ids
@@ -377,15 +380,13 @@ class TransferManager(
     }
 
     /**
-     * The one place a path reaches the terminal: [path] quoted for the shell ([shellQuote]), a
-     * space ahead of it when it follows another so several land as several words, and no newline
-     * ever, so nothing a drop pastes runs. A path is one line by construction ([SftpPaths.isValidName]
-     * admits no control character), so it needs no preview; shared text takes the Stage's gate
-     * instead ([app.berth.android.ui.AppViewModel.sharedPaste]).
+     * The one shape a landed path reaches the terminal in: [path] quoted for the shell
+     * ([shellQuote]), a space ahead of it when it follows another so several land as several words,
+     * and no newline ever, so nothing a drop pastes runs. A path is one line by construction
+     * ([SftpPaths.isValidName] admits no control character), so it needs no preview; shared text
+     * takes the Stage's gate instead ([app.berth.android.ui.AppViewModel.sharedPaste]).
      */
-    private fun pastePath(session: TerminalSession, path: String, first: Boolean) {
-        session.paste((if (first) "" else " ") + shellQuote(path))
-    }
+    private fun landedText(path: String, first: Boolean): String = (if (first) "" else " ") + shellQuote(path)
 
     /** Answers the conflict a transfer waits on, a folder's or a single file's; nothing happens when it is not waiting. */
     fun resolveConflict(id: String, choice: ConflictChoice, applyToAll: Boolean) {
