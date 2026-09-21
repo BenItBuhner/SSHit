@@ -1201,7 +1201,11 @@ fun SheetTitle(title: String, caption: String? = null, color: Color = Berth.colo
     }
 }
 
-/** Empty state: a short stance and up to three actions, no illustration. */
+/**
+ * Empty state: a short stance and up to three lines of actions, no illustration. A line is one
+ * action, or the primary with a secondary beside it where a second way in belongs on the first
+ * line (the empty Hosts library's Restore a bundle); text actions take a line each under them.
+ */
 @Composable
 fun EmptyState(
     title: String,

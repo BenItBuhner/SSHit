@@ -296,6 +296,35 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
 
     // ---- hosts (C9) -------------------------------------------------------------------------------
 
+    /**
+     * With no host saved, the empty state (spec C1) offers Add host with Restore a bundle beside it
+     * on one line, Quick connect and Import ssh config under them a line each, and the second
+     * opens Settings › Data's bundle import (spec C20) as it is there, its buttons whole in the
+     * window as the sheet opens.
+     */
+    @Test
+    fun `the empty Hosts library offers a bundle restore that opens the import`() {
+        themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
+        waitForText("Nothing here yet.")
+        val add = compose.onNodeWithText("Add host").fetchSemanticsNode()
+        val restore = compose.onNodeWithText("Restore a bundle").fetchSemanticsNode()
+        assertEquals("the secondary stands on the primary's line", add.positionInRoot.y, restore.positionInRoot.y, 1f)
+        assertTrue("the secondary stands beside the primary, after it", restore.positionInRoot.x >= add.positionInRoot.x + add.size.width)
+        val quick = compose.onNodeWithText("Quick connect").fetchSemanticsNode()
+        assertTrue("the text actions take their own lines under the pair", quick.positionInRoot.y >= add.positionInRoot.y + add.size.height - 1)
+        assertTrue(compose.onNodeWithText("Import ssh config").fetchSemanticsNode().positionInRoot.y > quick.positionInRoot.y)
+        capture("hosts-empty-restore")
+        assertNoTextCut("the empty Hosts library")
+
+        compose.onNodeWithText("Restore a bundle").performClick()
+        waitForText("Import bundle")
+        compose.onNodeWithText("A .berth file Berth exported, here or on another phone").assertExists()
+        compose.onNodeWithText("Open").assertIsNotEnabled()
+        assertSheetButtonsReachable("Choose file", "Open", "Cancel")
+        capture("hosts-empty-restore-sheet")
+        assertNoTextCut("the bundle import opened from the empty Hosts library")
+    }
+
     @Test
     fun `hosts search, tag chips and sort`() {
         seedLibrary()
