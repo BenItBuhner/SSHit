@@ -59,6 +59,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -272,6 +273,15 @@ class SessionManager @Inject constructor(
     private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
     private val hardwareKeyboard = settings.hardwareKeyboardSettings.stateIn(scope, SharingStarted.Eagerly, HardwareKeyboardSettings())
 
+    /** Settings › Connection › Detach idle sessions, as the span in milliseconds or null for Never; one read for every session. */
+    private val idleDetachAfter: StateFlow<Long?> = settings.connectionSettings.map { it.idleDetach.millis }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * The network's changes once for every session rather than a callback each (the system caps
+     * an app's callbacks), registered while a tab listens and let go when the last one closes.
+     */
+    private val networkChanges: SharedFlow<Unit> = network.changes.shareIn(scope, SharingStarted.WhileSubscribed())
+
     /**
      * History writes in the order the sessions made them (spec C16): one consumer, so two commands
      * a moment apart land as they ran and a repeat of the host's latest is seen as one, which two
@@ -294,6 +304,8 @@ class SessionManager @Inject constructor(
             KnownHostsPolicy(host, knownHosts, prompts, via = via, linkFingerprint = linkFingerprint)
         override suspend fun jumpHostsFor(host: Host): List<Host> = resolveJumpChain(host)
         override val networkAvailable: Flow<Unit> = network.available
+        override val networkChanges: Flow<Unit> = this@SessionManager.networkChanges
+        override val idleDetachAfter: Flow<Long?> = this@SessionManager.idleDetachAfter
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
         override suspend fun connectCommands(host: Host, workspaceId: String): List<String> =

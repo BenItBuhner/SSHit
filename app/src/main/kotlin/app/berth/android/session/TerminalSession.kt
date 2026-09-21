@@ -45,8 +45,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -64,6 +66,7 @@ import java.net.BindException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** What a connected session needs from the app: auth material, trust decisions, connectivity. */
 interface SessionEnvironment {
@@ -80,6 +83,21 @@ interface SessionEnvironment {
      */
     fun hostKeyPolicyFor(host: Host, via: HopRole?, linkFingerprint: String?): HostKeyPolicy = hostKeyPolicyFor(host)
     val networkAvailable: Flow<Unit>
+
+    /**
+     * The network under the app changed (another default network, none, or new addresses on the
+     * same one): a live session asks its server for a reply at once ([TerminalSession.probe]),
+     * so a socket the change left dead is found in seconds rather than after the keepalive count
+     * (vision §4.4). A stand-in that never emits leaves the keepalive to it.
+     */
+    val networkChanges: Flow<Unit> get() = emptyFlow()
+
+    /**
+     * How long a terminal may sit idle before it detaches itself and keeps its frame, in
+     * milliseconds, or null for never (spec C20 Connection, vision §4.4); the current value and
+     * each change. A stand-in that says nothing keeps every session.
+     */
+    val idleDetachAfter: Flow<Long?> get() = flowOf(null)
 
     /**
      * The host's ProxyJump chain as saved hosts, first hop first; an id no host answers to any
@@ -563,17 +581,23 @@ class TerminalSession(
         startLoop(initialAttempt = false)
     }
 
-    fun detach() {
+    /**
+     * Disconnects and keeps the frame, with a `detached` marker under the last line; [reason],
+     * when the session detached itself rather than by the user's hand, follows the word
+     * (`detached after 15 min idle`), so the frame says why on the relaunch too.
+     */
+    fun detach(reason: String? = null) {
         connectJob?.cancel()
         connectJob = null
         teardownConnection()
-        marker("detached")
+        marker(if (reason == null) "detached" else "detached $reason")
         transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
     }
 
     override fun close() {
         connectJob?.cancel()
         connectJob = null
+        watchers.cancel()
         teardownConnection()
         transition(SessionState.CLOSED, PersistenceLayer.LOCAL_FRAME)
     }
@@ -690,6 +714,8 @@ class TerminalSession(
         val firstShell = !everLive
         everLive = true
         if (isReconnect) marker("reconnected")
+        // A fresh shell is activity: an idle span counts from here, not from before the connect.
+        noteActivity()
         transition(SessionState.LIVE, if (h.persistence.tmux != TmuxMode.OFF) PersistenceLayer.TMUX else PersistenceLayer.IN_APP)
         patch { copy(lastLiveAt = env.now(), needsAttention = false, attentionReason = null) }
         if (firstShell) runOnConnect(sh, h)
@@ -699,7 +725,10 @@ class TerminalSession(
 
         try {
             withContext(Dispatchers.IO) {
-                sh.output().collect { chunk -> emulator.write(chunk) }
+                sh.output().collect { chunk ->
+                    noteOutput()
+                    emulator.write(chunk)
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -861,6 +890,7 @@ class TerminalSession(
     }
 
     fun sendText(text: String, modifiers: Int = 0) {
+        noteActivity()
         trackTyped(text, modifiers)
         if (modifiers == 0) {
             send(text.toByteArray(Charsets.UTF_8))
@@ -878,18 +908,120 @@ class TerminalSession(
     }
 
     fun sendKey(key: TerminalKey, modifiers: Int = 0) {
+        noteActivity()
         trackKey(key, modifiers)
         send(emulator.encodeKey(key, modifiers))
     }
 
     fun paste(text: String) {
+        noteActivity()
         trackPaste(text)
         send(emulator.encodePaste(text))
     }
 
     fun sendControl(char: Char) {
+        noteActivity()
         trackTyped(char.toString(), Mod.CTRL)
         send(emulator.encodeText(char.code, Mod.CTRL))
+    }
+
+    // ---- the network under the socket, and idleness (vision §4.4) --------------------------------
+
+    /**
+     * When the user last typed into this session or the server last sent it anything, whichever
+     * is later; what an idle span is measured from. A fresh shell counts too, so a reconnect is not
+     * idle from before it.
+     */
+    @Volatile private var lastActivityAt = env.now()
+
+    /** When the server last sent anything; what a probe weighs its silence against. */
+    @Volatile private var lastOutputAt = 0L
+
+    private fun noteActivity() {
+        lastActivityAt = env.now()
+    }
+
+    private fun noteOutput() {
+        val now = env.now()
+        lastOutputAt = now
+        lastActivityAt = now
+    }
+
+    /** A probe in flight, so the burst of events a handoff fires asks the server once. */
+    private val probing = AtomicBoolean(false)
+
+    /**
+     * The network changed under the app (vision §4.4, A23). A live connection asks its server for
+     * a reply now ([SshConnection.probe]) rather than wait for the keepalive timer to miss enough
+     * times. The server's answer within [PROBE_TIMEOUT_MS] settles it; so does any output that
+     * arrived while the probe waited, since data came over the socket (a reply queued behind a
+     * window of output on a slow link is late, not lost, and a shell without tmux must not be
+     * dropped for it). Nothing at all, and the transport is dropped as lost, which the reader
+     * turns into the reconnect loop, whose first attempt then starts at once instead of a minute
+     * or more on. A session that is not Live has nothing to ask.
+     */
+    private fun probe() {
+        if (state != SessionState.LIVE) return
+        val conn = connection ?: return
+        if (!probing.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val askedAt = env.now()
+                val answered = conn.probe(PROBE_TIMEOUT_MS)
+                val alive = answered || lastOutputAt >= askedAt
+                when {
+                    answered -> BerthLog.i(LOG_TAG, "[${host.name}] probe after a network change: the server answered")
+                    alive -> BerthLog.i(LOG_TAG, "[${host.name}] probe after a network change: no reply, but output arrived meanwhile")
+                    else -> {
+                        BerthLog.i(LOG_TAG, "[${host.name}] probe after a network change: nothing for ${PROBE_TIMEOUT_MS} ms, the connection is lost")
+                        conn.dropAsLost(PROBE_LOST_REASON)
+                    }
+                }
+            } finally {
+                probing.set(false)
+            }
+        }
+    }
+
+    /**
+     * Whether the idle policy leaves this session alone for now: while it carries the host's
+     * tunnels (the forwards are its work), and while it is on stage in front of the user, who may
+     * be reading a screen that is not moving. A Tunnels tab is never idle; it does not watch.
+     */
+    private val idleExempt: Boolean
+        get() = onStage || (carriesTunnels.value && _tunnels.value.isNotEmpty())
+
+    /**
+     * Detaches the session once nothing has been typed into it and nothing has arrived from it for
+     * the policy's span (spec C20 Connection), keeping the frame with a marker that says why. Each
+     * change of policy starts the watch over; Never watches nothing. The wait is until the
+     * earliest moment the span can be up and the check runs again then, so a session in use is
+     * never woken for and one left alone costs one timer; an exempt one is looked at again later.
+     */
+    private suspend fun watchIdle() {
+        if (tunnelsOnly) return
+        env.idleDetachAfter.collectLatest { limit ->
+            if (limit == null) return@collectLatest
+            while (true) {
+                _record.first { it.state == SessionState.LIVE }
+                val remaining = limit - (env.now() - lastActivityAt)
+                when {
+                    remaining > 0 -> delay(remaining)
+                    idleExempt -> delay(limit.coerceAtMost(IDLE_RECHECK_MS))
+                    state == SessionState.LIVE -> {
+                        val span = idleSpan(limit)
+                        BerthLog.i(LOG_TAG, "[${host.name}] idle for $span; detaching (Settings \u203A Connection)")
+                        detach("after $span idle")
+                    }
+                }
+            }
+        }
+    }
+
+    /** The probe's and the idle watch's collectors, for the life of the tab; [close] ends them. */
+    private val watchers: Job = scope.launch {
+        launch { env.networkChanges.collect { probe() } }
+        launch { watchIdle() }
     }
 
     fun resize(newCols: Int, newRows: Int) {
@@ -1037,6 +1169,28 @@ class TerminalSession(
         private const val RUN_ON_CONNECT_GRACE_MS = 400L
         private const val BIND_RETRIES = 2
         private const val BIND_RETRY_DELAY_MS = 250L
+
+        /**
+         * How long a probe waits for the server after a network change before the connection is
+         * held lost (vision §4.4: a handoff found in under two seconds). A live server answers in
+         * one round trip, well inside this on any link the shell itself is usable over; output
+         * arriving meanwhile counts as an answer, so a link busy with it is not mistaken.
+         */
+        const val PROBE_TIMEOUT_MS = 2_000L
+
+        /** What the `connection lost` marker says after a probe found nobody: the network moved, and the socket did not follow. */
+        const val PROBE_LOST_REASON = "the network changed and the server did not answer"
+
+        /** How long an exempt idle session (carrying tunnels, on stage) waits before the watch looks again. */
+        private const val IDLE_RECHECK_MS = 60_000L
+
+        /** The idle span as the marker and the log say it: `15 min`, `1 h`, `4 h`, or seconds for anything else. */
+        fun idleSpan(millis: Long): String = when {
+            millis >= 3_600_000L && millis % 3_600_000L == 0L -> "${millis / 3_600_000L} h"
+            millis >= 60_000L && millis % 60_000L == 0L -> "${millis / 60_000L} min"
+            else -> "${millis / 1_000L} s"
+        }
+
         private const val FRAME_VERSION = 3
         private const val FRAME_VERSION_WITH_HISTORY = 2
         private const val FRAME_VERSION_TEXT_ONLY = 1
