@@ -325,6 +325,13 @@ class TerminalSurfaceScreenshotTest {
         TerminalPaintsCache.clear()
     }
 
+    /** The OpenType feature setting on every sample line's span: null with ligatures on, the terminal's `-liga, -calt` with them off. */
+    private fun sampleFeatureSettings(): Set<String?> =
+        compose.onAllNodes(hasText(TerminalFonts.SAMPLE, substring = true)).fetchSemanticsNodes()
+            .flatMap { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty() }
+            .flatMap { text -> text.spanStyles.filter { range -> text.text.substring(range.start, range.end) == TerminalFonts.SAMPLE }.map { it.item.fontFeatureSettings } }
+            .toSet()
+
     /** A font resource as a file the document picker could have handed back. */
     private fun fileUri(name: String, resource: Int): Uri {
         val file = File(context.cacheDir, name)
@@ -354,6 +361,14 @@ class TerminalSurfaceScreenshotTest {
         capture("settings-font-picker$suffix")
         compose.assertNoTextCut("the font picker${if (cap) " at the interface's font cap" else ""}")
 
+        // The samples show what the terminal would draw: with the Ligatures switch off, every sample's
+        // `=>` and `->` are two glyphs each, the terminal's own feature setting on the span (review #16).
+        assertEquals(setOf<String?>(null), sampleFeatureSettings())
+        graph.viewModel.setTerminalFont(graph.viewModel.terminalFont.value.copy(ligatures = false))
+        compose.waitUntil(5_000) { sampleFeatureSettings() == setOf<String?>("-liga, -calt") }
+        graph.viewModel.setTerminalFont(graph.viewModel.terminalFont.value.copy(ligatures = true))
+        compose.waitUntil(5_000) { sampleFeatureSettings() == setOf<String?>(null) }
+
         // Fira Code chosen: the setting follows and the row behind the sheet reads it.
         compose.onNodeWithText("Fira Code").performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.family == "Fira Code" }
@@ -361,15 +376,18 @@ class TerminalSurfaceScreenshotTest {
 
         // Import font file asks the document picker for a file of any type, since phones name a font's
         // type variously; the file it hands back is read by its own name table, here a proportional
-        // face the interface uses, which lands as its own family, is chosen, and is warned about.
+        // face the interface uses, which lands as its own family in the list and is warned about. It is
+        // not chosen: an import is a file arriving, a choice is a tap on a row (review #16), so the
+        // terminal stays in Fira Code.
         compose.onNodeWithText("Import font file").performScrollTo().performClick()
         val request = shadowOf(compose.activity).nextStartedActivityForResult
         assertNotNull("the document picker was asked", request)
         assertEquals(Intent.ACTION_OPEN_DOCUMENT, request.intent.action)
         assertEquals("*/*", request.intent.type)
         shadowOf(compose.activity).receiveResult(request.intent, Activity.RESULT_OK, Intent().setData(fileUri("picked.ttf", R.font.ibm_plex_sans_regular)))
-        compose.waitUntil(10_000) { graph.viewModel.terminalFont.value.family == "IBM Plex Sans" }
-        waitForText("Imported IBM Plex Sans, regular")
+        waitForText("Imported IBM Plex Sans, regular", timeout = 10_000)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("IBM Plex Sans").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("an import is not a choice", "Fira Code", graph.viewModel.terminalFont.value.family)
         compose.onNodeWithText("not monospaced, columns will drift", substring = true).assertExists()
         assertEquals(8, compose.onAllNodes(hasText(TerminalFonts.SAMPLE, substring = true)).fetchSemanticsNodes().size)
         compose.onNodeWithText("Imported IBM Plex Sans, regular").performScrollTo()
@@ -377,8 +395,11 @@ class TerminalSurfaceScreenshotTest {
         capture("settings-font-picker-imported$suffix")
         // The longest note a row can carry, an import of one proportional face, still fits its lines.
         compose.assertNoTextCut("the font picker with an import${if (cap) " at the interface's font cap" else ""}")
+        assertEquals("Fira Code", graph.viewModel.terminalFont.value.family)
 
-        // Removed while in use: the terminal goes back to the default family and the note says so.
+        // Chosen by its row, as any family is; then removed while in use: the terminal goes back to the default family and the note says so.
+        compose.onNodeWithText("IBM Plex Sans").performScrollTo().performClick()
+        compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.family == "IBM Plex Sans" }
         compose.onNodeWithContentDescription("Remove IBM Plex Sans").performScrollTo().performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.family == TerminalFonts.DEFAULT }
         waitForText("Removed IBM Plex Sans")

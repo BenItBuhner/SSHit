@@ -57,8 +57,12 @@ import kotlinx.coroutines.withContext
  * imports by name, each captioned with where it came from and what it lacks, since a family with
  * one face has its bold made for it and a proportional face will not hold a column. Import font
  * file takes a TTF or OTF from the document picker and files it under the family its own name
- * table gives, so a bold imported after a regular joins it; a new family is chosen as it lands.
- * An imported family has a Remove beside it; the terminal set in it goes back to the default.
+ * table gives, so a bold imported after a regular joins it. An import is a file arriving in the
+ * list, not a choice: the family in use stays what it was until a row is tapped, since the two
+ * imports the app itself invites (a Nerd Font for the fallback's icons, a face to keep at hand)
+ * are not asks to set the terminal in them. An imported family has a Remove beside it; the
+ * terminal set in it goes back to the default. The samples honour the Ligatures switch, so a row
+ * shows what the terminal would draw.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,10 +87,7 @@ fun FontPickerSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             busy = true
             scope.launch {
                 when (val result = TerminalFonts.import(context, uri)) {
-                    is TerminalFonts.ImportResult.Done -> {
-                        note = "Imported ${result.family}, ${result.face.label()}" to false
-                        vm.setTerminalFont(vm.terminalFont.value.copy(family = result.family))
-                    }
+                    is TerminalFonts.ImportResult.Done -> note = "Imported ${result.family}, ${result.face.label()}" to false
                     is TerminalFonts.ImportResult.Failed -> note = result.reason to true
                 }
                 busy = false
@@ -110,6 +111,7 @@ fun FontPickerSheet(vm: AppViewModel, onDismiss: () -> Unit) {
                     FontRow(
                         choice = choice,
                         face = faces[choice.name],
+                        ligatures = font.ligatures,
                         selected = choice.name == font.family,
                         onClick = { vm.setTerminalFont(font.copy(family = choice.name)) },
                         onRemove = if (choice.kind == FontChoice.Kind.IMPORTED) {
@@ -145,13 +147,14 @@ fun FontPickerSheet(vm: AppViewModel, onDismiss: () -> Unit) {
 /**
  * One family: its name, the sample line in its own face in text.1, and its caption. The sample is
  * set in the default family until the face has loaded, so the row stands at its height from the
- * first frame. An imported family carries Remove at its trailing edge.
+ * first frame, and with [ligatures] off its `=>` and `->` stay two glyphs, as the terminal's would.
+ * An imported family carries Remove at its trailing edge.
  */
 @Composable
-private fun FontRow(choice: FontChoice, face: FontFamily?, selected: Boolean, onClick: () -> Unit, onRemove: (() -> Unit)?) {
+private fun FontRow(choice: FontChoice, face: FontFamily?, ligatures: Boolean, selected: Boolean, onClick: () -> Unit, onRemove: (() -> Unit)?) {
     val c = Berth.colors
     val subtitle = buildAnnotatedString {
-        withStyle(SpanStyle(fontFamily = face ?: JetBrainsMono, color = c.text1)) { append(TerminalFonts.SAMPLE) }
+        withStyle(SpanStyle(fontFamily = face ?: JetBrainsMono, color = c.text1, fontFeatureSettings = if (ligatures) null else NO_LIGATURES)) { append(TerminalFonts.SAMPLE) }
         append('\n')
         withStyle(SpanStyle(fontFamily = BerthType.caption.fontFamily, fontSize = BerthType.caption.fontSize, fontWeight = BerthType.caption.fontWeight, letterSpacing = BerthType.caption.letterSpacing)) {
             append(choice.note)
@@ -171,6 +174,9 @@ private fun FontRow(choice: FontChoice, face: FontFamily?, selected: Boolean, on
         },
     )
 }
+
+/** The OpenType features a ligature is made of, off: the terminal's own paint setting for the switch off ([TerminalCanvas][app.berth.android.ui.terminal.TerminalCanvas]). */
+private const val NO_LIGATURES = "-liga, -calt"
 
 /** The face as the import note names it. */
 private fun FontFace.label(): String = when (this) {
