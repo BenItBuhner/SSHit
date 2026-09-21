@@ -275,11 +275,12 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
     }
     val leaderNote = if (settings.chordPrefix == ChordPrefix.LEADER) " The Leader, ${settings.leaderKey.label()}, never does: it is the app\u2019s." else ""
     return listOf(
+        // The fixed rows look like the rows a tap rebinds, so the note says which are the strip's own.
         ShortcutGroup(
             "Tabs",
             tabChords,
-            note = if (readline) "Ctrl+T and Ctrl+W are the shell\u2019s (Settings \u203A Hardware keyboard); the chords open and close tabs."
-            else "Settings \u203A Hardware keyboard hands Ctrl+T and Ctrl+W to the shell; the chords still open and close tabs.",
+            note = if (readline) "Ctrl+Tab and Ctrl+1\u20269 are the strip\u2019s own. Ctrl+T and Ctrl+W are the shell\u2019s (Settings \u203A Hardware keyboard); the chords open and close tabs."
+            else "Ctrl+Tab and Ctrl+1\u20269 are the strip\u2019s own. Settings \u203A Hardware keyboard hands Ctrl+T and Ctrl+W to the shell; the chords still open and close tabs.",
         ),
         // The walking rule once, under the rows, rather than in each focus row's action; Esc is part
         // of it (it is Esc in the terminal, back to the terminal only from what the chords focus), so

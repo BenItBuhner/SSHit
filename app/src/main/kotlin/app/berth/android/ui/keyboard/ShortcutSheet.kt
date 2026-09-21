@@ -69,7 +69,7 @@ import app.berth.domain.model.LeaderKey
  * ([ChordConflict], the conflict detection against the shell-bound set); Use or Enter binds it,
  * Default gives the row its prefix chord back, Esc or Cancel leaves it as it was. A rebound row
  * shows its chord in accent and says under it what it was and what the shell lost. The strip's
- * browser conventions and the terminal's own keys are read, not rebound.
+ * browser conventions and the terminal's own keys are read, not rebound; the Tabs note says which.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -196,8 +196,9 @@ private fun KeysText(keys: String, color: Color, maxWidth: Dp) {
  * and what the shell lost. Tapped, the row steps up a tone, takes the keyboard's focus and listens:
  * the caption asks for the chord, then names the one pressed and what binding it would cost
  * ([conflictText]), and a row of Use, Default and Cancel stands under it, the keyboard's Enter and
- * Esc being Use and Cancel. A chord that blocks (another action's, the strip's, a signal, a bare
- * key) is said and not offered. The row is what listens, rather than a node of its own under it,
+ * Esc being Use and Cancel. A chord that blocks (another action's, the strip's, the system's, a
+ * signal, a bare key) is said and not offered, and stands in `text.2` rather than the accent an
+ * accepted chord wears. The row is what listens, rather than a node of its own under it,
  * so what holds the focus is the thing a reader names ("Find in scrollback, listening for the new
  * chord") and the focus stays on the row once it is bound, reading its new keys. It takes the focus
  * in touch mode too ([alwaysFocusable]): a tapped row is in touch mode, and the Ctrl chord typed
@@ -260,7 +261,9 @@ private fun RemapRow(
         role = Role.Button,
         trailing = {
             val shown = if (capturing) chord?.label() ?: "\u2026" else entry.keys
-            KeysText(shown, if (capturing || entry.remapped) c.accent else c.text2, keysMaxWidth)
+            // Accent for a chord the table has taken or will take; a chord it refuses stands in the fixed rows' tone, as the sentence under it says no.
+            val refused = capturing && chord != null && conflict?.blocks == true
+            KeysText(shown, if ((capturing || entry.remapped) && !refused) c.accent else c.text2, keysMaxWidth)
         },
         modifier = Modifier
             .semantics(mergeDescendants = true) { contentDescription = spoken }
@@ -284,7 +287,8 @@ private fun RemapRow(
             .then(if (capturing) Modifier.testTag(ChordCaptureTag) else Modifier),
     )
     if (capturing) {
-        FlowRow(Modifier.padding(start = 8.dp, top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Use starts where the row's title does.
+        FlowRow(Modifier.padding(start = ROW_PADDING, top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BerthButton("Use", onClick = { onRemap(chord) }, kind = ButtonKind.PRIMARY, enabled = bindable)
             if (entry.remapped) BerthButton("Default", onClick = { onRemap(null) })
             BerthButton("Cancel", onClick = { onCapture(false) }, kind = ButtonKind.TEXT)

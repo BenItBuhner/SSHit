@@ -123,11 +123,11 @@ private fun prefixNote(table: ChordTable): String {
 fun VolumeButtonsPanel(vm: AppViewModel) {
     val settings by vm.hardwareKeyboard.collectAsState()
     Panel(label = "Volume buttons") {
-        // A title short enough to stand beside the longest value; the caption says when.
-        CyclePicker("On a shell tab", VolumeButtons.entries, settings.volumeButtons, ::volumeButtonsLabel, caption = "Up then down; every other screen keeps the volume", captionLines = 2) { choice ->
+        // A title short enough to stand beside the longest value; the caption says what the value's pair is, the note where else the buttons stay the volume's.
+        CyclePicker("On a shell tab", VolumeButtons.entries, settings.volumeButtons, ::volumeButtonsLabel, caption = "What Volume Up, then Volume Down, send", captionLines = 2) { choice ->
             vm.updateHardwareKeyboard { it.copy(volumeButtons = choice) }
         }
-        PanelNote("A held button repeats the way a held key does. A Files tab leaves them to the volume as well.")
+        PanelNote("Every other screen, and a Files tab, leave them to the volume. A held button repeats the way a held key does.")
     }
 }
 

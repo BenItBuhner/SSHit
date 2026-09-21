@@ -436,7 +436,7 @@ class HardwareShortcutsTest {
     }
 
     @Test
-    fun `the sheet's rows follow the prefix, and its notes name the Leader`() {
+    fun `the sheet's rows follow the prefix, its notes name the Leader, and the Tabs note names the strip's own keys`() {
         val app = shortcutGroups(defaults)
         val leader = shortcutGroups(ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)))
         assertEquals("Leader F", leader.flatMap { it.entries }.first { it.chord == ChordAction.FIND }.keys)
@@ -444,6 +444,10 @@ class HardwareShortcutsTest {
         assertTrue(leader.last().note!!.contains("The Leader, Right Ctrl, never does"))
         assertFalse(app.last().note!!.contains("Leader"))
         assertEquals("the Leader, Right Ctrl, held with the key or tapped before it", ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)).prefixPhrase())
+        // The fixed rows look like the rows a tap rebinds, so the note under them says which are the strip's own, on either side of the readline setting.
+        for (groups in listOf(app, shortcutGroups(readline))) {
+            assertTrue(groups.first { it.title == "Tabs" }.note!!.startsWith("Ctrl+Tab and Ctrl+1\u20269 are the strip\u2019s own."))
+        }
     }
 
     @Test
@@ -451,5 +455,6 @@ class HardwareShortcutsTest {
         assertEquals("Alt+Tab is Android\u2019s: Recents.", conflictText(ChordConflict.System("Recents"), ChordKey("TAB", alt = true)))
         assertEquals("Meta+F is Android\u2019s: the system reads Meta before any app.", conflictText(defaults.conflict(ChordAction.FIND, ChordKey("F", meta = true))!!, ChordKey("F", meta = true)))
         assertEquals("N alone is typing. Hold Ctrl or Alt with it.", conflictText(ChordConflict.Typing, ChordKey("N")))
+        assertEquals("Takes the terminal\u2019s Enter from the shell.", conflictText(defaults.conflict(ChordAction.FIND, ChordKey("M", ctrl = true))!!, ChordKey("M", ctrl = true)))
     }
 }

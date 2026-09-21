@@ -146,6 +146,22 @@ class HardwareKeyboardTest {
     }
 
     @Test
+    fun `the terminal's own control characters are named as the terminal's, not readline's`() {
+        val table = ChordTable(HardwareKeyboardSettings())
+        // On the wire these are Enter, Tab, backspace and Escape, and the tty's flow control; no readline binding is involved.
+        assertEquals(ChordConflict.Shell("the terminal\u2019s Enter"), table.conflict(ChordAction.FIND, ChordKey("M", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s Enter"), table.conflict(ChordAction.FIND, ChordKey("J", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s Tab"), table.conflict(ChordAction.FIND, ChordKey("I", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s backspace"), table.conflict(ChordAction.FIND, ChordKey("H", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s Escape"), table.conflict(ChordAction.FIND, ChordKey("LEFT_BRACKET", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s flow control, stop output"), table.conflict(ChordAction.FIND, ChordKey("S", ctrl = true)))
+        assertEquals(ChordConflict.Shell("the terminal\u2019s flow control, resume output"), table.conflict(ChordAction.FIND, ChordKey("Q", ctrl = true)))
+        // Readline's stay readline's.
+        assertEquals(ChordConflict.Shell("readline\u2019s kill-line"), table.conflict(ChordAction.FIND, ChordKey("K", ctrl = true)))
+        assertEquals(ChordConflict.Shell("readline\u2019s character-search"), table.conflict(ChordAction.FIND, ChordKey("RIGHT_BRACKET", ctrl = true)))
+    }
+
+    @Test
     fun `Ctrl+T and Ctrl+W are the strip's until the readline setting hands them to the shell, then readline's`() {
         val strip = ChordTable(HardwareKeyboardSettings(), ctrlTabKeysReachTerminal = false)
         val shell = ChordTable(HardwareKeyboardSettings(), ctrlTabKeysReachTerminal = true)
@@ -163,6 +179,23 @@ class HardwareKeyboardTest {
         assertEquals(mapOf(ChordAction.COPY to ChordKey("Y", ctrl = true, shift = true)), back.remaps)
         assertEquals(ChordKey("F", ctrl = true, shift = true), back.chordFor(ChordAction.FIND))
         assertEquals(settings.remaps, settings.withChordPrefix(ChordPrefix.LEADER).remaps)
+    }
+
+    @Test
+    fun `a prefix change drops a remap that lands on another action's new default, so no two rows share a chord`() {
+        // Under the Leader, Ctrl+Shift+A is free and Copy takes it; back under Ctrl+Shift it is the tab switcher's default.
+        val settings = HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)
+            .withRemap(ChordAction.COPY, ChordKey("A", ctrl = true, shift = true))
+            .withRemap(ChordAction.FIND, ChordKey("N", ctrl = true))
+        assertNull(ChordTable(settings).conflict(ChordAction.COPY, ChordKey("A", ctrl = true, shift = true)))
+        val back = settings.withChordPrefix(ChordPrefix.CTRL_SHIFT)
+        assertEquals(mapOf(ChordAction.FIND to ChordKey("N", ctrl = true)), back.remaps)
+        val table = ChordTable(back)
+        assertEquals(ChordAction.TAB_SWITCHER, table.actionFor(ChordKey("A", ctrl = true, shift = true)))
+        assertEquals(ChordAction.entries.size, table.chords.values.toSet().size, "one chord per row")
+        // The other way too: a Ctrl+Shift remap that is some action's Leader default cannot exist, but a whole chord equal to none stays.
+        val leader = back.withChordPrefix(ChordPrefix.LEADER)
+        assertEquals(back.remaps, leader.remaps)
     }
 
     @Test

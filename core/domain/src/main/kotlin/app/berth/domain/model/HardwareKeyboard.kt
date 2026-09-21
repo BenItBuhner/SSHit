@@ -185,11 +185,19 @@ data class HardwareKeyboardSettings(
 
     /**
      * The document under [prefix]. Leaving the Leader drops the remaps that were Leader chords,
-     * since no key sends one without it; every other remap is a whole chord and stays.
+     * since no key sends one without it; every other remap is a whole chord and stays, unless it is
+     * what another action's default becomes under the new prefix (Copy rebound to Ctrl+Shift+A
+     * while the Leader was the prefix, then back to Ctrl+Shift, where the tab switcher is
+     * Ctrl+Shift+A): that remap is dropped too, or two rows would share one chord and the first
+     * would take it. Dropped whether or not the other action is itself rebound away from its
+     * default, since one rule the sheet can state is worth the odd remap it costs.
      */
     fun withChordPrefix(prefix: ChordPrefix): HardwareKeyboardSettings = copy(
         chordPrefix = prefix,
-        remaps = if (prefix == ChordPrefix.LEADER) remaps else remaps.filterValues { !it.leader },
+        remaps = remaps.filter { (action, chord) ->
+            (prefix == ChordPrefix.LEADER || !chord.leader) &&
+                ChordAction.entries.none { other -> other != action && prefix.chord(other.defaultKey) == chord }
+        },
     )
 }
 
@@ -232,7 +240,7 @@ sealed interface ChordConflict {
         override val blocks: Boolean get() = true
     }
 
-    /** The shell has the chord: readline's key, a Meta key, a modified arrow or a function key. Taken here, the shell never sees it. */
+    /** The shell has the chord: readline's key, the terminal's own, a Meta key, a modified arrow or a function key. Taken here, the shell never sees it. */
     data class Shell(val what: String) : ChordConflict {
         override val blocks: Boolean get() = false
     }
@@ -300,15 +308,17 @@ class ChordTable(
 
     /**
      * The shell's claim on [chord] as a noun phrase that fits "takes … from the shell" (`readline’s
-     * forward-char`, `Meta+F`, `F5`, `Ctrl+↑`), or null when it has none; the apostrophe is the
-     * interface's typographic one, since the phrase is read on the sheet as written.
+     * forward-char`, `the terminal’s Enter`, `Meta+F`, `F5`, `Ctrl+↑`), or null when it has none;
+     * the apostrophe is the interface's typographic one, since the phrase is read on the sheet as
+     * written.
      */
     private fun shellKey(chord: ChordKey): String? = when {
         chord.leader || chord.meta -> null
         chord.key in FUNCTION_KEYS -> ChordKey.keyLabel(chord.key)
         chord.ctrl && chord.alt -> "Meta and Ctrl+${ChordKey.keyLabel(chord.key)}"
         chord.alt -> "Meta+${ChordKey.keyLabel(chord.key)}"
-        chord.ctrlOnly -> READLINE[chord.key]?.let { "readline\u2019s $it" }
+        chord.ctrlOnly -> TERMINAL[chord.key]?.let { "the terminal\u2019s $it" }
+            ?: READLINE[chord.key]?.let { "readline\u2019s $it" }
             ?: if (chord.key in MODIFIED_KEYS) "Ctrl+${ChordKey.keyLabel(chord.key)}" else null
         chord.ctrl && chord.shift && chord.key in MODIFIED_KEYS -> "Ctrl+Shift+${ChordKey.keyLabel(chord.key)}"
         else -> null
@@ -328,15 +338,25 @@ class ChordTable(
             "BACKSLASH" to "the shell\u2019s quit",
         )
 
+        /**
+         * The plain Ctrl keys that are the terminal's before any program reads them: the control
+         * characters that *are* Enter, Tab, backspace and Escape on the wire, and the tty's flow
+         * control. Not readline's to rebind, so not named as its.
+         */
+        val TERMINAL: Map<String, String> = mapOf(
+            "H" to "backspace", "I" to "Tab", "J" to "Enter", "M" to "Enter", "LEFT_BRACKET" to "Escape",
+            "Q" to "flow control, resume output", "S" to "flow control, stop output",
+        )
+
         /** Readline's default bindings for the plain Ctrl keys, as the shell has them on the default install. */
         val READLINE: Map<String, String> = mapOf(
             "A" to "beginning-of-line", "B" to "backward-char", "E" to "end-of-line", "F" to "forward-char",
-            "G" to "abort", "H" to "backspace", "I" to "Tab", "J" to "Enter", "K" to "kill-line", "L" to "clear-screen",
-            "M" to "Enter", "N" to "next-history", "O" to "operate-and-get-next", "P" to "previous-history",
-            "Q" to "resume output", "R" to "reverse-search-history", "S" to "stop output", "T" to "transpose-chars",
+            "G" to "abort", "K" to "kill-line", "L" to "clear-screen",
+            "N" to "next-history", "O" to "operate-and-get-next", "P" to "previous-history",
+            "R" to "reverse-search-history", "T" to "transpose-chars",
             "U" to "unix-line-discard", "V" to "quoted-insert", "W" to "unix-word-rubout", "X" to "prefix",
             "Y" to "yank", "SPACE" to "set-mark", "SLASH" to "undo", "MINUS" to "undo",
-            "LEFT_BRACKET" to "Escape", "RIGHT_BRACKET" to "character-search",
+            "RIGHT_BRACKET" to "character-search",
         )
     }
 }
