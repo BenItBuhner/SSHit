@@ -41,6 +41,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.a11y.TerminalTag
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KeyAlgorithm
@@ -412,13 +413,15 @@ class LargeScreenScreenshotTest {
 
     /**
      * A live session in a pane beside a detached one: one Deck under both panes, the live terminal's
-     * (spec C23). A touch on the detached pane moves the focus and the keys, and nothing else: the
-     * detached frame has no Deck to show, so the live one's stays where it is and the live frame
-     * keeps its rows (a focus change must never send the remote a window change).
+     * (spec C23), and on a tablet the Deck of two rows (spec C4, two-row mode "default on tablets";
+     * #14 review, nit 6), Base over Nav/Fn, until Settings › Deck turns the second row off. A touch
+     * on the detached pane moves the focus and the keys, and nothing else: the detached frame has no
+     * Deck to show, so the live one's stays where it is and the live frame keeps its rows (a focus
+     * change must never send the remote a window change).
      */
     @Test
     @Config(qualifiers = TABLET_LANDSCAPE)
-    fun `live session beside a detached one, one Deck under both panes, staying with the terminal that has one`() {
+    fun `live session beside a detached one, one Deck of two rows under both panes, staying with the terminal that has one`() {
         assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
         seedTestBox()
         mountApp()
@@ -436,6 +439,10 @@ class LargeScreenScreenshotTest {
         settle(600)
         val deck = compose.onNode(hasContentDescription("Ctrl", substring = true))
         deck.assertIsDisplayed()
+        // Two rows on the tablet (spec C4): each with its layer key, the saved layer over Nav/Fn.
+        compose.onAllNodes(hasContentDescription("Layer")).assertCountEquals(2)
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Base")).assertIsDisplayed()
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Nav/Fn")).assertIsDisplayed()
         val deckBounds = deck.fetchSemanticsNode().boundsInRoot
         val liveBounds = paneBounds(session.id, PaneSide.RIGHT)
         val rows = session.emulator.rows
@@ -462,6 +469,15 @@ class LargeScreenScreenshotTest {
         assertEquals(deckBounds, deck.fetchSemanticsNode().boundsInRoot)
         assertEquals(rows, session.emulator.rows)
         assertEquals(cols, session.emulator.cols)
+
+        // Settings › Deck › Two rows on a large screen, off: the layout's own one row, and the terminal takes the height back.
+        runBlocking { graph.settings.setDeckSettings(DeckSettings(twoRowsOnLargeScreens = false)) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Layer")).fetchSemanticsNodes().size == 1 }
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Base")).assertIsDisplayed()
+        // The terminal grew by the row it got back: the one resize here is the one the setting asked for.
+        compose.waitUntil(5_000) { session.emulator.rows > rows }
+        settle(600)
+        capture("tablet-landscape-live-split-deck-one-row")
     }
 
     // ---- the shell and its panes -----------------------------------------------------------------

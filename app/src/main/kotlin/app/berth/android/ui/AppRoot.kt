@@ -74,6 +74,7 @@ import app.berth.android.ui.stage.PaneStageScreen
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.ShortDeckFit
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.stage.TwoRowDeckFit
 import app.berth.android.ui.tabs.GroupEditorRequest
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
@@ -397,9 +398,16 @@ private fun Shell(vm: AppViewModel) {
         )
     }
 
-    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal.
+    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal. A
+    // window past compact both ways (spec C4, two-row mode "default on tablets"): the Deck's second
+    // row, while Settings › Deck keeps it on; the saved layout's rows stand everywhere else.
     val stripStyle = LocalTabStripStyle.current.let { if (layout.shortLandscape) it.short() else it }
-    val deckFit = if (layout.shortLandscape) ShortDeckFit else LocalDeckFit.current
+    val deckSettings by vm.deckSettings.collectAsState()
+    val deckFit = when {
+        layout.shortLandscape -> ShortDeckFit
+        layout.twoRowDeck && deckSettings.twoRowsOnLargeScreens -> TwoRowDeckFit
+        else -> LocalDeckFit.current
+    }
     // Every window Berth opens over this one (a sheet as a dialog) blocks capture when this one does.
     val secure = securitySettings?.let(WindowSecurity::secure) ?: false
     CompositionLocalProvider(

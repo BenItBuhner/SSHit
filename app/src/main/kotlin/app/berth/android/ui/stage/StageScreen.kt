@@ -582,8 +582,10 @@ private fun StageBody(
     val record by session.record.collectAsState()
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
-    // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
+    // The window's fit of the saved layout (spec C23, C4): a phone on its side gives the Deck one 40 dp row, a tablet its second row.
     val fittedDeckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    // The hand's gestures on the Deck (spec D2): the swipe down, the swipe across for the layer.
+    val deckSettings by vm.deckSettings.collectAsState()
     // With a hardware keyboard attached the Deck stands folded to its strip (spec C4, the Stage's
     // FoldDeckOnHardwareKeyboard); what the strip expands to is one row of modifiers and actions
     // (Settings › Hardware keyboard › Compact Deck when expanded), or the whole Deck with that off.
@@ -785,7 +787,9 @@ private fun StageBody(
                         // The Deck and the strip that stands in for it are the one region Ctrl+Shift+K enters.
                         modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                         enabled = live,
+                        settings = deckSettings,
                         onGripTap = onOpenSessionSheet,
+                        onGripDragUp = onOpenSessionSheetExpanded,
                         onGripSwipeDown = {
                             keyboard?.hide()
                             onDeckVisibleChange(false)
