@@ -195,6 +195,66 @@ class SshKeysTest {
         }
     }
 
+    @Test
+    fun `the ssh-keygen -lf line is bits, fingerprint, comment and type, no comment when there is none`() {
+        val ed = SshKeys.generate(KeyAlgorithm.ED25519)
+        assertEquals(256, SshKeys.bits(ed.public))
+        assertEquals("ED25519", SshKeys.keygenType(ed.public))
+        assertEquals("256 ${SshKeys.fingerprintSha256(ed.public)} ben@pixel (ED25519)", SshKeys.keygenLine(ed.public, "ben@pixel"))
+        assertEquals("256 ${SshKeys.fingerprintSha256(ed.public)} no comment (ED25519)", SshKeys.keygenLine(ed.public))
+        assertEquals(SshKeys.keygenLine(ed.public), SshKeys.keygenLine(ed.public, "  "), "a blank comment is none")
+
+        val p256 = SshKeys.generate(KeyAlgorithm.ECDSA_P256)
+        assertEquals(256, SshKeys.bits(p256.public))
+        assertEquals("ECDSA", SshKeys.keygenType(p256.public))
+        assertEquals(384, SshKeys.bits(SshKeys.generate(KeyAlgorithm.ECDSA_P384).public))
+
+        val rsa = SshKeys.generate(KeyAlgorithm.RSA_3072)
+        assertEquals(3072, SshKeys.bits(rsa.public))
+        assertEquals("RSA", SshKeys.keygenType(rsa.public))
+    }
+
+    @Test
+    fun `keygen type names from wire names, with SK and CERT where the wire name says so`() {
+        assertEquals("ED25519", SshKeys.keygenType("ssh-ed25519"))
+        assertEquals("RSA", SshKeys.keygenType("ssh-rsa"))
+        assertEquals("DSA", SshKeys.keygenType("ssh-dss"))
+        assertEquals("ECDSA", SshKeys.keygenType("ecdsa-sha2-nistp521"))
+        assertEquals("ED25519-SK", SshKeys.keygenType("sk-ssh-ed25519@openssh.com"))
+        assertEquals("ECDSA-SK", SshKeys.keygenType("sk-ecdsa-sha2-nistp256@openssh.com"))
+        assertEquals("ED25519-CERT", SshKeys.keygenType("ssh-ed25519-cert-v01@openssh.com"))
+        assertEquals("RSA-CERT", SshKeys.keygenType("ssh-rsa-cert-v01@openssh.com"))
+        assertEquals("ED25519-SK-CERT", SshKeys.keygenType("sk-ssh-ed25519-cert-v01@openssh.com"))
+    }
+
+    @Test
+    fun `the compare-on-the-server command names the host key file for the type offered`() {
+        assertEquals("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub", SshKeys.serverFingerprintCommand("ssh-ed25519"))
+        assertEquals("ssh-keygen -lf /etc/ssh/ssh_host_ecdsa_key.pub", SshKeys.serverFingerprintCommand("ecdsa-sha2-nistp256"))
+        assertEquals("ssh-keygen -lf /etc/ssh/ssh_host_rsa_key.pub", SshKeys.serverFingerprintCommand("ssh-rsa"))
+        assertEquals("ssh-keygen -lf /etc/ssh/ssh_host_dsa_key.pub", SshKeys.serverFingerprintCommand("ssh-dss"))
+        assertEquals("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub", SshKeys.serverFingerprintCommand("ssh-ed25519-cert-v01@openssh.com"), "a certificate is signed over its plain type's key")
+    }
+
+    @Test
+    fun `OpenSSH prints the same -lf line for a public key file we write`() {
+        val keygen = listOf("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen").map(::File).firstOrNull { it.canExecute() }
+        assumeTrue("ssh-keygen not available", keygen != null)
+        val dir = Files.createTempDirectory("berth-keys").toFile()
+        try {
+            for (algorithm in listOf(KeyAlgorithm.ED25519, KeyAlgorithm.ECDSA_P256, KeyAlgorithm.RSA_3072)) {
+                val pair = SshKeys.generate(algorithm)
+                val pub = File(dir, "id.pub")
+                pub.writeText(SshKeys.openSshPublic(pair.public, "ben@pixel") + "\n")
+                assertEquals(SshKeys.keygenLine(pair.public, "ben@pixel"), run(keygen!!.path, "-lf", pub.path).trim(), "ssh-keygen -lf with a comment for $algorithm")
+                pub.writeText(SshKeys.openSshPublic(pair.public) + "\n")
+                assertEquals(SshKeys.keygenLine(pair.public), run(keygen.path, "-lf", pub.path).trim(), "ssh-keygen -lf without one for $algorithm")
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     private fun run(vararg command: String): String {
         val process = ProcessBuilder(*command).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().readText()
