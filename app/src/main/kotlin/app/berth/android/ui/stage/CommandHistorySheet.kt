@@ -72,9 +72,10 @@ fun CommandHistorySheet(vm: AppViewModel, session: TerminalSession, onDismiss: (
     var menuFor by remember { mutableStateOf<HostCommand?>(null) }
     var snippetFrom by remember { mutableStateOf<String?>(null) }
 
-    // A row's host, for the All hosts view: the saved host's name, the login of an unsaved quick connect, or a tab still open on it.
+    // A row's host, for the All hosts view: the saved host's name (by its key, since a host saved from a Quick connect
+    // tab keeps the login's), the login of an unsaved quick connect, or a tab still open on it.
     fun hostLabel(historyKey: String): String =
-        hosts.firstOrNull { it.id == historyKey }?.name
+        hosts.firstOrNull { it.commandHistoryKey == historyKey }?.name
             ?: Host.quickConnectLabel(historyKey)
             ?: tabs.firstOrNull { it.hostSnapshot.commandHistoryKey == historyKey }?.hostSnapshot?.name
             ?: "Removed host"

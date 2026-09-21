@@ -512,20 +512,26 @@ class AppViewModel @Inject constructor(
      * Quick connect's Save as host (spec C11): the spec read as [quickConnect] reads it, saved as a
      * host named after its address under an id of its own, with the identity the sheet picked;
      * [onSaved] gets the saved host, for the editor to open on so it can be named. Null once saved;
-     * otherwise the sentence for the field's helper line, as [quickConnect] would give it.
+     * otherwise the sentence for the field's helper line, as [quickConnect] would give it. The
+     * commands the login ran as a quick connect (spec C16, kept under [Host.quickCommandHistoryKey])
+     * go on under the saved host, so its History sheet shows what was run before it had a name.
      */
     fun saveQuickConnectAsHost(spec: String, identityId: String?, onSaved: (Host) -> Unit): String? {
         val (link, problem) = quickLink(spec)
         if (link == null) return problem
-        viewModelScope.launch { onSaved(saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)) }
+        viewModelScope.launch {
+            val saved = saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)
+            commandHistory.rekey(Host.quickCommandHistoryKey(saved.user, saved.address, saved.port), saved.id)
+            onSaved(saved)
+        }
         return null
     }
 
     /**
      * The Session sheet's Save as host (spec C11) for a tab opened by Quick connect: the tab's host,
      * as the login was made with it, saved under the id the tab already carries, so the tab is that
-     * host's from here on (its Host button, its reconnects, its place in the library). [onSaved] gets
-     * the host, for the editor to open on.
+     * host's from here on (its Host button, its reconnects, its place in the library, and its
+     * history, whose key the kept id keeps). [onSaved] gets the host, for the editor to open on.
      */
     fun saveSnapshotAsHost(host: Host, onSaved: (Host) -> Unit = {}) {
         viewModelScope.launch { onSaved(saveHostNow(host.copy(createdAt = System.currentTimeMillis()), null)) }
