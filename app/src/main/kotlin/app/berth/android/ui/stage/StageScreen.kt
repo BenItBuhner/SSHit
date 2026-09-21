@@ -702,6 +702,14 @@ private fun StageBody(
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
                 onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },
+                // The D1 gestures the canvas reports and the Stage owns: the font back to the host's default,
+                // the Deck shown or hidden (its own state lives here, not in Deck.kt), arrows for a drag when asked.
+                onTwoFingerDoubleTap = {
+                    patterns.fontStep()
+                    vm.resetFontSize(record.hostId)
+                },
+                onThreeFingerTap = { if (deckStateOk) onDeckVisibleChange(!deckVisible) },
+                horizontalDragArrows = terminalSettings.horizontalDragArrows,
                 // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
                 onLinkTap = { tools.pendingLink = it },
                 selection = tools.selection,

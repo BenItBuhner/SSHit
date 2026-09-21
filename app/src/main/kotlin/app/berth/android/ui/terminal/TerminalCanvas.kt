@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -56,11 +57,13 @@ import app.berth.terminal.SelectionMode
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -203,7 +206,9 @@ data class LinkTap(val url: String, val text: String)
  * space, and owns the touch gestures: drag scrolls history (or sends wheel events to full-screen
  * apps), pinch changes the font size, tap focuses and shows the keyboard (or, on an OSC 8 link,
  * offers to open it), long-press selects a word and places handles, double-tap selects a word,
- * double-tap and drag selects lines, a two-finger tap pastes (spec A60, C18, D1).
+ * double-tap and drag selects lines, a two-finger tap pastes, a two-finger double-tap resets the
+ * font size, a three-finger tap toggles the Deck, and a horizontal drag sends arrows when Settings
+ * asks for it (spec A60, C18, D1).
  *
  * Output never recomposes the canvas: frames are captured on a worker as the screen version
  * changes and a tick state read in the draw scope alone invalidates the drawing.
@@ -222,6 +227,18 @@ fun TerminalCanvas(
     onTap: () -> Unit = {},
     onTwoFingerSwipe: ((forward: Boolean) -> Unit)? = null,
     onTwoFingerTap: (() -> Unit)? = null,
+    /**
+     * Two two-finger taps within the double-tap window (spec D1: reset the font size). With this
+     * set, one two-finger tap waits the window out before it pastes, so the two never both happen.
+     */
+    onTwoFingerDoubleTap: (() -> Unit)? = null,
+    /** A tap of three fingers at once (spec D1: toggle the Deck); the Stage owns the Deck and takes it from here. */
+    onThreeFingerTap: (() -> Unit)? = null,
+    /**
+     * A one-finger horizontal drag sends Left and Right arrows, one per cell of travel, so the
+     * cursor follows the finger (spec D1, off by default); off, the drag does nothing.
+     */
+    horizontalDragArrows: Boolean = false,
     /**
      * A tap on a cell printed under an OSC 8 link, with the link's URL and its text on screen; the
      * link is underlined while the finger is down. Null leaves links as plain text.
@@ -318,7 +335,12 @@ fun TerminalCanvas(
     val handleReachPx = with(density) { HANDLE_REACH.toPx() }
     val currentSwipe by rememberUpdatedState(onTwoFingerSwipe)
     val currentTwoFingerTap by rememberUpdatedState(onTwoFingerTap)
+    val currentTwoFingerDoubleTap by rememberUpdatedState(onTwoFingerDoubleTap)
+    val currentThreeFingerTap by rememberUpdatedState(onThreeFingerTap)
+    val currentDragArrows by rememberUpdatedState(horizontalDragArrows)
     val currentLinkTap by rememberUpdatedState(onLinkTap)
+    // Runs the two-finger tap's paste once the double-tap window has passed without a second tap.
+    val scope = rememberCoroutineScope()
     val currentSelectionStarted by rememberUpdatedState(onSelectionStarted)
     val currentOnTap by rememberUpdatedState(onTap)
     val currentFontStep by rememberUpdatedState(onFontSizeStep)
@@ -337,6 +359,9 @@ fun TerminalCanvas(
             .pointerInput(session.id) {
                 var lastTapUp = 0L
                 var lastTapAt = Offset.Zero
+                // The last two-finger tap's release, and its paste waiting out the double-tap window.
+                var lastTwoTapUp = 0L
+                var pendingTwoTap: Job? = null
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
                     val p = paintsState.value
@@ -375,6 +400,9 @@ fun TerminalCanvas(
                     var mode = GestureMode.NONE
                     var lastY = down.position.y
                     var acc = 0f
+                    // The horizontal drag's travel not yet turned into arrows (spec D1), and where it was last read.
+                    var lastX = down.position.x
+                    var hAcc = 0f
                     var lastDist = 0f
                     var zoomAcc = 0f
                     var zoomed = false
@@ -383,6 +411,11 @@ fun TerminalCanvas(
                     var startSpan = 0f
                     var swipeForward = false
                     var twoTravel = 0f
+                    // The most fingers down at once, and how many were down at the last multi-finger event:
+                    // three make the gesture a three-finger tap or nothing (spec D1), and a finger landing or
+                    // lifting changes the pair the span is measured between, so that span is re-read, not zoomed by.
+                    var fingers = 1
+                    var lastCount = 1
                     while (true) {
                         val event = if (mode == GestureMode.NONE && sel != null) {
                             val left = viewConfiguration.longPressTimeoutMillis - (currentEventUptime() - down.uptimeMillis)
@@ -404,7 +437,34 @@ fun TerminalCanvas(
                             pressedLink = 0
                             when (mode) {
                                 GestureMode.SWIPE -> currentSwipe?.invoke(swipeForward)
-                                GestureMode.PINCH -> if (!zoomed && twoTravel < slop && up - down.uptimeMillis < TAP_MS) currentTwoFingerTap?.invoke()
+                                GestureMode.PINCH -> if (!zoomed && twoTravel < slop && up - down.uptimeMillis < TAP_MS) {
+                                    if (fingers >= 3) {
+                                        currentThreeFingerTap?.invoke()
+                                    } else {
+                                        // Two fingers: the second tap within the window resets the font (spec D1); with
+                                        // no such gesture wired the tap pastes at once, else it pastes when the window
+                                        // has passed without a second, so a reset never pastes on the way.
+                                        val doubleTap = currentTwoFingerDoubleTap
+                                        when {
+                                            doubleTap == null -> currentTwoFingerTap?.invoke()
+                                            lastTwoTapUp != 0L && down.uptimeMillis - lastTwoTapUp <= viewConfiguration.doubleTapTimeoutMillis -> {
+                                                pendingTwoTap?.cancel()
+                                                pendingTwoTap = null
+                                                lastTwoTapUp = 0L
+                                                doubleTap()
+                                            }
+                                            else -> {
+                                                lastTwoTapUp = up
+                                                pendingTwoTap = scope.launch {
+                                                    delay(viewConfiguration.doubleTapTimeoutMillis)
+                                                    pendingTwoTap = null
+                                                    lastTwoTapUp = 0L
+                                                    currentTwoFingerTap?.invoke()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 GestureMode.NONE -> {
                                     when {
                                         // A tap away from the handles dismisses a selection and does nothing else.
@@ -436,22 +496,29 @@ fun TerminalCanvas(
                         }
                         if (pressed.size >= 2) {
                             pressedLink = 0
+                            fingers = maxOf(fingers, pressed.size)
                             val a = pressed[0]
                             val b = pressed[1]
                             val dist = (a.position - b.position).getDistance()
+                            // Each finger's start is where it stood when the gesture first had two, or where it
+                            // landed after; the travel is the furthest any has gone from there.
+                            for (ch in pressed) {
+                                val from = starts[ch.id]
+                                if (from == null) starts[ch.id] = ch.position else twoTravel = maxOf(twoTravel, (ch.position - from).getDistance())
+                            }
                             if (mode != GestureMode.PINCH && mode != GestureMode.SWIPE) {
                                 mode = GestureMode.PINCH
                                 lastDist = dist
                                 startSpan = dist
-                                starts.clear()
-                                starts[a.id] = a.position
-                                starts[b.id] = b.position
-                            } else if (mode == GestureMode.PINCH) {
+                                lastCount = pressed.size
+                            } else if (pressed.size != lastCount) {
+                                lastDist = dist
+                                lastCount = pressed.size
+                            } else if (mode == GestureMode.PINCH && fingers < 3) {
                                 // Both fingers travelling the same way with the span held is a swipe, not a pinch;
                                 // once a zoom step has fired the gesture stays a pinch.
                                 val da = starts[a.id]?.let { a.position.x - it.x }
                                 val db = starts[b.id]?.let { b.position.x - it.x }
-                                twoTravel = maxOf(twoTravel, starts[a.id]?.let { (a.position - it).getDistance() } ?: 0f, starts[b.id]?.let { (b.position - it).getDistance() } ?: 0f)
                                 val together = da != null && db != null && (da > 0) == (db > 0) &&
                                     minOf(abs(da), abs(db)) >= swipeTravelPx && abs(dist - startSpan) < swipeSpanPx
                                 if (!zoomed && currentSwipe != null && together && da != null) {
@@ -469,7 +536,20 @@ fun TerminalCanvas(
                         }
                         val c = pressed[0]
                         when (mode) {
-                            GestureMode.PINCH, GestureMode.HORIZONTAL, GestureMode.SWIPE -> Unit
+                            GestureMode.PINCH, GestureMode.SWIPE -> Unit
+                            // A horizontal drag is nothing unless Settings makes it arrows (spec D1): then one
+                            // Left or Right per cell of travel, so the cursor keeps under the finger.
+                            GestureMode.HORIZONTAL -> if (currentDragArrows) {
+                                hAcc += c.position.x - lastX
+                                lastX = c.position.x
+                                val cells = (hAcc / p.cellWidth).toInt()
+                                if (cells != 0) {
+                                    hAcc -= cells * p.cellWidth
+                                    val key = if (cells > 0) TerminalKey.RIGHT else TerminalKey.LEFT
+                                    repeat(abs(cells)) { session.sendKey(key) }
+                                }
+                                c.consume()
+                            }
                             GestureMode.NONE -> {
                                 val dx = c.position.x - down.position.x
                                 val dy = c.position.y - down.position.y
@@ -491,6 +571,7 @@ fun TerminalCanvas(
                                         c.consume()
                                     } else {
                                         mode = GestureMode.HORIZONTAL
+                                        if (currentDragArrows) c.consume()
                                     }
                                 }
                             }
