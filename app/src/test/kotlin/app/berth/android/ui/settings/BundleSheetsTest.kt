@@ -47,11 +47,18 @@ class BundleSheetsTest {
     }
 
     @Test
-    fun `the rows for what stays as this phone has it count one and many`() {
-        assertEquals("1 known host differs from yours and stays yours", knownHostsKeptLine(1))
-        assertEquals("2 known hosts differ from yours and stay yours", knownHostsKeptLine(2))
-        assertEquals("1 tunnel listens on every interface; it stays off until you turn it on", tunnelsHeldOffLine(1))
-        assertEquals("3 tunnels listen on every interface; they stay off until you turn them on", tunnelsHeldOffLine(3))
+    fun `the rows for what stays as this phone has it count one and many, a title of one line and a caption that says why`() {
+        assertEquals("1 known host stays yours", knownHostsKeptLine(1))
+        assertEquals("2 known hosts stay yours", knownHostsKeptLine(2))
+        assertEquals("203.0.113.10 \u00B7 the bundle's key differs from the one this phone trusts", knownHostsKeptCaption(listOf("203.0.113.10")))
+        assertEquals("a, b \u00B7 the bundle's keys differ from the ones this phone trusts", knownHostsKeptCaption(listOf("a", "b")))
+        assertEquals("1 tunnel comes in switched off", tunnelsHeldOffLine(1))
+        assertEquals("3 tunnels come in switched off", tunnelsHeldOffLine(3))
+        assertEquals("*:9090 \u2192 localhost:9090 \u00B7 it listens on every interface; it stays off until you turn it on", tunnelsHeldOffCaption(listOf("*:9090 \u2192 localhost:9090")))
+        assertEquals("a, b \u00B7 they listen on every interface; they stay off until you turn them on", tunnelsHeldOffCaption(listOf("a", "b")))
+        // A caption names six and counts the rest, as every row of the panel does.
+        assertEquals("1, 2, 3, 4, 5, 6 and 2 more", namesLine((1..8).map { it.toString() }))
+        assertEquals("1, 2", namesLine(listOf("1", "2")))
     }
 
     @Test

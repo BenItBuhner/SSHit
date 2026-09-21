@@ -351,9 +351,12 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
     val software = bundle.identities.size - hardware.size
     Panel(label = "In this bundle") {
         @Composable
-        fun row(title: String, names: List<String>) {
-            ListRow(title, subtitle = names.take(6).joinToString(", ") + if (names.size > 6) " and ${names.size - 6} more" else "", surface = Color.Transparent, minHeight = 44.dp)
+        fun row(title: String, subtitle: String) {
+            ListRow(title, subtitle = subtitle, surface = Color.Transparent, minHeight = 44.dp)
         }
+
+        @Composable
+        fun row(title: String, names: List<String>) = row(title, namesLine(names))
 
         @Composable
         fun row(count: Int, noun: String, names: List<String>) {
@@ -370,7 +373,7 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         row(bundle.snippets.size, "snippet", bundle.snippets.map { it.name })
         row(bundle.tunnels.size, "tunnel", bundle.tunnels.map { it.spec })
         val everywhere = plan?.tunnelsOnEveryInterface.orEmpty()
-        if (everywhere.isNotEmpty()) row(tunnelsHeldOffLine(everywhere.size), everywhere.map { it.spec })
+        if (everywhere.isNotEmpty()) row(tunnelsHeldOffLine(everywhere.size), tunnelsHeldOffCaption(everywhere.map { it.spec }))
         row(bundle.terminalThemes.size, "theme", bundle.terminalThemes.map { it.name })
         bundle.deck?.let { deck ->
             ToggleRow(
@@ -390,7 +393,7 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         }
         row(bundle.knownHosts.size, "known host", bundle.knownHosts.map { it.endpoint })
         val kept = plan?.knownHostsKept.orEmpty()
-        if (kept.isNotEmpty()) row(knownHostsKeptLine(kept.size), kept.map { it.endpoint })
+        if (kept.isNotEmpty()) row(knownHostsKeptLine(kept.size), knownHostsKeptCaption(kept.map { it.endpoint }))
     }
     if (hardware.isNotEmpty()) {
         val used = bundle.hosts.filter { host -> hardware.any { (host.auth as? AuthMethod.Key)?.identityId == it.id } }
@@ -407,13 +410,21 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
 internal const val IMPORT_DISCLOSURE =
     "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed."
 
-/** The row for bundled known hosts the import leaves as this phone has them. */
-internal fun knownHostsKeptLine(n: Int): String =
-    if (n == 1) "1 known host differs from yours and stays yours" else "$n known hosts differ from yours and stay yours"
+/** A row's caption from the names it stands for: the first six, and how many more. */
+internal fun namesLine(names: List<String>): String =
+    names.take(6).joinToString(", ") + if (names.size > 6) " and ${names.size - 6} more" else ""
 
-/** The row for bundled tunnels that would listen on every interface, imported switched off. */
-internal fun tunnelsHeldOffLine(n: Int): String =
-    if (n == 1) "1 tunnel listens on every interface; it stays off until you turn it on" else "$n tunnels listen on every interface; they stay off until you turn them on"
+/** The row for bundled known hosts the import leaves as this phone has them: a title of a row's one line, and the caption that names them and says why. */
+internal fun knownHostsKeptLine(n: Int): String = if (n == 1) "1 known host stays yours" else "$n known hosts stay yours"
+
+internal fun knownHostsKeptCaption(endpoints: List<String>): String =
+    namesLine(endpoints) + " \u00B7 " + if (endpoints.size == 1) "the bundle's key differs from the one this phone trusts" else "the bundle's keys differ from the ones this phone trusts"
+
+/** The row for bundled tunnels that would listen on every interface, imported switched off: its title, and the caption that names them and says why. */
+internal fun tunnelsHeldOffLine(n: Int): String = if (n == 1) "1 tunnel comes in switched off" else "$n tunnels come in switched off"
+
+internal fun tunnelsHeldOffCaption(specs: List<String>): String =
+    namesLine(specs) + " \u00B7 " + if (specs.size == 1) "it listens on every interface; it stays off until you turn it on" else "they listen on every interface; they stay off until you turn them on"
 
 /** After the import: each key to make again and the hosts waiting on it, one row a key, in one panel. */
 @Composable
