@@ -107,6 +107,7 @@ import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.ScrollbackSearch
 import kotlinx.coroutines.delay
+import java.net.IDN
 
 /**
  * The Stage's text tools for one terminal tab (spec C16, C17, C18): its selection, its search,
@@ -665,8 +666,14 @@ fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, ha
  * the link's own path, since a text that appears in the address is the address naming itself
  * (a directory listing's every entry). Version numbers and decimals end in digits and claim
  * nothing. A claim is the link's own when it is the link's host, give or take `www.`, or a parent
- * of it (`github.com` over gist.github.com), which no stranger's host can be. The query is not
- * exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
+ * of it (`github.com` over gist.github.com), which no stranger's host can be, unless the parent
+ * is a platform that hands its labels or its pages to anyone ([UserContentHosts]: `github.io`
+ * over evil.github.io, `google.com` over sites.google.com/view/paypal-login), where the claim is
+ * true of the platform and says nothing of the page, so it warns. The query is not exempt:
+ * `?r=google.com` is how a redirect dresses up. Every host the caption names is in ASCII, a
+ * label outside it as its punycode ([asciiHost]), so `https://аpple.com/` with a Cyrillic а reads
+ * *goes to xn--pple-43d.com* and not as Apple's, in the caption where the panel, which shows the
+ * address as it is, cannot tell them apart. For a `file://`
  * link [path] is the file's path, percent-decoded. An `http`, `https` or `file` address is read
  * the way the browser and Android's `Uri` that will open it read it, a `\` as a `/`, so its
  * authority ends at the first of either and `https://evil.example\@google.com/` goes to
@@ -688,8 +695,8 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
     companion object {
         /** Scheme, an authority whose userinfo runs to its last `@` (the browser's and `SshLink`'s reading), then the host: a bracketed IPv6 literal or a name. */
         private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^/?#\s]*@)?(\[[^\]]*\]|[^/?#:;@\s]+)""")
-        /** A host of two labels or more, `www.` or not, a port and a tail drawn with any of the slashes a text can wear. */
-        private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#\\].*)?$""")
+        /** A host of two labels or more in any script (a homograph claims like the host it apes), `www.` or not, a port and a tail drawn with any of the slashes a text can wear. */
+        private val BARE_HOST = Regex("""^(?:www\.)?([\p{L}\p{N}\-]+(?:\.[\p{L}\p{N}\-]+)+)(?::\d+)?(?:[/?#\\].*)?$""")
         private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
         private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
 
@@ -742,8 +749,10 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
                 "mailto" -> {
                     val address = percentDecode(url.substringAfter(':').substringBefore('?')).trim()
                     mailbox = address.lowercase()
-                    to = address.substringAfterLast('@', "").lowercase().ifEmpty { null }
-                    where = "mails $address"
+                    val domain = address.substringAfterLast('@', "")
+                    to = asciiHost(domain).ifEmpty { null }
+                    // The mailbox as written, save a domain outside ASCII, which reads as its punycode like every host the caption names.
+                    where = "mails ${if (domain.all { it.code < 0x80 }) address else address.substringBeforeLast('@') + "@" + to}"
                     posture = Posture.OPEN
                 }
                 else -> {
@@ -767,18 +776,46 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
          * since `github.com` over gist.github.com is no lie and an attacker cannot make evil.example
          * end in `.google.com`, only carry it. One way: a claim deeper than the host is another host.
          * A parent is a domain, not a bare TLD: `www.com` shorn of its `www.` is no parent of every `.com`.
+         * And a parent that is a platform's own name, or above it ([UserContentHosts]), is the
+         * platform's and not the page's: `github.io` over evil.github.io, `s3.amazonaws.com` over
+         * evil-bucket.s3.amazonaws.com, `google.com` over sites.google.com; the claim has to reach
+         * below the platform, to the customer's label (`evil.github.io` over docs.evil.github.io), to
+         * name the site. Both are ASCII already, as [hostOf] and [hostClaim] give them.
          */
         private fun sameSite(claim: String, to: String): Boolean {
             val c = claim.removePrefix("www.")
             val t = to.removePrefix("www.")
-            return c == t || ('.' in c && t.endsWith(".$c"))
+            if (c == t) return true
+            if ('.' !in c || !t.endsWith(".$c")) return false
+            val platform = UserContentHosts.boundaryOf(t) ?: return true
+            // Both end the host at a dot; the longer of the two is the lower.
+            return c.length > platform.length
         }
 
         /**
-         * The host of an address with a scheme and an authority, lowercased, as the parser that opens
-         * it would read it ([asRead]); null for one without (`mailto:`, a bare word).
+         * The host of an address with a scheme and an authority, as the parser that opens it would
+         * read it ([asRead]), lowercased and in ASCII ([asciiHost]); null for one without (`mailto:`, a bare word).
          */
-        fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.lowercase()
+        fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.let(::asciiHost)
+
+        /**
+         * [host] as the resolver reads it: lowercased, and a label outside ASCII as its punycode
+         * (`IDN.toASCII`), the way a browser writes a confusable host in its address bar, so
+         * `аpple.com` with a Cyrillic а is xn--pple-43d.com wherever the caption names it and a
+         * claim of `apple.com` over it is measured against that. A bracketed IPv6 literal is ASCII
+         * already; a host IDN refuses (a label too long, an empty one) stands as it is, lowercased.
+         * Java's IDN is IDNA2003, so `ß` maps to `ss` where a browser would keep it; the host still
+         * reads as ASCII, which is what the caption is for.
+         */
+        fun asciiHost(host: String): String {
+            val lower = host.lowercase()
+            if (lower.all { it.code < 0x80 }) return lower
+            return try {
+                IDN.toASCII(lower, IDN.ALLOW_UNASSIGNED).lowercase()
+            } catch (e: IllegalArgumentException) {
+                lower
+            }
+        }
 
         /**
          * [url] as the parser that will open it reads it: in the [SLASH_SCHEMES] every `\` is a `/`,
@@ -791,17 +828,20 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         /**
          * The host a shown [text] claims to be, or null when it claims none: the host of an address
          * with a scheme, a `www.` name, or a bare host that is neither a file name nor a segment of
-         * [url]'s own path.
+         * [url]'s own path. In ASCII ([asciiHost]): a Cyrillic `аpple.com` claims xn--pple-43d.com,
+         * which is a claim all the same, measured against where the link goes.
          */
         fun hostClaim(text: String, url: String): String? {
             hostOf(text)?.let { return it }
             val host = BARE_HOST.matchEntire(text)?.groupValues?.get(1)?.lowercase() ?: return null
-            if (text.startsWith("www.", ignoreCase = true)) return host
+            if (text.startsWith("www.", ignoreCase = true)) return asciiHost(host)
             val last = host.substringAfterLast('.')
-            if (last.length < 2 || !last.all { it in 'a'..'z' }) return null
+            if (last.length < 2 || !last.all { it.isLetter() }) return null
             if (last in FILE_EXTENSIONS) return null
-            if (host in segments(percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')))) return null
-            return host
+            val ascii = asciiHost(host)
+            val segments = segments(percentDecode(afterAuthority(url).substringBefore('?').substringBefore('#')))
+            if (host in segments || ascii in segments) return null
+            return ascii
         }
 
         /**
@@ -849,8 +889,9 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
 
         /**
          * `user@host:port` for an `ssh://` or `sftp://` link, read as `SshLink` reads it: the authority to
-         * the first `/`, `?` or `#`, the host after its last `@`, and the user's `;fingerprint=`
-         * parameter (the draft URI keeps it in the userinfo) and password, never a caption's business, left out.
+         * the first `/`, `?` or `#`, the host after its last `@` (in ASCII, [asciiHost]), and the user's
+         * `;fingerprint=` parameter (the draft URI keeps it in the userinfo) and password, never a
+         * caption's business, left out.
          */
         private fun sshTarget(url: String): String {
             val start = url.indexOf("://") + 3
@@ -859,7 +900,13 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
             val at = authority.lastIndexOf('@')
             val user = if (at < 0) "" else authority.substring(0, at).substringBefore(';').substringBefore(':')
             val hostPort = authority.substring(at + 1).substringBefore(';')
-            return if (user.isEmpty()) hostPort else "$user@$hostPort"
+            // A bracketed literal is ASCII and holds colons of its own; a name may carry a port after its only one.
+            val target = when {
+                hostPort.startsWith("[") || hostPort.all { it.code < 0x80 } -> hostPort
+                ':' in hostPort -> asciiHost(hostPort.substringBeforeLast(':')) + ":" + hostPort.substringAfterLast(':')
+                else -> asciiHost(hostPort)
+            }
+            return if (user.isEmpty()) target else "$user@$target"
         }
 
         /** The text is the address itself, give or take the scheme, `www.`, a closing slash and how its slashes are drawn ([asRead]). */
