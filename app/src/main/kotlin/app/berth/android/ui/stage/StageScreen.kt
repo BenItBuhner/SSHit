@@ -221,9 +221,9 @@ fun StageScreen(
             override fun toggleDeck() { if (session != null) deckVisible = !deckVisible }
             override fun fontStep(step: Int) {
                 session ?: return
-                val size = session.record.value.hostSnapshot?.appearance?.fontSizeSp ?: vm.terminalFont.value.sizeSp
                 haptics.fontStep()
-                vm.setFontSize(size + step)
+                // The chord and the pinch are one function (review #15): a host with its own size keeps the change to itself.
+                vm.stepFontSize(session.record.value.hostId, step)
             }
             override fun shortcutSheet() { shortcutSheet = true }
             override fun split() { panes.split?.invoke() }
@@ -588,7 +588,11 @@ private fun StageBody(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
-    val host = record.hostSnapshot
+    val hosts by vm.hosts.collectAsState()
+    // The saved host as it is now, not as it was when the tab opened: a pinch writes the host's own
+    // size (review #15) and the terminal under the fingers has to follow it. A quick-connect tab
+    // has no saved host and keeps the snapshot the record carries.
+    val host = record.hostId?.let { id -> hosts.firstOrNull { it.id == id } } ?: record.hostSnapshot
     // Host override, then the workspace's theme, then the app default; all three flows are live, so a theme edit lands here at once.
     val theme = AppViewModel.resolveTerminalTheme(themes, defaultTheme, host, workspaces.byId(record.workspaceId))
     val font: TerminalFont = host.appearance.fontSizeSp?.let { fontSetting.copy(sizeSp = it) } ?: fontSetting
@@ -657,6 +661,11 @@ private fun StageBody(
         if (host.muteBell) return@LaunchedEffect
         session.bell.collect { patterns.bell() }
     }
+    // A key typed into a detached tab reconnects it (review #15); the pill shows the reconnect, the
+    // notice says the key itself went nowhere, so a sentence is not typed into the gap.
+    LaunchedEffect(session.id) {
+        session.keyReconnected.collect { tools.notice = "Reconnecting, the key was not sent" }
+    }
 
     BackHandler(enabled = imeVisible) { keyboard?.hide() }
 
@@ -689,7 +698,7 @@ private fun StageBody(
                     .alpha(frameAlpha),
                 onFontSizeStep = { step ->
                     patterns.fontStep()
-                    vm.setFontSize(font.sizeSp + step)
+                    vm.stepFontSize(record.hostId, step)
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
                 onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },

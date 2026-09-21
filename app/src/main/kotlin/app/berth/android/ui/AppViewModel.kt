@@ -73,6 +73,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import javax.inject.Inject
@@ -922,6 +924,49 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch {
             val current = settings.terminalFont.first()
             settings.setTerminalFont(current.copy(sizeSp = sizeSp.coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP)))
+        }
+    }
+
+    /** Font size writes one at a time: a pinch fires several steps in a row and each must read the last one's result. */
+    private val fontSizeLock = Mutex()
+
+    /**
+     * The pinch and the font-step chord, one function for both (review #15): on a host with its
+     * own size the step writes that override, so the terminal under the fingers is the one that
+     * changes; on any other tab, or a quick-connect tab with no saved host, it writes the app's size.
+     */
+    fun stepFontSize(hostId: String?, step: Int) {
+        viewModelScope.launch {
+            fontSizeLock.withLock {
+                val host = hostId?.let { hostRepository.get(it) }
+                val override = host?.appearance?.fontSizeSp
+                if (host != null && override != null) {
+                    hostRepository.upsert(host.copy(appearance = host.appearance.copy(fontSizeSp = (override + step).coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP))))
+                } else {
+                    val current = settings.terminalFont.first()
+                    settings.setTerminalFont(current.copy(sizeSp = (current.sizeSp + step).coerceIn(TerminalFont.MIN_SIZE_SP, TerminalFont.MAX_SIZE_SP)))
+                }
+            }
+        }
+    }
+
+    /**
+     * The two-finger double-tap (spec D1, "reset font size to host default"): a host with its own
+     * size loses it and follows the app's again; with none, the app's size returns to its default.
+     * The pinch writes the same field the host editor does, so the one size a reset can go back to
+     * is the one underneath, not a value pinched over.
+     */
+    fun resetFontSize(hostId: String?) {
+        viewModelScope.launch {
+            fontSizeLock.withLock {
+                val host = hostId?.let { hostRepository.get(it) }
+                if (host?.appearance?.fontSizeSp != null) {
+                    hostRepository.upsert(host.copy(appearance = host.appearance.copy(fontSizeSp = null)))
+                } else {
+                    val current = settings.terminalFont.first()
+                    settings.setTerminalFont(current.copy(sizeSp = TerminalFont().sizeSp))
+                }
+            }
         }
     }
 

@@ -41,6 +41,7 @@ import androidx.core.content.res.ResourcesCompat
 import app.berth.android.R
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalAccessibility
+import app.berth.android.ui.a11y.rememberAccessibilityEnabled
 import app.berth.android.ui.a11y.terminalAccessibility
 import app.berth.android.ui.a11y.terminalFontScale
 import app.berth.android.ui.theme.Berth
@@ -271,6 +272,13 @@ fun TerminalCanvas(
                 session.resize(cols, rows)
             }
         }
+    }
+    // The screen reader's copy of each frame is made only while a service is on (review #15); one
+    // turned on mid-session gets the frame on screen at once rather than at the next output.
+    val accessibilityOn by rememberAccessibilityEnabled()
+    LaunchedEffect(accessibility, accessibilityOn) {
+        accessibility.enabled = accessibilityOn
+        if (accessibilityOn && frames.front.rows > 0) accessibility.onFrame(frames.front)
     }
     val currentSelection by rememberUpdatedState(selection)
     // Frames: every change of the screen or of the view's offset is captured into the back buffer

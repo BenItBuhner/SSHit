@@ -190,6 +190,14 @@ class TerminalSession(
     private val _bell = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val bell: SharedFlow<Unit> = _bell.asSharedFlow()
 
+    /**
+     * A key typed into this tab while it was [SessionState.DETACHED] (review #15): the key was not
+     * sent, since the shell it would reach is not the one it was typed at, and the tab is
+     * reconnecting instead, the state pill's own action. The Stage says so over the terminal.
+     */
+    private val _keyReconnected = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val keyReconnected: SharedFlow<Unit> = _keyReconnected.asSharedFlow()
+
     /** Seconds until the next reconnect attempt while [SessionState.RECONNECTING]; null otherwise. */
     private val _retryIn = MutableStateFlow<Int?>(null)
     val retryIn: StateFlow<Int?> = _retryIn.asStateFlow()
@@ -842,7 +850,17 @@ class TerminalSession(
     private val writer = Dispatchers.IO.limitedParallelism(1)
 
     fun send(bytes: ByteArray) {
-        val sh = shell ?: return
+        val sh = shell
+        if (sh == null) {
+            // A detached tab does not eat what is typed into it: the first key reconnects, as the pill
+            // would, and the Stage is told the key itself went nowhere. Later keys, while the connection
+            // is being made, are dropped the way they always were: there is no shell to hold them for.
+            if (state == SessionState.DETACHED) {
+                reconnectNow()
+                _keyReconnected.tryEmit(Unit)
+            }
+            return
+        }
         scope.launch(writer) { runCatching { sh.write(bytes) } }
     }
 
