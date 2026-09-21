@@ -70,8 +70,10 @@ class LauncherShortcuts @Inject constructor(
     /**
      * The host's swatch as an adaptive icon: the swatch colour to the edges, the monogram white at
      * 92 % in the app's label face, sized for the launcher's safe zone (the middle two thirds).
+     * Internal for the capture of the icons as a launcher masks them: a published shortcut does
+     * not hand its icon back.
      */
-    private fun swatch(host: Host): Bitmap {
+    internal fun swatch(host: Host): Bitmap {
         val size = ICON_PX
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)

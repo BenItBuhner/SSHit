@@ -1230,8 +1230,11 @@ class AppViewModel @Inject constructor(
         /** The helper line when the spec parses but asks for what only a saved host can hold. */
         const val QUICK_CONNECT_IS_A_SHELL = "Quick connect takes user@host:port alone; save a host to carry forwards, a folder or a name."
 
-        /** The notice when a share arrives with no live terminal on stage to drop it into (spec C24). */
-        const val NO_LIVE_SESSION_FOR_SHARE = "Nothing to drop it into: put a live session on stage and share again."
+        /**
+         * The notice when a share arrives with no live terminal on stage to drop it into (spec C24):
+         * one sentence short enough for the notice bar's one line at the interface's font cap.
+         */
+        const val NO_LIVE_SESSION_FOR_SHARE = "Nothing live on stage to share into."
 
         /**
          * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
