@@ -279,10 +279,13 @@ private data class TerminalInputElement(val sink: TerminalInputSink, val predict
 /**
  * What the terminal tells the keyboard about itself: plain text with no suggestions, no autocorrect
  * and no capitalisation (the visible-password variation is the one flag every keyboard, Samsung's
- * included, honours as "do not correct this"), nothing learned from what is typed here, no
+ * included, honours as "do not correct this"), a request that nothing typed here be learned, no
  * full-screen or extracted editor, and Enter as a key rather than an action. With [predictive] on
- * (spec C6) it is plain text the keyboard may suggest for, still without autocorrect or
- * capitalisation, and still nothing learned: what is typed into a shell stays out of its dictionary.
+ * (spec C6) it is plain text the keyboard may suggest for, with the same request not to learn
+ * from it. Both are asks the keyboard is free to ignore: `IME_FLAG_NO_PERSONALIZED_LEARNING` is
+ * honoured by Gboard and Samsung Keyboard and by any other only as it chooses, and without the
+ * no-suggestions flag whether words are corrected as well as suggested is the keyboard's call; so
+ * no caption promises either, and only a phone with a given keyboard shows what it does.
  */
 fun configureTerminalEditorInfo(outAttributes: EditorInfo, predictive: Boolean = false) {
     outAttributes.inputType = if (predictive) InputType.TYPE_CLASS_TEXT else {

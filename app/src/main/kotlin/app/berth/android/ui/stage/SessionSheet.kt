@@ -168,7 +168,8 @@ fun SessionSheet(
                     "Predictive text",
                     session.id in predictiveIds,
                     { vm.setPredictiveText(session.id, it) },
-                    caption = "Word suggestions from the keyboard on this tab; nothing typed here is learned",
+                    // A request, not a promise: IME_FLAG_NO_PERSONALIZED_LEARNING is honoured as the keyboard chooses (review #16).
+                    caption = "Word suggestions on this tab; Berth asks the keyboard not to learn from it",
                 )
             }
             val rest = others.filter { it.id != tab.id }
