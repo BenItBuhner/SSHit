@@ -145,6 +145,10 @@ class InMemoryCommandHistory : CommandHistoryRepository {
         if (fresh.isEmpty()) return
         items.update { list -> (list + fresh.map { (text, at) -> HostCommand(nextId++, hostId, text.trim(), at) }).sortedWith(compareBy({ it.at }, { it.id })).trimmed(hostId) }
     }
+    override suspend fun rekey(from: String, to: String) {
+        if (from == to) return
+        items.update { list -> list.map { if (it.hostId == from) it.copy(hostId = to) else it }.sortedWith(compareBy({ it.at }, { it.id })).trimmed(to) }
+    }
     override suspend fun delete(id: Long) = items.update { list -> list.filter { it.id != id } }
     override suspend fun clear(hostId: String) = items.update { list -> list.filter { it.hostId != hostId } }
     override suspend fun clearAll() { items.value = emptyList() }

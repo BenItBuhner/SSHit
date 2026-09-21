@@ -100,6 +100,13 @@ class RoomCommandHistoryRepository(private val db: BerthDatabase) : CommandHisto
         dao.trim(hostId, CommandHistoryRepository.CAP)
     }
 
+    override suspend fun rekey(from: String, to: String) = writeLock.withLock {
+        if (from == to) return@withLock
+        val dao = db.commandHistory()
+        dao.rekey(from, to)
+        dao.trim(to, CommandHistoryRepository.CAP)
+    }
+
     override suspend fun delete(id: Long) = db.commandHistory().delete(id)
     override suspend fun clear(hostId: String) = db.commandHistory().clear(hostId)
     override suspend fun clearAll() = db.commandHistory().clearAll()

@@ -370,6 +370,35 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun `a quick connect's history goes on under the host it is saved as`() = runTest {
+        val history = RoomCommandHistoryRepository(db)
+        val quick = "quick:ben@10.0.0.7:22"
+        history.record(quick, "uptime", 10)
+        history.record(quick, "df -h", 20)
+        // The saved host already ran something (a tab opened on it before the move landed): the two merge by time.
+        history.record("h-saved", "ls", 15)
+        history.record("other", "pwd", 12)
+
+        history.rekey(quick, "h-saved")
+        assertTrue(history.observeForHost(quick).first().isEmpty(), "nothing is left under the quick-connect key")
+        assertEquals(listOf("uptime" to 10L, "ls" to 15L, "df -h" to 20L), history.observeForHost("h-saved").first().map { it.text to it.at })
+        assertEquals(listOf("pwd"), history.observeForHost("other").first().map { it.text }, "another host's history is untouched")
+        assertEquals(4, history.observeAll().first().size)
+
+        // The same id twice is nothing to do, and a key with no rows moves nothing.
+        history.rekey("h-saved", "h-saved")
+        history.rekey("never-seen", "h-saved")
+        assertEquals(3, history.observeForHost("h-saved").first().size)
+
+        // The merged history is one host's: past the cap the oldest go.
+        for (i in 0 until CommandHistoryRepository.CAP) history.record("quick:big", "cmd $i", 1_000L + i)
+        history.rekey("quick:big", "h-saved")
+        val merged = history.observeForHost("h-saved").first()
+        assertEquals(CommandHistoryRepository.CAP, merged.size)
+        assertEquals("cmd 0", merged.first().text, "the three older entries went, the quick connect's cap-worth stayed")
+    }
+
+    @Test
     fun `deleting a host takes its command history with it`() = runTest {
         val hosts = RoomHostRepository(db)
         val history = RoomCommandHistoryRepository(db)

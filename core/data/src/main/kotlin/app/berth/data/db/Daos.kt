@@ -192,6 +192,10 @@ interface CommandHistoryDao {
     )
     suspend fun trim(hostId: String, keep: Int)
 
+    /** Every row of [from] goes on under [to]; the rows keep their ids and times, so the merged order is by time as before. */
+    @Query("UPDATE command_history SET hostId = :to WHERE hostId = :from")
+    suspend fun rekey(from: String, to: String)
+
     @Query("DELETE FROM command_history WHERE id = :id")
     suspend fun delete(id: Long)
 

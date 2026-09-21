@@ -129,6 +129,15 @@ interface CommandHistoryRepository {
      */
     suspend fun importEntries(hostId: String, entries: List<Pair<String, Long>>)
 
+    /**
+     * Moves every entry kept under [from] to [to], for a quick connect saved as a host: its history
+     * was keyed `quick:user@host:port` ([app.berth.domain.model.Host.commandHistoryKey]) and goes
+     * on under the saved host's id, so the sheet on the new host shows what was run before it had a
+     * name. Entries [to] already holds stay, the merged history is oldest first and capped as one
+     * host's; nothing is left under [from]. Two equal ids are nothing to do.
+     */
+    suspend fun rekey(from: String, to: String)
+
     suspend fun delete(id: Long)
     suspend fun clear(hostId: String)
     suspend fun clearAll()
