@@ -78,7 +78,9 @@ import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.ShortDeckFit
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.TwoRowDeckFit
+import app.berth.android.ui.tabs.BottomEdge
 import app.berth.android.ui.tabs.GroupEditorRequest
+import app.berth.android.ui.tabs.LocalBottomEdge
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.NoticeBar
@@ -146,8 +148,10 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     // Whether the keyboard's focus is anywhere in this window: the Stage keeps its own while a keyboard
     // is attached, and this tells it a focus moved to the rail from one that was lost (spec A11).
     val windowFocus = remember { WindowFocus() }
+    // What the notice bars and the Stage's bottom chrome hold at the window's bottom edge, so the state pill stands clear of a bar by construction.
+    val bottomEdge = remember { BottomEdge() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus) {
+        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus, LocalBottomEdge provides bottomEdge) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
