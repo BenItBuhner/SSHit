@@ -1,7 +1,10 @@
 package app.berth.android.ui.keys
 
 import app.berth.android.session.TerminalSession
+import app.berth.domain.model.TmuxMode
+import app.berth.terminal.Mod
 import app.berth.terminal.TerminalEmulator
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withTimeoutOrNull
@@ -11,6 +14,14 @@ import kotlinx.coroutines.withTimeoutOrNull
  * `~/.ssh/authorized_keys`, typed into a live session's shell the way a snippet is run, and how
  * its answer is read back off the screen. Nothing here reaches into the transport: the command
  * goes through [TerminalSession.sendText], and the answer is what the shell printed.
+ *
+ * The command is typed only where a shell is reading. A tab on the alternate screen is in a
+ * program, `vim`, `less`, `htop`, and a program would take three hundred characters and an Enter as
+ * keystrokes of its own; the install refuses that tab and the sheet offers it instead, so the
+ * person can quit what is running or paste the command themselves. A tmux host is on the alternate
+ * screen for as long as tmux is attached, so the flag says nothing about its pane; that host is
+ * typed into as it stands. A half-typed prompt line is cleared first (Ctrl+U) rather than joined
+ * to the command.
  */
 object KeyInstall {
     /** What the shell prints when every step of [command] succeeded. */
@@ -23,6 +34,44 @@ object KeyInstall {
     const val ANSWER_TIMEOUT_MS = 20_000L
 
     enum class Outcome { INSTALLED, NOT_INSTALLED }
+
+    /** What came of typing the command, or why it was not typed. */
+    sealed interface Result {
+        /** The command was typed; [outcome] is the shell's answer, or null when it gave neither in time. */
+        data class Answered(val outcome: Outcome?) : Result
+
+        /** Nothing was typed: the tab is in a program, not at a shell ([runningProgram]). */
+        data object ProgramRunning : Result
+    }
+
+    /**
+     * The part of a session the install types into and reads from, so the typing can be checked
+     * against a fake; [shellOf] is the one over a [TerminalSession].
+     */
+    interface Shell {
+        val emulator: TerminalEmulator
+        val screenVersion: StateFlow<Long>
+        val tmux: TmuxMode
+        fun sendText(text: String, modifiers: Int = 0)
+    }
+
+    fun shellOf(session: TerminalSession): Shell = object : Shell {
+        override val emulator: TerminalEmulator get() = session.emulator
+        override val screenVersion: StateFlow<Long> get() = session.screenVersion
+        override val tmux: TmuxMode get() = session.host.persistence.tmux
+        override fun sendText(text: String, modifiers: Int) = session.sendText(text, modifiers)
+    }
+
+    /**
+     * Whether a program, not a shell, would read what is typed: the alternate screen is up and no
+     * tmux is attached to explain it. tmux itself holds the alternate screen while attached, so
+     * for a host with tmux on the flag says nothing about the pane's own state.
+     */
+    fun runningProgram(isAlternateScreen: Boolean, tmux: TmuxMode): Boolean = isAlternateScreen && tmux == TmuxMode.OFF
+
+    fun runningProgram(shell: Shell): Boolean = runningProgram(synchronized(shell.emulator.lock) { shell.emulator.isAlternateScreen }, shell.tmux)
+
+    fun runningProgram(session: TerminalSession): Boolean = runningProgram(shellOf(session))
 
     /**
      * The spec's command, with the key line single-quoted for the shell (a `'` in the comment
@@ -69,17 +118,25 @@ object KeyInstall {
     }
 
     /**
-     * Types [command] into [session]'s shell with its Enter, as a snippet is run, and waits for the
-     * answer: what the screen shows from its current top down is read again on every change until
-     * one of the two answers is there more often than it was, or [timeoutMs] pass with neither
-     * (the shell busy, a prompt waiting, a program that is not a shell), which is null.
+     * Types [command] into [shell] with its Enter, as a snippet is run, and waits for the answer:
+     * what the screen shows from its current top down is read again on every change until one of
+     * the two answers is there more often than it was, or [timeoutMs] pass with neither (the shell
+     * busy, a prompt waiting), which is [Result.Answered] of null. Ctrl+U goes first, so a line
+     * half-typed at the prompt is discarded rather than run with the command appended (`echo hell`
+     * plus the command would install the key). A shell that is [runningProgram] gets nothing, and
+     * the result says so.
      */
-    suspend fun run(session: TerminalSession, command: String, timeoutMs: Long = ANSWER_TIMEOUT_MS): Outcome? {
-        val top = screenTop(session.emulator)
-        val before = counts(rowsFrom(session.emulator, top))
-        session.sendText(command + "\n")
-        return withTimeoutOrNull(timeoutMs) {
-            session.screenVersion.mapNotNull { answer(rowsFrom(session.emulator, top), before) }.first()
+    suspend fun run(shell: Shell, command: String, timeoutMs: Long = ANSWER_TIMEOUT_MS): Result {
+        if (runningProgram(shell)) return Result.ProgramRunning
+        val top = screenTop(shell.emulator)
+        val before = counts(rowsFrom(shell.emulator, top))
+        shell.sendText("u", Mod.CTRL)
+        shell.sendText(command + "\n")
+        val outcome = withTimeoutOrNull(timeoutMs) {
+            shell.screenVersion.mapNotNull { answer(rowsFrom(shell.emulator, top), before) }.first()
         }
+        return Result.Answered(outcome)
     }
+
+    suspend fun run(session: TerminalSession, command: String, timeoutMs: Long = ANSWER_TIMEOUT_MS): Result = run(shellOf(session), command, timeoutMs)
 }

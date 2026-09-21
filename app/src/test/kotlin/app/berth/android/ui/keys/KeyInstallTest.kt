@@ -1,7 +1,11 @@
 package app.berth.android.ui.keys
 
+import app.berth.domain.model.TmuxMode
+import app.berth.terminal.Mod
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalListenerAdapter
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -74,5 +78,72 @@ class KeyInstallTest {
         val rows = KeyInstall.rowsFrom(t, top)
         assertEquals("every row the buffer still has", t.bufferRows, rows.size)
         assertTrue(rows.first().startsWith("line"))
+    }
+
+    /**
+     * A shell over an emulator that records what is typed into it and, when asked, answers as a
+     * shell would: the echo of the command and then the installed line, bumping the screen version.
+     */
+    private class FakeShell(override val tmux: TmuxMode = TmuxMode.OFF, private val answers: Boolean = true) : KeyInstall.Shell {
+        override val emulator = TerminalEmulator(120, 8, 20, TerminalListenerAdapter())
+        override val screenVersion = MutableStateFlow(0L)
+        val sent = ArrayList<Pair<String, Int>>()
+
+        override fun sendText(text: String, modifiers: Int) {
+            sent += text to modifiers
+            if (answers && text.endsWith("\n")) {
+                emulator.write(text.dropLast(1) + "\r\n" + KeyInstall.INSTALLED + "\r\n\$ ")
+                screenVersion.value++
+            }
+        }
+    }
+
+    @Test
+    fun `a tab on the alternate screen is refused and nothing is sent`() = runBlocking {
+        val shell = FakeShell()
+        shell.write("\$ vim notes.txt\r\n\u001b[?1049h~\r\n~\r\n")
+        assertTrue("the fixture is in a full-screen program", shell.emulator.isAlternateScreen)
+        assertTrue(KeyInstall.runningProgram(shell))
+        assertEquals(KeyInstall.Result.ProgramRunning, KeyInstall.run(shell, KeyInstall.command(keyLine), timeoutMs = 200))
+        assertTrue("a program, not a shell, would have read the command", shell.sent.isEmpty())
+    }
+
+    @Test
+    fun `at a shell the command goes in after a Ctrl+U, one Enter at its end, and the answer is read`() = runBlocking {
+        val shell = FakeShell()
+        shell.write("\$ echo hell")
+        assertFalse(KeyInstall.runningProgram(shell))
+        val command = KeyInstall.command(keyLine)
+        assertEquals(KeyInstall.Result.Answered(KeyInstall.Outcome.INSTALLED), KeyInstall.run(shell, command, timeoutMs = 2_000))
+        assertEquals("Ctrl+U first, so the half-typed line is discarded rather than run with the command on its end", "u" to Mod.CTRL, shell.sent.first())
+        assertEquals(0x15, shell.emulator.encodeText('u'.code, Mod.CTRL).single().toInt())
+        assertEquals(listOf(command + "\n"), shell.sent.drop(1).map { it.first })
+        assertTrue(shell.sent.drop(1).all { it.second == 0 })
+    }
+
+    @Test
+    fun `a tmux host is typed into on the alternate screen, since tmux holds it while attached`() = runBlocking {
+        val shell = FakeShell(tmux = TmuxMode.ATTACH_OR_CREATE)
+        shell.write("\u001b[?1049h[0] 0:bash*\r\n\$ ")
+        assertTrue(shell.emulator.isAlternateScreen)
+        assertFalse("the flag says nothing about the pane of an attached tmux", KeyInstall.runningProgram(shell))
+        assertEquals(KeyInstall.Result.Answered(KeyInstall.Outcome.INSTALLED), KeyInstall.run(shell, KeyInstall.command(keyLine), timeoutMs = 2_000))
+        assertEquals(2, shell.sent.size)
+        assertFalse(KeyInstall.runningProgram(isAlternateScreen = true, tmux = TmuxMode.ATTACH_ONLY))
+        assertTrue(KeyInstall.runningProgram(isAlternateScreen = true, tmux = TmuxMode.OFF))
+        assertFalse(KeyInstall.runningProgram(isAlternateScreen = false, tmux = TmuxMode.OFF))
+    }
+
+    @Test
+    fun `a shell that says nothing in time answers null, the command still sent`() = runBlocking {
+        val shell = FakeShell(answers = false)
+        shell.write("\$ ")
+        assertEquals(KeyInstall.Result.Answered(null), KeyInstall.run(shell, KeyInstall.command(keyLine), timeoutMs = 100))
+        assertEquals(2, shell.sent.size)
+    }
+
+    private fun FakeShell.write(text: String) {
+        emulator.write(text)
+        screenVersion.value++
     }
 }

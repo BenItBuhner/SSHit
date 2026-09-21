@@ -1008,6 +1008,80 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         }
     }
 
+    /**
+     * A connected tab that is in a program is not typed into: with the demo user's shell on the
+     * alternate screen (as `vim` or `less` would put it) its row under CONNECTED says so in place of
+     * its live dot, the button for it opens the tab, and nothing reaches the shell; once the program
+     * is quit the same row is a shell again and the button says Install.
+     */
+    @Test
+    fun `install on host refuses a live tab that is in a program`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        seedLibrary()
+        val box = Host(
+            id = "berth-test-box", name = "Berth test box", color = SwatchColor.TEAL, monogram = Host.monogramFor("Berth test box"),
+            address = sshHost, port = sshPort, user = sshUser, auth = AuthMethod.Password(AuthResolver.passwordSecretId("berth-test-box")),
+            tags = listOf("local"), createdAt = now - TimeUnit.HOURS.toMillis(1),
+        )
+        val opened = ArrayList<String>()
+        themed {
+            KeysScreen(graph.viewModel, onBack = {}, onOpenTab = { opened += it })
+            PromptHost(graph.prompts)
+        }
+        val session = runBlocking {
+            graph.secrets.put(AuthResolver.passwordSecretId(box.id), sshPassword.toByteArray())
+            graph.hosts.upsert(box)
+            graph.sessions.restore()
+            graph.sessions.open(box)
+        }
+        try {
+            compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+            waitForText("Trust and connect")
+            compose.onNodeWithText("Trust and connect").performScrollTo().performClick()
+            compose.waitUntil(45_000) { session.state == SessionState.LIVE }
+            settle(800)
+            // The shell itself switches the tab to the alternate screen, as a full-screen program does on its way in.
+            session.sendText("printf '\\033[?1049h'\n")
+            compose.waitUntil(15_000) { session.emulator.isAlternateScreen }
+            assertTrue(KeyInstall.runningProgram(session))
+
+            waitForText("laptop ed25519")
+            compose.onNodeWithText("laptop ed25519").performTouchInput { longClick() }
+            waitForText("Install on host")
+            compose.onNodeWithText("Install on host").performClick()
+            waitForText("Berth test box")
+            compose.onNodeWithText("Connected".uppercase()).assertExists()
+            compose.onNodeWithText("running a program").assertExists()
+            compose.onNode(hasText("Berth test box") and hasAnyAncestor(isDialog())).performClick()
+            waitForText("Open tab")
+            compose.onNodeWithText("Berth test box's tab is in a program, not at a shell, so the command is not typed there. Quit what is running there, or paste the command from the copy button.").assertExists()
+            hasNoText("Install")
+            settle(300)
+            capture("key-install-program-running")
+            assertNoTextCut("the Install on host sheet with the picked tab in a program")
+
+            // The program quits while the sheet is up: the tab is a shell again, and the row and the button say so at once.
+            session.sendText("printf '\\033[?1049l'\n")
+            compose.waitUntil(15_000) { !session.emulator.isAlternateScreen }
+            compose.waitUntil(5_000) { compose.onAllNodesWithText("Install").fetchSemanticsNodes().isNotEmpty() }
+            hasNoText("running a program")
+            hasNoText("Open tab")
+
+            // Back in a program, Open tab leads to the tab and closes the sheet, and nothing has been typed into the program.
+            session.sendText("printf '\\033[?1049h'\n")
+            compose.waitUntil(15_000) { session.emulator.isAlternateScreen }
+            waitForText("Open tab")
+            compose.onNodeWithText("Open tab").performScrollTo().performClick()
+            compose.waitUntil(5_000) { opened == listOf(session.id) }
+            waitForNoText("Runs in the shell")
+            // Had the command been typed, the shell at the alternate screen would have echoed it there by now.
+            settle(500)
+            assertTrue("nothing was typed into the program", KeyInstall.rowsFrom(session.emulator, 0).none { it.contains("authorized_keys") })
+        } finally {
+            graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+        }
+    }
+
     // ---- fixtures ---------------------------------------------------------------------------------
 
     private val now = System.currentTimeMillis()

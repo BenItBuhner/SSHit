@@ -48,6 +48,7 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.TmuxMode
 import app.berth.ssh.Randomart
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.delay
@@ -166,12 +167,13 @@ fun PublicKeyQrSheet(identity: Identity, onDismiss: () -> Unit) {
     }
 }
 
-/** Where the install stands: picking a host, connecting to one, the command typed and waiting, or its answer. */
+/** Where the install stands: picking a host, connecting to one, the command typed and waiting, its answer, or the tab that could not be typed into. */
 private sealed interface InstallPhase {
     data object Picking : InstallPhase
     data class Connecting(val host: Host) : InstallPhase
     data class Running(val host: Host, val session: TerminalSession) : InstallPhase
     data class Answered(val host: Host, val session: TerminalSession, val outcome: KeyInstall.Outcome?) : InstallPhase
+    data class ProgramRunning(val host: Host, val session: TerminalSession) : InstallPhase
     data class NotConnected(val host: Host, val reason: String, val session: TerminalSession?) : InstallPhase
 }
 
@@ -184,9 +186,11 @@ private fun List<TerminalSession>.shellOn(hostId: String): TerminalSession? =
  * host's session and read the result. A host with a Live shell is under CONNECTED and the command
  * goes straight into it, as a snippet would; a saved host without one is under SAVED, and the
  * button connects first, with the login's prompts (its key, a password) coming up over this sheet
- * as they would over any screen. The answer is what the shell printed, read off the screen; when
- * it prints neither answer in twenty seconds the sheet says so and offers the tab, where whatever
- * is waiting there can be seen.
+ * as they would over any screen. A connected tab that is in a program rather than at a shell
+ * ([KeyInstall.runningProgram]) says so on its row and is not typed into: its button opens the
+ * tab, where the program can be quit, or the command is pasted from the copy button. The answer
+ * is what the shell printed, read off the screen; when it prints neither answer in twenty seconds
+ * the sheet says so and offers the tab, where whatever is waiting there can be seen.
  */
 @Composable
 fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit, onOpenTab: (String) -> Unit) {
@@ -224,7 +228,10 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
                     else -> InstallPhase.NotConnected(p.host, "The login did not complete.", session)
                 }
             }
-            is InstallPhase.Running -> phase = InstallPhase.Answered(p.host, p.session, KeyInstall.run(p.session, command))
+            is InstallPhase.Running -> phase = when (val result = KeyInstall.run(p.session, command)) {
+                is KeyInstall.Result.Answered -> InstallPhase.Answered(p.host, p.session, result.outcome)
+                KeyInstall.Result.ProgramRunning -> InstallPhase.ProgramRunning(p.host, p.session)
+            }
             else -> Unit
         }
     }
@@ -239,27 +246,46 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
                 if (connected.isNotEmpty()) {
                     SectionLabel("Connected", Modifier.padding(start = 4.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (host in connected) HostPickRow(host, live = true, selected = picked?.id == host.id) { picked = host }
+                        for (host in connected) {
+                            val program = sessions.shellOn(host.id)?.let { runningProgram(it) } == true
+                            HostPickRow(host, live = true, program = program, selected = picked?.id == host.id) { picked = host }
+                        }
                     }
                 }
                 if (saved.isNotEmpty()) {
                     SectionLabel("Saved", Modifier.padding(start = 4.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        for (host in saved) HostPickRow(host, live = false, selected = picked?.id == host.id) { picked = host }
+                        for (host in saved) HostPickRow(host, live = false, program = false, selected = picked?.id == host.id) { picked = host }
                     }
                 }
                 CopyableLine("Runs in the shell", preview, copyText = command)
+                val target = picked
+                val shell = target?.let { sessions.shellOn(it.id) }
+                val program = shell?.let { runningProgram(it) } == true
+                if (program) {
+                    Text(
+                        "${target?.name}'s tab is in a program, not at a shell, so the command is not typed there. Quit what is running there, or paste the command from the copy button.",
+                        style = BerthType.caption,
+                        color = c.text2,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val target = picked
-                    val live = target != null && sessions.shellOn(target.id) != null
                     BerthButton(
-                        if (target == null || live) "Install" else "Connect and install",
+                        when {
+                            target == null || (shell != null && !program) -> "Install"
+                            program -> "Open tab"
+                            else -> "Connect and install"
+                        },
                         kind = ButtonKind.PRIMARY,
                         enabled = target != null,
                         onClick = {
                             val host = target ?: return@BerthButton
-                            val shell = sessions.shellOn(host.id)
-                            phase = if (shell != null) InstallPhase.Running(host, shell) else InstallPhase.Connecting(host)
+                            when {
+                                shell == null -> phase = InstallPhase.Connecting(host)
+                                program -> onOpenTab(shell.id)
+                                else -> phase = InstallPhase.Running(host, shell)
+                            }
                         },
                     )
                     BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
@@ -269,14 +295,25 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
                 SheetTitle("Connecting", "The key is installed once ${p.host.name} is up. A prompt for its host key or your password comes up over this sheet.")
                 HostLine(p.host)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
+                    // The connection is a tab of its own and goes on without the sheet; only the waiting stops here.
+                    BerthButton("Stop waiting", onClick = onDismiss, kind = ButtonKind.TEXT)
                 }
             }
             is InstallPhase.Running -> {
                 SheetTitle("Installing", "Typed into ${p.host.name}'s shell; waiting for its answer.")
                 HostLine(p.host)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
+                    // The command is typed and cannot be taken back; closing the sheet only stops the wait for its answer.
+                    BerthButton("Stop waiting", onClick = onDismiss, kind = ButtonKind.TEXT)
+                }
+            }
+            is InstallPhase.ProgramRunning -> {
+                SheetTitle("Running a program", "${p.host.name}'s tab is in a program, not at a shell, so nothing was typed. Quit what is running there, or paste the command from the copy button.", color = c.danger)
+                HostLine(p.host)
+                CopyableLine("Runs in the shell", preview, copyText = command)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Open tab", onClick = { onOpenTab(p.session.id) }, kind = ButtonKind.PRIMARY)
+                    BerthButton("Close", onClick = onDismiss, kind = ButtonKind.TEXT)
                 }
             }
             is InstallPhase.Answered -> {
@@ -298,8 +335,17 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
                         }
                     }
                     null -> {
-                        SheetTitle("No answer", "${p.host.name}'s shell said nothing in ${KeyInstall.ANSWER_TIMEOUT_MS / 1000} s. It may be busy, waiting on a prompt, or running something that is not a shell; the command is typed there.")
+                        val seconds = KeyInstall.ANSWER_TIMEOUT_MS / 1000
+                        SheetTitle(
+                            "No answer",
+                            if (p.host.persistence.tmux == TmuxMode.OFF) {
+                                "${p.host.name}'s shell said nothing in $seconds s; it may be busy or waiting on a prompt. Open the tab; if a program is running there, quit it and paste the command from the copy button."
+                            } else {
+                                "${p.host.name} said nothing in $seconds s. The command went to the tmux pane that was up; open the tab and look at the pane. If a program is running there, quit it and paste the command from the copy button."
+                            },
+                        )
                         HostLine(p.host)
+                        CopyableLine("Runs in the shell", preview, copyText = command)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             BerthButton("Open tab", onClick = { onOpenTab(p.session.id) }, kind = ButtonKind.PRIMARY)
                             BerthButton("Close", onClick = onDismiss, kind = ButtonKind.TEXT)
@@ -319,9 +365,14 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
     }
 }
 
-/** A host to install on: its swatch, name and `user@address:port`, the live dot when a shell is up, the selected tonal step when picked. */
+/**
+ * A host to install on: its swatch, name and `user@address:port`, the live dot when a shell is up,
+ * the selected tonal step when picked. A live tab that is in a [program] says so where its dot
+ * would be, since that tab is offered to open, not to type into.
+ */
 @Composable
-private fun HostPickRow(host: Host, live: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun HostPickRow(host: Host, live: Boolean, program: Boolean, selected: Boolean, onClick: () -> Unit) {
+    val c = Berth.colors
     val endpoint = host.userAtHost + if (host.port != 22) ":${host.port}" else ""
     ListRow(
         title = host.name,
@@ -331,8 +382,20 @@ private fun HostPickRow(host: Host, live: Boolean, selected: Boolean, onClick: (
         selected = selected,
         onClick = onClick,
         leading = { Swatch(host.color, host.monogram, 32.dp) },
-        trailing = { if (live) StatusDot(SessionState.LIVE) },
+        trailing = {
+            when {
+                program -> Text("running a program", style = BerthType.caption, color = c.text2)
+                live -> StatusDot(SessionState.LIVE)
+            }
+        },
     )
+}
+
+/** Whether [session]'s tab is in a program rather than at a shell, read again on every change of its screen, so a quit program frees the row while the sheet is up. */
+@Composable
+private fun runningProgram(session: TerminalSession): Boolean {
+    val version by session.screenVersion.collectAsState()
+    return remember(session, version) { KeyInstall.runningProgram(session) }
 }
 
 /** The key line with the middle of its base64 body elided (`ssh-ed25519 AAAAC3NzaC1l…dKb4 ben@pixel`), for the preview's width; what is copied and typed is the whole line. */
