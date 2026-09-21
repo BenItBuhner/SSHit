@@ -562,17 +562,17 @@ fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, 
 }
 
 /**
- * The app's popover: Compose's [Popup], a window of its own that [positionProvider] places over
- * the screen, for what hangs off one element without being a menu's list of lines (the Deck's row
- * of alternate chips risen over a held key). It takes no focus and closes itself for nothing,
- * since whatever raised it owns the finger that puts it away. A window provides its density
- * afresh from its Context, so the interface's font cap is applied again inside it
- * ([CappedFontScale]), as [BerthSheet] and [BerthMenu] apply it in theirs; every window the app
- * opens is one of the three.
+ * The app's popup: Compose's [Popup], a window of its own that [positionProvider] places over the
+ * screen and [properties] govern, for what hangs off one element without being a menu's list of
+ * lines (the Deck's row of alternate chips risen over a held key). It has no dismiss callback: it
+ * is open while its caller composes it and gone when the caller stops, so whatever raised it owns
+ * the finger or the state that puts it away. A window provides its density afresh from its
+ * Context, so the interface's font cap ([CappedFontScale], spec A11) is applied again inside it;
+ * every window the app opens, a [BerthSheet], a [BerthMenu] or this, is held to that rule.
  */
 @Composable
-fun BerthPopover(positionProvider: PopupPositionProvider, content: @Composable () -> Unit) {
-    Popup(popupPositionProvider = positionProvider, properties = PopupProperties(focusable = false)) {
+fun BerthPopup(positionProvider: PopupPositionProvider, properties: PopupProperties, content: @Composable () -> Unit) {
+    Popup(popupPositionProvider = positionProvider, properties = properties) {
         CappedFontScale(content)
     }
 }

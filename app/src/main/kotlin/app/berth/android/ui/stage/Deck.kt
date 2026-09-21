@@ -84,13 +84,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
 import app.berth.android.ui.a11y.alwaysFocusable
 import app.berth.android.ui.a11y.keyPressable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
-import app.berth.android.ui.components.BerthPopover
+import app.berth.android.ui.components.BerthPopup
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -951,9 +952,11 @@ private val PopoverRise = 8.dp
  * A key's alternates, risen on a hold (spec D2): one chip per alternate in a row over the key, on
  * the surface two tonal steps above the Deck the way a menu is, each in the key's own radius, the
  * one under the finger filled accent. No panel around them: a row of keys lifted off the Deck,
- * not a box of boxes. Centred on the key and kept inside the window; where the row lands is
- * reported through [onPlaced] in the key's coordinates, the first chip's left edge and the width
- * of each chip's span (its width and the gap), so the machine can tell which chip a finger is over.
+ * not a box of boxes. A window of the app's ([BerthPopup]) that takes no focus, since the finger
+ * holding the key owns it and puts it away. Centred on the key and kept inside the window; where
+ * the row lands is reported through [onPlaced] in the key's coordinates, the first chip's left
+ * edge and the width of each chip's span (its width and the gap), so the machine can tell which
+ * chip a finger is over.
  */
 @Composable
 private fun AlternatesPopover(chips: List<DeckAction>, hovered: Int?, onPlaced: (left: Float, width: Float) -> Unit) {
@@ -973,7 +976,7 @@ private fun AlternatesPopover(chips: List<DeckAction>, hovered: Int?, onPlaced: 
             }
         }
     }
-    BerthPopover(provider) {
+    BerthPopup(provider, PopupProperties(focusable = false)) {
         Row(horizontalArrangement = Arrangement.spacedBy(DeckGap)) {
             chips.forEachIndexed { i, action ->
                 val label = action.alternateLabel()
