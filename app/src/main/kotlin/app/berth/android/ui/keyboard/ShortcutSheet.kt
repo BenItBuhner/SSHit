@@ -1,5 +1,6 @@
 package app.berth.android.ui.keyboard
 
+import android.view.KeyCharacterMap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -24,7 +25,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -198,7 +204,9 @@ private fun KeysText(keys: String, color: Color, maxWidth: Dp) {
  * ([conflictText]), and a row of Use, Default and Cancel stands under it, the keyboard's Enter and
  * Esc being Use and Cancel. A chord that blocks (another action's, the strip's, the system's, a
  * signal, a bare key) is said and not offered, and stands in `text.2` rather than the accent an
- * accepted chord wears. The row is what listens, rather than a node of its own under it,
+ * accepted chord wears; a key AltGr types (`@` on a German layout's Q) is no chord at all, and the
+ * line says what it typed and where a chord's Alt is ([altGrText]) rather than listen on in silence.
+ * The row is what listens, rather than a node of its own under it,
  * so what holds the focus is the thing a reader names ("Find in scrollback, listening for the new
  * chord") and the focus stays on the row once it is bound, reading its new keys. It takes the focus
  * in touch mode too ([alwaysFocusable]): a tapped row is in touch mode, and the Ctrl chord typed
@@ -219,12 +227,14 @@ private fun RemapRow(
     val action = entry.chord ?: return
     val current = table.chord(action)
     var pressed by remember(capturing) { mutableStateOf<ChordKey?>(null) }
+    // The line for the last key, when AltGr typed it instead of a chord; the next chord clears it.
+    var typed by remember(capturing) { mutableStateOf<String?>(null) }
     val chord = pressed
     val conflict = chord?.let { table.conflict(action, it) }
     val bindable = chord != null && chord != current && conflict?.blocks != true
     val caption = when {
         !capturing -> if (entry.remapped) listOfNotNull("Default ${entry.default}", entry.takes?.let { "takes $it from the shell" }).joinToString(CHORD_SEPARATOR) else null
-        chord == null -> "Press the new chord on the keyboard. Esc keeps ${current.label()}."
+        chord == null -> typed ?: "Press the new chord on the keyboard. Esc keeps ${current.label()}."
         chord == current -> "${current.label()} is what it has now."
         conflict == null -> "${chord.label()} is free. Enter binds it."
         conflict.blocks -> conflictText(conflict, chord)
@@ -233,7 +243,7 @@ private fun RemapRow(
     val spoken = buildString {
         append(entry.action)
         when {
-            capturing && chord == null -> append(", listening for the new chord")
+            capturing && chord == null -> append(if (typed == null) ", listening for the new chord" else ", listening for the new chord, $typed")
             capturing -> append(", ${chord?.label()}, ${caption ?: ""}")
             else -> {
                 append(", ${entry.keys.spoken()}")
@@ -276,7 +286,8 @@ private fun RemapRow(
                     event = event,
                     reader = reader,
                     leaderKey = leaderKey,
-                    onChord = { pressed = it },
+                    onChord = { pressed = it; typed = null },
+                    onTyped = { typed = it; pressed = null },
                     onUse = {
                         if (bindable) onRemap(chord)
                         bindable
@@ -300,19 +311,26 @@ private fun RemapRow(
  * One key event while a row listens: a plain Escape cancels, a plain Enter binds what was pressed
  * (when it can be bound; before a press it is a candidate like any key, and said to be typing),
  * and any other chord becomes the candidate. Consumed either way, so the sheet under the row never
- * scrolls or moves its focus on a key meant as a chord; a release or a modifier alone is nobody's.
+ * scrolls or moves its focus on a key meant as a chord; a release or a modifier alone is nobody's,
+ * and a key AltGr types is the layout's, said under the row ([altGrText]).
  */
 private fun captureKey(
     event: KeyEvent,
     reader: ChordReader,
     leaderKey: LeaderKey?,
     onChord: (ChordKey) -> Unit,
+    onTyped: (String) -> Unit,
     onUse: () -> Boolean,
     onCancel: () -> Unit,
 ): Boolean {
     val read = when (val read = reader.read(event, leaderKey)) {
         ChordRead.Consumed -> return true
-        ChordRead.Ignored -> return false
+        ChordRead.Ignored -> {
+            // The one named key pressed that the reader leaves is a key AltGr types (`@` on a German layout's Q,
+            // [ChordRead.Ignored]): the row says so from the event's own character, rather than listen on in silence.
+            if (event.type == KeyEventType.KeyDown) chordName(event.key.nativeKeyCode)?.let { onTyped(altGrText(it, event.utf16CodePoint)) }
+            return false
+        }
         is ChordRead.Chord -> read
     }
     val chord = read.chord
@@ -324,6 +342,17 @@ private fun captureKey(
     if (plain && chord.key == "ENTER" && onUse()) return true
     onChord(chord)
     return true
+}
+
+/**
+ * The line under a listening row for a key AltGr types, `@` on a German layout's Q: the layout's own
+ * character and no chord's ([ChordReader]), so the row says what it typed and where a chord's Alt is.
+ * A dead key's accent is shown as the spacing accent the map gives it.
+ */
+private fun altGrText(key: String, character: Int): String {
+    val label = ChordKey.keyLabel(key)
+    val typed = (character and KeyCharacterMap.COMBINING_ACCENT.inv()).toChar()
+    return "AltGr+$label types $typed on this keyboard. Hold the left Alt for Alt+$label."
 }
 
 /** `Ctrl+T · Ctrl+Shift+T` as a reader says it: "Ctrl+T or Ctrl+Shift+T". */

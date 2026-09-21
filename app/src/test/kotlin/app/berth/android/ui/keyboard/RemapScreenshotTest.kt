@@ -12,11 +12,13 @@ import android.view.KeyEvent.KEYCODE_ENTER
 import android.view.KeyEvent.KEYCODE_ESCAPE
 import android.view.KeyEvent.KEYCODE_F
 import android.view.KeyEvent.KEYCODE_P
+import android.view.KeyEvent.KEYCODE_Q
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_V
 import android.view.KeyEvent.KEYCODE_VOLUME_DOWN
 import android.view.KeyEvent.KEYCODE_VOLUME_UP
 import android.view.KeyEvent.KEYCODE_W
+import android.view.KeyEvent.META_ALT_LEFT_ON
 import android.view.KeyEvent.META_ALT_ON
 import android.view.KeyEvent.META_ALT_RIGHT_ON
 import android.view.KeyEvent.META_CTRL_ON
@@ -99,7 +101,8 @@ import java.io.File
  * The remap table, the chord prefix, pass-through and the first Ctrl+W's hint (spec C22, A44,
  * A46), and the volume buttons (A43), written to `build/outputs/roborazzi` with the accessibility
  * audit on each frame: the shortcut sheet with a row listening for its new chord, the line naming
- * what Ctrl+F takes from the shell, the row rebound, the line refusing Ctrl+C; the Stage with
+ * what Ctrl+F takes from the shell, the row rebound, the line refusing Ctrl+C, and beside a German
+ * keyboard ([ShadowKeyLayout], that test's own) the line saying AltGr+Q types `@`; the Stage with
  * pass-through on and its pill in the header; the hint bar a first plain Ctrl+W leaves in place of
  * the close, and the notice after its action; Settings › Hardware keyboard with the prefix, its
  * menu of two (Meta is Android's and not offered), the Leader key under it, Right Ctrl as it comes,
@@ -136,6 +139,7 @@ class RemapScreenshotTest {
     @After
     fun tearDown() {
         graph.close()
+        ShadowKeyLayout.layout = KeyLayout.US
         RuntimeEnvironment.setFontScale(1f)
     }
 
@@ -202,6 +206,38 @@ class RemapScreenshotTest {
         compose.onNodeWithText("Default").performClick()
         compose.waitUntil(5_000) { ChordAction.FIND !in settings.remaps }
         row("Find in scrollback, Ctrl+Shift+F. Rebind").assertExists()
+    }
+
+    @Test
+    @Config(shadows = [ShadowKeyLayout::class])
+    fun `beside a German keyboard a listening row says AltGr+Q types @ and where a chord's Alt is, and Left Alt+Q is then the chord`() {
+        ShadowKeyLayout.layout = KeyLayout.GERMAN
+        stageWithKeyboard()
+        chord(KEYCODE_SLASH, META_CTRL_ON or META_SHIFT_ON)
+        waitForText("Keyboard shortcuts")
+        expandSheet()
+        row("Copy the selection").performScrollTo().performClick()
+        awaitFocused(hasTestTag(ChordCaptureTag), "the listening row, Copy the selection")
+
+        // AltGr+Q is the layout's @ and no chord: the row keeps listening, Use stays off, and the line says what it typed and where the Alt is.
+        sheetChord(KEYCODE_Q, META_ALT_ON or META_ALT_RIGHT_ON)
+        text("AltGr+Q types @ on this keyboard. Hold the left Alt for Alt+Q.").assertExists()
+        row("Copy the selection, listening for the new chord, AltGr+Q types @ on this keyboard").assertExists()
+        compose.onNodeWithText("Use").assertIsNotEnabled()
+        assertTrue("the row listens on", compose.onAllNodesWithTag(ChordCaptureTag).fetchSemanticsNodes().size == 1)
+        capture("shortcut-sheet-remap-altgr")
+
+        // Left Alt+Q is Alt+Q: the shell's Meta+Q, named as the cost and offered, and the AltGr line gives way.
+        sheetChord(KEYCODE_Q, META_ALT_ON or META_ALT_LEFT_ON)
+        text("Takes Meta+Q from the shell. Enter binds it.").assertExists()
+        text("Alt+Q").assertExists()
+        compose.onNodeWithText("Use").assertIsEnabled()
+        // And AltGr+Q after a chord clears it: the last key is what the row speaks of.
+        sheetChord(KEYCODE_Q, META_ALT_ON or META_ALT_RIGHT_ON)
+        text("AltGr+Q types @ on this keyboard. Hold the left Alt for Alt+Q.").assertExists()
+        compose.onNodeWithText("Use").assertIsNotEnabled()
+        sheetChord(KEYCODE_ESCAPE)
+        row("Copy the selection, Ctrl+Shift+C. Rebind").assertExists()
     }
 
     // ---- pass-through -----------------------------------------------------------------------------------------

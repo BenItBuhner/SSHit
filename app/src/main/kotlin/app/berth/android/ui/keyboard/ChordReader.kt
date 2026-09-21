@@ -110,7 +110,12 @@ sealed interface ChordRead {
     /** The Leader's own press or release, or Escape letting go of a tapped Leader: the app's, and nothing to dispatch. */
     data object Consumed : ChordRead
 
-    /** A release, a modifier pressed alone, or a key no chord is built on: not a chord, and not the app's to keep from the terminal. */
+    /**
+     * A release, a modifier pressed alone, or a key no chord is built on; and the one named key pressed
+     * that is read this way, a key AltGr types with no Leader engaged (`@` on a German layout's Q), which
+     * the sheet's listening row names from the event's own character. Not a chord, and not the app's to
+     * keep from the terminal.
+     */
     data object Ignored : ChordRead
 
     /**
