@@ -83,6 +83,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.AlignmentLine
+import androidx.compose.ui.layout.HorizontalAlignmentLine
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -107,7 +111,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -357,8 +364,9 @@ fun ListRow(
     val shownTitleColor = if (focused) c.accent else titleColor
     val titleLines = linesAtFontScale(titleMaxLines)
     val subtitleLines = linesAtFontScale(subtitleMaxLines)
-    Row(
-        modifier
+    SelectionDotLayout(
+        selected = selected,
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = minHeight)
             .clip(RoundedCornerShape(BerthRadius.row))
@@ -369,33 +377,83 @@ fun ListRow(
                 } else Modifier,
             )
             .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (selected) {
-            Box(
-                Modifier
-                    .size(4.dp)
-                    .clip(CircleShape)
-                    .background(c.accent),
-            )
-            Spacer(Modifier.width(8.dp))
-        }
-        if (leading != null) {
-            leading()
-            Spacer(Modifier.width(12.dp))
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = titleStyle, color = shownTitleColor.copy(alpha = shownTitleColor.alpha * textAlpha), maxLines = titleLines, overflow = TextOverflow.Ellipsis)
-            val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
-            when (subtitle) {
-                null -> Unit
-                is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
-                else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (leading != null) {
+                leading()
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    title,
+                    style = titleStyle,
+                    color = shownTitleColor.copy(alpha = shownTitleColor.alpha * textAlpha),
+                    maxLines = titleLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.publishTitleLineCentre(titleStyle),
+                )
+                val subtitleColor = c.text2.copy(alpha = c.text2.alpha * textAlpha)
+                when (subtitle) {
+                    null -> Unit
+                    is AnnotatedString -> Text(subtitle, style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+                    else -> Text(subtitle.toString(), style = subtitleStyle, color = subtitleColor, minLines = subtitleMinLines, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (trailing != null) {
+                Spacer(Modifier.width(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = trailing)
             }
         }
-        if (trailing != null) {
-            Spacer(Modifier.width(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = trailing)
+    }
+}
+
+/** A selected row's 4 dp accent dot and the 8 dp between it and the row's content (A6). */
+private val SelectionDot = 4.dp
+private val SelectionDotGap = 8.dp
+
+/**
+ * The centre of a row title's first line, published by the title as an alignment line so the
+ * accent dot beside the row can sit on it: the line climbs out through the Column and the Row
+ * that hold the title, each adding the title's offset inside it, and reaches the layout that
+ * places the dot as a position in the row's content.
+ */
+private val TitleLineCentre = HorizontalAlignmentLine { a, b -> minOf(a, b) }
+
+/**
+ * The title's [TitleLineCentre]: half its style's line height, the first line's own box under
+ * `LineHeightStyle.Trim.None` whether the title runs to one line or two; half the measured
+ * height for a style that gives no line height.
+ */
+private fun Modifier.publishTitleLineCentre(style: TextStyle): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val line = if (style.lineHeight.isSpecified) style.lineHeight.roundToPx() else placeable.height
+    layout(placeable.width, placeable.height, mapOf(TitleLineCentre to line / 2)) { placeable.place(0, 0) }
+}
+
+/**
+ * A row's content with, when [selected], the accent dot at its leading edge: the content keeps
+ * the 12 dp the dot and its gap take, exactly as it did when the dot was the row's first child,
+ * and the dot's centre sits on the title's first line ([TitleLineCentre]) rather than on the
+ * row's. On a one-line row the two are the same point; on a row whose caption runs to a second
+ * and a third line the dot stays beside the title instead of sliding down to the caption. The
+ * content is the row's own `Row`, measured as before, so nothing but the dot moves.
+ */
+@Composable
+private fun SelectionDotLayout(selected: Boolean, modifier: Modifier, content: @Composable () -> Unit) {
+    val accent = Berth.colors.accent
+    val dot: @Composable () -> Unit = {
+        if (selected) Box(Modifier.size(SelectionDot).clip(CircleShape).background(accent))
+    }
+    Layout(contents = listOf(dot, content), modifier = modifier) { (dotMeasurables, contentMeasurables), constraints ->
+        val inset = if (selected) (SelectionDot + SelectionDotGap).roundToPx() else 0
+        val row = contentMeasurables.single().measure(constraints.offset(horizontal = -inset))
+        val dotPlaceable = dotMeasurables.singleOrNull()?.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        layout(constraints.constrainWidth(row.width + inset), row.height) {
+            row.placeRelative(inset, 0)
+            if (dotPlaceable != null) {
+                val centre = row[TitleLineCentre].takeIf { it != AlignmentLine.Unspecified } ?: row.height / 2
+                dotPlaceable.placeRelative(0, centre - dotPlaceable.height / 2)
+            }
         }
     }
 }
