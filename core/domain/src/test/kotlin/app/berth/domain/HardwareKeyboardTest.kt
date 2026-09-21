@@ -98,11 +98,12 @@ class HardwareKeyboardTest {
         assertEquals(ChordConflict.Shell("readline's forward-char"), forwardChar)
         assertFalse(forwardChar!!.blocks)
         assertEquals(ChordConflict.Shell("readline's set-mark"), table.conflict(ChordAction.FIND, ChordKey("SPACE", ctrl = true)))
-        assertEquals(ChordConflict.Shell("Meta+F to the shell"), table.conflict(ChordAction.FIND, ChordKey("F", alt = true)))
-        assertEquals(ChordConflict.Shell("Meta and a control character to the shell"), table.conflict(ChordAction.FIND, ChordKey("F", ctrl = true, alt = true)))
-        assertEquals(ChordConflict.Shell("the host's F5"), table.conflict(ChordAction.FIND, ChordKey("F5")))
-        assertEquals(ChordConflict.Shell("the shell's Ctrl+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true)))
-        assertEquals(ChordConflict.Shell("the shell's Ctrl+Shift+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true, shift = true)))
+        // Noun phrases, so the sheet can say "takes Meta+F from the shell".
+        assertEquals(ChordConflict.Shell("Meta+F"), table.conflict(ChordAction.FIND, ChordKey("F", alt = true)))
+        assertEquals(ChordConflict.Shell("Meta and Ctrl+F"), table.conflict(ChordAction.FIND, ChordKey("F", ctrl = true, alt = true)))
+        assertEquals(ChordConflict.Shell("F5"), table.conflict(ChordAction.FIND, ChordKey("F5")))
+        assertEquals(ChordConflict.Shell("Ctrl+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true)))
+        assertEquals(ChordConflict.Shell("Ctrl+Shift+\u2191"), table.conflict(ChordAction.FIND, ChordKey("UP", ctrl = true, shift = true)))
         // Ctrl+Shift and a letter is the app's own family; Meta is the keyboard's spare key; the Leader is the app's by choice.
         assertNull(table.conflict(ChordAction.FIND, ChordKey("N", ctrl = true, shift = true)))
         assertNull(table.conflict(ChordAction.FIND, ChordKey("N", meta = true)))

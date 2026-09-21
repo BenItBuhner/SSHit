@@ -264,15 +264,18 @@ class ChordTable(
         }
     }
 
-    /** The shell's claim on [chord] as one phrase (`readline's forward-char`), or null when it has none. */
+    /**
+     * The shell's claim on [chord] as a noun phrase that fits "takes … from the shell" (`readline's
+     * forward-char`, `Meta+F`, `F5`, `Ctrl+↑`), or null when it has none.
+     */
     private fun shellKey(chord: ChordKey): String? = when {
         chord.leader || chord.meta -> null
-        chord.key in FUNCTION_KEYS -> "the host's ${ChordKey.keyLabel(chord.key)}"
-        chord.ctrl && chord.alt -> "Meta and a control character to the shell"
-        chord.alt -> "Meta+${ChordKey.keyLabel(chord.key)} to the shell"
+        chord.key in FUNCTION_KEYS -> ChordKey.keyLabel(chord.key)
+        chord.ctrl && chord.alt -> "Meta and Ctrl+${ChordKey.keyLabel(chord.key)}"
+        chord.alt -> "Meta+${ChordKey.keyLabel(chord.key)}"
         chord.ctrlOnly -> READLINE[chord.key]?.let { "readline's $it" }
-            ?: if (chord.key in MODIFIED_KEYS) "the shell's Ctrl+${ChordKey.keyLabel(chord.key)}" else null
-        chord.ctrl && chord.shift && chord.key in MODIFIED_KEYS -> "the shell's Ctrl+Shift+${ChordKey.keyLabel(chord.key)}"
+            ?: if (chord.key in MODIFIED_KEYS) "Ctrl+${ChordKey.keyLabel(chord.key)}" else null
+        chord.ctrl && chord.shift && chord.key in MODIFIED_KEYS -> "Ctrl+Shift+${ChordKey.keyLabel(chord.key)}"
         else -> null
     }
 
