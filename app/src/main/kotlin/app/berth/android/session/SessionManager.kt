@@ -244,6 +244,15 @@ class SessionManager @Inject constructor(
     /** A tab a notification put on stage; the shell pops back to the Stage so it is actually seen. */
     val stageRequests: SharedFlow<String> = _stageRequests.asSharedFlow()
 
+    private val _closedTabs = MutableSharedFlow<String>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The id of each tab as it closes ([close]), once [get] and [tab] no longer answer to it: for
+     * what is kept by tab id outside the manager and goes with the tab. An event, not a state, so
+     * a tab opened and closed between two looks at [tabs] is not missed the way a conflated list is.
+     */
+    val closedTabs: SharedFlow<String> = _closedTabs.asSharedFlow()
+
     /** A notification's tap that arrived before the strip was restored; honoured the moment it is. */
     private var pendingActivation: Activation? = null
 
@@ -1302,6 +1311,7 @@ class SessionManager @Inject constructor(
         tab.close()
         _sessions.update { it - id }
         _filesTabs.update { it - id }
+        _closedTabs.tryEmit(id)
         trackers.remove(id)?.cancel()
         savedVersions.remove(id)
         notifier.cancelFor(id)

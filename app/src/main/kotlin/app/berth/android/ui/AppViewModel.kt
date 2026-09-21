@@ -323,11 +323,17 @@ class AppViewModel @Inject constructor(
 
     init {
         // Paths held for a tab go with the tab: a closed terminal has no line for them and no notice to offer.
+        // On the close itself rather than on the strip's list, which conflates: a tab opened and closed
+        // between two of the list's deliveries is never seen here, and its paths would be held for good.
+        // Every entry whose tab is gone goes, not the one closed alone, so a burst of closes past the
+        // buffer still leaves nothing behind.
         viewModelScope.launch {
-            sessions.tabs.collect { tabs ->
-                _heldPaths.update { held -> if (held.keys.all { id -> tabs.any { it.id == id } }) held else held.filterKeys { id -> tabs.any { it.id == id } } }
-            }
+            sessions.closedTabs.collect { forgetHeldPathsOfClosedTabs() }
         }
+    }
+
+    private fun forgetHeldPathsOfClosedTabs() {
+        _heldPaths.update { held -> if (held.keys.all { sessions.get(it) != null }) held else held.filterKeys { sessions.get(it) != null } }
     }
 
     /**
@@ -355,6 +361,9 @@ class AppViewModel @Inject constructor(
             return
         }
         _heldPaths.update { held -> held + (session.id to (held[session.id]?.plus(text) ?: HeldPaths(text.trimStart(), 1))) }
+        // The tab may have closed as the path landed: its close either came after this write, and
+        // takes the entry, or before it, and this look after the write finds the tab gone.
+        if (sessions.get(session.id) == null) forgetHeldPathsOfClosedTabs()
     }
 
     /**

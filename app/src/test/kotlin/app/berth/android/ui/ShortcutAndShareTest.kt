@@ -258,7 +258,7 @@ class ShortcutAndShareTest {
      * keystrokes; or another tab on stage. The path is held instead ([AppViewModel.heldPaths]), for
      * the shell's notice and its Paste, every later path joining what is held in landing order so
      * one Paste sends them all to the shell that took the drop; a tab closed takes its held paths
-     * with it. The bar and its button are `ShortcutAndShareScreenshotTest`'s.
+     * with it and holds none that land after. The bar and its button are `ShortcutAndShareScreenshotTest`'s.
      */
     @Test
     fun `a path landing in the alternate screen or with another tab on stage is held, and one Paste sends all of them in order`() {
@@ -321,12 +321,14 @@ class ShortcutAndShareTest {
             await("the path pasted at once") { session.emulator.cursorLineText().endsWith(quoted) }
             session.sendText("\u0015")
 
-            // A path held for a tab that closes goes with it.
+            // A path held for a tab that closes goes with it, and one landing once the tab is closed is not held.
             val otherSession = graph.sessions.get(other.id)!!
             vm.landDroppedPath(otherSession, "/tmp/nowhere")
             assertEquals(HeldPaths("/tmp/nowhere", 1), vm.heldPaths.value[other.id])
             graph.sessions.close(other.id)
             awaitOnMain("the closed tab's held path to go") { other.id !in vm.heldPaths.value }
+            vm.landDroppedPath(otherSession, "/tmp/late")
+            assertNull("a path landing for a closed tab has no line to wait for", vm.heldPaths.value[other.id])
         } finally {
             folder?.let { dir ->
                 if (session.emulator.isAlternateScreen) session.sendText("printf '\\033[?1049l'\r")
