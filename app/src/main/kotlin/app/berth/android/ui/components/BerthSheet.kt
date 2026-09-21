@@ -41,6 +41,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.SecureFlagPolicy
+import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -78,6 +79,10 @@ fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresent
  * surface, centred, at most [dialogMaxWidth] wide, over the theme's scrim, with nothing else
  * changed for its content but what it asks through [sheetFillsHeight]. On a phone the call is the
  * bottom sheet, parameter for parameter, so the phone's frames are what they were.
+ *
+ * Either way the sheet is a window of its own, whose Compose view provides the density afresh from
+ * its Context; the theme's interface cap (A11, 1.3×) is applied again inside it through
+ * [CappedFontScale], so a sheet's text at the system's larger sizes stops where the screen's does.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,8 +108,9 @@ fun BerthSheet(
             scrimColor = scrimColor,
             shape = RoundedCornerShape(topStart = BerthRadius.sheet, topEnd = BerthRadius.sheet),
             dragHandle = { SheetHandle() },
-            content = content,
-        )
+        ) {
+            CappedFontScale { content() }
+        }
     }
 }
 
@@ -133,31 +139,33 @@ private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp,
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         SideEffect { window?.setDimAmount(0f) }
         val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.84f).dp
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(c.scrim)
-                .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }
-                .semantics(mergeDescendants = false) {
-                    contentDescription = "Close"
-                    onClick { onDismiss(); true }
-                }
-                .imePadding()
-                .padding(24.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                modifier
-                    .widthIn(max = maxWidth)
-                    .heightIn(max = maxHeight)
-                    .clip(RoundedCornerShape(BerthRadius.sheet))
-                    .background(c.surface1)
-                    // A tap on the panel stays on the panel.
-                    .pointerInput(Unit) { detectTapGestures { } }
-                    .consumeWindowInsets(WindowInsets.safeDrawing),
+        CappedFontScale {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(c.scrim)
+                    .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }
+                    .semantics(mergeDescendants = false) {
+                        contentDescription = "Close"
+                        onClick { onDismiss(); true }
+                    }
+                    .imePadding()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                Spacer(Modifier.height(20.dp))
-                content()
+                Column(
+                    modifier
+                        .widthIn(max = maxWidth)
+                        .heightIn(max = maxHeight)
+                        .clip(RoundedCornerShape(BerthRadius.sheet))
+                        .background(c.surface1)
+                        // A tap on the panel stays on the panel.
+                        .pointerInput(Unit) { detectTapGestures { } }
+                        .consumeWindowInsets(WindowInsets.safeDrawing),
+                ) {
+                    Spacer(Modifier.height(20.dp))
+                    content()
+                }
             }
         }
     }
