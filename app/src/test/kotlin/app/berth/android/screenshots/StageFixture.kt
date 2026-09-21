@@ -33,10 +33,11 @@ object StageFixture {
      * Homelab's tab reading Live with no shell behind it: the record says Live and the screen is
      * the seeded frame, so the Stage shows the tab with its Deck (only a live tab has one) and no
      * sshd is needed; what is typed has nowhere to go. Put on stage beside the strip [seed] fills.
+     * [command] is what the record says is running, for a sheet that has to lay out a long one.
      */
-    fun liveHomelab(now: Long = System.currentTimeMillis()): TerminalSession {
+    fun liveHomelab(now: Long = System.currentTimeMillis(), command: String = "docker compose ps"): TerminalSession {
         val homelab = host(now, "homelab", "homelab", "192.168.1.20", "ben", SwatchColor.VERDIGRIS, AuthMethod.Password(AuthResolver.passwordSecretId("homelab")))
-        val record = record(now, "s-homelab", homelab, Workspace.DEFAULT_ID, 0, 12, "~/srv", "docker compose ps")
+        val record = record(now, "s-homelab", homelab, Workspace.DEFAULT_ID, 0, 12, "~/srv", command)
             .copy(state = SessionState.LIVE, layer = PersistenceLayer.IN_APP)
         val env = object : SessionEnvironment {
             override suspend fun authFor(host: Host): List<SshAuth> = emptyList()

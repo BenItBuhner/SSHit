@@ -270,6 +270,37 @@ class FontScaleScreenshotTest {
         capture("session-sheet-font-scale-2x-360-scrolled")
     }
 
+    /**
+     * A fact whose value cannot share the line with its label, a running command longer than the
+     * room beside "Running" at 360 dp and the cap: the label keeps its line whole and the value
+     * takes the one under it, set to the trailing edge where every other value stands (#20
+     * re-check, nit 11, the fallback), read off the nodes' bounds rather than the picture.
+     */
+    @Test
+    @Config(qualifiers = "w360dp-h740dp-420dpi")
+    fun `a fact too long for its line at 360 dp and 2x puts the value under the label, whole`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val command = "docker compose -f infra/compose.yml up -d --build"
+        val live = StageFixture.liveHomelab(command = command)
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            SessionSheet(graph.viewModel, live, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Look")).fetchSemanticsNodes().isNotEmpty() }
+        val onSheet = hasAnyAncestor(isDialog())
+        val label = compose.onNode(hasText("Running") and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        val value = compose.onNode(hasText(command) and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        val beside = compose.onNode(hasText("Live") and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        assertEquals("the label on one line", 1, label.textLayout()!!.lineCount)
+        assertTrue("the value under the label, not beside it", value.boundsInRoot.top >= label.boundsInRoot.bottom - 1f)
+        assertEquals("the value at the trailing edge, where State's stands", beside.boundsInRoot.right, value.boundsInRoot.right, 1f)
+        compose.assertNoTextCut("the Session sheet with a long fact at 360 dp and the interface's font cap", within = isDialog())
+        compose.assertNoBrokenWords("the Session sheet with a long fact at 360 dp and the interface's font cap", within = isDialog())
+        capture("session-sheet-font-scale-2x-360-long-fact")
+    }
+
     @Test
     fun `hosts at 2x`() {
         StageFixture.seed(graph)

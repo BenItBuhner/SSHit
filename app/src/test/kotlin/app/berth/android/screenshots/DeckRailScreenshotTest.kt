@@ -482,11 +482,9 @@ class DeckRailScreenshotTest {
         compose.waitForIdle()
         compose.onNodeWithText("Font").assertIsDisplayed()
         compose.onNodeWithText("System monospace").assertIsDisplayed()
-        // The Look panel's own texts whole. The editor's two cut texts at 1x (the Add tunnel plus, the
-        // Alt key's caption) are main's, fixed in #19 and held there; the whole editor is held once that lands.
-        val cut = compose.cutTexts()
-        val look = listOf("Look", "Theme", "Font", "Font size", "System monospace", "Inherit")
-        assertTrue("text cut on the host editor's Look panel: ${cut.filter { it in look }}", cut.none { it in look })
+        // The whole editor whole, the Look panel with it: the two texts main cut at 1x (the Add tunnel
+        // plus, the Alt key's caption) were #19's to fix, and this holds them since the rebase over it.
+        compose.assertNoTextCut("the host editor with its Look panel")
         capture("host-editor-look-font")
 
         compose.onNodeWithText("Font").performClick()
