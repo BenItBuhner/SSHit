@@ -238,7 +238,11 @@ interface ModifierAwareSink : TerminalInputSink {
     fun onCodePoint(codePoint: Int, modifiers: Int)
 }
 
-/** Hardware keyboard events arriving through Compose. */
+/**
+ * Hardware keyboard events arriving through Compose. Ctrl and Alt are the chord's: the key's base
+ * character goes with them (Ctrl+C is `^C`, Alt+F is Meta+F). Right Alt is the layout's first: where
+ * it is AltGr, the third-level character it reaches is typed as it is ([thirdLevelCharacter]).
+ */
 fun handleComposeKeyEvent(event: androidx.compose.ui.input.key.KeyEvent, sink: TerminalInputSink): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
     var mods = 0
@@ -253,12 +257,33 @@ fun handleComposeKeyEvent(event: androidx.compose.ui.input.key.KeyEvent, sink: T
     }
     // A word the soft keyboard is still composing goes before the hardware key.
     sink.flushComposing()
+    // A key's third level under Right Alt, AltGr on a German or Nordic layout: `@` on Q is the layout's
+    // own character, typed as it is, and the Alt that reached it is no chord's.
+    val third = if (mods and Mod.ALT != 0 && mods and Mod.CTRL == 0) thirdLevelCharacter(native.keyCharacterMap::get, native.keyCode, native.metaState) else 0
+    if (third > 0 && third and KeyCharacterMap.COMBINING_ACCENT == 0) return handleKeyDown(native.keyCode, third, mods and Mod.ALT.inv(), sink)
     val unicode = if (mods and (Mod.CTRL or Mod.ALT) != 0) {
         // unicodeChar with Ctrl held is 0 on Android; recover the base character.
         val base = native.getUnicodeChar(native.metaState and KeyEvent.META_SHIFT_MASK)
         if (base > 0) base else event.utf16CodePoint
     } else event.utf16CodePoint
     return handleKeyDown(native.keyCode, unicode, mods, sink)
+}
+
+/**
+ * The character a key types as its third level, the one Right Alt reaches where it is AltGr: `@` on a
+ * German layout's Q, `{ [ ] }` on its 7 8 9 0, `\` on ß, `|` on the key beside the left Shift. It is what
+ * the layout's map gives the key under the modifiers held ([character] is the map's own lookup,
+ * `KeyCharacterMap.get`), for a key with a character under Right Alt and none under Left Alt: the
+ * map's `ralt` row, which only the right key reaches. 0 for a key with no third level, so Right Alt
+ * is the chord's Alt there the way the left one is; and 0 where the layout puts the same character
+ * under either Alt (Generic.kcm, the US layout, has ç on C and ß on S that way, and its accents on
+ * E I N U, as a Mac's Option has them), since Alt+C is Meta+C to a terminal whichever Alt is held.
+ * A dead key's accent comes back as the map gives it, with `KeyCharacterMap.COMBINING_ACCENT` set.
+ */
+fun thirdLevelCharacter(character: (keyCode: Int, metaState: Int) -> Int, keyCode: Int, metaState: Int): Int {
+    if (metaState and KeyEvent.META_ALT_RIGHT_ON == 0) return 0
+    if (character(keyCode, KeyEvent.META_ALT_RIGHT_ON) == 0 || character(keyCode, KeyEvent.META_ALT_LEFT_ON) != 0) return 0
+    return character(keyCode, metaState)
 }
 
 /**
