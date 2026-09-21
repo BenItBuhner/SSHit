@@ -307,7 +307,7 @@ class SessionPanesTest {
         awaitStored(null)
         graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
         awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
-        assertEquals("s-pihole", runBlocking { graph.settings.lastActiveSessionId.first() })
+        awaitActiveStored("s-pihole")
         // The roles trade: the document follows.
         graph.sessions.setActive("s-homelab")
         awaitStored(StageSplit("s-pihole", StageSide.LEFT))
@@ -326,7 +326,7 @@ class SessionPanesTest {
     fun `a relaunch rebuilds both panes, the companion on its side and the keys where they were`() {
         graph.sessions.placeInPane("s-pihole", PaneSide.LEFT)
         awaitStored(StageSplit("s-homelab", StageSide.LEFT))
-        await("the active id written") { runBlocking { graph.settings.lastActiveSessionId.first() } == "s-pihole" }
+        awaitActiveStored("s-pihole")
 
         graph = graph.relaunch()
         runBlocking { graph.sessions.restore() }
@@ -365,7 +365,7 @@ class SessionPanesTest {
     fun `a Files tab beside a terminal comes back in its pane too`() {
         graph.sessions.placeInPane("f-build", PaneSide.RIGHT)
         awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
-        await("the active id written") { runBlocking { graph.settings.lastActiveSessionId.first() } == "f-build" }
+        awaitActiveStored("f-build")
         graph = graph.relaunch()
         runBlocking { graph.sessions.restore() }
         assertEquals("f-build", graph.sessions.activeTabId.value)
@@ -389,6 +389,16 @@ class SessionPanesTest {
 
     private fun awaitStored(expected: StageSplit?) =
         await("the stored split to be $expected") { runBlocking { graph.settings.stageSplit.first() } == expected }
+
+    /**
+     * The split and the active id reach the store on two coroutines of the manager's scope (the
+     * split's collector, and the launch that follows a staged tab), in whichever order the
+     * dispatcher runs them, so the one landing says nothing about the other. A process ending
+     * between the two is safe by construction: a restore drops a split naming the active tab as
+     * its companion, and opens on the one tab.
+     */
+    private fun awaitActiveStored(expected: String?) =
+        await("the stored active id to be $expected") { runBlocking { graph.settings.lastActiveSessionId.first() } == expected }
 
     /**
      * The Stage composes each pane's tab under the tab's id, and an id can be in the composition
