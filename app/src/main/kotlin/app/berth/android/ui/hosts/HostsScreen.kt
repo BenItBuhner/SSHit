@@ -208,7 +208,10 @@ fun HostsScreen(
                 }
                 when (sort) {
                     HostSort.RECENT -> {
-                        val recent = shown.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
+                        // Recent heads the whole library (C9); a search or a chip narrows it to one list of
+                        // matches, since a shortcut over a list of two would only say each of them twice.
+                        val narrowed = query.isNotBlank() || tag != null
+                        val recent = if (narrowed) emptyList() else shown.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
                         if (recent.isNotEmpty()) {
                             label("Recent", true)
                             items(recent, key = { "recent-" + it.id }) { host -> row(host) }
