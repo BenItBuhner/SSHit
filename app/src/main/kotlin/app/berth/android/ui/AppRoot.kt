@@ -316,7 +316,16 @@ private fun Shell(vm: AppViewModel) {
                     is Screen.HostEditor -> NavEntry(key) {
                         HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() }, link = key.link)
                     }
-                    is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
+                    is Screen.Keys -> NavEntry(key) {
+                        KeysScreen(
+                            vm,
+                            onBack = { back() },
+                            onOpenTab = { id ->
+                                vm.setActive(id)
+                                toStage()
+                            },
+                        )
+                    }
                     is Screen.Settings -> NavEntry(key) {
                         SettingsScreen(
                             vm,

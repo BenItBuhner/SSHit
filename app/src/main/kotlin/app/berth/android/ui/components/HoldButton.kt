@@ -39,6 +39,8 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.a11y.showsFocus
@@ -133,7 +135,16 @@ fun HoldButton(
                 .padding(horizontal = 18.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(text, style = BerthType.label, color = if (enabled) label else label.copy(alpha = 0.5f), maxLines = 1)
+            // The label carries the spec's `— hold to confirm`, so at the interface's font cap (A11) it takes a second line rather than losing that half.
+            Text(
+                text,
+                style = BerthType.label,
+                color = if (enabled) label else label.copy(alpha = 0.5f),
+                textAlign = TextAlign.Center,
+                maxLines = linesAtFontScale(1),
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
         }
     }
 }
