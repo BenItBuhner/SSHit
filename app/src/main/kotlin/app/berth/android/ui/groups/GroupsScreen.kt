@@ -75,7 +75,7 @@ import app.berth.domain.model.Workspace
  * many columns as the width takes at [CARD_MIN_WIDTH]. A card is the group's swatch (ringed when a
  * tab in it needs the user) and name, its tab count with how many need the user, and up to three
  * of its tabs with the one mark each carries. Tap a card to switch to the group and go to the
- * Stage; long-press for its menu (Rename, Colour, New tab here, Move up and down, Close group,
+ * Stage; long-press for its menu (Rename, Colour, New tab here, Move earlier and later, Close group,
  * Delete group), which Edit in the header puts under a tap as well, marking each card with the
  * menu glyph. The last card is New group on `surface.1`. The spec's vocabulary note (C3, C8)
  * makes these "groups" and their contents "tabs" everywhere the user reads them.
@@ -261,9 +261,12 @@ private fun NewGroupCard(onClick: () -> Unit) {
 }
 
 /**
- * The card's menu: the chip's (C3) less Collapse, which is the strip's own concern, plus Move up
- * and Move down for the order the spec's Edit lets a drag change, each only where there is
- * somewhere to move to. Delete is not offered for the last group, which cannot be deleted.
+ * The card's menu: the chip's (C3) less Collapse, which is the strip's own concern, plus Move
+ * earlier and Move later for the order the spec's Edit lets a drag change, each only where there
+ * is somewhere to move to. The words are the order's, not the screen's: on a grid of two or more
+ * columns the card before this one stands to its left, not over it, and "up" would say the wrong
+ * thing on every card but the first of a row. Delete is not offered for the last group, which
+ * cannot be deleted.
  */
 @Composable
 private fun GroupCardMenu(
@@ -279,8 +282,8 @@ private fun GroupCardMenu(
         BerthMenuItem("Rename", onClick = { onDismiss(); actions.editGroup(id) })
         BerthMenuItem("Colour", onClick = { onDismiss(); actions.editGroup(id) })
         BerthMenuItem("New tab here", onClick = { onDismiss(); actions.newTabIn(id) })
-        if (index > 0) BerthMenuItem("Move up", onClick = { onDismiss(); actions.moveGroup(id, index - 1) })
-        if (index < count - 1) BerthMenuItem("Move down", onClick = { onDismiss(); actions.moveGroup(id, index + 1) })
+        if (index > 0) BerthMenuItem("Move earlier", onClick = { onDismiss(); actions.moveGroup(id, index - 1) })
+        if (index < count - 1) BerthMenuItem("Move later", onClick = { onDismiss(); actions.moveGroup(id, index + 1) })
         BerthMenuItem("Close group", destructive = true, onClick = { onDismiss(); actions.closeGroup(id) })
         if (count > 1) BerthMenuItem("Delete group", destructive = true, onClick = { onDismiss(); actions.deleteGroup(id) })
     }

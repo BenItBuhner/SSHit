@@ -973,27 +973,29 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("New group").performClick()
         assertEquals(1, newGroup)
 
-        // Edit: every card wears the menu glyph and a tap opens its menu; the last group cannot move down.
+        // Edit: every card wears the menu glyph and a tap opens its menu; the last group cannot move later.
+        // The order's words, earlier and later, since on the grid the card before Work is to its left (nit 5).
         compose.onNodeWithText("Edit").performClick()
         waitForText("Done")
         capture("groups-edit")
         compose.onNodeWithText("Work").performClick()
-        waitForText("Move up")
+        waitForText("Move earlier")
         for (item in listOf("Rename", "Colour", "New tab here", "Close group", "Delete group")) compose.onNodeWithText(item).assertExists()
-        hasNoText("Move down")
+        hasNoText("Move later")
+        hasNoText("Move up")
         capture("groups-card-menu")
         assertNoTextCut("a group card's menu")
-        compose.onNodeWithText("Move up").performClick()
-        waitForNoText("Move up")
+        compose.onNodeWithText("Move earlier").performClick()
+        waitForNoText("Move earlier")
         assertEquals(listOf("ws-work" to 0), actions.moved)
         assertEquals(listOf("ws-work"), opened)
 
-        // The first group's menu has Move down and no Move up; a long-press opens it in either mode.
+        // The first group's menu has Move later and no Move earlier; a long-press opens it in either mode.
         compose.onNodeWithText("Done").performClick()
         waitForText("Edit")
         compose.onNodeWithText("Home").performTouchInput { longClick() }
-        waitForText("Move down")
-        hasNoText("Move up")
+        waitForText("Move later")
+        hasNoText("Move earlier")
         compose.onNodeWithText("Rename").performClick()
         assertEquals(listOf(Workspace.DEFAULT_ID), actions.edited)
     }
