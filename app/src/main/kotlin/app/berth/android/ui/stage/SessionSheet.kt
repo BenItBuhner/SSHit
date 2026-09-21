@@ -62,8 +62,11 @@ fun SessionSheet(
     val others by vm.workspaceTabs.collectAsState()
     val tunnels by vm.tunnels.collectAsState()
     val tunnelStatuses by vm.tunnelStatuses.collectAsState()
+    val savedHosts by vm.hosts.collectAsState()
     val now = ageTicker()
     val host = record.hostSnapshot
+    // A Quick connect tab's host is nobody's in the library (spec C11): the sheet offers to save it rather than to edit what is not there.
+    val hostSaved = savedHosts.any { it.id == record.hostId }
     val hostTunnels = record.hostId?.let { id -> tunnels.filter { it.hostId == id } } ?: emptyList()
     val up = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Up }
     val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
@@ -136,8 +139,12 @@ fun SessionSheet(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     record.hostId?.let { hostId ->
-                        BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
-                        BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                        if (hostSaved) {
+                            BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                            BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                        } else {
+                            BerthButton("Save as host", onClick = { vm.saveSnapshotAsHost(host) { saved -> onEditHost(saved.id) }; onDismiss() }, modifier = Modifier.weight(1f))
+                        }
                     }
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
                 }

@@ -293,6 +293,10 @@ private fun Shell(vm: AppViewModel) {
                                 vm.open(host)
                                 toStage()
                             },
+                            onConnectInNewGroup = { host ->
+                                vm.openInNewGroup(host)
+                                toStage()
+                            },
                             onFiles = { host ->
                                 vm.openFilesForHost(host)
                                 toStage()
@@ -415,6 +419,10 @@ private fun Shell(vm: AppViewModel) {
                 sessionSheet = false
                 toStage()
                 if (drawer.isOpen) closeDrawer()
+            },
+            onSaved = { host ->
+                quickConnectLink = null
+                go(Screen.HostEditor(host.id))
             },
         )
     }

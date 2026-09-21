@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.KnownHostsImport
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
@@ -48,6 +50,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
+import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.Dispatchers
@@ -211,6 +214,140 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
         }
     }
 }
+
+/**
+ * Server keys from a pasted or picked `known_hosts` (spec A16), beside the config import. Every
+ * address the file names becomes a row, `host:port · TYPE · SHA256:…`; rows whose key Berth already
+ * trusts for that address start unticked and say so. A hashed name (`ssh-keygen -H`, the default
+ * on many systems) is read for a saved or known host whose address hashes the same and is marked
+ * as matched; the ones no host matches are counted in one line, since the name itself is not in
+ * the file. Wildcards, negations, CA and revoked lines are skipped and said, each with its line.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) -> Unit = {}) {
+    val c = Berth.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var text by remember { mutableStateOf("") }
+    var fileNote by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var parsed by remember { mutableStateOf<KnownHostsImport?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            val read = readDocument(context, uri)
+            if (read == null) fileNote = "Couldn't read that file." else { text = read; fileNote = null }
+        }
+    }
+    // The read consults the saved and known hosts for hashed names, so it runs where they are read, not in composition.
+    LaunchedEffect(text) { parsed = if (text.isBlank()) null else vm.parseKnownHosts(text) }
+    val candidates = parsed?.candidates.orEmpty()
+    var selection by remember(parsed) { mutableStateOf(candidates.filter { !it.existing }.map { it.key }.toSet()) }
+    val picked = candidates.filter { it.key in selection }
+
+    BerthSheet(onDismiss = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetTitle("Import known hosts", "Paste your ~/.ssh/known_hosts, or choose the file")
+            BerthField(
+                text,
+                { text = it },
+                placeholder = "[10.0.0.12]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\u2026",
+                mono = true,
+                singleLine = false,
+                minLines = 4,
+                modifier = Modifier.heightIn(max = 220.dp),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                helper = fileNote,
+                isError = fileNote != null,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                BerthButton("Choose file", onClick = { picker.launch(arrayOf("*/*")) })
+                if (text.isNotEmpty()) BerthButton("Clear", kind = ButtonKind.TEXT, onClick = { text = "" })
+            }
+
+            val read = parsed
+            if (read != null) {
+                if (candidates.isEmpty()) {
+                    Text(
+                        if (read.hashedUnresolved > 0) "No key here names a host Berth can hold: the names are hashed, and none hashes to a saved host's address." else "No server keys found.",
+                        style = BerthType.caption,
+                        color = c.text2,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                } else {
+                    SectionLabel("${candidates.size} " + if (candidates.size == 1) "key" else "keys", Modifier.padding(start = 4.dp))
+                    for (cand in candidates) {
+                        val selected = cand.key in selection
+                        ListRow(
+                            title = cand.entry.address,
+                            subtitle = buildList {
+                                add(KnownHostKey.algorithmLabelFor(cand.entry.keyType))
+                                add(shortFingerprint(cand.entry.fingerprintSha256))
+                                if (cand.existing) add("trusted already")
+                                if (cand.entry.hashed) add("matched by hash")
+                            }.joinToString(" \u00B7 "),
+                            minHeight = 52.dp,
+                            onClick = { selection = if (selected) selection - cand.key else selection + cand.key },
+                            leading = { TickDot(selected) },
+                        )
+                    }
+                }
+                if (read.hashedUnresolved > 0) {
+                    Text(
+                        (if (read.hashedUnresolved == 1) "1 hashed name matches no saved host and is left out; " else "${read.hashedUnresolved} hashed names match no saved host and are left out; ") +
+                            "save the host first, then import again.",
+                        style = BerthType.caption,
+                        color = c.text3,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+                val otherSkips = read.skipped.filter { !it.reason.startsWith("a hashed host name") }
+                if (otherSkips.isNotEmpty()) {
+                    Text(
+                        otherSkips.take(4).joinToString("\n") { "Line ${it.line}: ${it.reason}." } + if (otherSkips.size > 4) "\nAnd ${otherSkips.size - 4} more." else "",
+                        style = BerthType.caption,
+                        color = c.text3,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                BerthButton(
+                    when {
+                        busy -> "Importing\u2026"
+                        picked.size == 1 -> "Import 1 key"
+                        else -> "Import ${picked.size} keys"
+                    },
+                    kind = ButtonKind.PRIMARY,
+                    enabled = picked.isNotEmpty() && !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val count = vm.importKnownHosts(picked.map { it.entry })
+                            busy = false
+                            onImported(count)
+                            onDismiss()
+                        }
+                    },
+                )
+                BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/** `SHA256:` and the first four groups of the hash, enough to tell keys apart on a row. */
+private fun shortFingerprint(fingerprint: String): String =
+    "SHA256:" + fingerprint.removePrefix("SHA256:").chunked(4).take(4).joinToString(" ") + "\u2026"
 
 /** The tick on a candidate row: an 8 dp dot, accent when the host will import, text.3 when it will not. */
 @Composable

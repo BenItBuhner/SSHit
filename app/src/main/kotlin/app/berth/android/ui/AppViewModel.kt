@@ -55,6 +55,7 @@ import app.berth.domain.repository.WorkspaceRepository
 import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshConfigParseResult
+import app.berth.ssh.KnownHostsFile
 import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshLink
@@ -316,28 +317,61 @@ class AppViewModel @Inject constructor(
      * the trust sheet while the field still names the link's server.
      */
     fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null, fromLink: LinkOutcome.QuickConnect? = null): String? {
-        val link = when (val result = SshLink.parse(spec)) {
-            is SshLink.Result.Malformed -> return result.reason
-            is SshLink.Result.Parsed -> result.link
-        }
-        if (!link.plain) return QUICK_CONNECT_IS_A_SHELL
+        val (link, problem) = quickLink(spec)
+        if (link == null) return problem
         // A fingerprint typed into the field counts as the link's would; one the link carried holds while the field still names its server.
         val linkFingerprint = link.fingerprint ?: fromLink?.fingerprintFor(link)
+        val host = quickHost(link, identityId, id = "quick-" + UUID.randomUUID().toString())
+        viewModelScope.launch { sessions.open(host, workspaceId, linkFingerprint = linkFingerprint) }
+        return null
+    }
+
+    /**
+     * Quick connect's Save as host (spec C11): the spec read as [quickConnect] reads it, saved as a
+     * host named after its address under an id of its own, with the identity the sheet picked;
+     * [onSaved] gets the saved host, for the editor to open on so it can be named. Null once saved;
+     * otherwise the sentence for the field's helper line, as [quickConnect] would give it.
+     */
+    fun saveQuickConnectAsHost(spec: String, identityId: String?, onSaved: (Host) -> Unit): String? {
+        val (link, problem) = quickLink(spec)
+        if (link == null) return problem
+        viewModelScope.launch { onSaved(saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)) }
+        return null
+    }
+
+    /**
+     * The Session sheet's Save as host (spec C11) for a tab opened by Quick connect: the tab's host,
+     * as the login was made with it, saved under the id the tab already carries, so the tab is that
+     * host's from here on (its Host button, its reconnects, its place in the library). [onSaved] gets
+     * the host, for the editor to open on.
+     */
+    fun saveSnapshotAsHost(host: Host, onSaved: (Host) -> Unit = {}) {
+        viewModelScope.launch { onSaved(saveHostNow(host.copy(createdAt = System.currentTimeMillis()), null)) }
+    }
+
+    /** The link a Quick connect spec parses to, or the one sentence that stops it. */
+    private fun quickLink(spec: String): Pair<SshLink?, String?> {
+        val link = when (val result = SshLink.parse(spec)) {
+            is SshLink.Result.Malformed -> return null to result.reason
+            is SshLink.Result.Parsed -> result.link
+        }
+        if (!link.plain) return null to QUICK_CONNECT_IS_A_SHELL
+        return link to null
+    }
+
+    private fun quickHost(link: SshLink, identityId: String?, id: String): Host {
         val (user, address, port) = link.quickTarget()
-        val name = address
-        val host = Host(
-            id = "quick-" + UUID.randomUUID().toString(),
-            name = name,
-            color = SwatchColor.forName(name),
-            monogram = Host.monogramFor(name),
+        return Host(
+            id = id,
+            name = address,
+            color = SwatchColor.forName(address),
+            monogram = Host.monogramFor(address),
             address = address,
             port = port,
             user = user,
             auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
             createdAt = System.currentTimeMillis(),
         )
-        viewModelScope.launch { sessions.open(host, workspaceId, linkFingerprint = linkFingerprint) }
-        return null
     }
 
     fun setActive(id: String?) = sessions.setActive(id)
@@ -482,6 +516,105 @@ class AppViewModel @Inject constructor(
             security.forgetHost(id)
             settings.updateHardwareKeyboardSettings { it.withoutHost(id) }
         }
+    }
+
+    /**
+     * Connect in new group (spec C9): a group named and coloured after the host is made and made
+     * current, and the host's tab opens in it, so a login that deserves a group of its own gets
+     * one without a trip through the group editor.
+     */
+    fun openInNewGroup(host: Host) {
+        viewModelScope.launch {
+            val ws = sessions.createWorkspace(host.name, host.color)
+            sessions.setCurrentWorkspace(ws.id)
+            sessions.connect(host, ws.id)
+        }
+    }
+
+    /**
+     * Duplicate (spec C9): a copy of the host under a new id, named `<name> copy` (`copy 2`, `copy
+     * 3` while such a name is taken), never connected, created now. A stored password is copied
+     * under the copy's own secret id, since secrets are per host; every other field, tags and
+     * environment included, comes along as it is. [onDone] gets the copy, for the editor to open on.
+     */
+    fun duplicateHost(id: String, onDone: (Host) -> Unit = {}) {
+        viewModelScope.launch {
+            val all = hostRepository.observeAll().first()
+            val host = all.firstOrNull { it.id == id } ?: return@launch
+            val taken = all.map { it.name.lowercase() }.toSet()
+            var name = "${host.name} copy"
+            var n = 2
+            while (name.lowercase() in taken) name = "${host.name} copy ${n++}"
+            var copy = host.copy(id = UUID.randomUUID().toString(), name = name, lastConnectedAt = null, createdAt = System.currentTimeMillis())
+            val auth = host.auth
+            if (auth is AuthMethod.Password) {
+                val secret = auth.secretId?.let { secrets.get(it) }
+                copy = if (secret != null) {
+                    val secretId = AuthResolver.passwordSecretId(copy.id)
+                    secrets.put(secretId, secret)
+                    copy.copy(auth = AuthMethod.Password(secretId))
+                } else {
+                    copy.copy(auth = AuthMethod.Password(null))
+                }
+            }
+            hostRepository.upsert(copy)
+            onDone(copy)
+        }
+    }
+
+    // ---- known hosts import ----------------------------------------------------------------------
+
+    /**
+     * A pasted or picked `known_hosts` read for import (spec A16): every line [KnownHostsFile]
+     * reads, hashed names tried against the saved hosts' and the known hosts' addresses. Each entry
+     * is marked as already trusted when Berth has that very key for that address, so the sheet can
+     * start it unticked.
+     */
+    suspend fun parseKnownHosts(text: String): KnownHostsImport {
+        val saved = hostRepository.observeAll().first().map { it.address to it.port }
+        val known = knownHostRepository.observeAll().first()
+        val parsed = KnownHostsFile.parse(text, saved + known.map { it.host to it.port })
+        val trusted = known.map { Triple(it.host.lowercase(), it.port, it.publicKeyBase64) }.toSet()
+        return KnownHostsImport(
+            parsed.entries.map { KnownHostsCandidate(it, existing = Triple(it.host.lowercase(), it.port, it.publicKeyBase64) in trusted) },
+            parsed.skipped,
+            parsed.hashedUnresolved,
+        )
+    }
+
+    /** Saves [entries] as trusted keys, first seen now; one already held for its address is left as it is. Returns how many were added. */
+    suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): Int {
+        var added = 0
+        val now = System.currentTimeMillis()
+        for (entry in entries) {
+            val present = knownHostRepository.find(entry.host, entry.port).any { it.publicKeyBase64 == entry.publicKeyBase64 }
+            if (present) continue
+            knownHostRepository.upsert(
+                KnownHostKey(
+                    id = UUID.randomUUID().toString(),
+                    host = entry.host,
+                    port = entry.port,
+                    keyType = entry.keyType,
+                    publicKeyBase64 = entry.publicKeyBase64,
+                    fingerprintSha256 = entry.fingerprintSha256,
+                    firstSeenAt = now,
+                    lastSeenAt = now,
+                ),
+            )
+            added++
+        }
+        return added
+    }
+
+    /**
+     * Share as `ssh://` link (spec C9): `ssh://user@address[:port]#name`, the form the spec's deep
+     * link reads and the parser takes back, with the fingerprint of the key trusted for the host
+     * as the draft's `;fingerprint=` parameter when one is (the most recently seen, if several), so
+     * the trust sheet on the receiving side can say the server's key is the one this side saw.
+     */
+    suspend fun shareLink(host: Host): String {
+        val trusted = knownHostRepository.find(host.address, host.port).maxByOrNull { it.lastSeenAt }
+        return SshLink.format(host.user, host.address, host.port, fingerprint = trusted?.fingerprintSha256, name = host.name)
     }
 
     // ---- identities ------------------------------------------------------------------------------
@@ -834,6 +967,14 @@ class AppViewModel @Inject constructor(
 }
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
+
+/** One `known_hosts` entry as the import sheet lists it; [existing] when Berth already trusts this key for this address. */
+data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val existing: Boolean) {
+    val key: String get() = "${entry.host}:${entry.port}:${entry.publicKeyBase64}"
+}
+
+/** A `known_hosts` text as read for the import sheet ([AppViewModel.parseKnownHosts]). */
+data class KnownHostsImport(val candidates: List<KnownHostsCandidate>, val skipped: List<KnownHostsFile.Skipped>, val hashedUnresolved: Int)
 
 /** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {

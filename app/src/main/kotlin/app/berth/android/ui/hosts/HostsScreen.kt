@@ -1,5 +1,7 @@
 package app.berth.android.ui.hosts
 
+import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,11 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,15 +29,16 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.LinkOutcome
@@ -42,8 +46,11 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.EmptyState
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ListRow
@@ -53,21 +60,35 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.importer.ImportHostsSheet
+import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
+import kotlinx.coroutines.launch
+
+/** The Hosts screen's order (spec C9, Overflow › Sort). */
+enum class HostSort(val label: String) {
+    /** The three last connected under Recent, then everyone by name. */
+    RECENT("Recent"),
+    NAME("Name"),
+
+    /** A section per tag, a host under each of its tags, the untagged last. */
+    TAG("Tag"),
+}
 
 /**
- * The host library (spec C9). Tap opens a tab on the host in the current group (spec C3); the row's
- * second line is `user@address:port`, then `via bastion` for a host that jumps, the chain as
- * `bastion › edge`. Long-press offers Files (the host's Files tab, opened or brought on stage, when
- * [onFiles] is given), Connect as tunnel only (a Tunnels tab on the host, whatever its toggle says,
- * when [onTunnels] is given), Edit and Delete. [picker] mode titles the screen "New tab"; back
- * returns to the Stage.
+ * The host library (spec C9). A search field under the header reads name, address, user and tags;
+ * the tags in use are chips under it, one chosen at a time, `All` to clear. Tap opens a tab on the
+ * host in the current group (spec C3); the row's second line is `user@address:port`, then `via
+ * bastion` for a host that jumps, the chain as `bastion › edge`. Long-press offers Edit, Connect in
+ * new group (when [onConnectInNewGroup] is given), Connect as tunnel only (a Tunnels tab on the
+ * host, whatever its toggle says, when [onTunnels] is given), Files (when [onFiles] is given),
+ * Duplicate (a copy, opened in the editor), Share as `ssh://` link and Delete. Overflow holds
+ * Sort, Quick connect, the two imports and Known hosts. [picker] mode titles the screen "New tab";
+ * back returns to the Stage.
  */
 @Composable
 fun HostsScreen(
@@ -81,15 +102,28 @@ fun HostsScreen(
     picker: Boolean = false,
     onFiles: ((Host) -> Unit)? = null,
     onTunnels: ((Host) -> Unit)? = null,
+    onConnectInNewGroup: ((Host) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val hosts by vm.hosts.collectAsState()
     val byId = remember(hosts) { hosts.associateBy { it.id } }
     var quickConnect by remember { mutableStateOf(false) }
     var importConfig by remember { mutableStateOf(false) }
+    var importKnownHosts by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var sort by rememberSaveable { mutableStateOf(HostSort.RECENT) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var tag by rememberSaveable { mutableStateOf<String?>(null) }
     val now = ageTicker()
+
+    val tags = remember(hosts) { hosts.allTags() }
+    // A chip for a tag no host has any more would filter to nothing for good.
+    if (tag != null && tag !in tags) tag = null
+    val shown = remember(hosts, query, tag) { hosts.matching(query, tag) }
 
     Column(
         modifier
@@ -108,10 +142,17 @@ fun HostsScreen(
                 IconAction(onClick = onAddHost, description = "Add host") { BerthIcon(BerthIcons.add) }
                 Box {
                     IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                        DropdownMenuItem(text = { Text("Quick connect", style = BerthType.body, color = c.text1) }, onClick = { menu = false; quickConnect = true })
-                        DropdownMenuItem(text = { Text("Import ssh config", style = BerthType.body, color = c.text1) }, onClick = { menu = false; importConfig = true })
-                        DropdownMenuItem(text = { Text("Known hosts", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onKnownHosts() })
+                    BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+                        BerthMenuItem("Sort \u00B7 ${sort.label}", onClick = { menu = false; sortMenu = true })
+                        BerthMenuItem("Quick connect", onClick = { menu = false; quickConnect = true })
+                        BerthMenuItem("Import ssh config", onClick = { menu = false; importConfig = true })
+                        BerthMenuItem("Import known_hosts", onClick = { menu = false; importKnownHosts = true })
+                        BerthMenuItem("Known hosts", onClick = { menu = false; onKnownHosts() })
+                    }
+                    BerthMenu(expanded = sortMenu, onDismiss = { sortMenu = false }) {
+                        for (option in HostSort.entries) {
+                            BerthMenuItem("Sort by ${option.label.lowercase()}", selected = sort == option, onClick = { sort = option; sortMenu = false })
+                        }
                     }
                 }
             },
@@ -128,8 +169,20 @@ fun HostsScreen(
                 BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)
             }
         } else {
-            val recent = hosts.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
-            val all = hosts.sortedBy { it.name.lowercase() }
+            Column(Modifier.padding(horizontal = BerthSpace.screenMargin), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                BerthField(
+                    query,
+                    { query = it },
+                    placeholder = "Search hosts and tags",
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Search),
+                )
+                if (tags.isNotEmpty()) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Chip("All", selected = tag == null) { tag = null }
+                        for (t in tags) Chip(t, selected = tag == t) { tag = if (tag == t) null else t }
+                    }
+                }
+            }
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 8.dp),
@@ -141,28 +194,91 @@ fun HostsScreen(
                         subtitle = host.rowSubtitle(byId),
                         now = now,
                         onTap = { onConnect(host) },
-                        onFiles = onFiles?.let { open -> { open(host) } },
-                        onTunnels = onTunnels?.let { open -> { open(host) } },
                         onEdit = { onEditHost(host.id) },
+                        onConnectInNewGroup = onConnectInNewGroup?.let { open -> { open(host) } },
+                        onTunnels = onTunnels?.let { open -> { open(host) } },
+                        onFiles = onFiles?.let { open -> { open(host) } },
+                        onDuplicate = { vm.duplicateHost(host.id) { copy -> onEditHost(copy.id) } },
+                        onShare = { scope.launch { shareHostLink(context, host, vm.shareLink(host)) } },
                         onDelete = { vm.deleteHost(host.id) },
                     )
                 }
-                if (recent.isNotEmpty()) {
-                    item { SectionLabel("Recent", Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp)) }
-                    items(recent, key = { "recent-" + it.id }) { host -> row(host) }
-                    item { SectionLabel("All", Modifier.padding(start = 4.dp, top = 20.dp, bottom = 6.dp)) }
+                val label: (String, Boolean) -> Unit = { text, first ->
+                    item(key = "label-$text") { SectionLabel(text, Modifier.padding(start = 4.dp, top = if (first) 8.dp else 20.dp, bottom = 6.dp)) }
                 }
-                items(all, key = { it.id }) { host -> row(host) }
+                when (sort) {
+                    HostSort.RECENT -> {
+                        val recent = shown.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
+                        if (recent.isNotEmpty()) {
+                            label("Recent", true)
+                            items(recent, key = { "recent-" + it.id }) { host -> row(host) }
+                            label("All", false)
+                        }
+                        items(shown.sortedBy { it.name.lowercase() }, key = { it.id }) { host -> row(host) }
+                    }
+                    HostSort.NAME -> items(shown.sortedBy { it.name.lowercase() }, key = { it.id }) { host -> row(host) }
+                    HostSort.TAG -> {
+                        val sections = shown.byTag()
+                        sections.forEachIndexed { index, (name, group) ->
+                            label(name, index == 0)
+                            items(group, key = { "$name-" + it.id }) { host -> row(host) }
+                        }
+                    }
+                }
+                if (shown.isEmpty()) {
+                    item(key = "none") {
+                        Text(
+                            if (tag != null) "No host is tagged $tag and matches." else "No host matches.",
+                            style = BerthType.body,
+                            color = c.text2,
+                            modifier = Modifier.padding(start = 4.dp, top = 12.dp),
+                        )
+                    }
+                }
             }
         }
     }
 
     if (quickConnect) {
-        QuickConnectSheet(vm = vm, onDismiss = { quickConnect = false }, onConnected = { quickConnect = false })
+        QuickConnectSheet(
+            vm = vm,
+            onDismiss = { quickConnect = false },
+            onConnected = { quickConnect = false },
+            onSaved = { host -> quickConnect = false; onEditHost(host.id) },
+        )
     }
     if (importConfig) {
         ImportHostsSheet(vm = vm, onDismiss = { importConfig = false })
     }
+    if (importKnownHosts) {
+        ImportKnownHostsSheet(vm = vm, onDismiss = { importKnownHosts = false })
+    }
+}
+
+/** Every tag any host carries, once each, in order of the alphabet. */
+internal fun List<Host>.allTags(): List<String> = flatMap { it.tags }.map { it.trim() }.filter { it.isNotEmpty() }.distinct().sortedBy { it.lowercase() }
+
+/**
+ * The hosts the search field and the chosen chip leave (spec C9): [query] is looked for in the
+ * name, the address, the user and the tags, case aside, each word of it in any of those; [tag],
+ * when chosen, has to be one of the host's.
+ */
+internal fun List<Host>.matching(query: String, tag: String?): List<Host> {
+    val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    return filter { host ->
+        (tag == null || host.tags.any { it.equals(tag, ignoreCase = true) }) &&
+            words.all { word ->
+                host.name.lowercase().contains(word) || host.address.lowercase().contains(word) ||
+                    host.user.lowercase().contains(word) || host.tags.any { it.lowercase().contains(word) }
+            }
+    }
+}
+
+/** Sort by tag (spec C9): a section per tag in alphabetical order, its hosts by name; the untagged last, when there are any. */
+internal fun List<Host>.byTag(): List<Pair<String, List<Host>>> {
+    val sections = allTags().map { t -> t to filter { h -> h.tags.any { it.equals(t, ignoreCase = true) } }.sortedBy { it.name.lowercase() } }
+    val untagged = filter { it.tags.none { t -> t.isNotBlank() } }.sortedBy { it.name.lowercase() }
+    return if (untagged.isEmpty()) sections else sections + ("Untagged" to untagged)
 }
 
 /**
@@ -176,15 +292,27 @@ internal fun Host.rowSubtitle(byId: Map<String, Host>): String = buildString {
     if (jumpHostIds.isNotEmpty()) append(" \u00B7 via ").append(jumpHostIds.joinToString(" \u203A ") { byId[it]?.name ?: "a deleted host" })
 }
 
+/** Share as `ssh://` link (spec C9): the link as text through the system share sheet, titled with the host's name. */
+internal fun shareHostLink(context: Context, host: Host, link: String) {
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_SUBJECT, host.name)
+        .putExtra(Intent.EXTRA_TEXT, link)
+    runCatching { context.startActivity(Intent.createChooser(send, "Share ${host.name}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+}
+
 @Composable
 private fun HostRow(
     host: Host,
     subtitle: String,
     now: Long,
     onTap: () -> Unit,
-    onFiles: (() -> Unit)?,
-    onTunnels: (() -> Unit)?,
     onEdit: () -> Unit,
+    onConnectInNewGroup: (() -> Unit)?,
+    onTunnels: (() -> Unit)?,
+    onFiles: (() -> Unit)?,
+    onDuplicate: () -> Unit,
+    onShare: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val c = Berth.colors
@@ -200,28 +328,37 @@ private fun HostRow(
                 if (host.lastConnectedAt != null) Text(ageText(host.lastConnectedAt, now), style = BerthType.caption, color = c.text3)
             },
         )
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-            if (onFiles != null) DropdownMenuItem(text = { Text("Files", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onFiles() })
-            if (onTunnels != null) DropdownMenuItem(text = { Text("Connect as tunnel only", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onTunnels() })
-            DropdownMenuItem(text = { Text("Edit", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onEdit() })
-            DropdownMenuItem(text = { Text("Delete", style = BerthType.body, color = c.danger) }, onClick = { menu = false; onDelete() })
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+            BerthMenuItem("Edit", onClick = { menu = false; onEdit() })
+            if (onConnectInNewGroup != null) BerthMenuItem("Connect in new group", onClick = { menu = false; onConnectInNewGroup() })
+            if (onTunnels != null) BerthMenuItem("Connect as tunnel only", onClick = { menu = false; onTunnels() })
+            if (onFiles != null) BerthMenuItem("Files", onClick = { menu = false; onFiles() })
+            BerthMenuItem("Duplicate", onClick = { menu = false; onDuplicate() })
+            BerthMenuItem("Share as ssh:// link", onClick = { menu = false; onShare() })
+            BerthMenuItem("Delete", destructive = true, onClick = { menu = false; onDelete() })
         }
     }
 }
 
 /**
- * Quick connect (spec C11): a `user@host:port` field in Mono, the identity to log in with, Connect;
- * the login opens as an unsaved host. What stops a spec is said under the field in the parser's
- * words, the same ones a link's notice uses. With [fromLink] the sheet is where a plain `ssh://`
- * link no saved host answers to lands (spec, Deep links): the field holds the link's address with
- * the caret after it and takes focus as the sheet opens, so a keyboard adds a port or presses
- * Enter without first reaching for the field; the title says why the sheet is up, and a
- * fingerprint the link carried goes to the trust sheet.
+ * Quick connect (spec C11): a `user@host:port` field in Mono, the identity to log in with, Connect
+ * and Save as host; the login opens as an unsaved host, and Save as host keeps the address as a
+ * host named after it and hands it to [onSaved] for the editor to name. What stops a spec is said
+ * under the field in the parser's words, the same ones a link's notice uses. With [fromLink] the
+ * sheet is where a plain `ssh://` link no saved host answers to lands (spec, Deep links): the field
+ * holds the link's address with the caret after it and takes focus as the sheet opens, so a
+ * keyboard adds a port or presses Enter without first reaching for the field; the title says why
+ * the sheet is up, and a fingerprint the link carried goes to the trust sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -> Unit, fromLink: LinkOutcome.QuickConnect? = null) {
-    val c = Berth.colors
+fun QuickConnectSheet(
+    vm: AppViewModel,
+    onDismiss: () -> Unit,
+    onConnected: () -> Unit,
+    fromLink: LinkOutcome.QuickConnect? = null,
+    onSaved: ((Host) -> Unit)? = null,
+) {
     val identities by vm.identities.collectAsState()
     val initialSpec = fromLink?.spec
     var spec by remember { mutableStateOf(TextFieldValue(initialSpec ?: "", TextRange(initialSpec?.length ?: 0))) }
@@ -233,6 +370,12 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
         if (spec.text.isBlank()) return
         val problem = vm.quickConnect(spec.text, identityId, fromLink = fromLink)
         if (problem == null) onConnected() else error = problem
+    }
+    fun save() {
+        val done = onSaved ?: return
+        if (spec.text.isBlank()) return
+        val problem = vm.saveQuickConnectAsHost(spec.text, identityId, onSaved = done)
+        if (problem != null) error = problem
     }
     BerthSheet(onDismiss = onDismiss) {
         Column(
@@ -262,15 +405,16 @@ fun QuickConnectSheet(vm: AppViewModel, onDismiss: () -> Unit, onConnected: () -
                     value = identities.firstOrNull { it.id == identityId }?.name ?: "Ask on connect",
                     onClick = { pickIdentity = true },
                 )
-                DropdownMenu(expanded = pickIdentity, onDismissRequest = { pickIdentity = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                    DropdownMenuItem(text = { Text("Ask on connect", style = BerthType.body, color = c.text1) }, onClick = { identityId = null; pickIdentity = false })
+                BerthMenu(expanded = pickIdentity, onDismiss = { pickIdentity = false }) {
+                    BerthMenuItem("Ask on connect", selected = identityId == null, onClick = { identityId = null; pickIdentity = false })
                     for (identity in identities) {
-                        DropdownMenuItem(text = { Text(identity.name, style = BerthType.body, color = c.text1) }, onClick = { identityId = identity.id; pickIdentity = false })
+                        BerthMenuItem(identity.name, selected = identityId == identity.id, onClick = { identityId = identity.id; pickIdentity = false })
                     }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton("Connect", onClick = ::connect, kind = ButtonKind.PRIMARY, enabled = spec.text.isNotBlank())
+                if (onSaved != null) BerthButton("Save as host", onClick = ::save, kind = ButtonKind.SECONDARY, enabled = spec.text.isNotBlank())
             }
         }
     }
