@@ -23,6 +23,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.qr.QrCode
@@ -367,27 +370,30 @@ fun InstallKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit,
 
 /**
  * A host to install on: its swatch, name and `user@address:port`, the live dot when a shell is up,
- * the selected tonal step when picked. A live tab that is in a [program] says so where its dot
- * would be, since that tab is offered to open, not to type into.
+ * the selected tonal step when picked. A live tab that is in a [program] says so on the line under
+ * its address, in the caption face, the way the import sheet's rows carry their second line: the
+ * address keeps its own line whole rather than breaking inside an octet to make room, and the
+ * trailing slot keeps the dot, since the shell is up. That tab is offered to open, not to type into.
  */
 @Composable
 private fun HostPickRow(host: Host, live: Boolean, program: Boolean, selected: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
     val endpoint = host.userAtHost + if (host.port != 22) ":${host.port}" else ""
+    val subtitle = if (!program) endpoint else buildAnnotatedString {
+        append(endpoint)
+        append("\n")
+        withStyle(SpanStyle(fontFamily = BerthType.caption.fontFamily, fontWeight = BerthType.caption.fontWeight, letterSpacing = BerthType.caption.letterSpacing)) {
+            append("running a program")
+        }
+    }
     ListRow(
         title = host.name,
-        subtitle = endpoint,
+        subtitle = subtitle,
         subtitleStyle = BerthType.mono.copy(fontSize = 12.sp, lineHeight = 16.sp),
-        subtitleMaxLines = 1,
+        subtitleMaxLines = if (program) 2 else 1,
         selected = selected,
         onClick = onClick,
         leading = { Swatch(host.color, host.monogram, 32.dp) },
-        trailing = {
-            when {
-                program -> Text("running a program", style = BerthType.caption, color = c.text2)
-                live -> StatusDot(SessionState.LIVE)
-            }
-        },
+        trailing = { if (live) StatusDot(SessionState.LIVE) },
     )
 }
 

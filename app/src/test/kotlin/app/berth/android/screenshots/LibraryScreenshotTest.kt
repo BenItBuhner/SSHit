@@ -1313,7 +1313,11 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
             compose.onNodeWithText("Install on host").performClick()
             waitForText("Berth test box")
             compose.onNodeWithText("Connected".uppercase()).assertExists()
-            compose.onNodeWithText("running a program").assertExists()
+            // The state is the line under the address, and the address is whole on its own line at both sizes: never broken inside an octet.
+            val endpoint = "$sshUser@$sshHost" + if (sshPort != 22) ":$sshPort" else ""
+            val stateLine = compose.onNode(hasText("$endpoint\nrunning a program"), useUnmergedTree = true).fetchSemanticsNode().textLayout()!!
+            assertEquals("the address is not whole on its line", endpoint.length, stateLine.getLineEnd(0, visibleEnd = true))
+            assertEquals(2, stateLine.lineCount)
             compose.onNode(hasText("Berth test box") and hasAnyAncestor(isDialog())).performClick()
             waitForText("Open tab")
             compose.onNodeWithText("Berth test box's tab is in a program, not at a shell, so the command is not typed there. Quit what is running there, or paste the command from the copy button.").assertExists()
@@ -1326,7 +1330,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
             session.sendText("printf '\\033[?1049l'\n")
             compose.waitUntil(15_000) { !session.emulator.isAlternateScreen }
             compose.waitUntil(5_000) { compose.onAllNodesWithText("Install").fetchSemanticsNodes().isNotEmpty() }
-            hasNoText("running a program")
+            compose.onAllNodes(hasText("running a program", substring = true)).assertCountEquals(0)
+            compose.onNodeWithText(endpoint).assertExists()
             hasNoText("Open tab")
 
             // Back in a program, Open tab leads to the tab and closes the sheet, and nothing has been typed into the program.
