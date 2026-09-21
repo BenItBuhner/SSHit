@@ -45,6 +45,8 @@ dependencies {
     implementation(project(":core:ssh"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+    // Argon2id for the .berth bundle's key (BundleCodec); the same artifact sshj already brings in.
+    implementation(libs.bouncycastle.prov)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

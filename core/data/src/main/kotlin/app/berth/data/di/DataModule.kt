@@ -1,6 +1,7 @@
 package app.berth.data.di
 
 import android.content.Context
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreCrypto
 import app.berth.data.crypto.KeystoreSigning
@@ -78,4 +79,16 @@ object DataModule {
 
     @Provides @Singleton
     fun commandHistory(db: BerthDatabase): CommandHistoryRepository = RoomCommandHistoryRepository(db)
+
+    @Provides @Singleton
+    fun bundles(
+        hosts: HostRepository,
+        identities: IdentityRepository,
+        workspaces: WorkspaceRepository,
+        snippets: SnippetRepository,
+        tunnels: TunnelRepository,
+        knownHosts: KnownHostRepository,
+        settings: SettingsRepository,
+        secrets: SecretStore,
+    ): BerthBundles = BerthBundles(hosts, identities, workspaces, snippets, tunnels, knownHosts, settings, secrets)
 }
