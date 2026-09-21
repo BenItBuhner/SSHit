@@ -14,8 +14,8 @@ import java.io.InputStream
  * The import sheet's reading of a picked file, and its lines: the picker is `*∕*`, so the pick may
  * be anything on the phone and the read stops at the bundle limit instead of holding the pick
  * whole to measure it; the rows for what an import does not take as carried count in the singular
- * and the plural, and the button names the keys the ticks replace and the keys they add beside a
- * saved one.
+ * and the plural, the button names the keys the ticks replace and the keys they add beside a saved
+ * one, and the disclosure's last clause holds under a ticked Replace.
  */
 class BundleSheetsTest {
     @Test
@@ -81,10 +81,20 @@ class BundleSheetsTest {
     }
 
     @Test
-    fun `the disclosure names what an import replaces and that nothing is removed`() {
+    fun `the disclosure names what an import replaces and that nothing is removed, until a tick takes a saved key's place`() {
         assertEquals(
             "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed.",
             IMPORT_DISCLOSURE,
+        )
+        assertEquals(IMPORT_DISCLOSURE, importDisclosure(replacing = 0))
+        // A ticked Replace removes a saved key, said on the row and the button: the last clause says so too (nit 20).
+        assertEquals(
+            "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed but the host key you ticked to replace.",
+            importDisclosure(replacing = 1),
+        )
+        assertEquals(
+            "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed but the 2 host keys you ticked to replace.",
+            importDisclosure(replacing = 2),
         )
     }
 

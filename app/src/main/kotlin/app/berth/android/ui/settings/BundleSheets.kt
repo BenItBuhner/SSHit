@@ -232,7 +232,7 @@ fun ImportBundleSheet(
     var report by remember { mutableStateOf<BundleImportReport?>(null) }
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     // What the ticks do, which the button names: a key of a held type takes the saved key's place, one of a type this
-    // phone holds none of is added beside it.
+    // phone holds none of is added beside it; the disclosure's last clause holds for the first.
     val ticked = plan?.knownHostsConflicting?.filter { it.id in options.replaceKnownHosts }.orEmpty()
     val replacing = ticked.count { !it.addsBeside }
     val adding = ticked.count { it.addsBeside }
@@ -321,7 +321,7 @@ fun ImportBundleSheet(
                     SheetTitle("Import bundle", file?.let { "${it.name} \u00B7 made ${exportedOn(opened.exportedAt)}" })
                     BundleContents(opened, plan, options, defaultThemeHere = defaultTheme.name, onOptions = { options = it })
                     Text(
-                        IMPORT_DISCLOSURE,
+                        importDisclosure(replacing),
                         style = BerthType.caption,
                         color = c.text3,
                         modifier = Modifier.padding(horizontal = 4.dp),
@@ -480,9 +480,23 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
     }
 }
 
-/** The line under the contents for what an import does to what is already here. */
-internal const val IMPORT_DISCLOSURE =
-    "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed."
+private const val DISCLOSURE =
+    "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed"
+
+/** The line under the contents for what an import does to what is already here, with no tick set to take a saved key's place. */
+internal const val IMPORT_DISCLOSURE = "$DISCLOSURE."
+
+/**
+ * [IMPORT_DISCLOSURE], true to the ticks: with [replacing] keys ticked to take a saved key's place
+ * the last clause names them, `nothing is removed but the host key you ticked to replace`, since a
+ * saved key does go then, as the row and the button say. A tick that adds a key beside the saved
+ * one removes nothing and leaves the line as it is.
+ */
+internal fun importDisclosure(replacing: Int): String = when (replacing) {
+    0 -> IMPORT_DISCLOSURE
+    1 -> "$DISCLOSURE but the host key you ticked to replace."
+    else -> "$DISCLOSURE but the $replacing host keys you ticked to replace."
+}
 
 /** A row's caption from the names it stands for: the first six, and how many more. */
 internal fun namesLine(names: List<String>): String =

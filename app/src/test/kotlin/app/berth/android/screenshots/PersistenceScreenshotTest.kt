@@ -44,6 +44,7 @@ import app.berth.android.ui.settings.MIN_BUNDLE_PASSPHRASE
 import app.berth.android.ui.settings.PickedFile
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.settings.defaultTerminalThemeCaption
+import app.berth.android.ui.settings.importDisclosure
 import app.berth.android.ui.settings.tunnelsHeldOffLine
 import app.berth.android.ui.stage.CommandHistorySheet
 import app.berth.android.ui.theme.BerthTheme
@@ -284,8 +285,8 @@ class PersistenceScreenshotTest {
      * of a type this phone holds none of for that same address as a row that starts unticked too,
      * its line in the plain tone saying the tick adds it beside the saved key (nit 19); and the
      * key for an address this phone pins as a lock row, read and not offered. Ticking the conflict
-     * is the Replace, and the button says so; ticking the other adds, and the button counts that
-     * apart. The import then writes every table as the
+     * is the Replace, and the button and the disclosure's last clause say so (nit 20); ticking the
+     * other adds, and the button counts that apart. The import then writes every table as the
      * sheet said, puts the bundle's key in the saved one's place and leaves the pin alone, leaves
      * that host asking each time, and ends on the list of keys to make again, which stays until
      * Done, with Make a key beside it opening the New key sheet on the key named. Four frames: the
@@ -355,14 +356,17 @@ class PersistenceScreenshotTest {
         compose.onNodeWithText("Import").performScrollTo()
         compose.waitForIdle()
         capture("$name-decisions")
-        // Ticking the conflict is the Replace decision, and the button says so before it is taken.
+        // Ticking the conflict is the Replace decision, and the button and the disclosure's last clause say so before it is taken.
         conflict.performScrollTo().performClick()
         waitForText("Import, replace 1 key")
         conflict.assertIsOn()
-        // Ticking the RSA key adds it, which the button counts apart from the replace; unticked again for the frame.
+        waitForText(importDisclosure(1))
+        compose.onAllNodesWithText(IMPORT_DISCLOSURE).assertCountEquals(0)
+        // Ticking the RSA key adds it, which the button counts apart from the replace and the disclosure has nothing to say about; unticked again for the frame.
         beside.performScrollTo().performClick()
         waitForText("Import, replace 1 key, add 1")
         beside.assertIsOn()
+        waitForText(importDisclosure(1))
         beside.performClick()
         waitForText("Import, replace 1 key")
         beside.assertIsOff()
