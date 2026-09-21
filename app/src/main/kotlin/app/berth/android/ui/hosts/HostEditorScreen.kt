@@ -176,9 +176,10 @@ fun HostEditorScreen(
     fun pendingProblem(index: Int): String? = pendingDrafts[index].validate(allTunnels + keptDrafts)
     // A kept row with a problem holds Save, as the tunnel editor's own Save is held: switching the row off lets the rest through.
     val pendingProblem = pending.indices.any { pending[it] !in leftOut && pendingProblem(it) != null }
-    // A line that is not NAME=value holds Save the way a bad port does: said under the field, not found at login.
+    // A line that is not NAME=value holds Save the way a bad port does: said under the field, by its number, not found at login.
     val environmentValue = HostEditorFields.parseEnvironment(environment)
-    val environmentError = environmentValue == null
+    val environmentProblem = HostEditorFields.environmentProblem(environment)
+    val environmentError = environmentProblem != null
     val canSave = address.isNotBlank() && user.isNotBlank() && !portError && !pendingProblem && !environmentError
 
     fun save() {
@@ -394,7 +395,7 @@ fun HostEditorScreen(
                     singleLine = false,
                     minLines = 2,
                     isError = environmentError,
-                    helper = if (environmentError) HostEditorFields.ENVIRONMENT_HELP else "One NAME=value per line; the server's AcceptEnv decides which arrive.",
+                    helper = environmentProblem?.helper ?: "One NAME=value per line; the server's AcceptEnv decides which arrive.",
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                 )
                 BerthField(terminalType, { terminalType = it }, label = "Terminal type", mono = true)

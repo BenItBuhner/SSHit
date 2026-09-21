@@ -466,6 +466,13 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         hasNoText("Agent forwarding")
         capture("host-editor-advanced")
         assertNoTextCut("the host editor's Advanced panel")
+        // The helper keeps a field's gap to the label under it (nit 2): in the panel a field's text
+        // stands 15 dp over the next label (its box's unseen bottom half and the panel's 4 dp), and the
+        // helper stood 4 dp over TERMINAL TYPE.
+        val helperBottom = compose.onNodeWithText("One NAME=value per line; the server's AcceptEnv decides which arrive.").fetchSemanticsNode().boundsInRoot.bottom
+        val nextLabelTop = compose.onNodeWithText("TERMINAL TYPE").fetchSemanticsNode().boundsInRoot.top
+        val helperGap = (nextLabelTop - helperBottom) / compose.density.density
+        assertTrue("the Environment helper stands $helperGap dp over TERMINAL TYPE, a field's text stands 15", helperGap >= 14f)
 
         // The panel's end: the Alt key's caption whole beside the widest value the editor has, then Delete host.
         compose.onNodeWithText("Alt key").performScrollTo()
@@ -474,16 +481,17 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("Inherit (escape prefix)").assertExists()
         capture("host-editor-advanced-end")
 
-        // A line that is not NAME=value stops Save and says what a line is.
+        // A line that is not NAME=value stops Save and says which line, then what a line is (nit 2).
         compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8")).performTextReplacement("LANG=C.UTF-8\n1BAD=x")
-        waitForText(HostEditorFields.ENVIRONMENT_HELP)
+        val environmentHelp = "Line 2: 1BAD is not a name a shell takes. " + HostEditorFields.ENVIRONMENT_HELP
+        waitForText(environmentHelp)
         compose.onNodeWithText("Save").assertIsNotEnabled()
         capture("host-editor-environment-error")
         assertNoTextCut("the host editor with an environment error")
 
         // Fixed, tagged and muted: Save writes all three.
         compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8\n1BAD=x")).performTextReplacement("LANG=C.UTF-8\nTERM_PROGRAM=berth")
-        waitForNoText(HostEditorFields.ENVIRONMENT_HELP)
+        waitForNoText(environmentHelp)
         compose.onNodeWithText("Mute bell").performClick()
         section("Tags").performScrollTo()
         compose.onNode(hasSetTextAction() and hasText("lab, dns")).performTextReplacement("lab, dns, Home, dns")

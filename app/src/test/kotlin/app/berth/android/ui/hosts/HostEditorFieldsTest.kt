@@ -48,6 +48,24 @@ class HostEditorFieldsTest {
     }
 
     @Test
+    fun `the environment's problem names the first bad line by its number, blank lines and notes counted`() {
+        assertNull(HostEditorFields.environmentProblem("LANG=C\n\n# a note\nTERM=xterm"))
+        val bad = HostEditorFields.environmentProblem("LANG=C.UTF-8\n1BAD=x")!!
+        assertEquals(2, bad.number)
+        assertEquals("Line 2: 1BAD is not a name a shell takes.", bad.message)
+        assertEquals("Line 2: 1BAD is not a name a shell takes. " + HostEditorFields.ENVIRONMENT_HELP, bad.helper)
+        assertEquals("Line 4: broken is not NAME=value.", HostEditorFields.environmentProblem("\n# from the old host\nA=1\nbroken\nB=2")!!.message)
+        assertEquals("the name, not the whole line, when the name is the fault", "Line 1: MY VAR is not a name a shell takes.", HostEditorFields.environmentProblem("MY VAR=x")!!.message)
+        assertEquals("an empty name is not NAME=value", "Line 1: =value is not NAME=value.", HostEditorFields.environmentProblem("=value")!!.message)
+        assertEquals("the first bad line, not the last", 2, HostEditorFields.environmentProblem("A=1\nbroken\n2BAD=x")!!.number)
+        assertEquals(
+            "a long line is cut to its head",
+            "Line 1: a line that goes on and\u2026 is not NAME=value.",
+            HostEditorFields.environmentProblem("a line that goes on and on without an equals sign anywhere")!!.message,
+        )
+    }
+
+    @Test
     fun `environment round-trips through the field's text`() {
         val env = linkedMapOf("LANG" to "C.UTF-8", "TZ" to "Europe/Berlin", "EMPTY" to "")
         assertEquals("LANG=C.UTF-8\nTZ=Europe/Berlin\nEMPTY=", HostEditorFields.environmentText(env))

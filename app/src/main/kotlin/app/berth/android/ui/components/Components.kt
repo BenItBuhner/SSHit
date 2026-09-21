@@ -1002,10 +1002,17 @@ fun BerthField(
             }
         }
         if (helper != null) {
-            Text(helper, style = BerthType.caption.copy(letterSpacing = 0.sp), color = if (isError) c.danger else c.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+            // In a panel the field's box is the panel's own surface, unseen, and its bottom half (the
+            // 44 dp less the line of text) is the gap to the label under it; the helper stands where
+            // that half was, so it carries the same gap rather than leaving the next label 4 dp off.
+            val bottom = if (LocalPanelSurface.current != null) FieldHelperPanelGap else 0.dp
+            Text(helper, style = BerthType.caption.copy(letterSpacing = 0.sp), color = if (isError) c.danger else c.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = bottom))
         }
     }
 }
+
+/** What a field's box leaves under its text: (44 dp − the body's 22 sp line) / 2, given to a helper inside a [Panel]. */
+private val FieldHelperPanelGap = 11.dp
 
 // ---- Sheets and misc ---------------------------------------------------------------------------------
 
