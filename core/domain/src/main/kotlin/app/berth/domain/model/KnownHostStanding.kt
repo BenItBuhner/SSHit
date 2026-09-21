@@ -3,10 +3,11 @@ package app.berth.domain.model
 /**
  * Where a key offered for an endpoint stands against the keys Berth already trusts for it (spec
  * A16). It is the answer the live policy gives a server's key, and the answer the two imports give
- * a key read from a file: a `known_hosts` file's rows, where a [Conflicting] key is the Replace
- * decision the changed-key sheet makes and starts unticked, and a `.berth` bundle's known hosts,
- * where nothing that differs from what this phone holds is taken at all, since the bundle was made
- * to move settings and the check between the user and a wrong key is not one of them.
+ * a key read from a file: a `known_hosts` file's rows and a `.berth` bundle's known hosts, where a
+ * [Conflicting] key is the Replace decision the changed-key sheet makes and starts unticked, and a
+ * [Pinned] endpoint takes nothing. The bundle import lays one rule of its own over [of]: a key of
+ * a type this phone holds none of, for an endpoint it does hold a key for, stands as [Conflicting]
+ * with what is held and is kept, since live that case asks the user and an import cannot.
  *
  * [of] is the one rule; the callers decide what each answer means for them.
  */

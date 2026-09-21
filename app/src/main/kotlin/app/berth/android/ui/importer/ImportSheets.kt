@@ -60,6 +60,7 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.KnownHostStanding
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.Dispatchers
@@ -308,7 +309,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                         }.joinToString(" \u00B7 ")
                         when (val standing = cand.standing) {
                             // A pin means no other key for the address: the row is read, not offered, and says where the pin is undone.
-                            is KnownHostsCandidate.Standing.Pinned -> ListRow(
+                            is KnownHostStanding.Pinned -> ListRow(
                                 title = cand.entry.address,
                                 subtitle = "$facts\nPinned to ${standing.saved.algorithmLabel} ${shortFingerprint(standing.saved.fingerprintSha256)}; unpin it under Known hosts first.",
                                 subtitleMaxLines = 4,
@@ -316,7 +317,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                                 leading = { PinLock() },
                             )
                             // A different key of a type already trusted: C13's changed-key decision, unticked until it is made.
-                            is KnownHostsCandidate.Standing.Conflicting -> TickRow(
+                            is KnownHostStanding.Conflicting -> TickRow(
                                 title = cand.entry.address,
                                 subtitle = facts,
                                 ticked = selected,

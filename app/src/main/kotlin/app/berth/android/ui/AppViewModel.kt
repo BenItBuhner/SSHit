@@ -45,6 +45,7 @@ import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
@@ -794,7 +795,7 @@ class AppViewModel @Inject constructor(
      * A pasted or picked `known_hosts` read for import (spec A16): every line [KnownHostsFile]
      * reads, hashed names tried against the saved hosts' and the known hosts' addresses. Each entry
      * comes with where it stands against what Berth already trusts for its address
-     * ([KnownHostsCandidate.Standing]), which is the decision the live policy makes when a server
+     * ([KnownHostStanding]), which is the decision the live policy makes when a server
      * presents a key ([app.berth.android.session.KnownHostsPolicy]): the very key is already
      * trusted; a different key of a type already trusted is the changed-key case, which the sheet
      * starts unticked and takes as Replace; and an endpoint with a pinned key takes no key it does
@@ -828,13 +829,13 @@ class AppViewModel @Inject constructor(
         for (entry in entries) {
             val here = knownHostRepository.observeAll().first().forEndpoint(entry.host, entry.port)
             val host = when (val standing = standingOf(entry, here)) {
-                KnownHostsCandidate.Standing.EXISTING, is KnownHostsCandidate.Standing.Pinned -> continue
-                is KnownHostsCandidate.Standing.Conflicting -> {
+                KnownHostStanding.EXISTING, is KnownHostStanding.Pinned -> continue
+                is KnownHostStanding.Conflicting -> {
                     knownHostRepository.delete(standing.saved.id)
                     replaced++
                     standing.saved.host
                 }
-                KnownHostsCandidate.Standing.NEW -> {
+                KnownHostStanding.NEW -> {
                     added++
                     entry.host
                 }
@@ -864,15 +865,12 @@ class AppViewModel @Inject constructor(
     private fun List<KnownHostKey>.forEndpoint(host: String, port: Int): List<KnownHostKey> =
         filter { it.port == port && it.host.equals(host, ignoreCase = true) }
 
-    /** Where [entry] stands against the keys Berth holds for its endpoint ([here]), as the live policy would judge the same key from the server. */
-    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostsCandidate.Standing {
-        if (here.any { it.publicKeyBase64 == entry.publicKeyBase64 }) return KnownHostsCandidate.Standing.EXISTING
-        val pinned = here.firstOrNull { it.pinned && it.keyType == entry.keyType } ?: here.firstOrNull { it.pinned }
-        if (pinned != null) return KnownHostsCandidate.Standing.Pinned(pinned)
-        val sameType = here.firstOrNull { it.keyType == entry.keyType }
-        if (sameType != null) return KnownHostsCandidate.Standing.Conflicting(sameType)
-        return KnownHostsCandidate.Standing.NEW
-    }
+    /**
+     * Where [entry] stands against the keys Berth holds for its endpoint ([here]): the one rule the
+     * live policy, this import and the bundle import share ([KnownHostStanding.of]).
+     */
+    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostStanding =
+        KnownHostStanding.of(entry.keyType, entry.publicKeyBase64, here)
 
     /**
      * Share as `ssh://` link (spec C9): `ssh://user@address[:port]#name`, the form the spec's deep
@@ -1336,29 +1334,24 @@ class AppViewModel @Inject constructor(
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
 
-/** One `known_hosts` entry as the import sheet lists it; [existing] when Berth already trusts this key for this address. */
-data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: Standing) {
+/**
+ * One `known_hosts` entry as the import sheet lists it, with where it stands against what Berth
+ * holds for its endpoint ([KnownHostStanding]: the live policy's three answers plus the plain new key).
+ */
+data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: KnownHostStanding) {
     val key: String get() = "${entry.host}:${entry.port}:${entry.publicKeyBase64}"
 
     /** The very key is already trusted for the address: nothing to import, the row starts unticked and says so. */
-    val existing: Boolean get() = standing == Standing.EXISTING
+    val existing: Boolean get() = standing == KnownHostStanding.EXISTING
 
     /** A different key of a type already trusted for the address: ticking it is the Replace decision of the changed-key sheet. */
-    val conflicting: Boolean get() = standing is Standing.Conflicting
+    val conflicting: Boolean get() = standing is KnownHostStanding.Conflicting
 
     /** The address has a pinned key and this is not it: not offered, since a pin means no other key is taken. */
-    val pinned: Boolean get() = standing is Standing.Pinned
+    val pinned: Boolean get() = standing is KnownHostStanding.Pinned
 
     /** Whether the sheet ticks the row on arrival: only a key that is plainly new. */
-    val tickedByDefault: Boolean get() = standing == Standing.NEW
-
-    /** How the entry stands against what Berth holds for its endpoint; the live policy's three answers plus the plain new key. */
-    sealed interface Standing {
-        data object NEW : Standing
-        data object EXISTING : Standing
-        data class Conflicting(val saved: KnownHostKey) : Standing
-        data class Pinned(val saved: KnownHostKey) : Standing
-    }
+    val tickedByDefault: Boolean get() = standing == KnownHostStanding.NEW
 }
 
 /** A `known_hosts` text as read for the import sheet ([AppViewModel.parseKnownHosts]). */

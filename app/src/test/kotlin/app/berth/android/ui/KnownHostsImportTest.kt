@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import app.berth.android.screenshots.TestGraph
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.KnownHostStanding
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -43,7 +44,7 @@ class KnownHostsImportTest {
 
         val read = graph.viewModel.parseKnownHosts("prod-api.example.com ${SshKeys.openSshPublic(rotated)}")
         val candidate = read.candidates.single()
-        assertEquals(KnownHostsCandidate.Standing.Conflicting(trusted), candidate.standing)
+        assertEquals(KnownHostStanding.Conflicting(trusted), candidate.standing)
         assertTrue(!candidate.tickedByDefault)
 
         assertEquals(KnownHostsImported(added = 0, replaced = 1), graph.viewModel.importKnownHosts(listOf(candidate.entry)))
@@ -55,7 +56,7 @@ class KnownHostsImportTest {
 
         // Read again, the same line is the very key now held: nothing to import, and the store is left as it is.
         val again = graph.viewModel.parseKnownHosts("prod-api.example.com ${SshKeys.openSshPublic(rotated)}")
-        assertEquals(KnownHostsCandidate.Standing.EXISTING, again.candidates.single().standing)
+        assertEquals(KnownHostStanding.EXISTING, again.candidates.single().standing)
         assertEquals(KnownHostsImported(added = 0, replaced = 0), graph.viewModel.importKnownHosts(listOf(again.candidates.single().entry)))
         assertEquals(listOf(key), graph.knownHosts.items.value)
     }
