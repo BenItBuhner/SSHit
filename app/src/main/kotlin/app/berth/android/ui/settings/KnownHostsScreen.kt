@@ -57,6 +57,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
+import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.SshKeys
 
@@ -137,7 +138,7 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                                 withStyle(SpanStyle(color = c.accent)) { append("pinned") }
                             }
                             append(" \u00B7 ")
-                            withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp)) {
+                            withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp, fontFeatureSettings = MonoFontFeatures)) {
                                 append(shortFingerprint(k.fingerprintSha256, prefixLength = length))
                             }
                         },

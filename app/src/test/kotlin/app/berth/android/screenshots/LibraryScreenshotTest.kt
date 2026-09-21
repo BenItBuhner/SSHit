@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertCountEquals
@@ -34,6 +36,7 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -57,6 +60,7 @@ import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.tabs.GroupEditorSheet
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -223,6 +227,23 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     }
 
     private fun assertNoTextCut(where: String) = assertNoTextCutBut(where)
+
+    /**
+     * [node]'s text is drawn glyph for glyph as its ASCII: the layout it was measured with has
+     * JetBrains Mono's ligatures and contextual alternates off ([MonoFontFeatures]), so a randomart
+     * row's `.=` and `|=` and a fingerprint's `//` are the glyphs `ssh-keygen` prints, and the
+     * picture on the sheet can be held against the server's. The text is asserted beside it; the
+     * glyphs themselves are the capture's.
+     */
+    private fun assertMonoGlyphsExact(node: SemanticsNode, what: String) {
+        val results = ArrayList<TextLayoutResult>()
+        assertTrue("$what has no text layout to read", node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results) == true)
+        val style = results.single().layoutInput.style
+        assertEquals("$what is drawn with the font's ligatures on", MonoFontFeatures, style.fontFeatureSettings)
+    }
+
+    /** The one node whose text is exactly [text], read unmerged so a row's own layout is the one measured. */
+    private fun textNode(text: String): SemanticsNode = compose.onNode(hasText(text), useUnmergedTree = true).fetchSemanticsNode()
 
     // ---- hosts (C9) -------------------------------------------------------------------------------
 
@@ -527,6 +548,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText("Hide visual fingerprint")
         val art = compose.onNode(hasContentDescription("Visual fingerprint", substring = true), useUnmergedTree = true).fetchSemanticsNode()
         assertEquals(Randomart.of(laptopKey.public), art.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text })
+        assertMonoGlyphsExact(art, "the randomart")
+        assertMonoGlyphsExact(textNode(keygenLine), "the ssh-keygen line")
         compose.onNodeWithText("Install on host").performScrollTo()
         compose.waitForIdle()
         capture("key-detail-randomart")
@@ -622,6 +645,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText("Hide visual fingerprint")
         val art = compose.onNode(hasContentDescription("Visual fingerprint", substring = true), useUnmergedTree = true).fetchSemanticsNode()
         assertEquals(Randomart.of(key), art.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text })
+        assertMonoGlyphsExact(art, "the trust sheet's randomart")
+        assertMonoGlyphsExact(textNode("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"), "the server's ssh-keygen command")
         compose.onNodeWithText("Trust and connect").performScrollTo()
         compose.waitForIdle()
         capture("trust-sheet-randomart")

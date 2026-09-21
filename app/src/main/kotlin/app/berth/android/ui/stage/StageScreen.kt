@@ -125,7 +125,6 @@ import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
@@ -1010,4 +1009,4 @@ fun ageTicker(): Long {
 }
 
 /** Mono style for fingerprints and specs in sheets. */
-val MonoBody get() = BerthType.body.copy(fontFamily = JetBrainsMono)
+val MonoBody get() = BerthType.monoBody

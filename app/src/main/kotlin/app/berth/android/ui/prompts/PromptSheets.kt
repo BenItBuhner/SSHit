@@ -53,7 +53,6 @@ import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.Host
 import app.berth.ssh.FingerprintCheck
 import app.berth.ssh.Randomart
@@ -140,10 +139,10 @@ internal fun HostLine(host: Host) {
             NameAndEndpoint(
                 name = { Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 separator = { Text(" \u00B7 ", style = BerthType.body, color = c.text3) },
-                endpoint = { Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                endpoint = { Text(endpoint, style = BerthType.monoBody, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         } else {
-            Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(endpoint, style = BerthType.monoBody, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

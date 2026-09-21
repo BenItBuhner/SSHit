@@ -29,6 +29,17 @@ val JetBrainsMono: FontFamily = FontFamily(
 
 private val Trim = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
 
+/**
+ * JetBrains Mono's ligatures and contextual alternates, off, for the interface's mono text. That
+ * text is what a server prints, randomart, fingerprints, `ssh-keygen` lines, the install command,
+ * endpoints, a command from the history, and it is read against a server's own output glyph for
+ * glyph: with the font's defaults `.=` in a randomart row draws as a raised dot before the `=` and
+ * a first-cell `=` merges with the border into one glyph, neither of which `ssh-keygen -lv` prints,
+ * and `//` in a fingerprint or `||` in a command fuse. A [androidx.compose.ui.text.SpanStyle] that
+ * sets the mono family takes this too. The terminal's ligature setting is its own (C19).
+ */
+const val MonoFontFeatures = "-liga, -calt"
+
 private fun style(family: FontFamily, size: Int, line: Int, weight: FontWeight, tracking: Float = 0f) = TextStyle(
     fontFamily = family,
     fontWeight = weight,
@@ -37,6 +48,7 @@ private fun style(family: FontFamily, size: Int, line: Int, weight: FontWeight, 
     letterSpacing = if (tracking == 0f) 0.sp else tracking.em,
     lineHeightStyle = Trim,
     platformStyle = PlatformTextStyle(includeFontPadding = false),
+    fontFeatureSettings = if (family === JetBrainsMono) MonoFontFeatures else null,
 )
 
 /** Type roles from UX spec A3, addressable by name rather than by M3 slot. */
@@ -50,6 +62,9 @@ class BerthTypeRoles(family: FontFamily) {
     val caption = style(family, 11, 16, FontWeight.Medium, tracking = 0.08f)
     val mono = style(JetBrainsMono, 13, 18, FontWeight.Normal)
     val monoLarge = style(JetBrainsMono, 17, 24, FontWeight.Normal)
+
+    /** [body]'s size in the mono face: an endpoint beside a name, a command from the history, a path. */
+    val monoBody = style(JetBrainsMono, 15, 22, FontWeight.Normal)
 }
 
 val BerthType = BerthTypeRoles(PlexSans)
