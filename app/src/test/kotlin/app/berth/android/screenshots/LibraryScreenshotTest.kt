@@ -388,6 +388,9 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         seedLibrary()
         val inNewGroup = ArrayList<String>()
         val edited = ArrayList<String>()
+        val tunnels = ArrayList<String>()
+        val files = ArrayList<String>()
+        // Wired as AppRoot wires the screen, every door open, so the capture and its audit are of the menu the app shows (nit 8).
         themed {
             HostsScreen(
                 graph.viewModel,
@@ -397,20 +400,30 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
                 onBack = null,
                 onOpenDrawer = {},
                 onKnownHosts = {},
+                onFiles = { files += it.id },
+                onTunnels = { tunnels += it.id },
                 onConnectInNewGroup = { inNewGroup += it.id },
             )
         }
         waitForText("homelab")
 
-        // The row's menu (C9), in the spec's order, Delete last and apart.
+        // The row's menu: C9's list with Files after the tunnel row, in that order, Delete last and apart.
         compose.onAllNodesWithText("homelab")[0].performTouchInput { longClick() }
         waitForText("Connect in new group")
-        compose.onNodeWithText("Edit").assertExists()
-        compose.onNodeWithText("Duplicate").assertExists()
-        compose.onNodeWithText("Share as ssh:// link").assertExists()
-        compose.onNodeWithText("Delete").assertExists()
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals(listOf("Edit", "Connect in new group", "Connect as tunnel only", "Files", "Duplicate", "Share as ssh:// link", "Delete"), rows)
         capture("hosts-row-menu-library")
         assertNoTextCut("the host row's menu")
+        compose.onNodeWithText("Connect as tunnel only").performClick()
+        waitForNoText("Connect as tunnel only")
+        assertEquals(listOf("homelab"), tunnels)
+        compose.onAllNodesWithText("homelab")[0].performTouchInput { longClick() }
+        waitForText("Files")
+        compose.onNodeWithText("Files").performClick()
+        waitForNoText("Files")
+        assertEquals(listOf("homelab"), files)
+        compose.onAllNodesWithText("homelab")[0].performTouchInput { longClick() }
+        waitForText("Connect in new group")
         compose.onNodeWithText("Connect in new group").performClick()
         waitForNoText("Connect in new group")
         assertEquals(listOf("homelab"), inNewGroup)
