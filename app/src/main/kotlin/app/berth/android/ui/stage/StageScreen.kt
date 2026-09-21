@@ -635,6 +635,8 @@ private fun StageBody(
                     DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     DeckAppAction.JUMP_TO_UNREAD -> vm.jumpToUnread()
+                    // The Deck key for C5's "Toggle predictive text" flips the same flag the Session sheet's row does.
+                    DeckAppAction.TOGGLE_PREDICTIVE_TEXT -> vm.setPredictiveText(session.id, session.id !in vm.predictiveTextTabIds.value)
                     else -> Unit
                 }
             },
