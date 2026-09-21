@@ -233,8 +233,11 @@ fun Deck(
                 height = rowHeight,
                 settings = settings,
                 grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
-                onNext = { strip = null; onLayerIndexChange((index + 1) % layers.size) },
-                onPrevious = { strip = null; onLayerIndexChange((index - 1 + layers.size) % layers.size) },
+                // A layer step leaves the F-strip where it is, in either row: the strip belongs to the
+                // key whose hold raised it and that hold closes it, and a strip that fell with the
+                // step would drop a row of Deck under the finger and reflow the terminal (#20 review).
+                onNext = { onLayerIndexChange((index + 1) % layers.size) },
+                onPrevious = { onLayerIndexChange((index - 1 + layers.size) % layers.size) },
                 onLayerHold = onOpenDeckEditor,
                 onStrip = { held -> strip = if (strip == held) null else held },
                 editing = editing,
