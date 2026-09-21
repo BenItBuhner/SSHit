@@ -24,7 +24,6 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -464,6 +463,33 @@ class DeckRailScreenshotTest {
         waitForText("System monospace")
         compose.onNodeWithText("System monospace").performClick()
         compose.waitUntil(5_000) { graph.hosts.items.value.first { it.id == "homelab" }.appearance.fontFamily == "System monospace" }
+    }
+
+    /**
+     * A Quick connect tab's host is in no library (spec C11), so its sheet offers Save as host in
+     * place of Host and has no Look row: a look is a saved host's (C6), and a row over an unsaved
+     * one opened a Look sheet with no host to land on, which put itself away on its first frame and
+     * raised this sheet again (#20 delta pass). Save as host keeps the tab's id, so the moment the
+     * host is saved the offer gives way to Host and the row comes, with a Look sheet that stays.
+     */
+    @Test
+    fun `a Quick connect tab's Session sheet offers Save as host and has no Look row until the host is saved`() {
+        StageFixture.seed(graph)
+        val quick = StageFixture.liveQuick()
+        themed { SessionSheet(graph.viewModel, quick, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {}) }
+        waitForText("Save as host")
+        val onTheSheet = hasAnyAncestor(isDialog())
+        compose.onAllNodes(hasText("Save as host") and onTheSheet).assertCountEquals(1)
+        compose.onAllNodes(hasText("Host") and onTheSheet).assertCountEquals(0)
+        compose.onAllNodes(hasText("Look") and onTheSheet).assertCountEquals(0)
+
+        runBlocking { graph.hosts.upsert(quick.record.value.hostSnapshot) }
+        waitForText("Look")
+        compose.onAllNodes(hasText("Save as host") and onTheSheet).assertCountEquals(0)
+        compose.onAllNodes(hasText("Host") and onTheSheet).assertCountEquals(1)
+        compose.onNodeWithText("Look").performClick()
+        waitForText("Theme")
+        compose.onNodeWithText("Theme").assertIsDisplayed()
     }
 
     /**

@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -39,15 +40,35 @@ object StageFixture {
         val homelab = host(now, "homelab", "homelab", "192.168.1.20", "ben", SwatchColor.VERDIGRIS, AuthMethod.Password(AuthResolver.passwordSecretId("homelab")))
         val record = record(now, "s-homelab", homelab, Workspace.DEFAULT_ID, 0, 12, "~/srv", command)
             .copy(state = SessionState.LIVE, layer = PersistenceLayer.IN_APP)
-        val env = object : SessionEnvironment {
-            override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
-            override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
-            override val networkAvailable: Flow<Unit> = emptyFlow()
-            override fun onClipboardText(host: Host, text: String) = Unit
-        }
-        val session = TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), env) {}
+        val session = TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
         session.restoreFrame(frame(HOMELAB_LINES))
         return session
+    }
+
+    /**
+     * A tab as Quick connect opens one (spec C11), Live as [liveHomelab] is: its host is the spec's
+     * address under a `quick-` id, as [app.berth.android.ui.AppViewModel.quickConnect] makes it, and
+     * in no library [seed] fills, so a sheet over it offers Save as host and has no Look row to show.
+     */
+    fun liveQuick(now: Long = System.currentTimeMillis()): TerminalSession {
+        val address = "10.0.0.9"
+        val quick = Host(
+            id = "quick-" + UUID.randomUUID(), name = address, color = SwatchColor.forName(address), monogram = Host.monogramFor(address),
+            address = address, port = 22, user = "root", auth = AuthMethod.AskEachTime, createdAt = now - TimeUnit.MINUTES.toMillis(3),
+        )
+        val record = record(now, "s-quick", quick, Workspace.DEFAULT_ID, 0, 0, "~", "uptime")
+            .copy(state = SessionState.LIVE, layer = PersistenceLayer.IN_APP)
+        val session = TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
+        session.restoreFrame(frame(listOf("root@10.0.0.9:~# uptime", " 20:41:02 up 3 days,  4:12,  1 user,  load average: 0.08, 0.03, 0.01", "root@10.0.0.9:~# ")))
+        return session
+    }
+
+    /** The environment of a tab with no shell behind it: nothing to log in with, every key trusted, no network to wait on. */
+    private val NoShell = object : SessionEnvironment {
+        override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
+        override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
+        override val networkAvailable: Flow<Unit> = emptyFlow()
+        override fun onClipboardText(host: Host, text: String) = Unit
     }
 
     fun seed(graph: TestGraph, now: Long = System.currentTimeMillis()) = runBlocking {

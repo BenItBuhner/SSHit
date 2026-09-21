@@ -49,14 +49,14 @@ import app.berth.domain.model.SessionState
 /**
  * The session sheet from the Grip, its tap or its drag up (spec C4), or the ribbon title: the tab's
  * facts and actions, then the host's look and the tab's Predictive text toggle (C6's order), then
- * the other tabs in the group for a quick switch. A
- * terminal tab offers Detach or Reconnect, Files (the host's Files tab, opened or brought on stage),
- * Snippets and History, and under the pills the Look row (the host's theme, font and size over a
- * live Stage, [LookSheet]); a Files tab offers Connect or Reconnect for the terminal it rides and
- * Terminal to go there. The sheet opens at its content height and scrolls when the window is
- * shorter (spec C6 as ruled for #19 and #20: its content is a fixed set of controls, not a list, so
- * there is no fold to hide a row of pills or the Look row under), and the actions are pills at their
- * own width that wrap as they must, so a label is never cut, at 1× or at the interface's 1.3× cap (A11).
+ * the other tabs in the group for a quick switch. A terminal tab offers Detach or Reconnect, Files
+ * (the host's Files tab, opened or brought on stage), Snippets and History, and under the pills the
+ * Look row (the host's theme, font and size over a live Stage, [LookSheet]) once its host is saved;
+ * a Files tab offers Connect or Reconnect for the terminal it rides and Terminal to go there. The
+ * sheet opens at its content height and scrolls when the window is shorter (spec C6 as ruled for
+ * #19 and #20: its content is a fixed set of controls, not a list, so there is no fold to hide a row
+ * of pills or the Look row under), and the actions are pills at their own width that wrap as they
+ * must, so a label is never cut, at 1× or at the interface's 1.3× cap (A11).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -193,8 +193,9 @@ fun SessionSheet(
             }
             // The host's look (spec C6, Look): a row under the pills rather than a sixth of them, since
             // it has something to say, the theme, font and size the terminal draws with now, and opens
-            // the Look sheet over the live Stage. Only a saved host has a look of its own; Quick connect's has none.
-            if (session != null && lookHostId != null) {
+            // the Look sheet over the live Stage. Only a saved host has a look of its own; Quick connect's
+            // has none until Save as host, which keeps the tab's id, so the row comes with the host it lands on.
+            if (session != null && lookHostId != null && hostSaved) {
                 ListRow(
                     title = "Look",
                     subtitle = lookOf(lookHostId).summary,
