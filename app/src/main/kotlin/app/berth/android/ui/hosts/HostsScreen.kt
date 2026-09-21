@@ -169,7 +169,11 @@ fun HostsScreen(
                 BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)
             }
         } else {
-            Column(Modifier.padding(horizontal = BerthSpace.screenMargin), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // The 8 dp between the search and the first row is split: 4 of it end this column, 4 head
+            // the list. The field is 44 dp and Compose reaches its hit area out to 48 only into space no
+            // neighbour claims (see touchTarget); the list claims everything from its own top edge, so
+            // with no chips between them a list starting flush with the field cut its reach to 46.
+            Column(Modifier.padding(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 BerthField(
                     query,
                     { query = it },
@@ -185,7 +189,7 @@ fun HostsScreen(
             }
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = BerthSpace.screenMargin, vertical = 8.dp),
+                contentPadding = PaddingValues(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, top = 4.dp, bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val row: @Composable (Host) -> Unit = { host ->
