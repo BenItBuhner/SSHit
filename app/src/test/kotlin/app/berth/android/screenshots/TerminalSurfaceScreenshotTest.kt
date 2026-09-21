@@ -6,18 +6,28 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
@@ -25,13 +35,16 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.R
@@ -41,6 +54,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.StageTools
 import app.berth.android.ui.tabs.ShellTabActions
@@ -59,6 +73,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -80,9 +95,10 @@ import java.io.File
  * that opens a picker, the Nerd Font fallback, the cursor's shape and blink, the scrollback kept,
  * the drag-for-arrows switch), the font picker sheet with every family set in its own face and an
  * import landing through the document picker's result, the sheet a tap on an OSC 8 link opens in
- * its two postures, and rectangular selection from the selection bar's overflow. Every capture is
- * an accessibility audit, and the screens at the cap are held to no text cut and no button pushed
- * past the sheet's edge. The gestures are driven for real on the canvas.
+ * its two postures, rectangular selection from the selection bar's overflow, and the Session
+ * sheet's Predictive text row (C6) with the grip it lights and the keyboard attributes it changes.
+ * Every capture is an accessibility audit, and the screens at the cap are held to no text cut and
+ * no button pushed past the sheet's edge. The gestures are driven for real on the canvas.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -578,4 +594,75 @@ class TerminalSurfaceScreenshotTest {
 
     @Test
     fun `rectangular selection from the bar's overflow at the 1,3 cap`() = rectangularSelection(cap = true)
+
+    // ---- predictive text (spec C6, C4; review #20) --------------------------------------------------------------
+
+    private val predictiveRow = hasText("Predictive text") and isToggleable()
+
+    /**
+     * The attributes the terminal on stage hands the keyboard, read the way the keyboard reads them
+     * on a restart: through the Compose view's own input connection, with the canvas focused.
+     */
+    private fun keyboardAttributes(): EditorInfo {
+        val canvas = compose.onNodeWithTag(TerminalTag)
+        canvas.requestFocus()
+        canvas.assertIsFocused()
+        compose.waitForIdle()
+        val view = (canvas.fetchSemanticsNode().root as ViewRootForTest).view
+        val info = EditorInfo()
+        assertNotNull("the focused terminal has a keyboard connection", view.onCreateInputConnection(info))
+        return info
+    }
+
+    private fun predictiveText(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        StageFixture.seed(graph)
+        val session = StageFixture.liveHomelab().also { sessions += it }
+        val tools = StageTools()
+        var sheet by mutableStateOf(true)
+        // The Stage under the Session sheet, as the shell mounts them.
+        themed {
+            Stage(session, tools)
+            if (sheet) SessionSheet(graph.viewModel, session, onDismiss = { sheet = false }, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        awaitGrid(session)
+        waitForText("Predictive text")
+        // Half height by default (C6), the row starts under the fold; the handle's Expand is the reader's drag-up.
+        val expandable = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand)).fetchSemanticsNodes()
+        if (expandable.isNotEmpty()) compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand)).performSemanticsAction(SemanticsActions.Expand)
+        settle(500)
+        compose.onNode(predictiveRow).assertIsDisplayed().assertIsOff()
+        // Off is the default for every tab: the keyboard is told no suggestions, and the flag is nobody's yet.
+        assertTrue(graph.viewModel.predictiveTextTabIds.value.isEmpty())
+
+        // On: the row reads on, the flag is this tab's, and the row's own text is whole at either scale.
+        compose.onNode(predictiveRow).performClick()
+        compose.waitUntil(5_000) { session.id in graph.viewModel.predictiveTextTabIds.value }
+        compose.onNode(predictiveRow).assertIsOn()
+        settle(300)
+        capture("session-sheet-predictive-text$suffix")
+        compose.assertNoTextCut("the Predictive text row${if (cap) " at the interface's font cap" else ""}", within = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+
+        // Under the sheet the grip has turned accent (C4), and the keyboard is told plain text it may suggest for.
+        sheet = false
+        waitForNoText("Predictive text")
+        settle(300)
+        capture("stage-predictive-text-grip$suffix")
+        val on = keyboardAttributes()
+        assertEquals("plain text, nothing withheld from the keyboard", InputType.TYPE_CLASS_TEXT, on.inputType)
+        assertNotEquals("and still nothing learned", 0, on.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING)
+
+        // Off again from the flag alone (the row is one way to it): the next read is the privacy default.
+        graph.viewModel.setPredictiveText(session.id, false)
+        compose.waitForIdle()
+        val off = keyboardAttributes()
+        assertNotEquals(0, off.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+        assertEquals(InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, off.inputType and InputType.TYPE_MASK_VARIATION)
+    }
+
+    @Test
+    fun `predictive text is the tab's row on the Session sheet, lights the grip and changes what the keyboard is told`() = predictiveText(cap = false)
+
+    @Test
+    fun `predictive text row and grip at the 1,3 cap`() = predictiveText(cap = true)
 }
