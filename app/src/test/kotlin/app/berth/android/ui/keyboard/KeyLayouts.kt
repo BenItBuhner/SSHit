@@ -87,30 +87,35 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
          * keyboard_layout_german.kcm, the keys a test presses: the letters, the digits and the
          * punctuation, with the third level its `ralt` rows put under Right Alt (`@` on Q, `€` on E,
          * `µ` on M, `² ³` on 2 3, `{ [ ] }` on 7 8 9 0, `\` on ß and `ẞ` with Shift, `~` on the `+`
-         * key, `|` on the `<` key beside the left Shift). ß is the file's `SLASH`, the `<` key its `PLUS`.
+         * key, `|` on the `<` key beside the left Shift, and the dead keys: `´` with a dead grave under
+         * Shift on the `=` key, `^` and `°` on the grave key). ß is the file's `SLASH`, the `<` key its
+         * `PLUS`. Caps Lock is a Shift Lock on this layout: the file gives the `shift, capslock` pair to
+         * the digits and the punctuation too, all but the `-` and `<` keys and the two dead ones.
          */
         val GERMAN: KeyLayout = KeyLayout(
             "German",
-            letters() + digits('!', '"', '\u00A7', '$', '%', '&', '/', '(', ')', '=') + listOf(
-                key(KEYCODE_Q, 'q', 'Q', ralt = '@'),
-                key(KEYCODE_E, 'e', 'E', ralt = '\u20AC'),
-                key(KEYCODE_M, 'm', 'M', ralt = '\u00B5'),
-                key(KEYCODE_2, '2', '"', ralt = '\u00B2'),
-                key(KEYCODE_3, '3', '\u00A7', ralt = '\u00B3'),
-                key(KEYCODE_7, '7', '/', ralt = '{'),
-                key(KEYCODE_8, '8', '(', ralt = '['),
-                key(KEYCODE_9, '9', ')', ralt = ']'),
-                key(KEYCODE_0, '0', '=', ralt = '}'),
-                key(KEYCODE_SLASH, '\u00DF', '?', ralt = '\\', shiftRalt = '\u1E9E'),
-                key(KEYCODE_LEFT_BRACKET, '\u00FC', '\u00DC'),
-                key(KEYCODE_RIGHT_BRACKET, '+', '*', ralt = '~'),
-                key(KEYCODE_SEMICOLON, '\u00F6', '\u00D6'),
-                key(KEYCODE_APOSTROPHE, '\u00E4', '\u00C4'),
-                key(KEYCODE_BACKSLASH, '#', '\''),
+            letters() + digits('!', '"', '\u00A7', '$', '%', '&', '/', '(', ')', '=', capsLock = true) + listOf(
+                key(KEYCODE_Q, 'q', 'Q', ralt = '@', capsLock = true),
+                key(KEYCODE_E, 'e', 'E', ralt = '\u20AC', capsLock = true),
+                key(KEYCODE_M, 'm', 'M', ralt = '\u00B5', capsLock = true),
+                key(KEYCODE_2, '2', '"', ralt = '\u00B2', capsLock = true),
+                key(KEYCODE_3, '3', '\u00A7', ralt = '\u00B3', capsLock = true),
+                key(KEYCODE_7, '7', '/', ralt = '{', capsLock = true),
+                key(KEYCODE_8, '8', '(', ralt = '[', capsLock = true),
+                key(KEYCODE_9, '9', ')', ralt = ']', capsLock = true),
+                key(KEYCODE_0, '0', '=', ralt = '}', capsLock = true),
+                key(KEYCODE_SLASH, '\u00DF', '?', ralt = '\\', shiftRalt = '\u1E9E', capsLock = true),
+                key(KEYCODE_LEFT_BRACKET, '\u00FC', '\u00DC', capsLock = true),
+                key(KEYCODE_RIGHT_BRACKET, '+', '*', ralt = '~', capsLock = true),
+                key(KEYCODE_SEMICOLON, '\u00F6', '\u00D6', capsLock = true),
+                key(KEYCODE_APOSTROPHE, '\u00E4', '\u00C4', capsLock = true),
+                key(KEYCODE_BACKSLASH, '#', '\'', capsLock = true),
                 key(KEYCODE_PLUS, '<', '>', ralt = '|'),
-                key(KEYCODE_COMMA, ',', ';'),
-                key(KEYCODE_PERIOD, '.', ':'),
+                key(KEYCODE_COMMA, ',', ';', capsLock = true),
+                key(KEYCODE_PERIOD, '.', ':', capsLock = true),
                 key(KEYCODE_MINUS, '-', '_'),
+                key(KEYCODE_EQUALS, '\u0301', '\u0300'),
+                key(KEYCODE_GRAVE, '\u0302', '\u00B0'),
                 key(KEYCODE_SPACE, ' '),
             ),
         )
@@ -123,7 +128,8 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
          * left Shift (its `PLUS`), `€` on E, `µ` on M, ø and æ on the ö and ä keys, the Sami letters on
          * Q T I O A S D F G H K Z C V B N (â on Q, á on A, š on S), and a dead tilde on the `¨` key
          * (its `RIGHT_BRACKET`), whose base and Shift are dead too. So `@` is on 2 here, where the
-         * German layout has it on Q, and Right Alt+Q is â.
+         * German layout has it on Q, and Right Alt+Q is â. The `shift, capslock` pair is the letters'
+         * and å ö ä's; the digits and the punctuation have `shift` alone.
          */
         val NORDIC: KeyLayout = KeyLayout(
             "Nordic",
@@ -139,11 +145,11 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
                 key(KEYCODE_MINUS, '+', '?', ralt = '\\'),
                 key(KEYCODE_EQUALS, '\u0301', '\u0300'),
                 letter(KEYCODE_Q, 'q', 'Q', '\u00E2', '\u00C2'),
-                key(KEYCODE_E, 'e', 'E', ralt = '\u20AC'),
+                key(KEYCODE_E, 'e', 'E', ralt = '\u20AC', capsLock = true),
                 letter(KEYCODE_T, 't', 'T', '\u0167', '\u0166'),
                 letter(KEYCODE_I, 'i', 'I', '\u00EF', '\u00CF'),
                 letter(KEYCODE_O, 'o', 'O', '\u00F5', '\u00D5'),
-                key(KEYCODE_LEFT_BRACKET, '\u00E5', '\u00C5'),
+                key(KEYCODE_LEFT_BRACKET, '\u00E5', '\u00C5', capsLock = true),
                 key(KEYCODE_RIGHT_BRACKET, '\u0308', '\u0302', ralt = '\u0303'),
                 letter(KEYCODE_A, 'a', 'A', '\u00E1', '\u00C1'),
                 letter(KEYCODE_S, 's', 'S', '\u0161', '\u0160'),
@@ -161,7 +167,7 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
                 letter(KEYCODE_V, 'v', 'V', '\u01EF', '\u01EE'),
                 letter(KEYCODE_B, 'b', 'B', '\u0292', '\u01B7'),
                 letter(KEYCODE_N, 'n', 'N', '\u014B', '\u014A'),
-                key(KEYCODE_M, 'm', 'M', ralt = '\u00B5'),
+                key(KEYCODE_M, 'm', 'M', ralt = '\u00B5', capsLock = true),
                 key(KEYCODE_COMMA, ',', ';'),
                 key(KEYCODE_PERIOD, '.', ':'),
                 key(KEYCODE_SLASH, '-', '_'),
@@ -173,18 +179,20 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
         /**
          * Generic.kcm, the US layout Android gives a keyboard with no other: the letters, the digits
          * and the punctuation, and its `alt` rows, which either Alt reaches, as a Mac's Option does:
-         * `ç` on C (`Ç` with Shift), `ß` on S, and the dead accents on E I N U and the grave key.
-         * Nothing is under Right Alt alone.
+         * `ç` on C (`Ç` with Shift, with the Caps Lock rows a letter has), `ß` on S, and the dead
+         * accents on E I N U and the grave key (`alt+shift` alone there, no Caps Lock row). Nothing
+         * is under Right Alt alone; the `shift, capslock` pair is the letters' only.
          */
         val US: KeyLayout = KeyLayout(
             "US",
             letters() + digits('!', '@', '#', '$', '%', '^', '&', '*', '(', ')') + listOf(
-                key(KEYCODE_C, 'c', 'C', alt = '\u00E7', shiftAlt = '\u00C7'),
-                key(KEYCODE_S, 's', 'S', alt = '\u00DF'),
-                key(KEYCODE_E, 'e', 'E', alt = '\u0301'),
-                key(KEYCODE_I, 'i', 'I', alt = '\u0302'),
-                key(KEYCODE_N, 'n', 'N', alt = '\u0303'),
-                key(KEYCODE_U, 'u', 'U', alt = '\u0308'),
+                key(KEYCODE_6, '6', '^', shiftAlt = '\u0302'),
+                key(KEYCODE_C, 'c', 'C', alt = '\u00E7', shiftAlt = '\u00C7', capsLock = true),
+                key(KEYCODE_S, 's', 'S', alt = '\u00DF', capsLock = true),
+                key(KEYCODE_E, 'e', 'E', alt = '\u0301', capsLock = true),
+                key(KEYCODE_I, 'i', 'I', alt = '\u0302', capsLock = true),
+                key(KEYCODE_N, 'n', 'N', alt = '\u0303', capsLock = true),
+                key(KEYCODE_U, 'u', 'U', alt = '\u0308', capsLock = true),
                 key(KEYCODE_GRAVE, '`', '~', alt = '\u0300', shiftAlt = '\u0303'),
                 key(KEYCODE_MINUS, '-', '_'),
                 key(KEYCODE_EQUALS, '=', '+'),
@@ -201,30 +209,39 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
         )
 
         /** The letters as every layout writes them: the lowercase, `shift, capslock` the uppercase, `shift+capslock` the lowercase again. */
-        private fun letters(): Map<Int, List<Row>> = ('a'..'z').associate { c -> key(KEYCODE_A + (c - 'a'), c, c.uppercaseChar()) }
-
-        /** The digits 1 to 9 then 0 with their Shift characters, `shift, capslock` rows the way both files write them. */
-        private fun digits(vararg shift: Char): Map<Int, List<Row>> =
-            (listOf(KEYCODE_1, KEYCODE_2, KEYCODE_3, KEYCODE_4, KEYCODE_5, KEYCODE_6, KEYCODE_7, KEYCODE_8, KEYCODE_9, KEYCODE_0) zip shift.toList())
-                .associate { (code, s) -> key(code, ('0' + (code - KEYCODE_0)), s) }
+        private fun letters(): Map<Int, List<Row>> = ('a'..'z').associate { c -> key(KEYCODE_A + (c - 'a'), c, c.uppercaseChar(), capsLock = true) }
 
         /**
-         * A key's rows in a `.kcm` file's order: `base`; `shift, capslock` and `shift+capslock` for a
-         * key with a Shift character; `alt`, then `shift+alt, capslock+alt` and `shift+capslock+alt`
-         * with it, as Generic.kcm writes its C; `ralt`, then `shift+ralt`, as the German file writes its ß.
+         * The digits 1 to 9 then 0 with their Shift characters: the `shift, capslock` pair where the
+         * file gives its digits one ([capsLock], the German file, where Caps Lock is a Shift Lock),
+         * `shift` alone where it does not (the Swedish file, Generic.kcm).
          */
-        private fun key(code: Int, base: Char, shift: Char? = null, alt: Char? = null, shiftAlt: Char? = null, ralt: Char? = null, shiftRalt: Char? = null): Pair<Int, List<Row>> {
+        private fun digits(vararg shift: Char, capsLock: Boolean = false): Map<Int, List<Row>> =
+            (listOf(KEYCODE_1, KEYCODE_2, KEYCODE_3, KEYCODE_4, KEYCODE_5, KEYCODE_6, KEYCODE_7, KEYCODE_8, KEYCODE_9, KEYCODE_0) zip shift.toList())
+                .associate { (code, s) -> key(code, ('0' + (code - KEYCODE_0)), s, capsLock = capsLock) }
+
+        /**
+         * A key's rows in a `.kcm` file's order: `base`; then for a key with a Shift character either
+         * `shift` alone or, where the file locks the key with Caps Lock ([capsLock]: every letter, and
+         * on the German layout the digits and most punctuation), `shift, capslock` and `shift+capslock`;
+         * `alt`, then `shift+alt` with it, as Generic.kcm writes its grave key (or `alt+shift` alone, as
+         * it writes its 6), or `shift+alt, capslock+alt` and `shift+capslock+alt` where the key is Caps
+         * Lock's, as it writes its C; `ralt`, then `shift+ralt`, as the German file writes its ß.
+         */
+        private fun key(code: Int, base: Char, shift: Char? = null, alt: Char? = null, shiftAlt: Char? = null, ralt: Char? = null, shiftRalt: Char? = null, capsLock: Boolean = false): Pair<Int, List<Row>> {
             val rows = ArrayList<Row>()
             rows += Row(0, base)
             if (shift != null) {
                 rows += Row(META_SHIFT_ON, shift)
-                rows += Row(META_CAPS_LOCK_ON, shift)
-                rows += Row(META_SHIFT_ON or META_CAPS_LOCK_ON, base)
+                if (capsLock) {
+                    rows += Row(META_CAPS_LOCK_ON, shift)
+                    rows += Row(META_SHIFT_ON or META_CAPS_LOCK_ON, base)
+                }
             }
-            if (alt != null) {
-                rows += Row(META_ALT_ON, alt)
-                if (shiftAlt != null) {
-                    rows += Row(META_SHIFT_ON or META_ALT_ON, shiftAlt)
+            if (alt != null) rows += Row(META_ALT_ON, alt)
+            if (shiftAlt != null) {
+                rows += Row(META_SHIFT_ON or META_ALT_ON, shiftAlt)
+                if (capsLock && alt != null) {
                     rows += Row(META_CAPS_LOCK_ON or META_ALT_ON, shiftAlt)
                     rows += Row(META_SHIFT_ON or META_CAPS_LOCK_ON or META_ALT_ON, alt)
                 }
@@ -241,7 +258,7 @@ class KeyLayout(val name: String, private val rows: Map<Int, List<Row>>) {
          * `shift+ralt, capslock+ralt` its capital and `shift+capslock+ralt` the small one again.
          */
         private fun letter(code: Int, base: Char, upper: Char, ralt: Char, raltUpper: Char): Pair<Int, List<Row>> {
-            val (c, rows) = key(code, base, upper, ralt = ralt, shiftRalt = raltUpper)
+            val (c, rows) = key(code, base, upper, ralt = ralt, shiftRalt = raltUpper, capsLock = true)
             return c to rows + Row(META_CAPS_LOCK_ON or META_ALT_RIGHT_ON, raltUpper) + Row(META_SHIFT_ON or META_CAPS_LOCK_ON or META_ALT_RIGHT_ON, ralt)
         }
 
