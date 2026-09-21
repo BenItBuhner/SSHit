@@ -69,9 +69,10 @@ class ImportedFamily(val name: String, val dir: File, val files: Map<FontFace, F
 /**
  * The terminal's font families (spec C20, Fonts): the five bundled ones, the device's monospace,
  * and the TTF or OTF files the user imports, kept under the app's files and grouped by the family
- * name in the file. Bundling stops at what a family costs: Fira Code ships its two faces and Hack
- * its regular and bold (its italics would double it), with the missing faces made from the regular
- * one, as they are for a System font. Symbols Nerd Font Mono is 1.6 MB compressed and is not
+ * name in the file. Bundling stops at what a family costs, under 300 KB compressed each: IBM Plex
+ * Mono ships all four faces at 236 KB, Fira Code its two, and Hack and Source Code Pro their regular
+ * and bold (their italics would add 160 to 300 KB a family), with the missing faces made from the
+ * regular one, as they are for a System font. Symbols Nerd Font Mono is 1.6 MB compressed and is not
  * bundled; the Nerd Font fallback draws the glyphs a family lacks from a Nerd Font the user has
  * imported, and, with none, from the Powerline range alone (U+E0A0 to U+E0D7: the arrows, the
  * rounded, flame and pixel dividers), a 15 KB subset of it ([R.font.berth_powerline_symbols]), so
@@ -89,7 +90,7 @@ object TerminalFonts {
         BundledFamily("IBM Plex Mono", R.font.ibm_plex_mono_regular, R.font.ibm_plex_mono_bold, R.font.ibm_plex_mono_italic, R.font.ibm_plex_mono_bold_italic, "OFL"),
         BundledFamily("Fira Code", R.font.fira_code_regular, R.font.fira_code_bold, null, null, "OFL"),
         BundledFamily("Hack", R.font.hack_regular, R.font.hack_bold, null, null, "MIT"),
-        BundledFamily("Source Code Pro", R.font.source_code_pro_regular, R.font.source_code_pro_bold, R.font.source_code_pro_italic, R.font.source_code_pro_bold_italic, "OFL"),
+        BundledFamily("Source Code Pro", R.font.source_code_pro_regular, R.font.source_code_pro_bold, null, null, "OFL"),
     )
 
     /** Bumps when an import lands or a family is removed; paints and typefaces keyed on a family re-read it. */

@@ -67,7 +67,8 @@ class TerminalFontsTest {
         assertEquals("IBM Plex Mono" to FontFace.REGULAR, parsed(R.font.ibm_plex_mono_regular).let { it.family to it.face })
         assertEquals("Fira Code" to FontFace.BOLD, parsed(R.font.fira_code_bold).let { it.family to it.face })
         assertEquals("Hack" to FontFace.REGULAR, parsed(R.font.hack_regular).let { it.family to it.face })
-        assertEquals("Source Code Pro" to FontFace.ITALIC, parsed(R.font.source_code_pro_italic).let { it.family to it.face })
+        assertEquals("IBM Plex Mono" to FontFace.ITALIC, parsed(R.font.ibm_plex_mono_italic).let { it.family to it.face })
+        assertEquals("Source Code Pro" to FontFace.BOLD, parsed(R.font.source_code_pro_bold).let { it.family to it.face })
         assertEquals("JetBrains Mono" to FontFace.BOLD, parsed(R.font.jetbrains_mono_bold).let { it.family to it.face })
         assertFalse(parsed(R.font.hack_regular).cff)
     }
