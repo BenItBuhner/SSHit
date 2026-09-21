@@ -1221,9 +1221,12 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         waitForText("Connect and install")
         compose.onNodeWithText("Connect and install").performScrollTo().performClick()
 
-        // The login's prompts come up over the sheet: the server's key first.
+        // The login's prompts come up over the sheet: the server's key first. Under it the sheet offers
+        // Stop waiting, not Cancel, since the connection goes on as a tab whatever the sheet does (nit 9).
         compose.waitUntil(20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
         waitForText("Trust and connect")
+        compose.onNodeWithText("Stop waiting").assertExists()
+        compose.onAllNodesWithText("Cancel").assertCountEquals(1) // the trust sheet's own
         settle(300)
         capture("key-install-connecting-live")
         compose.onNodeWithText("Trust and connect").performScrollTo().performClick()
