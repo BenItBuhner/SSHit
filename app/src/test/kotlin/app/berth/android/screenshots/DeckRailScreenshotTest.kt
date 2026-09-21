@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
@@ -402,7 +404,8 @@ class DeckRailScreenshotTest {
         waitForText("Look")
         compose.onNodeWithText("Berth Dark \u00B7 JetBrains Mono \u00B7 13 sp").assertIsDisplayed()
         settle(400)
-        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) compose.onNodeWithText(verb).assertIsDisplayed()
+        // The seven verbs, on the sheet (the Deck under it has a Snippets key of its own).
+        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) compose.onNode(hasText(verb) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         compose.assertNoTextCut("the Session sheet over a live tab", within = isDialog())
         capture("session-sheet-expanded-live")
 
