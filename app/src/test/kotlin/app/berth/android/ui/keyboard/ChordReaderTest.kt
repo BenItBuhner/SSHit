@@ -157,4 +157,17 @@ class ChordReaderTest {
         assertEquals(ChordKey("F"), chord(KEYCODE_F, 0, null))
         assertFalse(reader.armed)
     }
+
+    @Test
+    fun `a Leader whose release landed in the window its chord opened is not held on the next key`() {
+        val leader = LeaderKey.RIGHT_ALT
+        reader.read(event(KEYCODE_ALT_RIGHT, META_ALT_ON or META_ALT_RIGHT_ON), leader)
+        assertEquals(ChordKey("SLASH", leader = true), chord(KEYCODE_SLASH, META_ALT_ON or META_ALT_RIGHT_ON, leader))
+        // The sheet took the release; the next key here comes with no Right Alt in its state and is its own, not swallowed as half a Leader chord.
+        assertEquals(ChordKey("F"), chord(KEYCODE_F, 0, leader))
+        assertFalse(reader.armed)
+        // A Right Alt still down on the next key is the Leader still.
+        reader.read(event(KEYCODE_ALT_RIGHT, META_ALT_ON or META_ALT_RIGHT_ON), leader)
+        assertEquals(ChordKey("F", leader = true), chord(KEYCODE_F, META_ALT_ON or META_ALT_RIGHT_ON, leader))
+    }
 }

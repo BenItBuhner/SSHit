@@ -39,7 +39,9 @@ import android.view.KeyEvent.KEYCODE_SPACE
 import android.view.KeyEvent.KEYCODE_TAB
 import android.view.KeyEvent.KEYCODE_Z
 import android.view.KeyEvent.META_ALT_LEFT_ON
+import android.view.KeyEvent.META_ALT_RIGHT_ON
 import android.view.KeyEvent.META_CTRL_LEFT_ON
+import android.view.KeyEvent.META_CTRL_RIGHT_ON
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -90,6 +92,13 @@ val LeaderKey.composeKey: Key
         LeaderKey.RIGHT_CTRL -> Key.CtrlRight
     }
 
+/** The bit every key event's meta state carries while the Leader is down. */
+private val LeaderKey.metaBit: Int
+    get() = when (this) {
+        LeaderKey.RIGHT_ALT -> META_ALT_RIGHT_ON
+        LeaderKey.RIGHT_CTRL -> META_CTRL_RIGHT_ON
+    }
+
 fun LeaderKey.label(): String = when (this) {
     LeaderKey.RIGHT_ALT -> "Right Alt"
     LeaderKey.RIGHT_CTRL -> "Right Ctrl"
@@ -122,7 +131,10 @@ sealed interface ChordRead {
  * waits. While the Leader is held its own modifier bit is not the chord's: Right Alt held with F is
  * `Leader F`, and only the left Alt joined as well would make it `Leader Alt+F`. Without a Leader
  * ([leaderKey] null) the right-hand keys are the modifiers they are. One reader per dispatcher, and
- * one per sheet capturing a remap; nothing here decides what a chord does.
+ * one per sheet capturing a remap; nothing here decides what a chord does. A Leader chord that
+ * opens a sheet moves the keys to the sheet's window, and the Leader's release lands there, never
+ * here: so the hold is checked against the Leader's own bit in each key's meta state, and a key
+ * that arrives without it is read as the key it is.
  */
 class ChordReader {
     private var leaderHeld = false
@@ -154,6 +166,7 @@ class ChordReader {
         }
         if (event.type != KeyEventType.KeyDown) return ChordRead.Ignored
         val name = chordName(event.key.nativeKeyCode) ?: return ChordRead.Ignored
+        if (leaderHeld && leaderKey != null && native.metaState and leaderKey.metaBit == 0) leaderHeld = false
         val withLeader = leaderHeld || armed
         if (leaderHeld) leaderUsed = true
         val plain = !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed && !event.isShiftPressed
