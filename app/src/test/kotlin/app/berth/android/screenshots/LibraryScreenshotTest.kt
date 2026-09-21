@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -216,6 +217,15 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
 
     /** The one text field in the sheet's own window, whatever fields the screen under it has. */
     private val sheetField get() = compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog()))
+
+    /** The sheet's text field under the label [label], which BerthField sets in capitals over the field's box. */
+    private fun field(label: String): SemanticsNodeInteraction {
+        val labelBottom = compose.onNode(hasText(label.uppercase()) and hasAnyAncestor(isDialog())).fetchSemanticsNode().boundsInRoot.bottom
+        val under = compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(isDialog())).fetchSemanticsNodes()
+            .filter { it.boundsInRoot.top >= labelBottom - 1f }
+            .minByOrNull { it.boundsInRoot.top } ?: throw AssertionError("no text field under $label")
+        return compose.onNode(SemanticsMatcher("the field under $label") { it.id == under.id })
+    }
 
     /** A tag chip: the selectable with that label, as the section label of the same name is not. */
     private fun chip(text: String) = compose.onNode(hasText(text) and isSelectable())
@@ -1052,10 +1062,13 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         val work = graph.workspaces.items.value.first { it.id == "ws-work" }
         val reconnect = ArrayList<Boolean>()
         themed {
-            GroupEditorSheet(group = work, onCreate = { _, _ -> }, onRename = {}, onRecolor = {}, onDismiss = {}, onReconnectAtLaunch = { reconnect += it })
+            GroupEditorSheet(group = work, onCreate = { _, _, _ -> }, onRename = { _, _ -> }, onRecolor = {}, onDismiss = {}, onReconnectAtLaunch = { reconnect += it })
         }
         waitForText("Reconnect tabs at launch")
         compose.onNodeWithText("Off, its tabs come back as saved frames and reconnect when tapped.").assertExists()
+        // C8's controls in its order: Name, Colour, Monogram, then the switch; Work's saved monogram is its own letter, not the name's two.
+        section("Monogram").assertExists()
+        field("Monogram").assert(hasText("W"))
         capture("group-editor-reconnect")
         assertNoTextCut("the group editor")
         // The sheet opens whole: Done and Cancel are measured and on screen at the cap, not below a half-open sheet's fold.
@@ -1069,10 +1082,68 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     @Test
     fun `a new group's editor has no Reconnect row`() {
         seedLibrary()
-        themed { GroupEditorSheet(group = null, onCreate = { _, _ -> }, onRename = {}, onRecolor = {}, onDismiss = {}) }
+        themed { GroupEditorSheet(group = null, onCreate = { _, _, _ -> }, onRename = { _, _ -> }, onRecolor = {}, onDismiss = {}) }
         waitForText("Create")
         hasNoText("Reconnect tabs at launch")
         assertSheetButtonsReachable("Create", "Cancel")
+    }
+
+    /**
+     * Monogram (auto, editable), the editor's third control in C8 (nit 5): the field carries the
+     * name's own two letters (A8) and follows the name as it is typed; typing into the field ends
+     * that, and an emptied field falls back to the name's own rather than saving nothing. Create
+     * and Done hand the monogram over beside the name, blank while it is the name's own, and the
+     * model keeps a typed monogram through a rename, in one write with the name.
+     */
+    @Test
+    fun `the group editor's monogram follows the name until it is typed over`() {
+        seedLibrary()
+        val created = ArrayList<Triple<String, SwatchColor, String>>()
+        var dismissed = 0
+        themed { GroupEditorSheet(group = null, onCreate = { n, c, m -> created += Triple(n, c, m) }, onRename = { _, _ -> }, onRecolor = {}, onDismiss = { dismissed++ }) }
+        waitForText("Create")
+        field("Monogram").assert(hasText("GR"))
+        field("Name").performTextInput("Home lab")
+        compose.waitUntil(5_000) { runCatching { field("Monogram").assert(hasText("HL")) }.isSuccess }
+        // Typed over: two characters, set in capitals, kept as the name goes on changing.
+        field("Monogram").performTextReplacement("h9")
+        compose.waitUntil(5_000) { runCatching { field("Monogram").assert(hasText("H9")) }.isSuccess }
+        field("Name").performTextReplacement("Lab rack")
+        field("Monogram").assert(hasText("H9"))
+        compose.onNodeWithText("Create").performClick()
+        compose.waitUntil(5_000) { created.isNotEmpty() }
+        assertEquals("Lab rack", created.single().first)
+        assertEquals("H9", created.single().third)
+        assertEquals(1, dismissed)
+
+        // The model: Done's one write carries both, a blank monogram is the name's own, and Create keeps a typed one.
+        compose.waitUntil(5_000) { graph.sessions.workspaces.value.any { it.id == "ws-work" } }
+        graph.viewModel.renameWorkspace("ws-work", "Work bench", "WB")
+        compose.waitUntil(5_000) { graph.workspaces.items.value.first { it.id == "ws-work" }.let { it.name == "Work bench" && it.monogram == "WB" } }
+        graph.viewModel.renameWorkspace("ws-work", "Ops")
+        compose.waitUntil(5_000) { graph.workspaces.items.value.first { it.id == "ws-work" }.let { it.name == "Ops" && it.monogram == "OP" } }
+        var made: Workspace? = null
+        graph.viewModel.createWorkspace("Night shift", switchTo = false, monogram = "N1") { made = it }
+        compose.waitUntil(5_000) { made != null && graph.workspaces.items.value.any { it.id == made!!.id && it.monogram == "N1" && it.name == "Night shift" } }
+        assertEquals("N1", made!!.monogram)
+    }
+
+    /** An existing group whose monogram is the name's own: the field follows a rename, and Done hands the name over with the monogram blank; emptied, the field means the name's own too. */
+    @Test
+    fun `an existing group's monogram follows its rename while it is the name's own`() {
+        seedLibrary()
+        val renamed = ArrayList<Pair<String, String>>()
+        val plain = Workspace("ws-plain", "Homelab", SwatchColor.MOSS, Host.monogramFor("Homelab"), createdAt = 0)
+        themed { GroupEditorSheet(group = plain, onCreate = { _, _, _ -> }, onRename = { n, m -> renamed += n to m }, onRecolor = {}, onDismiss = {}) }
+        waitForText("Done")
+        field("Monogram").assert(hasText("HO"))
+        field("Name").performTextReplacement("Rack")
+        compose.waitUntil(5_000) { runCatching { field("Monogram").assert(hasText("RA")) }.isSuccess }
+        field("Monogram").performTextClearance()
+        compose.waitUntil(5_000) { runCatching { field("Monogram").assert(hasText("")) }.isSuccess }
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntil(5_000) { renamed.isNotEmpty() }
+        assertEquals(listOf("Rack" to ""), renamed)
     }
 
     @Test

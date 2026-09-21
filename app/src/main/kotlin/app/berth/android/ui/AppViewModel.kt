@@ -454,16 +454,30 @@ class AppViewModel @Inject constructor(
 
     fun setWorkspace(id: String) = sessions.setCurrentWorkspace(id)
 
-    /** Creates a group; with [switchTo] it becomes the target for the next new tab. Returns its id through [onCreated]. */
-    fun createWorkspace(name: String, switchTo: Boolean = true, color: SwatchColor? = null, onCreated: (Workspace) -> Unit = {}) {
+    /**
+     * Creates a group; with [switchTo] it becomes the target for the next new tab. A [monogram]
+     * typed in the editor (spec C8, "auto, editable") replaces the name's own; blank keeps it.
+     * Returns the group through [onCreated].
+     */
+    fun createWorkspace(name: String, switchTo: Boolean = true, color: SwatchColor? = null, monogram: String = "", onCreated: (Workspace) -> Unit = {}) {
         viewModelScope.launch {
-            val ws = sessions.createWorkspace(name, color ?: SwatchColor.forName(name))
+            var ws = sessions.createWorkspace(name, color ?: SwatchColor.forName(name))
+            if (monogram.isNotBlank() && monogram != ws.monogram) {
+                // Written through the repository from the group just returned: the manager's list may not carry it yet.
+                ws = ws.copy(monogram = monogram)
+                workspaceRepository.upsert(ws)
+            }
             if (switchTo) sessions.setCurrentWorkspace(ws.id)
             onCreated(ws)
         }
     }
 
-    fun renameWorkspace(id: String, name: String) = sessions.renameWorkspace(id, name)
+    /**
+     * The group editor's Done (spec C8): the name and the monogram in one write, so neither change
+     * overtakes the other; a blank [monogram] is the name's own (A8).
+     */
+    fun renameWorkspace(id: String, name: String, monogram: String = "") =
+        sessions.updateWorkspace(id) { copy(name = name, monogram = monogram.ifBlank { Host.monogramFor(name) }) }
     fun setWorkspaceColor(id: String, color: SwatchColor) = sessions.setWorkspaceColor(id, color)
     fun setWorkspaceCollapsed(id: String, collapsed: Boolean) = sessions.setWorkspaceCollapsed(id, collapsed)
 
