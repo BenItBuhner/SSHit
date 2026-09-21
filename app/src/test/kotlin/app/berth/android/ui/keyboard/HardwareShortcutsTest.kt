@@ -367,9 +367,12 @@ class HardwareShortcutsTest {
     // ---- the sheet's rows -----------------------------------------------------------------------------------------
 
     @Test
-    fun `the sheet lists the focus chords beside the Stage's others`() {
-        val stage = shortcutGroups(defaults).first { it.title == "Stage" }.entries.map { it.keys }
-        assertTrue("Ctrl+Shift+S" in stage && "Ctrl+Shift+K" in stage && "Esc" in stage && "Ctrl+Shift+P" in stage)
+    fun `the sheet lists the focus chords beside the Stage's others, every row one of the app's, and Esc in the note`() {
+        val stage = shortcutGroups(defaults).first { it.title == "Stage" }
+        val keys = stage.entries.map { it.keys }
+        assertTrue("Ctrl+Shift+S" in keys && "Ctrl+Shift+K" in keys && "Ctrl+Shift+P" in keys)
+        assertTrue("the Stage's rows are all the app's chords, so all rebind", stage.entries.all { it.chord != null })
+        assertTrue("Esc is said once, in the walking rule", "Esc" !in keys && "Esc" in stage.note.orEmpty())
     }
 
     @Test

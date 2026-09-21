@@ -60,6 +60,7 @@ import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.a11y.TerminalTag
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
@@ -210,13 +211,14 @@ class HardwareKeyboardScreenshotTest {
 
     /**
      * C22's table (design review, item 4): a row per chord with the action as its title and the keys
-     * trailing in mono, one line each on a 40 dp row, the reader hearing the action first; and the
-     * whole sheet under two screens, where the two-line rows ran to four.
+     * trailing in mono, one line each on a row of a touch target's 48 dp (the app's rows are the
+     * remap table's controls, and the fixed rows keep step), the reader hearing the action first;
+     * and the whole sheet under two screens, where the two-line rows ran to four.
      */
     private fun assertShortcutTable() {
         val row = compose.onNode(hasContentDescription("Next tab, Ctrl+Tab")).fetchSemanticsNode()
         val density = compose.density.density
-        assertTrue("a one-line row, ${row.size.height / density} dp", row.size.height / density <= 44f)
+        assertTrue("a one-line row, ${row.size.height / density} dp", row.size.height / density <= TouchTargetSize.value)
         // The row merges its texts for the reader; the two texts are found under it in the unmerged tree.
         val title = compose.onNode(hasText("Next tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()
         val keys = compose.onNode(hasText("Ctrl+Tab") and hasAnyAncestor(hasContentDescription("Next tab, Ctrl+Tab")), useUnmergedTree = true).fetchSemanticsNode()

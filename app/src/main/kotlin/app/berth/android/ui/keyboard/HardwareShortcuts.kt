@@ -190,7 +190,7 @@ fun chordTitle(action: ChordAction): String = when (action) {
     ChordAction.FOCUS_OTHER_PANE -> "Focus the other pane"
     ChordAction.FOCUS_STRIP -> "Focus the tab strip"
     ChordAction.FOCUS_DECK -> "Focus the Deck"
-    ChordAction.PASS_THROUGH -> "Pass-through, every key to the shell"
+    ChordAction.PASS_THROUGH -> "Pass-through to the shell"
     ChordAction.SHORTCUT_SHEET -> "This sheet"
 }
 
@@ -257,7 +257,6 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
         entry(ChordAction.FONT_SMALLER),
         entry(ChordAction.FOCUS_STRIP),
         entry(ChordAction.FOCUS_DECK),
-        ShortcutEntry("Esc", "Back to the terminal"),
         entry(ChordAction.PASS_THROUGH),
         entry(ChordAction.SHORTCUT_SHEET),
     )
@@ -271,7 +270,7 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
         add(ShortcutEntry("Shift, Ctrl, Alt + arrows", "Modified arrows, Home, End, Page Up and Down"))
         add(ShortcutEntry("F1 \u2026 F12", "Function keys, with any modifier"))
         add(ShortcutEntry("Esc, Tab, Insert, Delete", "As on the host"))
-        if (readline) add(ShortcutEntry("Ctrl+T, Ctrl+W", "Readline's transpose and delete word"))
+        if (readline) add(ShortcutEntry("Ctrl+T, Ctrl+W", "Readline\u2019s transpose and delete word"))
     }
     val leaderNote = if (settings.chordPrefix == ChordPrefix.LEADER) " The Leader, ${settings.leaderKey.label()}, never does: it is the app\u2019s." else ""
     return listOf(
@@ -281,8 +280,10 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
             note = if (readline) "Ctrl+T and Ctrl+W are the shell\u2019s (Settings \u203A Hardware keyboard); the chords open and close tabs."
             else "Settings \u203A Hardware keyboard hands Ctrl+T and Ctrl+W to the shell; the chords still open and close tabs.",
         ),
-        // The walking rule once, under the rows, rather than in each focus row's action.
-        ShortcutGroup("Stage", stageChords, note = "On the strip and the Deck, Tab and the arrows walk, Enter presses. Esc from the strip, the Deck or the search is back to the terminal. Pass-through ends with its chord again, or a tap on its pill."),
+        // The walking rule once, under the rows, rather than in each focus row's action; Esc is part
+        // of it (it is Esc in the terminal, back to the terminal only from what the chords focus), so
+        // it is said here and is no row of the app's chords.
+        ShortcutGroup("Stage", stageChords, note = "Tab and the arrows walk the strip and the Deck, Enter presses; Esc from them or the search is back to the terminal. Pass-through sends every key to the shell, the chords too, until its chord again or a tap on its pill."),
         ShortcutGroup("Panes", paneChords),
         ShortcutGroup("Terminal", terminalKeys, note = "Which Alt is per host: Settings \u203A Hardware keyboard. Unbound combinations always reach the terminal.$leaderNote"),
     )

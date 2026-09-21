@@ -25,10 +25,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -82,10 +85,9 @@ fun ShortcutSheet(
     val prefix = table.prefixPhrase()
     BerthSheet(onDismiss = onDismiss) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // The keys' column stops at half a row's content (the sheet's width less its margin, the
-            // panel's padding, the row's own and the gap between its columns) and wraps past it, so the
-            // action keeps the other half whole at the font cap; at 1× only a list of keys is that wide.
-            val keysMaxWidth = (maxWidth - BerthSpace.screenMargin * 2 - BerthSpace.panelPadding * 2 - ROW_PADDING * 2 - COLUMN_GAP) / 2
+            // A row's content: the sheet's width less its margin, the panel's padding and the row's own.
+            val contentWidth = maxWidth - BerthSpace.screenMargin * 2 - BerthSpace.panelPadding * 2 - ROW_PADDING * 2
+            val measurer = rememberTextMeasurer(cacheSize = 64)
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -102,22 +104,27 @@ fun ShortcutSheet(
                 )
                 for (group in shortcutGroups(table, panes)) {
                     Panel(label = group.title) {
-                        for (entry in group.entries) {
-                            val action = entry.chord
-                            if (action != null && onRemap != null) {
-                                RemapRow(
-                                    entry = entry,
-                                    table = table,
-                                    keysMaxWidth = keysMaxWidth,
-                                    capturing = capturing == action,
-                                    onCapture = { capturing = if (it) action else null },
-                                    onRemap = { chord ->
-                                        onRemap(action, chord)
-                                        capturing = null
-                                    },
-                                )
-                            } else {
-                                ShortcutRow(entry, keysMaxWidth)
+                        // The rows as one child of the panel, so they meet: the panel's 4 dp between
+                        // its children is for rows on their own surfaces, and these are a table's.
+                        Column {
+                            for (entry in group.entries) {
+                                val action = entry.chord
+                                val keysMaxWidth = keysWidth(entry.action, contentWidth, measurer)
+                                if (action != null && onRemap != null) {
+                                    RemapRow(
+                                        entry = entry,
+                                        table = table,
+                                        keysMaxWidth = keysMaxWidth,
+                                        capturing = capturing == action,
+                                        onCapture = { capturing = if (it) action else null },
+                                        onRemap = { chord ->
+                                            onRemap(action, chord)
+                                            capturing = null
+                                        },
+                                    )
+                                } else {
+                                    ShortcutRow(entry, keysMaxWidth)
+                                }
                             }
                         }
                         if (group.note != null) PanelNote(group.note)
@@ -132,16 +139,37 @@ fun ShortcutSheet(
 private val ROW_PADDING = 12.dp
 private val COLUMN_GAP = 12.dp
 
+/** The share of a row the keys keep when the action wants the whole line: two fifths, the action the three it is read by. */
+private const val KEYS_SHARE = 0.4f
+
+/**
+ * How wide the keys may stand on a row before they wrap: the width the action's own line leaves
+ * them (the row's [contentWidth] less the action set on one line in body and the gap between the
+ * columns), and never less than [KEYS_SHARE] of the row. So a short action lends its spare width
+ * and `Ctrl+T · Ctrl+Shift+T` sits on one line beside `New tab`; an action too long for its line
+ * wraps beside keys that keep two fifths, the larger share going to the column the eye scans, and
+ * at the font cap the long action has three lines whole rather than four with the last cut. The
+ * action is measured as [ListRow] sets it, in [BerthType.body] on one line.
+ */
+@Composable
+private fun keysWidth(action: String, contentWidth: Dp, measurer: TextMeasurer): Dp {
+    val density = LocalDensity.current
+    return remember(action, contentWidth, density.density, density.fontScale) {
+        val line = with(density) { measurer.measure(action, style = BerthType.body, softWrap = false, maxLines = 1).size.width.toDp() }
+        (contentWidth - line - COLUMN_GAP).coerceAtLeast(contentWidth * KEYS_SHARE)
+    }
+}
+
 /** The tag on the one row listening for a remap's chord, for a test to send the keys to; no row carries it otherwise. */
 const val ChordCaptureTag = "chord-capture"
 
 /**
  * One chord as a line of C22's table: the action as the row's title in body, the keys in mono and
  * `text.2` at the trailing edge, right-aligned, on a row of a touch target's height (48 dp), since
- * the app's rows are the remap table's controls and the fixed rows keep step with them. A wide
- * chord takes its width first and the action wraps beside it, to two lines for the few long ones;
- * the keys wrap once they would take more than half the row ([keysMaxWidth]), never clip. TalkBack
- * hears the action first: "Next tab, Ctrl+Tab".
+ * the app's rows are the remap table's controls and the fixed rows keep step with them; the rows
+ * meet, so the table's pitch is the row. A wide chord takes its width first and the action wraps
+ * beside it, to two lines for the few long ones; the keys wrap past [keysMaxWidth] ([keysWidth]),
+ * never clip. TalkBack hears the action first: "Next tab, Ctrl+Tab".
  */
 @Composable
 private fun ShortcutRow(entry: ShortcutEntry, keysMaxWidth: Dp) {
