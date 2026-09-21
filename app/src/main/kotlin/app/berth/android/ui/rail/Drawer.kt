@@ -46,6 +46,8 @@ import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.layout.HeightClass
+import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.tabs.GroupMenu
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.theme.Berth
@@ -60,10 +62,13 @@ enum class Library { HOSTS, KEYS, TUNNELS, SNIPPETS, SETTINGS }
  * The drawer (spec C7): a secondary surface for jumping between groups and for the library. Not a
  * tab switcher; tabs are (C3). 304 dp on `surface.1`: the groups as 44 dp rows (swatch 24 with a ring
  * when a tab in the group needs attention, name in Body, tab count in Caption; the current group on
- * `surface.3`), New group, then the library rows with Settings last. The Groups label is the way
- * to the groups overview (spec C8, [onGroups]), and carries the chevron every navigating row does.
- * On an expanded window it stands as the rail (spec C23, A12): the same column at [width] 280 dp,
- * in place beside the Stage.
+ * `surface.3`), New group, then the library rows, each with its drawn glyph leading and Settings
+ * last. The Groups label is the way to the groups overview (spec C8, [onGroups]), and carries the
+ * chevron every navigating row does. On an expanded window it stands as the rail (spec C23, A12):
+ * the same column at [width] 280 dp, in place beside the Stage. The library stands at the foot, as
+ * the 72 dp column's glyphs do ([MediumRail]), so a window crossing 840 dp trades the words for
+ * nothing else; on a window too short to hold the groups and the library both (a phone on its
+ * side, where the drawer is a sheet) the drawer scrolls as one column instead.
  */
 @Composable
 fun Drawer(
@@ -82,6 +87,14 @@ fun Drawer(
     val records by vm.records.collectAsState(initial = emptyList())
     val ordered = remember(groups) { groups.sortedWith(compareBy<Workspace> { it.sortOrder }.thenBy { it.createdAt }) }
     var menuFor by remember { mutableStateOf<String?>(null) }
+    val pinnedLibrary = windowLayout().height != HeightClass.COMPACT
+    val library: @Composable () -> Unit = {
+        LibraryRow("Hosts", BerthIcons.hosts) { onLibrary(Library.HOSTS) }
+        LibraryRow("Keys", BerthIcons.key) { onLibrary(Library.KEYS) }
+        LibraryRow("Tunnels", BerthIcons.tunnel) { onLibrary(Library.TUNNELS) }
+        LibraryRow("Snippets", BerthIcons.snippet) { onLibrary(Library.SNIPPETS) }
+        LibraryRow("Settings", BerthIcons.settings) { onLibrary(Library.SETTINGS) }
+    }
 
     Column(
         modifier
@@ -127,12 +140,17 @@ fun Drawer(
                     },
                 )
             }
-            item(key = "library-label") { SectionLabel("Library", Modifier.padding(start = 4.dp, top = 24.dp, bottom = 6.dp)) }
-            item(key = "lib-hosts") { LibraryRow("Hosts") { onLibrary(Library.HOSTS) } }
-            item(key = "lib-keys") { LibraryRow("Keys") { onLibrary(Library.KEYS) } }
-            item(key = "lib-tunnels") { LibraryRow("Tunnels") { onLibrary(Library.TUNNELS) } }
-            item(key = "lib-snippets") { LibraryRow("Snippets") { onLibrary(Library.SNIPPETS) } }
-            item(key = "lib-settings") { LibraryRow("Settings") { onLibrary(Library.SETTINGS) } }
+            if (!pinnedLibrary) {
+                item(key = "library-label") { SectionLabel("Library", Modifier.padding(start = 4.dp, top = 24.dp, bottom = 6.dp)) }
+                item(key = "library") { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { library() } }
+            }
+        }
+        if (pinnedLibrary) {
+            // The 24 dp between the Groups and the Library, kept when the groups fill the height above.
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                SectionLabel("Library", Modifier.padding(start = 4.dp, top = 24.dp, bottom = 6.dp))
+                library()
+            }
         }
         Spacer(Modifier.height(4.dp))
     }
@@ -170,9 +188,13 @@ private fun GroupsLabelRow(onClick: () -> Unit) {
     }
 }
 
-/** A 44 dp library row: Label `text.1` with the trailing chevron every navigating row in Settings carries. */
+/**
+ * A 44 dp library row (spec C7): its drawn glyph 24 leading, where the group rows carry their
+ * swatch, the name in Label `text.1`, and the trailing chevron every navigating row in Settings
+ * carries. The same glyph stands for the row in the 72 dp column ([MediumRail]).
+ */
 @Composable
-private fun LibraryRow(text: String, onClick: () -> Unit) {
+private fun LibraryRow(text: String, icon: Int, onClick: () -> Unit) {
     val c = Berth.colors
     ListRow(
         title = text,
@@ -180,6 +202,7 @@ private fun LibraryRow(text: String, onClick: () -> Unit) {
         minHeight = 44.dp,
         titleStyle = BerthType.label,
         onClick = onClick,
+        leading = { BerthIcon(icon, tint = c.text2) },
         trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
     )
 }

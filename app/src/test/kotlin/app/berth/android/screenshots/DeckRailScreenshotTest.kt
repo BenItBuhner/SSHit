@@ -83,6 +83,9 @@ private const val PHONE_PORTRAIT = "w411dp-h914dp-420dpi"
 /** A Pixel Fold turned tall: a medium width, where the drawer stands as the 72 dp column. */
 private const val FOLD_PORTRAIT = "w701dp-h841dp-port-420dpi"
 
+/** The same fold open the wide way: an expanded width, where the drawer stands as the 280 dp rail. */
+private const val FOLD_LANDSCAPE = "w841dp-h701dp-land-420dpi"
+
 /** A 10-inch tablet upright: medium in width too, and tall. */
 private const val TABLET_PORTRAIT = "w800dp-h1280dp-port-320dpi"
 
@@ -216,6 +219,33 @@ class DeckRailScreenshotTest {
         compose.waitForIdle()
         hosts.assertIsFocused()
         capture("medium-rail-focus-glyph")
+    }
+
+    // ---- the 280 dp rail (spec C7, A12; #20 review, nit 1) ----------------------------------------------
+
+    /**
+     * The fold open the wide way is an expanded width: the drawer stands as the 280 dp rail, its
+     * library rows each with the glyph the column shows for the same screen, leading where the
+     * group rows carry their swatch, and standing at the rail's foot as the column's glyphs do, so
+     * a window crossing 840 dp trades the words for nothing else.
+     */
+    @Test
+    @Config(qualifiers = FOLD_LANDSCAPE)
+    fun `the fold open wide stands the 280 dp rail, its library rows glyphed and at the foot as the column's`() {
+        mountApp()
+        compose.onNodeWithText("New group").assertIsDisplayed()
+        for (row in listOf("Hosts", "Keys", "Tunnels", "Snippets", "Settings")) compose.onNodeWithText(row).assertIsDisplayed()
+        val density = compose.density.density
+        // The glyph fills the leading slot: a library row's name starts where a group row's does, past a 24 dp leading.
+        val newGroup = compose.onNode(hasText("New group"), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val hosts = compose.onNode(hasText("Hosts"), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertEquals("the library's names line up with the groups', past the glyph", newGroup.left, hosts.left, 1f)
+        assertTrue("the glyph stands before the name", hosts.left / density > 24f + 12f + 12f)
+        // At the foot: the last row ends in the rail's bottom padding, however few groups stand above.
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val settings = compose.onNodeWithText("Settings").fetchSemanticsNode().boundsInRoot
+        assertTrue("the library stands at the rail's foot: Settings ends ${(root.bottom - settings.bottom) / density} dp above it", (root.bottom - settings.bottom) / density < 24f)
+        capture("wide-rail-library-glyphs")
     }
 
     // ---- the Deck of two rows (spec C4; #14 review, nit 6; #15 review, nit 8) ---------------------------
