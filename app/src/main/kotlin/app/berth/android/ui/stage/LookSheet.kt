@@ -11,8 +11,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthSheet
@@ -20,6 +22,7 @@ import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.hosts.CyclePicker
+import app.berth.android.ui.terminal.TerminalFonts
 import app.berth.domain.model.AppearanceOverride
 import app.berth.domain.model.Host
 import app.berth.domain.model.TerminalFont
@@ -33,8 +36,20 @@ data class TerminalLook(val theme: TerminalTheme, val font: TerminalFont) {
     val summary: String get() = "${theme.name} \u00B7 ${font.family} \u00B7 ${font.sizeSp} sp"
 }
 
-/** The font families the terminal draws in; the same two Settings › Terminal offers. */
-val TerminalFontFamilies: List<String> = listOf("JetBrains Mono", "System monospace")
+/**
+ * The font families a host may set (spec C20, Fonts): the ones Settings › Terminal's picker lists,
+ * the bundled, the device's monospace and the imports, in the picker's order, read again when an
+ * import lands or a family goes ([TerminalFonts.version]), so a family imported in Settings is a
+ * host's to pick the moment it is there. A host naming a family since removed keeps its name on
+ * the row (the terminal draws the default for it, [app.berth.android.ui.terminal.resolvedFamily])
+ * until another is picked.
+ */
+@Composable
+fun rememberTerminalFontFamilies(): List<String> {
+    val context = LocalContext.current
+    val version = TerminalFonts.version
+    return remember(version) { TerminalFonts.choices(context).map { it.name } }
+}
 
 /**
  * What a terminal on [host] draws with: the host's own theme, then the workspace's, then the
@@ -98,7 +113,7 @@ fun LookSheet(vm: AppViewModel, hostId: String, onDismiss: () -> Unit) {
                 ) { set(appearance.copy(terminalThemeId = it)) }
                 CyclePicker(
                     "Font",
-                    listOf<String?>(null) + TerminalFontFamilies,
+                    listOf<String?>(null) + rememberTerminalFontFamilies(),
                     appearance.fontFamily,
                     { it ?: "Inherit" },
                 ) { set(appearance.copy(fontFamily = it)) }

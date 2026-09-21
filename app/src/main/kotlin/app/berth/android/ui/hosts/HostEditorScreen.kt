@@ -53,7 +53,7 @@ import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
-import app.berth.android.ui.stage.TerminalFontFamilies
+import app.berth.android.ui.stage.rememberTerminalFontFamilies
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -384,7 +384,7 @@ fun HostEditorScreen(
             // The three fields the Session sheet's Look sheet sets, so a family picked there shows and clears here.
             Panel(label = "Look") {
                 CyclePicker("Theme", listOf<String?>(null) + themes.map { it.id }, themeId, { id -> id?.let { i -> themes.firstOrNull { it.id == i }?.name } ?: "Inherit" }) { themeId = it }
-                CyclePicker("Font", listOf<String?>(null) + TerminalFontFamilies, fontFamily, { it ?: "Inherit" }) { fontFamily = it }
+                CyclePicker("Font", listOf<String?>(null) + rememberTerminalFontFamilies(), fontFamily, { it ?: "Inherit" }) { fontFamily = it }
                 CyclePicker("Font size", listOf<Int?>(null) + (9..24).toList(), fontSize, { it?.let { s -> "$s sp" } ?: "Inherit" }) { fontSize = it }
             }
 
