@@ -265,15 +265,16 @@ class ChordTable(
     }
 
     /**
-     * The shell's claim on [chord] as a noun phrase that fits "takes … from the shell" (`readline's
-     * forward-char`, `Meta+F`, `F5`, `Ctrl+↑`), or null when it has none.
+     * The shell's claim on [chord] as a noun phrase that fits "takes … from the shell" (`readline’s
+     * forward-char`, `Meta+F`, `F5`, `Ctrl+↑`), or null when it has none; the apostrophe is the
+     * interface's typographic one, since the phrase is read on the sheet as written.
      */
     private fun shellKey(chord: ChordKey): String? = when {
         chord.leader || chord.meta -> null
         chord.key in FUNCTION_KEYS -> ChordKey.keyLabel(chord.key)
         chord.ctrl && chord.alt -> "Meta and Ctrl+${ChordKey.keyLabel(chord.key)}"
         chord.alt -> "Meta+${ChordKey.keyLabel(chord.key)}"
-        chord.ctrlOnly -> READLINE[chord.key]?.let { "readline's $it" }
+        chord.ctrlOnly -> READLINE[chord.key]?.let { "readline\u2019s $it" }
             ?: if (chord.key in MODIFIED_KEYS) "Ctrl+${ChordKey.keyLabel(chord.key)}" else null
         chord.ctrl && chord.shift && chord.key in MODIFIED_KEYS -> "Ctrl+Shift+${ChordKey.keyLabel(chord.key)}"
         else -> null
@@ -287,10 +288,10 @@ class ChordTable(
 
         /** The control characters a shell reads as signals; taking one leaves the user unable to stop what runs. */
         val SIGNALS: Map<String, String> = mapOf(
-            "C" to "the shell's interrupt",
-            "D" to "the shell's end-of-file",
-            "Z" to "the shell's suspend",
-            "BACKSLASH" to "the shell's quit",
+            "C" to "the shell\u2019s interrupt",
+            "D" to "the shell\u2019s end-of-file",
+            "Z" to "the shell\u2019s suspend",
+            "BACKSLASH" to "the shell\u2019s quit",
         )
 
         /** Readline's default bindings for the plain Ctrl keys, as the shell has them on the default install. */

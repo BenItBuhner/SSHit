@@ -82,10 +82,10 @@ class HardwareKeyboardTest {
         assertEquals(ChordConflict.Strip("Tab 3"), table.conflict(ChordAction.FIND, ChordKey("3", ctrl = true)))
         assertEquals(ChordConflict.Strip("Last tab"), table.conflict(ChordAction.FIND, ChordKey("9", ctrl = true)))
         assertEquals(ChordConflict.Strip("Close tab"), table.conflict(ChordAction.FIND, ChordKey("W", ctrl = true)))
-        assertEquals(ChordConflict.Signal("the shell's interrupt"), table.conflict(ChordAction.FIND, ChordKey("C", ctrl = true)))
-        assertEquals(ChordConflict.Signal("the shell's end-of-file"), table.conflict(ChordAction.FIND, ChordKey("D", ctrl = true)))
-        assertEquals(ChordConflict.Signal("the shell's suspend"), table.conflict(ChordAction.FIND, ChordKey("Z", ctrl = true)))
-        assertEquals(ChordConflict.Signal("the shell's quit"), table.conflict(ChordAction.FIND, ChordKey("BACKSLASH", ctrl = true)))
+        assertEquals(ChordConflict.Signal("the shell\u2019s interrupt"), table.conflict(ChordAction.FIND, ChordKey("C", ctrl = true)))
+        assertEquals(ChordConflict.Signal("the shell\u2019s end-of-file"), table.conflict(ChordAction.FIND, ChordKey("D", ctrl = true)))
+        assertEquals(ChordConflict.Signal("the shell\u2019s suspend"), table.conflict(ChordAction.FIND, ChordKey("Z", ctrl = true)))
+        assertEquals(ChordConflict.Signal("the shell\u2019s quit"), table.conflict(ChordAction.FIND, ChordKey("BACKSLASH", ctrl = true)))
         for (conflict in listOf(ChordConflict.Typing, ChordConflict.Taken(ChordAction.COPY), ChordConflict.Strip("Next tab"), ChordConflict.Signal("x"))) {
             assertTrue(conflict.blocks, "$conflict blocks")
         }
@@ -95,9 +95,9 @@ class HardwareKeyboardTest {
     fun `the shell's own keys are named and allowed, and the free chords are free`() {
         val table = ChordTable(HardwareKeyboardSettings())
         val forwardChar = table.conflict(ChordAction.FIND, ChordKey("F", ctrl = true))
-        assertEquals(ChordConflict.Shell("readline's forward-char"), forwardChar)
+        assertEquals(ChordConflict.Shell("readline\u2019s forward-char"), forwardChar)
         assertFalse(forwardChar!!.blocks)
-        assertEquals(ChordConflict.Shell("readline's set-mark"), table.conflict(ChordAction.FIND, ChordKey("SPACE", ctrl = true)))
+        assertEquals(ChordConflict.Shell("readline\u2019s set-mark"), table.conflict(ChordAction.FIND, ChordKey("SPACE", ctrl = true)))
         // Noun phrases, so the sheet can say "takes Meta+F from the shell".
         assertEquals(ChordConflict.Shell("Meta+F"), table.conflict(ChordAction.FIND, ChordKey("F", alt = true)))
         assertEquals(ChordConflict.Shell("Meta and Ctrl+F"), table.conflict(ChordAction.FIND, ChordKey("F", ctrl = true, alt = true)))
@@ -115,8 +115,8 @@ class HardwareKeyboardTest {
         val strip = ChordTable(HardwareKeyboardSettings(), ctrlTabKeysReachTerminal = false)
         val shell = ChordTable(HardwareKeyboardSettings(), ctrlTabKeysReachTerminal = true)
         assertEquals(ChordConflict.Strip("New tab"), strip.conflict(ChordAction.FIND, ChordKey("T", ctrl = true)))
-        assertEquals(ChordConflict.Shell("readline's transpose-chars"), shell.conflict(ChordAction.FIND, ChordKey("T", ctrl = true)))
-        assertEquals(ChordConflict.Shell("readline's unix-word-rubout"), shell.conflict(ChordAction.FIND, ChordKey("W", ctrl = true)))
+        assertEquals(ChordConflict.Shell("readline\u2019s transpose-chars"), shell.conflict(ChordAction.FIND, ChordKey("T", ctrl = true)))
+        assertEquals(ChordConflict.Shell("readline\u2019s unix-word-rubout"), shell.conflict(ChordAction.FIND, ChordKey("W", ctrl = true)))
     }
 
     @Test

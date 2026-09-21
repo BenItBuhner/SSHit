@@ -408,7 +408,7 @@ class HardwareShortcutsTest {
         assertEquals("Ctrl+F", find.keys)
         assertTrue(find.remapped)
         assertEquals("Ctrl+Shift+F", find.default)
-        assertEquals("readline's forward-char", find.takes)
+        assertEquals("readline\u2019s forward-char", find.takes)
         val copy = rows.first { it.chord == ChordAction.COPY }
         assertFalse(copy.remapped)
         assertEquals(null, copy.takes)
