@@ -13,6 +13,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
@@ -161,6 +162,14 @@ interface SettingsRepository {
     /** The active tab, written on every switch so it survives process death (spec C3, Persistence). */
     val lastActiveSessionId: Flow<String?>
     suspend fun setLastActiveSessionId(id: String?)
+
+    /** The Stage split beside the active tab (spec C23), written as it changes; null while one tab has the Stage. */
+    val stageSplit: Flow<StageSplit?>
+    suspend fun setStageSplit(split: StageSplit?)
+
+    /** Where the divider between the panes rests, as the left pane's share of the width; half until moved. */
+    val paneDividerFraction: Flow<Float>
+    suspend fun setPaneDividerFraction(fraction: Float)
 
     val currentWorkspaceId: Flow<String?>
     suspend fun setCurrentWorkspaceId(id: String)

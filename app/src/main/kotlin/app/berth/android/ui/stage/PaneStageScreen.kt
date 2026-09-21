@@ -38,7 +38,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -150,6 +149,7 @@ fun PaneStageScreen(
 ) {
     val active by vm.activeTab.collectAsState()
     val panes by vm.panes.collectAsState()
+    val dividerFraction by vm.paneDividerFraction.collectAsState()
     val carry = remember { TabCarry() }
     val tools = remember { HashMap<String, StageTools>() }
     val requesters = remember { HashMap<String, FocusRequester>() }
@@ -259,6 +259,8 @@ fun PaneStageScreen(
                         tracking = ::tracking,
                         onFocus = { side -> vm.setActive(two.on(side).id) },
                         onClosePane = { side -> actions.closePane(side) },
+                        restingFraction = dividerFraction,
+                        onFractionSettled = vm::setPaneDividerFraction,
                         modifier = body,
                     )
                 }
@@ -273,6 +275,10 @@ fun PaneStageScreen(
  * terminal hands its Deck to a [StageChromeHost] and the layer lays out the focused pane's, or the
  * other pane's when the focused one has none, under both panes, paying the bottom insets once for
  * everything above it. The panes are the carry's targets while this is up, and not a moment longer.
+ *
+ * The divider opens at [restingFraction], where it last came to rest, and reports where it settles
+ * ([onFractionSettled]: a drag's end, a keyboard step) so the panes come back there after an
+ * unsplit, a rotation or a relaunch (spec C23 with C3's Persistence).
  */
 @Composable
 private fun PaneLayer(
@@ -286,11 +292,16 @@ private fun PaneLayer(
     tracking: (String) -> Modifier,
     onFocus: (PaneSide) -> Unit,
     onClosePane: (PaneSide) -> Unit,
+    restingFraction: Float,
+    onFractionSettled: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    var fraction by rememberSaveable { mutableFloatStateOf(0.5f) }
+    var fraction by remember { mutableFloatStateOf(restingFraction) }
     var dragging by remember { mutableStateOf(false) }
+    // The stored rest as it arrives (the store reads a moment after the first frame) or moves under this
+    // layer; a finger on the divider has the last word while it holds, and its release is what writes.
+    LaunchedEffect(restingFraction) { if (!dragging) fraction = restingFraction }
     var rowWidthPx by remember { mutableStateOf(0) }
     var layerOrigin by remember { mutableStateOf(Offset.Zero) }
     val gapPx = with(density) { PaneGap.toPx() }
@@ -335,6 +346,7 @@ private fun PaneLayer(
                     onDragEnd = {
                         dragging = false
                         fraction = snap(fraction)
+                        onFractionSettled(fraction)
                     },
                 ),
         ) {
@@ -376,7 +388,10 @@ private fun PaneLayer(
             Divider(
                 dragging = dragging,
                 fraction = clampFraction(fraction),
-                onStep = { dir -> fraction = clampFraction(fraction + dir * 0.1f) },
+                onStep = { dir ->
+                    fraction = clampFraction(fraction + dir * 0.1f)
+                    onFractionSettled(fraction)
+                },
                 modifier = Modifier
                     .offset { IntOffset(leftPx, 0) }
                     .width(PaneGap)

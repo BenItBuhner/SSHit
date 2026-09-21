@@ -81,6 +81,20 @@ enum class TabSwipeGesture {
     NONE,
 }
 
+/** A side of the split Stage (spec C23), as stored. */
+@Serializable
+enum class StageSide { LEFT, RIGHT }
+
+/**
+ * The Stage split in two, as it is kept across processes (spec C23 with C3's Persistence): the
+ * tab sharing the Stage with the active tab, and the side the active tab holds. Written beside the
+ * last active tab's id as the split changes, so a relaunch rebuilds both panes; a companion no
+ * open tab answers to restores as one tab. The divider's position is a preference of its own
+ * (`paneDividerFraction`), since it outlives the split: the panes come back where the user set them.
+ */
+@Serializable
+data class StageSplit(@SerialName("companion") val companionId: String, @SerialName("active_side") val activeSide: StageSide)
+
 /**
  * The strip's ordering rules (spec C3) as pure functions over records, so the session manager
  * only has to persist what comes back. The strip order is groups in their order, then each

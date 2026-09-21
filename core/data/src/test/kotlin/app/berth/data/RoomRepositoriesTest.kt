@@ -29,6 +29,8 @@ import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSide
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
@@ -272,6 +274,25 @@ class RoomRepositoriesTest {
         assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
         settings.setCtrlTabKeysReachTerminal(true)
         assertTrue(settings.ctrlTabKeysReachTerminal.first())
+    }
+
+    @Test
+    fun `the split and the divider are kept beside the active tab, the split cleared as one tab takes the Stage`() = runTest {
+        val settings = RoomSettingsRepository(db)
+        assertNull(settings.stageSplit.first(), "one tab has the Stage until a split is written")
+        assertEquals(0.5f, settings.paneDividerFraction.first(), "the panes start at half each")
+
+        settings.setStageSplit(StageSplit("s-companion", StageSide.LEFT))
+        assertEquals(StageSplit("s-companion", StageSide.LEFT), settings.stageSplit.first())
+        settings.setStageSplit(StageSplit("s-other", StageSide.RIGHT))
+        assertEquals(StageSplit("s-other", StageSide.RIGHT), settings.stageSplit.first())
+        settings.setStageSplit(null)
+        assertNull(settings.stageSplit.first())
+        assertNull(db.preferences().get(RoomSettingsRepository.KEY_STAGE_SPLIT), "cleared is deleted, not written as null")
+
+        settings.setPaneDividerFraction(1f / 3f)
+        assertEquals(1f / 3f, settings.paneDividerFraction.first())
+        assertEquals(1f / 3f, settings.paneDividerFraction.first(), "the divider's rest outlives the split")
     }
 
     // ---- command history (spec C16) -------------------------------------------------------------

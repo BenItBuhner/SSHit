@@ -7,6 +7,8 @@ import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
+import app.berth.domain.model.StageSide
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
@@ -34,8 +36,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * on stage with it while the panes show. The strip's tap, Ctrl+Tab and the notification tap all go
  * through [SessionManager.setActive], so the rules for staging a tab while the Stage is split live
  * in the manager: the companion's tab trades roles, any other tab replaces the focused pane, and a
- * pane's tab closing closes its pane and never the other one. Nothing here is persisted; a split
- * survives rotation with the manager and starts over with the process.
+ * pane's tab closing closes its pane and never the other one. The split is written beside the last
+ * active tab as it changes and a relaunch rebuilds both panes from it (spec C3, Persistence).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -297,6 +299,96 @@ class SessionPanesTest {
         graph.sessions.closePane(PaneSide.LEFT)
         assertEquals("s-homelab", graph.sessions.activeTabId.value)
     }
+
+    // ---- across processes (spec C3, Persistence) -----------------------------------------------------
+
+    @Test
+    fun `the split is written beside the active tab as it changes, and cleared when one tab has the Stage`() {
+        awaitStored(null)
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        assertEquals("s-pihole", runBlocking { graph.settings.lastActiveSessionId.first() })
+        // The roles trade: the document follows.
+        graph.sessions.setActive("s-homelab")
+        awaitStored(StageSplit("s-pihole", StageSide.LEFT))
+        graph.sessions.placeInPane("s-build", PaneSide.RIGHT)
+        awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        graph.sessions.closePane(PaneSide.RIGHT)
+        awaitStored(null)
+        // The companion's tab closing closes the pane, and the document with it.
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        graph.sessions.close("s-homelab")
+        awaitStored(null)
+    }
+
+    @Test
+    fun `a relaunch rebuilds both panes, the companion on its side and the keys where they were`() {
+        graph.sessions.placeInPane("s-pihole", PaneSide.LEFT)
+        awaitStored(StageSplit("s-homelab", StageSide.LEFT))
+        await("the active id written") { runBlocking { graph.settings.lastActiveSessionId.first() } == "s-pihole" }
+
+        graph = graph.relaunch()
+        runBlocking { graph.sessions.restore() }
+        assertEquals("s-pihole", graph.sessions.activeTabId.value)
+        assertEquals(Split("s-homelab", PaneSide.LEFT), graph.sessions.split.value)
+        awaitPanes(left = "s-pihole", right = "s-homelab", focused = PaneSide.LEFT)
+        assertEquals("the document stands after the relaunch", StageSplit("s-homelab", StageSide.LEFT), runBlocking { graph.settings.stageSplit.first() })
+        // Both tabs came back detached, on stage together once the panes show, so neither raises attention.
+        graph.process.start()
+        graph.sessions.setPanesShown(true)
+        assertTrue(graph.sessions.get("s-pihole")!!.onStage)
+        assertTrue(graph.sessions.get("s-homelab")!!.onStage)
+        assertFalse(graph.sessions.get("s-build")!!.onStage)
+    }
+
+    @Test
+    fun `a saved companion no open tab answers to, or the active tab itself, restores as one tab and is cleared`() {
+        runBlocking { graph.settings.setStageSplit(StageSplit("s-closed-while-dead", StageSide.RIGHT)) }
+        graph = graph.relaunch()
+        runBlocking { graph.sessions.restore() }
+        assertEquals("s-homelab", graph.sessions.activeTabId.value)
+        assertNull(graph.sessions.split.value)
+        awaitPanes(null)
+        awaitStored(null)
+
+        // A document that names the active tab as its own companion (the active id moved under it).
+        runBlocking { graph.settings.setStageSplit(StageSplit("s-homelab", StageSide.LEFT)) }
+        graph = graph.relaunch()
+        runBlocking { graph.sessions.restore() }
+        assertEquals("s-homelab", graph.sessions.activeTabId.value)
+        assertNull(graph.sessions.split.value)
+        awaitStored(null)
+    }
+
+    @Test
+    fun `a Files tab beside a terminal comes back in its pane too`() {
+        graph.sessions.placeInPane("f-build", PaneSide.RIGHT)
+        awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        await("the active id written") { runBlocking { graph.settings.lastActiveSessionId.first() } == "f-build" }
+        graph = graph.relaunch()
+        runBlocking { graph.sessions.restore() }
+        assertEquals("f-build", graph.sessions.activeTabId.value)
+        assertEquals(Split("s-homelab", PaneSide.RIGHT), graph.sessions.split.value)
+        awaitPanes(left = "s-homelab", right = "f-build", focused = PaneSide.RIGHT)
+        assertEquals("the group follows the keys", "ws-work", graph.sessions.currentWorkspaceId.value)
+    }
+
+    @Test
+    fun `nothing is written before the strip is restored, so a relaunch never erases the split it is about to rebuild`() {
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        repeat(20) {
+            graph = graph.relaunch()
+            // The manager's own restore runs on its scope from init; whichever of the two reaches the lock first, the split stands.
+            runBlocking { graph.sessions.restore() }
+            assertEquals("round $it", Split("s-homelab", PaneSide.RIGHT), graph.sessions.split.value)
+            awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        }
+    }
+
+    private fun awaitStored(expected: StageSplit?) =
+        await("the stored split to be $expected") { runBlocking { graph.settings.stageSplit.first() } == expected }
 
     /**
      * The Stage composes each pane's tab under the tab's id, and an id can be in the composition

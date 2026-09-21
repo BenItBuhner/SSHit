@@ -22,6 +22,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
@@ -45,6 +46,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 
 class RoomHostRepository(private val db: BerthDatabase) : HostRepository {
@@ -270,6 +272,14 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         else db.preferences().upsert(PreferenceEntity(KEY_LAST_SESSION, id, System.currentTimeMillis()))
     }
 
+    override val stageSplit: Flow<StageSplit?> = document(KEY_STAGE_SPLIT, StageSplit.serializer().nullable) { null }
+    override suspend fun setStageSplit(split: StageSplit?) {
+        if (split == null) db.preferences().delete(KEY_STAGE_SPLIT) else write(KEY_STAGE_SPLIT, StageSplit.serializer(), split)
+    }
+
+    override val paneDividerFraction: Flow<Float> = document(KEY_PANE_DIVIDER, Float.serializer()) { DEFAULT_PANE_DIVIDER }
+    override suspend fun setPaneDividerFraction(fraction: Float) = write(KEY_PANE_DIVIDER, Float.serializer(), fraction)
+
     override val currentWorkspaceId: Flow<String?> = db.preferences().observe(KEY_CURRENT_WORKSPACE)
     override suspend fun setCurrentWorkspaceId(id: String) =
         db.preferences().upsert(PreferenceEntity(KEY_CURRENT_WORKSPACE, id, System.currentTimeMillis()))
@@ -323,7 +333,12 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_CUSTOM_THEMES = "terminal_themes_custom"
         const val KEY_DEFAULT_THEME = "terminal_theme_default"
         const val KEY_LAST_SESSION = "last_active_session"
+        const val KEY_STAGE_SPLIT = "stage_split"
+        const val KEY_PANE_DIVIDER = "pane_divider_fraction"
         const val KEY_CURRENT_WORKSPACE = "current_workspace"
+
+        /** The divider's rest until the user moves it: the panes at half each. */
+        const val DEFAULT_PANE_DIVIDER = 0.5f
         const val KEY_TAB_SWIPE = "tab_swipe_gesture"
         const val KEY_CTRL_TAB_KEYS_TERMINAL = "ctrl_tab_keys_reach_terminal"
         const val KEY_SECURITY = "security"

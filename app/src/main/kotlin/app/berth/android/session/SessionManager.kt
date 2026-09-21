@@ -358,6 +358,14 @@ class SessionManager @Inject constructor(
         scope.launch { for (write in historyWrites) runCatching { write() }.onFailure { BerthLog.w(LOG_TAG, "command history write failed", it) } }
         scope.launch { restore() }
         scope.launch {
+            // The split beside the last active tab (spec C23 with C3's Persistence), written as it
+            // changes, once the strip is restored: before that the Stage is empty, and a write would
+            // erase the split the last process left for this one to rebuild. The first value written
+            // is the restored split itself, or null for a saved companion no open tab answered to.
+            restored.first { it }
+            split.collect { settings.setStageSplit(it?.stored) }
+        }
+        scope.launch {
             // Only a login holds a socket (a terminal, or a Tunnels tab); a Files tab mirrors its
             // ride's state and never keeps the service up on its own. The notification says what every
             // such tab is doing, with the tunnels up, the transfers in flight, how many of those wait
@@ -650,7 +658,14 @@ class SessionManager @Inject constructor(
         // tabs" over a strip that has them (spec C3, Launch and Persistence): the current group's first
         // tab, else the strip's first.
         val last = persisted ?: finalRecords.firstOrNull { it.workspaceId == currentGroup }?.id ?: finalRecords.firstOrNull()?.id
-        moveStage(last, seen = false)
+        // The split comes back with the active tab (spec C23 with C3's Persistence), when the companion
+        // it names is still open and is not the active tab itself (a document from before the active
+        // id moved under it); otherwise the Stage opens on the one tab, and the collector in init
+        // writes the split as it now stands, clearing what no tab answers to.
+        val savedSplit = settings.stageSplit.first()
+            ?.takeIf { last != null && it.companionId != last && (map.containsKey(it.companionId) || files.containsKey(it.companionId)) }
+            ?.let { Split.of(it) }
+        restoreStage(last, savedSplit)
         _currentWorkspaceId.value = last?.let { tabNow(it)?.record?.value?.workspaceId } ?: currentGroup
         if (last != null && last != persisted) scope.launch { settings.setLastActiveSessionId(last) }
         val reconnectWorkspaces = groups.filter { it.reconnectAtLaunch }.map { it.id }.toSet()
@@ -1013,6 +1028,19 @@ class SessionManager @Inject constructor(
             _stage.value = Stage(id, next)
             refreshStage()
             if (seen && id != null) tabNow(id)?.markSeen()
+        }
+    }
+
+    /**
+     * The Stage as the last process left it ([restore]): the active tab with the split it had, in
+     * the one write [moveStage] makes, so the panes flow never sees the active tab without its
+     * companion or the reverse. Nothing is marked seen: the tabs are back detached, and what they
+     * raised before the process died is theirs to raise again.
+     */
+    private fun restoreStage(id: String?, split: Split?) {
+        synchronized(stageLock) {
+            _stage.value = Stage(id, split)
+            refreshStage()
         }
     }
 

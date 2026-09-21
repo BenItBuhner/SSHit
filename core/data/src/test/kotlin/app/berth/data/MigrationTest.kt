@@ -429,6 +429,9 @@ class MigrationTest {
         // The tab settings this build added are not in the older document and read as their defaults.
         assertEquals(TabSwipeGesture.TWO_FINGER, settings.tabSwipeGesture.first())
         assertFalse(settings.ctrlTabKeysReachTerminal.first())
+        // Version 5's Stage documents: no older build wrote a split or moved the divider, so one tab has the Stage at half.
+        assertNull(settings.stageSplit.first())
+        assertEquals(0.5f, settings.paneDividerFraction.first())
     }
 
     // ---- SQL helpers -------------------------------------------------------------------------------

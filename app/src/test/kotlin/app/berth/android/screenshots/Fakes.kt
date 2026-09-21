@@ -39,6 +39,7 @@ import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Snippet
+import app.berth.domain.model.StageSplit
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
@@ -228,6 +229,12 @@ class InMemorySettings : SettingsRepository {
     override suspend fun setDefaultTerminalTheme(id: String) { defaultTheme.value = id }
     override val lastActiveSessionId: Flow<String?> = lastActive
     override suspend fun setLastActiveSessionId(id: String?) { lastActive.value = id }
+    val split = MutableStateFlow<StageSplit?>(null)
+    override val stageSplit: Flow<StageSplit?> = split
+    override suspend fun setStageSplit(split: StageSplit?) { this.split.value = split }
+    val dividerFraction = MutableStateFlow(0.5f)
+    override val paneDividerFraction: Flow<Float> = dividerFraction
+    override suspend fun setPaneDividerFraction(fraction: Float) { dividerFraction.value = fraction }
     override val currentWorkspaceId: Flow<String?> = currentWorkspace
     override suspend fun setCurrentWorkspaceId(id: String) { currentWorkspace.value = id }
     private val files = MutableStateFlow(FilesPrefs())
@@ -285,24 +292,27 @@ class FakeLifecycleOwner : LifecycleOwner {
  * every screen test that is not about the ask should see (otherwise the process's first Live
  * raises the rationale sheet over whatever the test is looking at). A test of the permission
  * flow itself passes [notificationsGranted] false.
+ *
+ * [storage] is what the phone keeps across processes; [relaunch] builds a second graph over the
+ * same storage, the way a cold start after process death restores from what the last one wrote.
  */
-class TestGraph(private val context: Context, notificationsGranted: Boolean = true) {
+class TestGraph(private val context: Context, notificationsGranted: Boolean = true, private val storage: TestStorage = TestStorage()) {
     init {
         if (notificationsGranted) {
             shadowOf(context.applicationContext as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    val hosts = InMemoryHosts()
-    val secrets = InMemorySecrets()
-    val identities = InMemoryIdentities(hosts)
-    val knownHosts = InMemoryKnownHosts()
-    val workspaces = InMemoryWorkspaces()
-    val sessionRecords = InMemorySessions()
-    val settings = InMemorySettings()
-    val tunnels = InMemoryTunnels()
-    val snippets = InMemorySnippets()
-    val commandHistory = InMemoryCommandHistory()
+    val hosts = storage.hosts
+    val secrets = storage.secrets
+    val identities = storage.identities
+    val knownHosts = storage.knownHosts
+    val workspaces = storage.workspaces
+    val sessionRecords = storage.sessionRecords
+    val settings = storage.settings
+    val tunnels = storage.tunnels
+    val snippets = storage.snippets
+    val commandHistory = storage.commandHistory
     val prompts = PromptCenter()
     val hardwareKeys = HardwareKeys(context)
 
@@ -339,6 +349,16 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     }
 
     /**
+     * The process died and came back: a new graph over this one's storage, its manager restoring
+     * the tabs, the active tab and the split from what this one wrote. This graph's coroutines end
+     * first, as the old process would have; its tabs are not closed, since a death closes nothing.
+     */
+    fun relaunch(): TestGraph {
+        if (manager.isInitialized()) manager.value.scope.cancel()
+        return TestGraph(context, storage = storage)
+    }
+
+    /**
      * Ends what a test left open, whether it passed or not: every tab (a live one closes its
      * socket), then the manager's coroutines, so nothing of one test runs under the next.
      */
@@ -348,4 +368,18 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
         sessions.sessions.value.map { it.id }.forEach { sessions.close(it) }
         sessions.scope.cancel()
     }
+}
+
+/** What the phone's storage holds across processes: the in-memory stand-ins for Room and the secret store. */
+class TestStorage {
+    val hosts = InMemoryHosts()
+    val secrets = InMemorySecrets()
+    val identities = InMemoryIdentities(hosts)
+    val knownHosts = InMemoryKnownHosts()
+    val workspaces = InMemoryWorkspaces()
+    val sessionRecords = InMemorySessions()
+    val settings = InMemorySettings()
+    val tunnels = InMemoryTunnels()
+    val snippets = InMemorySnippets()
+    val commandHistory = InMemoryCommandHistory()
 }

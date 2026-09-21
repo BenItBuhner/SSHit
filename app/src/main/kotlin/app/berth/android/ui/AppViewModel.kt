@@ -154,6 +154,9 @@ class AppViewModel @Inject constructor(
     /** Two tabs side by side (spec C23), or null while one tab has the Stage; only a width that fits them lays them out. */
     val panes: StateFlow<Panes?> = sessions.panes
 
+    /** Where the divider between the panes rests, as the left pane's share of the width; kept across splits and processes. */
+    val paneDividerFraction: StateFlow<Float> = settings.paneDividerFraction.stateIn(viewModelScope, SharingStarted.Eagerly, 0.5f)
+
     /** Every tab in strip order, terminals and Files tabs alike. */
     val tabs: StateFlow<List<ManagedTab>> = sessions.tabs
 
@@ -449,6 +452,11 @@ class AppViewModel @Inject constructor(
 
     /** Told by the Stage whether it is laying both panes out, so the companion counts as in view only when it is. */
     fun setPanesShown(shown: Boolean) = sessions.setPanesShown(shown)
+
+    /** The divider came to rest (a drag ended, a keyboard step): where it rests is where the panes come back. */
+    fun setPaneDividerFraction(fraction: Float) {
+        viewModelScope.launch { settings.setPaneDividerFraction(fraction) }
+    }
 
     // ---- files tabs ------------------------------------------------------------------------------
 
