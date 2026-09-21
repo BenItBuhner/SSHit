@@ -25,6 +25,7 @@ import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
@@ -201,6 +202,13 @@ class AppViewModel @Inject constructor(
 
     fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) {
         viewModelScope.launch { settings.updateTerminalSettings(change) }
+    }
+
+    /** The Deck's gestures and its rows on a large screen (spec D2, C4); Settings › Deck and Gestures write it. */
+    val deckSettings: StateFlow<DeckSettings> = settings.deckSettings.stateIn(viewModelScope, SharingStarted.Eagerly, DeckSettings())
+
+    fun setDeckSettings(deck: DeckSettings) {
+        viewModelScope.launch { settings.setDeckSettings(deck) }
     }
 
     fun themeFor(host: Host, workspaceId: String? = null): TerminalTheme =

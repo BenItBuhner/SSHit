@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hosts (UX spec A8, C7): two shelves of a rack, each with its light at the right, 1.75 dp stroke, round caps. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6,4.5 h12 a2,2 0 0 1 2,2 v3 a2,2 0 0 1 -2,2 h-12 a2,2 0 0 1 -2,-2 v-3 a2,2 0 0 1 2,-2 z" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6,12.5 h12 a2,2 0 0 1 2,2 v3 a2,2 0 0 1 -2,2 h-12 a2,2 0 0 1 -2,-2 v-3 a2,2 0 0 1 2,-2 z" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:pathData="M16.5,8 h0.01 M16.5,16 h0.01" />
+</vector>

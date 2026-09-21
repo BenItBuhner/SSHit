@@ -54,12 +54,14 @@ import app.berth.android.ui.keyboard.LocalWindowFocus
 import app.berth.android.ui.keyboard.WindowFocus
 import app.berth.android.ui.keyboard.windowFocus
 import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.layout.DrawerForm
 import app.berth.android.ui.layout.LocalWindowLayout
 import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.prompts.NotificationPermissionHost
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.rail.Library
+import app.berth.android.ui.rail.MediumRail
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
@@ -72,6 +74,7 @@ import app.berth.android.ui.stage.PaneStageScreen
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.ShortDeckFit
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.stage.TwoRowDeckFit
 import app.berth.android.ui.tabs.GroupEditorRequest
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
@@ -115,10 +118,10 @@ sealed interface Screen : NavKey {
 /** The drawer's width as a sheet over the Stage (spec C7). */
 private val DrawerWidth = 304.dp
 
-/** The drawer's width standing as the rail on an expanded window (spec A12). */
+/** The drawer's width standing as the rail on an expanded window (spec A12); on a medium one it stands at [app.berth.android.ui.rail.MediumRailWidth]. */
 private val RailWidth = 280.dp
 
-/** The Stage's gutter on its rail side (spec A, the gap between panels): the terminal's first column is not against the rail's tonal edge. */
+/** The Stage's gutter on its rail side (spec A, the gap between panels), narrow rail or wide: the terminal's first column is not against the rail's tonal edge. */
 private val RailGutter = 12.dp
 
 /**
@@ -222,37 +225,37 @@ private fun Shell(vm: AppViewModel) {
     val securitySettings by vm.security.settings.collectAsState()
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
 
-    val drawerContent: @Composable (width: Dp) -> Unit = { width ->
-        Drawer(
-            vm = vm,
-            actions = tabActions,
-            width = width,
-            onGroupTap = { id ->
-                vm.setWorkspace(id)
-                toStage()
-                closeDrawer()
-            },
-            onNewGroup = {
-                closeDrawer()
-                tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
-            },
-            onGroups = {
-                closeDrawer()
-                go(Screen.Groups)
-            },
-            onLibrary = { lib ->
-                closeDrawer()
-                go(
-                    when (lib) {
-                        Library.HOSTS -> Screen.Hosts()
-                        Library.KEYS -> Screen.Keys
-                        Library.TUNNELS -> Screen.Tunnels()
-                        Library.SNIPPETS -> Screen.Snippets
-                        Library.SETTINGS -> Screen.Settings
-                    },
-                )
+    // What the drawer's rows do, in whichever form the drawer takes (spec C7): a group's tap goes to
+    // its last active tab on the Stage, New group opens the editor into the New tab sheet, Groups
+    // opens the overview (spec C8), a library row opens its screen. Closing the drawer is nothing
+    // when it stands as a rail.
+    val onGroupTap: (String) -> Unit = { id ->
+        vm.setWorkspace(id)
+        toStage()
+        closeDrawer()
+    }
+    val onNewGroup: () -> Unit = {
+        closeDrawer()
+        tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
+    }
+    val onGroups: () -> Unit = {
+        closeDrawer()
+        go(Screen.Groups)
+    }
+    val onLibrary: (Library) -> Unit = { lib ->
+        closeDrawer()
+        go(
+            when (lib) {
+                Library.HOSTS -> Screen.Hosts()
+                Library.KEYS -> Screen.Keys
+                Library.TUNNELS -> Screen.Tunnels()
+                Library.SNIPPETS -> Screen.Snippets
+                Library.SETTINGS -> Screen.Settings
             },
         )
+    }
+    val drawerContent: @Composable (width: Dp) -> Unit = { width ->
+        Drawer(vm = vm, actions = tabActions, width = width, onGroupTap = onGroupTap, onNewGroup = onNewGroup, onGroups = onGroups, onLibrary = onLibrary)
     }
     val screens: @Composable () -> Unit = {
         // A screen slides in a sixth of the way over its fade; under reduced motion the two screens crossfade (spec A7).
@@ -386,9 +389,16 @@ private fun Shell(vm: AppViewModel) {
         )
     }
 
-    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal.
+    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal. A
+    // window past compact both ways (spec C4, two-row mode "default on tablets"): the Deck's second
+    // row, while Settings › Deck keeps it on; the saved layout's rows stand everywhere else.
     val stripStyle = LocalTabStripStyle.current.let { if (layout.shortLandscape) it.short() else it }
-    val deckFit = if (layout.shortLandscape) ShortDeckFit else LocalDeckFit.current
+    val deckSettings by vm.deckSettings.collectAsState()
+    val deckFit = when {
+        layout.shortLandscape -> ShortDeckFit
+        layout.twoRowDeck && deckSettings.twoRowsOnLargeScreens -> TwoRowDeckFit
+        else -> LocalDeckFit.current
+    }
     // Every window Berth opens over this one (a sheet as a dialog) blocks capture when this one does.
     val secure = securitySettings?.let(WindowSecurity::secure) ?: false
     CompositionLocalProvider(
@@ -398,10 +408,15 @@ private fun Shell(vm: AppViewModel) {
         LocalWindowSecure provides secure,
     ) {
         if (rail) {
-            // Expanded width (spec C7, A12): the drawer stands as a 280 dp rail beside the screens, always
-            // in view, with the Stage's gutter between its tonal edge and the terminal's first column.
+            // The drawer standing beside the screens (spec C7, A12), always in view, with the Stage's
+            // gutter between its tonal edge and the terminal's first column: the 280 dp rail with its
+            // names on an expanded width, the 72 dp column of swatches and glyphs on a medium one.
             Row(Modifier.fillMaxSize()) {
-                drawerContent(RailWidth)
+                if (layout.drawer == DrawerForm.WIDE) {
+                    drawerContent(RailWidth)
+                } else {
+                    MediumRail(vm = vm, actions = tabActions, onGroupTap = onGroupTap, onNewGroup = onNewGroup, onLibrary = onLibrary)
+                }
                 Box(Modifier.weight(1f).fillMaxHeight().padding(start = RailGutter)) { screens() }
             }
         } else {

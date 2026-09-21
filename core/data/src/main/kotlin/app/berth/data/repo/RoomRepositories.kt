@@ -8,6 +8,7 @@ import app.berth.data.db.SecretEntity
 import app.berth.data.db.SessionFrameEntity
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
@@ -259,6 +260,9 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         write(KEY_TERMINAL, TerminalSettings.serializer(), change(current))
     }
 
+    override val deckSettings: Flow<DeckSettings> = document(KEY_DECK_SETTINGS, DeckSettings.serializer()) { DeckSettings() }
+    override suspend fun setDeckSettings(settings: DeckSettings) = write(KEY_DECK_SETTINGS, DeckSettings.serializer(), settings)
+
     companion object {
         const val KEY_FILES = "files_prefs"
         const val KEY_DECK = "deck_layout"
@@ -275,5 +279,6 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
         const val KEY_TERMINAL = "terminal"
+        const val KEY_DECK_SETTINGS = "deck_settings"
     }
 }

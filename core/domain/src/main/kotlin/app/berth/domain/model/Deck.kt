@@ -92,20 +92,25 @@ data class DeckKey(
             null -> if (nub) "Nub" else if (snippets) "Snippets" else ""
         }
 
-    val secondaryLabel: String?
-        get() = when (val u = up) {
-            is DeckAction.Key -> keyLabel(u.key)
-            is DeckAction.Text -> u.text
-            is DeckAction.Combo -> u.combo.replace("CTRL ", "^").replace("SHIFT TAB", "S-Tab").replace("ALT ", "M-")
+    /** The swipe-up alternate's glyph, at the key's top right (UX spec C4). */
+    val secondaryLabel: String? get() = up?.alternateLabel()
+
+    /** The swipe-down alternate's glyph, at the key's bottom right while swipe down is on (UX spec D2). */
+    val tertiaryLabel: String? get() = down?.alternateLabel()
+
+    companion object {
+        /** An alternate as its key shows it: `^C`, `S-Tab`, `M-x`, `Pfx d`; a snippet or app action is `...`. */
+        fun DeckAction.alternateLabel(): String = when (this) {
+            is DeckAction.Key -> keyLabel(key)
+            is DeckAction.Text -> text
+            is DeckAction.Combo -> combo.replace("CTRL ", "^").replace("SHIFT TAB", "S-Tab").replace("ALT ", "M-")
                 // A control chord on a letter reads as `^C` (UX spec C4) whatever case the target was
                 // typed in; Meta chords keep the letter as typed, because `M-x` and `M-X` are different chords.
                 .let { if (it.length == 2 && it[0] == '^' && it[1].isLetter()) it.uppercase() else it }
-            is DeckAction.Macro -> u.macro.replace("PREFIX", "Pfx")
-            null -> null
+            is DeckAction.Macro -> macro.replace("PREFIX", "Pfx")
             else -> "..."
         }
 
-    companion object {
         fun keyLabel(key: DeckKeyCode): String = when (key) {
             DeckKeyCode.ESC -> "Esc"
             DeckKeyCode.TAB -> "Tab"
@@ -145,6 +150,27 @@ enum class DeckArrows { NUB, FOUR_KEYS, BOTH }
 @Serializable
 enum class HapticLevel { OFF, SUBTLE, FULL }
 
+/**
+ * What a hand does on this device's Deck (UX spec D2, C4): device preferences beside [DeckLayout],
+ * like [HapticLevel], so an exported layout (E1) carries the keys and not one device's gestures.
+ * One document, so a change to any field lands atomically.
+ */
+@Serializable
+data class DeckSettings(
+    /**
+     * A swipe down on a key sends its tertiary action (D2: off by default). While on, a key with a
+     * tertiary shows its glyph at the bottom right, the way the swipe-up alternate sits at the top right.
+     */
+    val swipeDown: Boolean = false,
+    /** A horizontal swipe across the Deck's keys steps the layer, left for the one before and right for the next (D2). */
+    val layerSwipe: Boolean = true,
+    /**
+     * Two rows on a window with the height for them (C4: two-row mode is the default on tablets),
+     * whatever row count the layout saved; off, the layout's own rows stand everywhere.
+     */
+    val twoRowsOnLargeScreens: Boolean = true,
+)
+
 /** The whole Deck configuration; the shape of Berth Deck JSON (UX spec E1). */
 @Serializable
 data class DeckLayout(
@@ -167,18 +193,23 @@ data class DeckLayout(
 
         fun fromJson(text: String): DeckLayout = json.decodeFromString(serializer(), text)
 
-        /** The stock layout from the UX spec. */
+        /**
+         * The stock layout from the UX spec. Three of Base's keys carry a tertiary under their
+         * alternate (Esc's `~`, `-`'s `_`, `/`'s `?`), the shell's other half of each pair: silent
+         * until the swipe down is turned on (D2, off by default), and reached from the hold's
+         * popover either way, so the setting has something to do on a fresh install.
+         */
         fun default(): DeckLayout = DeckLayout(
             layers = listOf(
                 DeckLayer(
                     name = "Base",
                     keys = listOf(
-                        DeckKey(tap = DeckAction.Key(DeckKeyCode.ESC), up = DeckAction.Text("`")),
+                        DeckKey(tap = DeckAction.Key(DeckKeyCode.ESC), up = DeckAction.Text("`"), down = DeckAction.Text("~")),
                         DeckKey(tap = DeckAction.Key(DeckKeyCode.TAB), up = DeckAction.Combo("SHIFT TAB")),
                         DeckKey(tap = DeckAction.Modifier(DeckModifier.CTRL), up = DeckAction.Combo("CTRL c"), display = "Ctrl"),
                         DeckKey(tap = DeckAction.Modifier(DeckModifier.ALT), up = DeckAction.Combo("CTRL r"), display = "Alt"),
-                        DeckKey(tap = DeckAction.Text("-"), up = DeckAction.Text("|")),
-                        DeckKey(tap = DeckAction.Text("/"), up = DeckAction.Text("\\")),
+                        DeckKey(tap = DeckAction.Text("-"), up = DeckAction.Text("|"), down = DeckAction.Text("_")),
+                        DeckKey(tap = DeckAction.Text("/"), up = DeckAction.Text("\\"), down = DeckAction.Text("?")),
                         DeckKey(nub = true),
                     ),
                 ),

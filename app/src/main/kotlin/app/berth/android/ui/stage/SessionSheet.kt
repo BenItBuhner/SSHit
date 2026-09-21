@@ -20,16 +20,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.FilesTab
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.byId
 import app.berth.android.ui.snippets.SnippetPickerSheet
 import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
@@ -41,10 +47,16 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionState
 
 /**
- * The session sheet from the Grip or the ribbon title: the tab's facts and actions, then the other
- * tabs in the workspace for a quick switch. A terminal tab offers Detach or Reconnect, Files (the
- * host's Files tab, opened or brought on stage) and Snippets; a Files tab offers Connect or
- * Reconnect for the terminal it rides and Terminal to go there.
+ * The session sheet from the Grip, its tap or its drag up (spec C4), or the ribbon title: the tab's
+ * facts and actions, then the host's look and the tab's Predictive text toggle (C6's order), then
+ * the other tabs in the group for a quick switch. A terminal tab offers Detach or Reconnect, Files
+ * (the host's Files tab, opened or brought on stage), Snippets and History, and under the pills the
+ * Look row (the host's theme, font and size over a live Stage, [LookSheet]) once its host is saved;
+ * a Files tab offers Connect or Reconnect for the terminal it rides and Terminal to go there. The
+ * sheet opens at its content height and scrolls when the window is shorter (spec C6 as ruled for
+ * #19 and #20: its content is a fixed set of controls, not a list, so there is no fold to hide a row
+ * of pills or the Look row under), and the actions are pills at their own width that wrap as they
+ * must, so a label is never cut, at 1× or at the interface's 1.3× cap (A11).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -78,6 +90,24 @@ fun SessionSheet(
     val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
     var snippets by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
+    var lookOpen by remember { mutableStateOf(false) }
+    val lookHostId = record.hostId
+    // The look the terminal draws with now, from the host as it is saved (a pick in the Look sheet
+    // lands there; the record's snapshot is the host as it was at connect) over the group's theme.
+    val hosts by vm.hosts.collectAsState()
+    val themes by vm.terminalThemes.collectAsState()
+    val defaultTheme by vm.defaultTerminalTheme.collectAsState()
+    val fontSetting by vm.terminalFont.collectAsState()
+    val workspaces by vm.workspaces.collectAsState()
+    fun lookOf(hostId: String): TerminalLook =
+        resolveLook(themes, defaultTheme, fontSetting, hosts.firstOrNull { it.id == hostId } ?: host, workspaces.byId(record.workspaceId))
+
+    // The Look sheet stands in for this one while it is up: one sheet over the Stage, and the Stage
+    // in view under it is the preview. Closing Look brings this sheet back where it was.
+    if (lookOpen && session != null && lookHostId != null) {
+        LookSheet(vm, lookHostId, onDismiss = { lookOpen = false })
+        return
+    }
 
     // The sheet opens whole, as the prompts do, rather than at half the window with its second row of
     // pills below the fold at the interface cap; and the column scrolls, for a window shorter than the
@@ -161,6 +191,20 @@ fun SessionSheet(
                     BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() })
                 }
             }
+            // The host's look (spec C6, Look): a row under the pills rather than a sixth of them, since
+            // it has something to say, the theme, font and size the terminal draws with now, and opens
+            // the Look sheet over the live Stage. Only a saved host has a look of its own; Quick connect's
+            // has none until Save as host, which keeps the tab's id, so the row comes with the host it lands on.
+            if (session != null && lookHostId != null && hostSaved) {
+                ListRow(
+                    title = "Look",
+                    subtitle = lookOf(lookHostId).summary,
+                    surface = c.surface1,
+                    minHeight = 44.dp,
+                    onClick = { lookOpen = true },
+                    trailing = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) },
+                )
+            }
             // C6's toggle row: this tab's keyboard may suggest words; the Stage tells the keyboard and lights the grip.
             if (session != null && !session.tunnelsOnly) {
                 val predictiveIds by vm.predictiveTextTabIds.collectAsState()
@@ -174,7 +218,8 @@ fun SessionSheet(
             }
             val rest = others.filter { it.id != tab.id }
             if (rest.isNotEmpty()) {
-                Text("Also in this workspace".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
+                // "Group", not "workspace": C3's word for it (#19 review, nit 11).
+                Text("Also in this group".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     for (t in rest) {
                         SessionRow(
@@ -200,12 +245,47 @@ fun SessionSheet(
     }
 }
 
+/**
+ * A fact of the panel: its label in text.2 and its value at the trailing edge. The two share the
+ * line while both fit it whole with 12 dp between; when they do not (a command's line at the
+ * interface's font cap on a 360 dp phone), the value takes the line under the label, set to the
+ * trailing edge and wrapping as it must, so neither breaks inside a word. A row that measured the
+ * value first and gave the label what was left broke the label instead, "Run / ning" beside
+ * "docker compose ps", a break no overflow or ellipsis check can see (#20 review, nit 11); the
+ * shape is the prompt sheets' name-and-endpoint line (#15, N12).
+ */
 @Composable
 private fun Fact(label: String, value: String, valueColor: Color = Berth.colors.text1) {
     val c = Berth.colors
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(label, style = BerthType.body, color = c.text2, modifier = Modifier.weight(1f))
-        Text(value, style = BerthType.body, color = valueColor)
+    Layout(
+        content = {
+            Text(label, style = BerthType.body, color = c.text2)
+            Text(value, style = BerthType.body, color = valueColor, textAlign = TextAlign.End)
+        },
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) { measurables, constraints ->
+        val (labelM, valueM) = measurables
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val labelWidth = labelM.maxIntrinsicWidth(constraints.maxHeight)
+        val valueWidth = valueM.maxIntrinsicWidth(constraints.maxHeight)
+        val apart = labelWidth + 12.dp.roundToPx() + valueWidth
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else apart
+        if (apart <= width) {
+            val labelP = labelM.measure(loose)
+            val valueP = valueM.measure(loose)
+            val height = maxOf(labelP.height, valueP.height)
+            layout(width, height) {
+                labelP.placeRelative(0, (height - labelP.height) / 2)
+                valueP.placeRelative(width - valueP.width, (height - valueP.height) / 2)
+            }
+        } else {
+            val labelP = labelM.measure(loose)
+            val valueP = valueM.measure(loose.copy(maxWidth = width))
+            layout(width, labelP.height + valueP.height) {
+                labelP.placeRelative(0, 0)
+                valueP.placeRelative(width - valueP.width, labelP.height)
+            }
+        }
     }
 }
 

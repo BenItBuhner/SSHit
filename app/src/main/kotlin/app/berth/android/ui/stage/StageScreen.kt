@@ -576,8 +576,10 @@ private fun StageBody(
     val record by session.record.collectAsState()
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
-    // The window's fit of the saved layout (spec C23): a phone on its side gives the Deck one 40 dp row.
+    // The window's fit of the saved layout (spec C23, C4): a phone on its side gives the Deck one 40 dp row, a tablet its second row.
     val fittedDeckLayout = LocalDeckFit.current.fit(vm.deckLayout.collectAsState().value)
+    // The hand's gestures on the Deck (spec D2): the swipe down, the swipe across for the layer.
+    val deckSettings by vm.deckSettings.collectAsState()
     // With a hardware keyboard attached the Deck stands folded to its strip (spec C4, the Stage's
     // FoldDeckOnHardwareKeyboard); what the strip expands to is one row of modifiers and actions
     // (Settings › Hardware keyboard › Compact Deck when expanded), or the whole Deck with that off.
@@ -588,14 +590,17 @@ private fun StageBody(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val themes by vm.terminalThemes.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
-    val hosts by vm.hosts.collectAsState()
     // The saved host as it is now, not as it was when the tab opened: a pinch writes the host's own
-    // size (review #15) and the terminal under the fingers has to follow it. A quick-connect tab
-    // has no saved host and keeps the snapshot the record carries.
+    // size (review #15) and the Look sheet's picks land on the saved host (spec C6), and the terminal
+    // under the fingers or under the sheet has to follow them. A quick-connect tab has no saved host
+    // and keeps the snapshot the record carries.
+    val hosts by vm.hosts.collectAsState()
     val host = record.hostId?.let { id -> hosts.firstOrNull { it.id == id } } ?: record.hostSnapshot
-    // Host override, then the workspace's theme, then the app default; all three flows are live, so a theme edit lands here at once.
-    val theme = AppViewModel.resolveTerminalTheme(themes, defaultTheme, host, workspaces.byId(record.workspaceId))
-    val font: TerminalFont = host.appearance.fontSizeSp?.let { fontSetting.copy(sizeSp = it) } ?: fontSetting
+    // Host override, then the workspace's theme, then the app default, and the host's font size and
+    // family over the app's font; every flow is live, so a theme edit, a pinch or a Look pick lands here at once.
+    val look = resolveLook(themes, defaultTheme, fontSetting, host, workspaces.byId(record.workspaceId))
+    val theme = look.theme
+    val font: TerminalFont = look.font
     val keyboard = LocalSoftwareKeyboardController.current
     val clipboard = LocalClipboardManager.current
     val imeVisible = WindowInsets.isImeVisible
@@ -776,6 +781,8 @@ private fun StageBody(
                         // The Deck and the strip that stands in for it are the one region Ctrl+Shift+K enters.
                         modifier = Modifier.stageRegion(focus, StageRegion.Deck),
                         enabled = live,
+                        settings = deckSettings,
+                        // The grip's tap and its drag up (spec C4) open the one Session sheet, which opens whole.
                         onGripTap = onOpenSessionSheet,
                         onGripSwipeDown = {
                             keyboard?.hide()

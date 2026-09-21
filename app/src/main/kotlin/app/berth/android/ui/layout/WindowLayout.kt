@@ -13,10 +13,19 @@ enum class WidthClass { COMPACT, MEDIUM, EXPANDED }
 enum class HeightClass { COMPACT, MEDIUM, EXPANDED }
 
 /**
+ * How the drawer stands in the window (spec C7, A12): a [SHEET] over the Stage on a phone; on a
+ * medium width the persistent [NARROW] column, 72 dp of group swatches and library glyphs; on an
+ * expanded width the [WIDE] one, the 280 dp rail with names. The two that stand need the height
+ * for their rows: a phone on its side keeps the sheet.
+ */
+enum class DrawerForm { SHEET, NARROW, WIDE }
+
+/**
  * What the window's size allows (spec A12, C23), decided once from its width and height in dp so
- * every surface that adapts reads the same answer: whether two panes fit, whether the drawer
- * stands as a rail, whether a sheet is better a dialog, and whether the chrome should give height
- * back to the terminal. A phone in portrait answers no to all four and sees the layouts it always had.
+ * every surface that adapts reads the same answer: whether two panes fit, how the drawer stands,
+ * whether a sheet is better a dialog, whether the Deck has the room for its second row, and whether
+ * the chrome should give height back to the terminal. A phone in portrait answers no to all of them
+ * and sees the layouts it always had.
  */
 @Immutable
 data class WindowLayout(val widthDp: Int, val heightDp: Int) {
@@ -35,14 +44,28 @@ data class WindowLayout(val widthDp: Int, val heightDp: Int) {
     val panes: Boolean get() = width != WidthClass.COMPACT
 
     /**
-     * The drawer stands as a permanent 280 dp rail (spec A12): expanded width, with the height to
-     * hold its rows. Medium widths keep the modal drawer for now; the 72 dp column of group swatches
-     * and library glyphs that spec A12 and C7 ask for there is a component still to come.
+     * How the drawer stands (spec C7, A12): the 280 dp rail at an expanded width, the 72 dp column of
+     * swatches and glyphs at a medium one, each with the height to hold its rows; a sheet otherwise.
      */
-    val rail: Boolean get() = width == WidthClass.EXPANDED && height != HeightClass.COMPACT
+    val drawer: DrawerForm get() = when {
+        height == HeightClass.COMPACT -> DrawerForm.SHEET
+        width == WidthClass.EXPANDED -> DrawerForm.WIDE
+        width == WidthClass.MEDIUM -> DrawerForm.NARROW
+        else -> DrawerForm.SHEET
+    }
+
+    /** The drawer stands in place beside the Stage, narrow or wide, and there is nothing to open. */
+    val rail: Boolean get() = drawer != DrawerForm.SHEET
 
     /** A sheet would be a strip across the bottom of a large window: it opens as a dialog instead (spec C23). */
     val dialogs: Boolean get() = width != WidthClass.COMPACT && height != HeightClass.COMPACT
+
+    /**
+     * The Deck's two-row mode is the default (spec C4: "default on tablets"): a window past compact
+     * both ways, which is a tablet either way up or a fold open, where a second row of 44 dp keys
+     * takes from the terminal what it has to spare. A phone keeps its one row, on its side above all.
+     */
+    val twoRowDeck: Boolean get() = width != WidthClass.COMPACT && height != HeightClass.COMPACT
 
     /** Wide but short, a phone lying on its side: the strip and the Deck lose height so the terminal keeps its rows (spec C23). */
     val shortLandscape: Boolean get() = height == HeightClass.COMPACT && widthDp > heightDp

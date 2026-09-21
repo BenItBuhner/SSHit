@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings (UX spec A8, C7): three slider tracks, each broken around its knob, 1.75 dp stroke, round caps. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:pathData="M4,7 H6.75 M11.25,7 H20 M4,12 H12.75 M17.25,12 H20 M4,17 H8.75 M13.25,17 H20" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.75"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M9,4.75 a2.25,2.25 0 1 0 0,4.5 a2.25,2.25 0 1 0 0,-4.5 z M15,9.75 a2.25,2.25 0 1 0 0,4.5 a2.25,2.25 0 1 0 0,-4.5 z M11,14.75 a2.25,2.25 0 1 0 0,4.5 a2.25,2.25 0 1 0 0,-4.5 z" />
+</vector>

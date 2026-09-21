@@ -34,6 +34,7 @@ import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
+import app.berth.android.screenshots.assertNoBrokenWords
 import app.berth.android.screenshots.assertNoTextCut
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.screenshots.textLayout
@@ -45,6 +46,7 @@ import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
+import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
@@ -84,7 +86,8 @@ import java.util.concurrent.TimeUnit
  * things that clipped at the cap are held: a Deck key's alternate hint stays clear of its label,
  * no text on the Settings screen is cut (a title ellipsized, a caption stopped at one line), and
  * the two tallest sheets, the changed-key sheet with a link's row and the crash sheet, scroll to
- * their buttons rather than measuring them to nothing.
+ * their buttons rather than measuring them to nothing. The Session sheet's verbs, pills that wrap
+ * rather than cut (#20 review), and the Look sheet under it are held to no cut text the same way.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -201,6 +204,101 @@ class FontScaleScreenshotTest {
             if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)
             addAll(child.textDescendants())
         }
+    }
+
+    /**
+     * The Session sheet at the cap, open at its content height as it always is (C6 as ruled for #19
+     * and #20): its actions are pills at their own width, so at 1.3× they take another line and lose
+     * no letter, and the Look row's summary wraps to its second line rather than cutting; then the
+     * Look sheet it opens, held the same. Each sheet is held on its own: the tab's title behind it
+     * ellipsizes by design.
+     */
+    @Test
+    fun `the Session sheet and the Look sheet at 2x keep every verb and every line whole`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            SessionSheet(graph.viewModel, live, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Look")).fetchSemanticsNodes().isNotEmpty() }
+        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) {
+            compose.onNodeWithText(verb).assertExists()
+        }
+        compose.assertNoTextCut("the Session sheet at the interface's font cap", within = isDialog())
+        capture("session-sheet-font-scale-2x")
+
+        compose.onNodeWithText("Look").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Theme")).fetchSemanticsNodes().isNotEmpty() }
+        compose.assertNoTextCut("the Look sheet at the interface's font cap", within = isDialog())
+        capture("look-sheet-font-scale-2x")
+    }
+
+    /**
+     * The Session sheet on the width most phones are, 360 dp, at the cap (#20 re-check, nits 10 and
+     * 11): the sibling row's state word stands over its age, so its title and subtitle keep their
+     * room and lose no letter; a fact whose label and value cannot share the line puts the value
+     * under the label whole, rather than breaking the label beside it ("Run / ning"). A break inside
+     * a word is neither an overflow nor an ellipsis, so the sheet is held to none of those too. The
+     * column is one scroll, so every row is composed and read whether or not it is in view; the
+     * second capture scrolls to the foot, where the sibling's row stands.
+     */
+    @Test
+    @Config(qualifiers = "w360dp-h740dp-420dpi")
+    fun `the Session sheet at 360 dp and 2x keeps every word whole, the sibling's row included`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            SessionSheet(graph.viewModel, live, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Look")).fetchSemanticsNodes().isNotEmpty() }
+        // The seven verbs and the sibling's row, on the sheet (the Deck under it has a Snippets key of its own).
+        for (verb in listOf("Detach", "Files", "Snippets", "History", "Tunnels", "Host", "Close")) {
+            compose.onNode(hasText(verb) and hasAnyAncestor(isDialog())).assertExists()
+        }
+        compose.onNode(hasText("tail -f pihole.log") and hasAnyAncestor(isDialog())).assertExists()
+        compose.assertNoTextCut("the Session sheet at 360 dp and the interface's font cap", within = isDialog())
+        compose.assertNoBrokenWords("the Session sheet at 360 dp and the interface's font cap", within = isDialog())
+        capture("session-sheet-font-scale-2x-360")
+        compose.onNodeWithText("New session").performScrollTo()
+        compose.waitForIdle()
+        capture("session-sheet-font-scale-2x-360-scrolled")
+    }
+
+    /**
+     * A fact whose value cannot share the line with its label, a running command longer than the
+     * room beside "Running" at 360 dp and the cap: the label keeps its line whole and the value
+     * takes the one under it, set to the trailing edge where every other value stands (#20
+     * re-check, nit 11, the fallback), read off the nodes' bounds rather than the picture.
+     */
+    @Test
+    @Config(qualifiers = "w360dp-h740dp-420dpi")
+    fun `a fact too long for its line at 360 dp and 2x puts the value under the label, whole`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val command = "docker compose -f infra/compose.yml up -d --build"
+        val live = StageFixture.liveHomelab(command = command)
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            SessionSheet(graph.viewModel, live, onDismiss = {}, onSwitch = {}, onEditHost = {}, onNewSession = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Look")).fetchSemanticsNodes().isNotEmpty() }
+        val onSheet = hasAnyAncestor(isDialog())
+        val label = compose.onNode(hasText("Running") and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        val value = compose.onNode(hasText(command) and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        val beside = compose.onNode(hasText("Live") and onSheet, useUnmergedTree = true).fetchSemanticsNode()
+        assertEquals("the label on one line", 1, label.textLayout()!!.lineCount)
+        assertTrue("the value under the label, not beside it", value.boundsInRoot.top >= label.boundsInRoot.bottom - 1f)
+        assertEquals("the value at the trailing edge, where State's stands", beside.boundsInRoot.right, value.boundsInRoot.right, 1f)
+        compose.assertNoTextCut("the Session sheet with a long fact at 360 dp and the interface's font cap", within = isDialog())
+        compose.assertNoBrokenWords("the Session sheet with a long fact at 360 dp and the interface's font cap", within = isDialog())
+        capture("session-sheet-font-scale-2x-360-long-fact")
     }
 
     @Test

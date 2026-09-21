@@ -53,6 +53,7 @@ import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
+import app.berth.android.ui.stage.rememberTerminalFontFamilies
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
@@ -118,6 +119,7 @@ fun HostEditorScreen(
     var tmux by remember { mutableStateOf(TmuxMode.OFF) }
     var tmuxPrefix by remember { mutableStateOf("C-b") }
     var themeId by remember { mutableStateOf<String?>(null) }
+    var fontFamily by remember { mutableStateOf<String?>(null) }
     var fontSize by remember { mutableStateOf<Int?>(null) }
     var startupCommand by remember { mutableStateOf("") }
     var terminalType by remember { mutableStateOf("xterm-256color") }
@@ -151,6 +153,7 @@ fun HostEditorScreen(
                 tmux = h.persistence.tmux
                 tmuxPrefix = h.persistence.tmuxPrefix
                 themeId = h.appearance.terminalThemeId
+                fontFamily = h.appearance.fontFamily
                 fontSize = h.appearance.fontSizeSp
                 startupCommand = h.startupCommand ?: ""
                 terminalType = h.terminalType
@@ -206,7 +209,7 @@ fun HostEditorScreen(
             terminalType = terminalType.ifBlank { "xterm-256color" },
             compression = compression,
             addressFamily = addressFamily,
-            appearance = (base?.appearance ?: app.berth.domain.model.AppearanceOverride()).copy(terminalThemeId = themeId, fontSizeSp = fontSize),
+            appearance = (base?.appearance ?: app.berth.domain.model.AppearanceOverride()).copy(terminalThemeId = themeId, fontFamily = fontFamily, fontSizeSp = fontSize),
             tunnelsOnly = tunnelsOnly,
             tags = HostEditorFields.parseTags(tags),
             environment = environmentValue ?: base?.environment ?: emptyMap(),
@@ -378,8 +381,10 @@ fun HostEditorScreen(
                 }
             }
 
+            // The three fields the Session sheet's Look sheet sets, so a family picked there shows and clears here.
             Panel(label = "Look") {
                 CyclePicker("Theme", listOf<String?>(null) + themes.map { it.id }, themeId, { id -> id?.let { i -> themes.firstOrNull { it.id == i }?.name } ?: "Inherit" }) { themeId = it }
+                CyclePicker("Font", listOf<String?>(null) + rememberTerminalFontFamilies(), fontFamily, { it ?: "Inherit" }) { fontFamily = it }
                 CyclePicker("Font size", listOf<Int?>(null) + (9..24).toList(), fontSize, { it?.let { s -> "$s sp" } ?: "Inherit" }) { fontSize = it }
             }
 

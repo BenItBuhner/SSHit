@@ -78,7 +78,9 @@ fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresent
  * height past compact) the same content opens as a dialog: a panel of the sheet's radius and
  * surface, centred, at most [dialogMaxWidth] wide, over the theme's scrim, with nothing else
  * changed for its content but what it asks through [sheetFillsHeight]. On a phone the call is the
- * bottom sheet, parameter for parameter, so the phone's frames are what they were.
+ * bottom sheet, parameter for parameter, so the phone's frames are what they were. A sheet that is
+ * about what is under it (the Look sheet, spec C6, over the Stage it previews) asks for no scrim in
+ * either form, through [scrimColor] and [dialogScrimColor]; the two default to each form's own.
  *
  * Either way the sheet is a window of its own, whose Compose view provides the density afresh from
  * its Context; the theme's interface cap (A11, 1.3×) is applied again inside it through
@@ -92,12 +94,13 @@ fun BerthSheet(
     sheetState: SheetState = rememberModalBottomSheetState(),
     scrimColor: Color = BottomSheetDefaults.ScrimColor,
     dialogMaxWidth: Dp = SheetDialogMaxWidth,
+    dialogScrimColor: Color = Berth.colors.scrim,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Berth.colors
     if (windowLayout().dialogs) {
         CompositionLocalProvider(LocalSheetPresentation provides SheetPresentation.DIALOG) {
-            SheetDialog(onDismiss = onDismiss, modifier = modifier, maxWidth = dialogMaxWidth, content = content)
+            SheetDialog(onDismiss = onDismiss, modifier = modifier, maxWidth = dialogMaxWidth, scrim = dialogScrimColor, content = content)
         }
     } else {
         ModalBottomSheet(
@@ -125,7 +128,7 @@ fun BerthSheet(
  * not from a phone. Otherwise it inherits the window under it, as every Compose dialog does.
  */
 @Composable
-private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp, content: @Composable ColumnScope.() -> Unit) {
+private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp, scrim: Color, content: @Composable ColumnScope.() -> Unit) {
     val c = Berth.colors
     val secure = LocalWindowSecure.current
     Dialog(
@@ -143,7 +146,7 @@ private fun SheetDialog(onDismiss: () -> Unit, modifier: Modifier, maxWidth: Dp,
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(c.scrim)
+                    .background(scrim)
                     .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }
                     .semantics(mergeDescendants = false) {
                         contentDescription = "Close"

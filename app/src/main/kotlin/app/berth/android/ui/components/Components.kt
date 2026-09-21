@@ -106,6 +106,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import app.berth.android.R
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.CappedFontScale
@@ -556,6 +559,22 @@ fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, 
         onClick = onClick,
         leadingIcon = leading,
     )
+}
+
+/**
+ * The app's popup: Compose's [Popup], a window of its own that [positionProvider] places over the
+ * screen and [properties] govern, for what hangs off one element without being a menu's list of
+ * lines (the Deck's row of alternate chips risen over a held key). It has no dismiss callback: it
+ * is open while its caller composes it and gone when the caller stops, so whatever raised it owns
+ * the finger or the state that puts it away. A window provides its density afresh from its
+ * Context, so the interface's font cap ([CappedFontScale], spec A11) is applied again inside it;
+ * every window the app opens, a [BerthSheet], a [BerthMenu] or this, is held to that rule.
+ */
+@Composable
+fun BerthPopup(positionProvider: PopupPositionProvider, properties: PopupProperties, content: @Composable () -> Unit) {
+    Popup(popupPositionProvider = positionProvider, properties = properties) {
+        CappedFontScale(content)
+    }
 }
 
 /**
@@ -1191,6 +1210,12 @@ object BerthIcons {
     @DrawableRes val trash: Int = R.drawable.glyph_trash
     /** A ring with a handle; the New tab sheet's host filter. */
     @DrawableRes val search: Int = R.drawable.glyph_search
+    /** The library as glyphs (spec C7), for the drawer's 72 dp column: a rack, a key, a tunnel's mouth, a run of code, three sliders. */
+    @DrawableRes val hosts: Int = R.drawable.glyph_hosts
+    @DrawableRes val key: Int = R.drawable.glyph_key
+    @DrawableRes val tunnel: Int = R.drawable.glyph_tunnel
+    @DrawableRes val snippet: Int = R.drawable.glyph_snippet
+    @DrawableRes val settings: Int = R.drawable.glyph_settings
 }
 
 /** One glyph from [BerthIcons], tinted `text.2` unless told otherwise; decorative, so no description. */

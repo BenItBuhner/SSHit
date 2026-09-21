@@ -27,6 +27,7 @@ import app.berth.android.ui.AppViewModel
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
@@ -221,6 +222,10 @@ class InMemorySettings : SettingsRepository {
     val terminal = MutableStateFlow(TerminalSettings())
     override val terminalSettings: Flow<TerminalSettings> = terminal
     override suspend fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings) = terminal.update(change)
+
+    val deckGestures = MutableStateFlow(DeckSettings())
+    override val deckSettings: Flow<DeckSettings> = deckGestures
+    override suspend fun setDeckSettings(settings: DeckSettings) { deckGestures.value = settings }
 }
 
 /**

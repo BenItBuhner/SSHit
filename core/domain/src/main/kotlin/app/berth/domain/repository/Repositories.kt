@@ -1,6 +1,7 @@
 package app.berth.domain.repository
 
 import app.berth.domain.model.DeckLayout
+import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.HardwareKeyboardSettings
@@ -163,4 +164,8 @@ interface SettingsRepository {
 
     /** Read-modify-write under one lock, like [updateSecuritySettings]. */
     suspend fun updateTerminalSettings(change: (TerminalSettings) -> TerminalSettings)
+
+    /** The Deck's gestures and its rows on a large screen (spec D2, C4; Settings › Deck and Gestures), a device's rather than the layout's. */
+    val deckSettings: Flow<DeckSettings>
+    suspend fun setDeckSettings(settings: DeckSettings)
 }
