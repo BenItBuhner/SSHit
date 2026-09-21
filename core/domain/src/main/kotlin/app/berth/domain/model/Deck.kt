@@ -162,7 +162,7 @@ data class DeckSettings(
      * tertiary shows its glyph at the bottom right, the way the swipe-up alternate sits at the top right.
      */
     val swipeDown: Boolean = false,
-    /** A horizontal swipe across the Deck's keys steps the layer, left for the next and right for the one before (D2). */
+    /** A horizontal swipe across the Deck's keys steps the layer, left for the one before and right for the next (D2). */
     val layerSwipe: Boolean = true,
     /**
      * Two rows on a window with the height for them (C4: two-row mode is the default on tablets),
