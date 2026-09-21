@@ -52,6 +52,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.type
+import app.berth.android.ui.terminal.thirdLevelCharacter
 import app.berth.domain.model.ChordKey
 import app.berth.domain.model.LeaderKey
 
@@ -130,11 +131,15 @@ sealed interface ChordRead {
  * second tap or a plain Escape lets it go; there is no clock on it, the way a multiplexer's prefix
  * waits. While the Leader is held its own modifier bit is not the chord's: Right Alt held with F is
  * `Leader F`, and only the left Alt joined as well would make it `Leader Alt+F`. Without a Leader
- * ([leaderKey] null) the right-hand keys are the modifiers they are. One reader per dispatcher, and
- * one per sheet capturing a remap; nothing here decides what a chord does. A Leader chord that
- * opens a sheet moves the keys to the sheet's window, and the Leader's release lands there, never
- * here: so the hold is checked against the Leader's own bit in each key's meta state, and a key
- * that arrives without it is read as the key it is.
+ * ([leaderKey] null) the right-hand keys are the modifiers they are, except that Right Alt where the
+ * layout makes it AltGr is the layout's before it is any chord's: a key with a third level under it
+ * ([thirdLevelCharacter], the rule the terminal types by) is no chord at all, so a remap onto Alt+Q
+ * fires on Left Alt and leaves a German keyboard its `@`. A Right Alt Leader takes the third level
+ * with it, the cost its Settings row names. One reader per dispatcher, and one per sheet capturing
+ * a remap; nothing here decides what a chord does. A Leader chord that opens a sheet moves the keys
+ * to the sheet's window, and the Leader's release lands there, never here: so the hold is checked
+ * against the Leader's own bit in each key's meta state, and a key that arrives without it is read
+ * as the key it is.
  */
 class ChordReader {
     private var leaderHeld = false
@@ -174,6 +179,8 @@ class ChordReader {
             armed = false
             if (name == "ESCAPE" && plain) return ChordRead.Consumed
         }
+        // AltGr: the map answers under the modifiers held, so a Ctrl or a second Alt beside Right Alt is a chord still.
+        if (leaderKey != LeaderKey.RIGHT_ALT && thirdLevelCharacter(native.keyCharacterMap::get, native.keyCode, native.metaState) != 0) return ChordRead.Ignored
         var ctrl = event.isCtrlPressed
         var alt = event.isAltPressed
         if (withLeader) {

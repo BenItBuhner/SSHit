@@ -89,7 +89,9 @@ interface StageShortcutActions {
  * setting leaves them the strip's), then to a plain Escape while the focus is out of the tab's body
  * ([StageShortcutActions.returnToBody]), and everything else reaches the terminal: the plain Ctrl
  * keys are the shell's (Ctrl+F is readline's forward-char, every pager's forward key), and so is any
- * chord nobody bound. Two exceptions run the other way: a Leader chord nobody bound is still
+ * chord nobody bound, and so is AltGr with a key that types under it, which the reader never makes
+ * a chord of (a remap onto Alt+Q fires on Left Alt+Q and leaves a German keyboard its `@`). Two
+ * exceptions run the other way: a Leader chord nobody bound is still
  * swallowed, since the Leader is the key the app took for itself and the shell should never see
  * half of it (which is why the Leader is Right Ctrl unless chosen otherwise: Right Alt types on an
  * AltGr layout, [app.berth.domain.model.LeaderKey]); and in pass-through every key reaches the

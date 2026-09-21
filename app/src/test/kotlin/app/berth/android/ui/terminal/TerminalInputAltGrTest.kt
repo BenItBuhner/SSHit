@@ -41,6 +41,8 @@ import app.berth.android.ui.keyboard.ShadowKeyLayout
 import app.berth.android.ui.keyboard.StageShortcutActions
 import app.berth.android.ui.keyboard.layoutTypesWithRightAlt
 import app.berth.android.ui.tabs.TabShortcuts
+import app.berth.domain.model.ChordAction
+import app.berth.domain.model.ChordKey
 import app.berth.domain.model.ChordPrefix
 import app.berth.domain.model.ChordTable
 import app.berth.domain.model.HardwareKeyboardSettings
@@ -87,7 +89,7 @@ class TerminalInputAltGrTest {
 
     private val sink = RecordingSink()
 
-    /** The Stage's calls: the sheet and the search, the two chords pressed here. */
+    /** The Stage's calls: the sheet, the search and Copy, the chords pressed here. */
     private val calls = ArrayList<String>()
     private val shortcuts = HardwareShortcuts(
         tabs = TabShortcuts(step = {}, jump = {}),
@@ -97,7 +99,7 @@ class TerminalInputAltGrTest {
             override fun tabSwitcher() {}
             override fun jumpToUnread() {}
             override fun find() { calls += "find" }
-            override fun copy() {}
+            override fun copy() { calls += "copy" }
             override fun paste() {}
             override fun toggleDeck() {}
             override fun fontStep(step: Int) {}
@@ -267,6 +269,42 @@ class TerminalInputAltGrTest {
         stage(table, KEYCODE_ALT_RIGHT, 0, ACTION_UP)
         assertEquals(listOf("sheet", "find"), calls)
         assertEquals(listOf("text:@", "text:@"), sink.sent)
+    }
+
+    @Test
+    fun `a remap onto Alt+Q fires on Left Alt and never on AltGr, so a German keyboard keeps its @, while a US keyboard's Right Alt is Alt and fires it`() {
+        // Copy on Alt+Q: allowed, warned as the shell's Meta+Q. Before the reader knew the third level it fired on AltGr+Q and `@` was gone.
+        val table = ChordTable(HardwareKeyboardSettings(ctrlWHintSeen = true).withRemap(ChordAction.COPY, ChordKey("Q", alt = true)))
+        stage(table, KEYCODE_ALT_RIGHT, altGr)
+        stage(table, KEYCODE_Q, altGr) // the layout's `@`, no chord
+        stage(table, KEYCODE_ALT_RIGHT, 0, ACTION_UP)
+        stage(table, KEYCODE_Q, leftAlt) // the remap
+        stage(table, KEYCODE_A, altGr) // A has no third level: Right Alt is the chord's Alt there, and Alt+A is nobody's, so the terminal's Meta+a
+        stage(table, KEYCODE_Q, altGr or leftAlt) // both Alts: the map answers nothing to that, so a chord, and the remap fires
+        assertEquals(listOf("copy", "copy"), calls)
+        assertEquals(listOf("text:@", "chord:Alt+a"), sink.sent)
+
+        // Under a Right Ctrl Leader nothing moves: held with AltGr+Q the map answers nothing to the Ctrl, so it is Leader Alt+Q,
+        // nobody's and swallowed as before; tapped, the tap is spent on the key, which types.
+        calls.clear(); sink.sent.clear()
+        val leader = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, ctrlWHintSeen = true).withRemap(ChordAction.COPY, ChordKey("Q", alt = true)))
+        stage(leader, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(leader, KEYCODE_Q, rightCtrl or altGr)
+        stage(leader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(leader, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(leader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(leader, KEYCODE_Q, altGr)
+        stage(leader, KEYCODE_Q, leftAlt)
+        assertEquals(listOf("copy"), calls)
+        assertEquals(listOf("text:@"), sink.sent)
+
+        // The US layout has nothing under Right Alt, so Right Alt+Q is Alt+Q there and the remap fires, as it did.
+        ShadowKeyLayout.layout = KeyLayout.US
+        calls.clear(); sink.sent.clear()
+        stage(table, KEYCODE_Q, altGr)
+        stage(table, KEYCODE_C, altGr) // ç under either Alt is no third level: Alt+C, nobody's, the terminal's Meta+c
+        assertEquals(listOf("copy"), calls)
+        assertEquals(listOf("chord:Alt+c"), sink.sent)
     }
 
     @Test
