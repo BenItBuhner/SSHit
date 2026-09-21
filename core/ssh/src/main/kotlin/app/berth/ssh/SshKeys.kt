@@ -21,6 +21,7 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
+import java.security.interfaces.DSAPublicKey
 import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 import java.security.interfaces.RSAPrivateCrtKey
@@ -88,6 +89,56 @@ object SshKeys {
     /** Groups a fingerprint's base64 body in fours for display. */
     fun groupedFingerprint(fingerprint: String): String =
         fingerprint.removePrefix("SHA256:").chunked(4).joinToString(" ")
+
+    /** The key's size in bits as `ssh-keygen -l` reports it: the modulus for RSA, the curve for ECDSA, 256 for Ed25519. */
+    fun bits(key: PublicKey): Int = when (key) {
+        is RSAPublicKey -> key.modulus.bitLength()
+        is ECPublicKey -> key.params.curve.field.fieldSize
+        is DSAPublicKey -> key.params.p.bitLength()
+        else -> 256
+    }
+
+    /** `ssh-keygen`'s short type name: `ED25519`, `ECDSA`, `RSA`, `DSA`, with `-SK` and `-CERT` where the wire name says so. */
+    fun keygenType(key: PublicKey): String = keygenType(keyTypeName(key))
+
+    fun keygenType(wireName: String): String {
+        val sk = wireName.startsWith("sk-")
+        val cert = wireName.endsWith("-cert-v01@openssh.com")
+        val base = wireName.removePrefix("sk-").removeSuffix("-cert-v01@openssh.com").removeSuffix("@openssh.com")
+        val name = when {
+            base == "ssh-ed25519" -> "ED25519"
+            base == "ssh-rsa" -> "RSA"
+            base == "ssh-dss" -> "DSA"
+            base.startsWith("ecdsa-sha2-") -> "ECDSA"
+            else -> base.uppercase()
+        }
+        return name + (if (sk) "-SK" else "") + (if (cert) "-CERT" else "")
+    }
+
+    /**
+     * The line `ssh-keygen -lf` prints for a key: bits, `SHA256:` fingerprint, the comment (`no
+     * comment` when there is none, as the tool writes; a known_hosts entry's host in its place)
+     * and the type in parentheses.
+     */
+    fun keygenLine(key: PublicKey, comment: String = ""): String {
+        val label = comment.trim().ifEmpty { "no comment" }
+        return "${bits(key)} ${fingerprintSha256(key)} $label (${keygenType(key)})"
+    }
+
+    /**
+     * The command a person runs on a server to print that server's fingerprint for the key type
+     * at hand, for the trust sheet's "compare on the server" line: OpenSSH keeps its host keys at
+     * `/etc/ssh/ssh_host_<type>_key.pub`, named `ed25519`, `ecdsa`, `rsa` or `dsa`.
+     */
+    fun serverFingerprintCommand(wireName: String): String {
+        val file = when (keygenType(wireName).removeSuffix("-CERT").removeSuffix("-SK")) {
+            "ECDSA" -> "ecdsa"
+            "RSA" -> "rsa"
+            "DSA" -> "dsa"
+            else -> "ed25519"
+        }
+        return "ssh-keygen -lf /etc/ssh/ssh_host_${file}_key.pub"
+    }
 
     /** `<type> <base64> [comment]` as found in `authorized_keys`. */
     fun openSshPublic(key: PublicKey, comment: String = ""): String {
