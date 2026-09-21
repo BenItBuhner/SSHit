@@ -86,6 +86,7 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.TerminalAccessibility
 import app.berth.android.ui.a11y.TerminalAnnouncer
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.reachingClickable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.byId
@@ -909,7 +910,10 @@ private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifi
     }
 }
 
-/** Visible height of the state pill; its touch target is the full 44 dp row around it. */
+/**
+ * Visible height of the state pill; its actions' touch targets are the full 48 dp row around it
+ * ([TouchTargetSize], as a button's 44 dp fill sits in its 48 dp box), the pill drawn centred in it.
+ */
 private val StatePillHeight = 32.dp
 
 /**
@@ -942,15 +946,17 @@ internal fun StatePill(
         SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting$hop\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
+    // The row is the target's height inside the same 60 dp; the pill's 12 dp over the Deck is the
+    // notice bar's over the bottom edge, and keeps the row clear of that bar's two lines at the cap.
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 12.dp),
+            .padding(bottom = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             Modifier
-                .height(44.dp)
+                .height(TouchTargetSize)
                 .drawBehind {
                     val h = StatePillHeight.toPx()
                     drawRoundRect(

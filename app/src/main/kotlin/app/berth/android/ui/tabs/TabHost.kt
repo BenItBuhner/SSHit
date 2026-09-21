@@ -386,7 +386,9 @@ fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
  * composed and [visible] drives it, so the exit animates; the owner decides when it goes. A line
  * that has to be read whole (`Sessions keep running. Detach all from the notification.`, spec
  * Part B) asks for [maxLines] of two and the bar grows to hold it at the font cap, its radius
- * kept at the one-line pill's so the two shapes agree.
+ * kept at the one-line pill's so the two shapes agree. Two lines sit closer to the pill's edge
+ * than one does: at the cap the bar stands taller than the Deck it lies over, and this is what
+ * keeps it clear of the state pill floating above the Deck on a Stage that is not live.
  */
 @Composable
 fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Unit, modifier: Modifier = Modifier, maxLines: Int = 1) {
@@ -423,7 +425,7 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
                     color = c.text2,
                     maxLines = maxLines,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = if (maxLines > 1) 12.dp else 0.dp),
+                    modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = if (maxLines > 1) 8.dp else 0.dp),
                 )
                 Text("\u00B7", style = BerthType.caption, color = c.text3)
                 BarAction(action, onAction)

@@ -40,12 +40,13 @@ fun ConnectionSettingsPanel(vm: AppViewModel) {
             IdleDetach.entries,
             settings.idleDetach,
             ::idleDetachLabel,
-            caption = "Keep a session that has done nothing for this long as a frozen frame; tunnels and the tab on screen are left alone",
+            // Two lines beside the row's value at 1× (A11): the condition, what happens, and the one exemption.
+            caption = "A session idle off screen for this long is detached; tunnels stay up",
         ) { vm.setIdleDetach(it) }
         val chevron: @Composable RowScope.() -> Unit = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }
         ListRow(
             "Background",
-            subtitle = "The service that keeps sessions alive, the battery exemption, and the steps some phones need",
+            subtitle = "The service, the battery exemption and the step some phones add",
             surface = Color.Transparent,
             minHeight = 44.dp,
             onClick = {
