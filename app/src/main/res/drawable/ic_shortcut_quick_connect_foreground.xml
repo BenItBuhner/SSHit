@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The terminal glyph (glyph_terminal) drawn into the adaptive icon's 72 dp safe zone at a 5 dp
+     stroke, warm white; a chevron and the cursor bar, the app's mark for a prompt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#F2EDE6"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M37,40 l13,14 l-13,14" />
+    <path
+        android:strokeColor="#F2EDE6"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M56,68 H74" />
+</vector>

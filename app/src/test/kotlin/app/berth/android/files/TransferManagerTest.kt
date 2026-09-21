@@ -532,6 +532,40 @@ class TransferManagerTest {
         assertEquals(listOf("s1" to "/home/demo"), synchronized(changed) { changed.toList() })
     }
 
+    // ---- the share sheet's drop (spec C24) ---------------------------------------------------------
+
+    @Test
+    fun `a drop lands each shared file in tmp through the queue, in the order shared, as plain uploads`() {
+        server.dir("/tmp", 0)
+        val session = session("s1")
+        val report = File(tmp, "my report (1).pdf").apply { writeBytes(ByteArray(3000) { it.toByte() }) }
+        val notes = File(tmp, "notes.txt").apply { writeText("shared\n") }
+
+        val ids = manager.dropIntoTmp(session, listOf(Uri.fromFile(report), Uri.fromFile(notes)))
+        assertEquals(2, ids.size)
+        val rows = ids.map(::awaitFinished)
+        assertEquals(listOf(TransferState.DONE, TransferState.DONE), rows.map { it.state })
+        assertEquals(listOf(TransferKind.UPLOAD, TransferKind.UPLOAD), rows.map { it.kind })
+        assertEquals(listOf("/tmp/my report (1).pdf", "/tmp/notes.txt"), rows.map { it.remotePath })
+        assertEquals(listOf("/tmp/my report (1).pdf", "/tmp/notes.txt"), moved.toList())
+        assertArrayEquals(ByteArray(3000) { it.toByte() }, server.nodes["/tmp/my report (1).pdf"]?.content)
+        assertEquals("shared\n", server.nodes["/tmp/notes.txt"]?.content?.toString(Charsets.UTF_8))
+        assertEquals("/tmp", TransferManager.DROP_DIR)
+    }
+
+    @Test
+    fun `a path is quoted for the shell only when it needs it, and a quote inside survives`() {
+        assertEquals("/tmp/notes.txt", TransferManager.shellQuote("/tmp/notes.txt"))
+        assertEquals("/tmp/site-backup_2026-09-21.tar.gz", TransferManager.shellQuote("/tmp/site-backup_2026-09-21.tar.gz"))
+        assertEquals("/tmp/a+b@c:d,e=f%g", TransferManager.shellQuote("/tmp/a+b@c:d,e=f%g"))
+        assertEquals("'/tmp/my report (1).pdf'", TransferManager.shellQuote("/tmp/my report (1).pdf"))
+        assertEquals("'/tmp/\$HOME.txt'", TransferManager.shellQuote("/tmp/\$HOME.txt"))
+        assertEquals("'/tmp/it'\\''s.txt'", TransferManager.shellQuote("/tmp/it's.txt"))
+        assertEquals("'/tmp/caf\u00e9.txt'", TransferManager.shellQuote("/tmp/caf\u00e9.txt"))
+        assertEquals("'/tmp/a;rm -rf ~'", TransferManager.shellQuote("/tmp/a;rm -rf ~"))
+        assertEquals("''", TransferManager.shellQuote(""))
+    }
+
     // ---- helpers -----------------------------------------------------------------------------------
 
     private fun session(id: String): TerminalSession {

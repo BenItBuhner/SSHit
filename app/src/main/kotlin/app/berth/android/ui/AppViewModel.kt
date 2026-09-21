@@ -4,7 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.files.FilesCenter
-import app.berth.android.links.LinkInbox
+import app.berth.android.links.Arrival
+import app.berth.android.links.IntentInbox
 import app.berth.android.security.SecurityCenter
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ClosedTab
@@ -18,6 +19,7 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
+import android.net.Uri
 import android.os.Build
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
@@ -42,6 +44,7 @@ import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionRecord
+import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
@@ -106,8 +109,8 @@ class AppViewModel @Inject constructor(
     val files: FilesCenter,
     /** App lock, clipboard hygiene, the OSC 52 gate and their settings (spec C20); Settings › Security talks to this directly. */
     val security: SecurityCenter,
-    /** `ssh://` and `sftp://` links other apps hand to the activity; read here once the lock allows. */
-    private val links: LinkInbox,
+    /** What other apps and the launcher hand the activity (links, shortcuts, shares); read here once the lock allows. */
+    private val inbox: IntentInbox,
     /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
     val reports: CrashReporter,
     private val commandHistory: CommandHistoryRepository,
@@ -116,11 +119,12 @@ class AppViewModel @Inject constructor(
 ) : ViewModel() {
     init {
         viewModelScope.launch {
-            links.links.collect { raw ->
-                // Under the lock the user faces the lock screen; a link then would open a login behind
-                // it. It waits for the unlock, as a notification's tap and the key prompts do.
+            inbox.arrivals.collect { arrival ->
+                // Under the lock the user faces the lock screen; a link or a shortcut then would open
+                // a login behind it, and a share would paste into one. Each waits for the unlock, as
+                // a notification's tap and the key prompts do.
                 security.lock.awaitUnlocked()
-                openLink(raw)
+                arrive(arrival)
             }
         }
     }
@@ -263,15 +267,67 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { sessions.openTunnels(host, workspaceId) }
     }
 
-    // ---- links -----------------------------------------------------------------------------------
+    // ---- links, shortcuts and shares -------------------------------------------------------------
 
     private val _linkOutcome = MutableStateFlow<LinkOutcome?>(null)
 
-    /** What the last link came to, for the shell to act on and then [clearLinkOutcome]. */
+    /** What the last arrival (a link, a shortcut, a share) came to, for the shell to act on and then [clearLinkOutcome]. */
     val linkOutcome: StateFlow<LinkOutcome?> = _linkOutcome.asStateFlow()
 
     fun clearLinkOutcome() {
         _linkOutcome.value = null
+    }
+
+    /** One arrival from the activity's intent, the lock already past. */
+    suspend fun arrive(arrival: Arrival) {
+        when (arrival) {
+            is Arrival.Link -> openLink(arrival.raw)
+            is Arrival.OpenHost -> openHostShortcut(arrival.hostId)
+            Arrival.QuickConnect -> _linkOutcome.value = LinkOutcome.QuickConnect("")
+            is Arrival.Files -> dropFiles(arrival.uris)
+            is Arrival.Text -> dropText(arrival.text)
+        }
+    }
+
+    /**
+     * A launcher shortcut's host (spec Part B, App shortcuts): connects as the host list's Connect
+     * would and lands on the Stage. The launcher may hold a shortcut for a host deleted since the
+     * four were last published; that one ends in a notice, not a login to nowhere.
+     */
+    private suspend fun openHostShortcut(hostId: String) {
+        val host = hostRepository.get(hostId)
+        if (host == null) {
+            _linkOutcome.value = LinkOutcome.Notice("That host is no longer saved.")
+            return
+        }
+        sessions.connect(host)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    /**
+     * The share sheet's file drop (spec C24): the files land in `/tmp` on the host of the terminal on
+     * stage, through the transfer queue, and each path is pasted into it as its copy lands
+     * (`TransferManager.dropIntoTmp`). The tab on stage has to be a live terminal: a frozen frame, a
+     * Files or Tunnels tab, or an empty Stage has nowhere to put the file and no prompt to paste
+     * into, so the drop ends in a notice and the share can be made again once one is up.
+     */
+    private fun dropFiles(uris: List<Uri>) {
+        val session = liveSessionOnStage() ?: return
+        files.transfers.dropIntoTmp(session, uris)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    /** Text shared with no file behind it: pasted into the live terminal on stage, as a paste from the clipboard would be. */
+    private fun dropText(text: String) {
+        val session = liveSessionOnStage() ?: return
+        session.paste(text)
+        _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    private fun liveSessionOnStage(): TerminalSession? {
+        val session = sessions.activeSession.value?.takeIf { it.state == SessionState.LIVE }
+        if (session == null) _linkOutcome.value = LinkOutcome.Notice(NO_LIVE_SESSION_FOR_SHARE)
+        return session
     }
 
     /**
@@ -1174,6 +1230,9 @@ class AppViewModel @Inject constructor(
         /** The helper line when the spec parses but asks for what only a saved host can hold. */
         const val QUICK_CONNECT_IS_A_SHELL = "Quick connect takes user@host:port alone; save a host to carry forwards, a folder or a name."
 
+        /** The notice when a share arrives with no live terminal on stage to drop it into (spec C24). */
+        const val NO_LIVE_SESSION_FOR_SHARE = "Nothing to drop it into: put a live session on stage and share again."
+
         /**
          * The unsaved host a Quick connect spec names, as (user, address, port), or null when it is
          * not a plain address. [SshLink.parse] reads it, the same parser an `ssh://` link goes
@@ -1222,7 +1281,7 @@ data class KnownHostsImported(val added: Int, val replaced: Int) {
     val total: Int get() = added + replaced
 }
 
-/** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
+/** What an arrival (a link, a launcher shortcut, a share) came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {
     /** A tab was opened or brought on stage; the shell pops back to the Stage. */
     data object Staged : LinkOutcome
@@ -1256,4 +1315,7 @@ sealed interface LinkOutcome {
 
     /** The link could not be read; [reason] is one sentence for the notice bar. */
     data class Malformed(val reason: String) : LinkOutcome
+
+    /** A shortcut or a share that could not land (its host gone, no live terminal on stage); [text] is one sentence for the notice bar. */
+    data class Notice(val text: String) : LinkOutcome
 }

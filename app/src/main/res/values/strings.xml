@@ -30,4 +30,7 @@
     <string name="notification_problem_gave_up_title">Couldn\'t reconnect to %1$s</string>
     <string name="notification_problem_gave_up_text">Gave up after %1$s. Tap to retry.</string>
     <string name="notification_problem_failed_title">Couldn\'t connect to %1$s</string>
+    <!-- The launcher's static shortcut (spec Part B, App shortcuts); the recent hosts beside it are dynamic. -->
+    <string name="shortcut_quick_connect">Quick connect</string>
+    <string name="shortcut_quick_connect_long">Quick connect to an address</string>
 </resources>

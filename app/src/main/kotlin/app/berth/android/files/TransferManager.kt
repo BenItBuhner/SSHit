@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -296,6 +297,28 @@ class TransferManager(
         }
     }
 
+    /**
+     * The share sheet's quick file drop (spec C24): [uris] land in `/tmp` on [session]'s host
+     * through the same queue as any upload, so the transfers sheet and the notification see them,
+     * and as each copy lands its path is pasted into the terminal, quoted where the shell would
+     * need it (`'/tmp/my report.pdf'`), in the order the files were shared, a space between one
+     * path and the next so several land as several words. A copy that fails or is cancelled
+     * pastes nothing; its row says what happened. Returns the transfer ids.
+     */
+    fun dropIntoTmp(session: TerminalSession, uris: List<Uri>): List<String> {
+        val ids = upload(session, uris, DROP_DIR)
+        scope.launch {
+            var pasted = 0
+            for (id in ids) {
+                // Wait for this copy to end; a row cleared from the sheet meanwhile ends the wait with nothing to paste.
+                val ended = transfers.first { list -> list.firstOrNull { it.id == id }?.state?.isActive != true }.firstOrNull { it.id == id }
+                if (ended?.state != TransferState.DONE) continue
+                session.paste((if (pasted++ > 0) " " else "") + shellQuote(ended.remotePath))
+            }
+        }
+        return ids
+    }
+
     /** Answers the conflict a transfer waits on, a folder's or a single file's; nothing happens when it is not waiting. */
     fun resolveConflict(id: String, choice: ConflictChoice, applyToAll: Boolean) {
         val answer = ConflictResolution(choice, applyToAll)
@@ -535,10 +558,22 @@ class TransferManager(
         private const val PUBLISH_INTERVAL_NANOS = 120_000_000L
         private const val SAMPLE_NANOS = 250_000_000L
 
+        /** Where a shared file lands (spec C24): the host's `/tmp`, which every login can write and nothing keeps. */
+        const val DROP_DIR = "/tmp"
+
         fun mimeFor(name: String): String {
             val ext = name.substringAfterLast('.', "").lowercase()
             return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
         }
+
+        /**
+         * [path] as a POSIX shell reads it back as one word: as it is when every character is one
+         * the shell leaves alone, else in single quotes, a quote inside written as `'\''`. What the
+         * drop pastes, so `/tmp/my report (1).pdf` lands as one argument.
+         */
+        fun shellQuote(path: String): String =
+            if (path.isNotEmpty() && path.all { it.isLetterOrDigit() && it.code < 128 || it in "/._-+@:,=%" }) path
+            else "'" + path.replace("'", "'\\''") + "'"
 
         /** The one line a finished folder with failures carries: how many, and of what. */
         fun folderOutcome(p: FolderProgress): String {

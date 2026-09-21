@@ -215,6 +215,7 @@ private fun Shell(vm: AppViewModel) {
             is LinkOutcome.NewHost -> go(Screen.HostEditor(null, link = outcome.raw))
             is LinkOutcome.ConfirmForwards -> go(Screen.HostEditor(outcome.hostId, link = outcome.raw))
             is LinkOutcome.Malformed -> linkNotice = outcome.reason
+            is LinkOutcome.Notice -> linkNotice = outcome.text
         }
         vm.clearLinkOutcome()
     }
