@@ -84,8 +84,30 @@ class RandomartTest {
             val lines = Randomart.lines(SshKeys.generate(algorithm).public)
             assertEquals(Randomart.HEIGHT + 2, lines.size, "$algorithm")
             assertTrue(lines.all { it.length == Randomart.WIDTH + 2 }, "$algorithm: ${lines.map { it.length }}")
-            assertTrue(lines.drop(1).dropLast(1).joinToString("").let { 'S' in it && 'E' in it }, "$algorithm marks start and end")
+            val board = lines.drop(1).dropLast(1).joinToString("")
+            assertEquals(1, board.count { it == 'E' }, "$algorithm marks the end once")
+            // The start is S unless the bishop ended where it began: then E is written over it, as ssh-keygen writes it.
+            val centre = lines[1 + Randomart.HEIGHT / 2][1 + Randomart.WIDTH / 2]
+            assertTrue(centre == 'S' || centre == 'E', "$algorithm: the centre is '$centre'")
+            assertEquals(if (centre == 'E') 0 else 1, board.count { it == 'S' }, "$algorithm marks the start once, unless the walk ended on it")
         }
+    }
+
+    /**
+     * A walk that comes home: `0x0F` is two steps down-right then two back, so the bishop ends on the
+     * start and the end mark takes the square, as `ssh-keygen` writes it (the start is set first, the
+     * end after). One key in a few dozen does this, which is why the art is not asked for both marks.
+     */
+    @Test
+    fun `the end is written over the start when the bishop comes home`() {
+        val lines = Randomart.lines(byteArrayOf(0x0F), "[T]", "[F]")
+        val board = lines.drop(1).dropLast(1).joinToString("")
+        assertEquals('E', lines[1 + Randomart.HEIGHT / 2][1 + Randomart.WIDTH / 2])
+        assertEquals(0, board.count { it == 'S' })
+        assertEquals(1, board.count { it == 'E' })
+        // The squares the walk crossed on its way out and back: each stepped on twice.
+        assertEquals('o', lines[1 + Randomart.HEIGHT / 2 + 1][1 + Randomart.WIDTH / 2 + 1])
+        assertEquals('.', lines[1 + Randomart.HEIGHT / 2 + 2][1 + Randomart.WIDTH / 2 + 2])
     }
 
     @Test
