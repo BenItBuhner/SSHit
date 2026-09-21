@@ -11,22 +11,19 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 
 /**
- * The hardware shortcuts of spec C3: Ctrl+Tab / Ctrl+Shift+Tab step, Ctrl+1…8 jump, Ctrl+9 is the
- * last tab, Ctrl+T new tab, Ctrl+W close, Ctrl+Shift+A the switcher, Ctrl+Shift+U the most recent
- * unread tab (C22). Ctrl+Tab and the digits never reach a terminal usefully and are always taken;
- * T and W are readline keys, so with [ctrlTabKeysReachTerminal] they pass through and only the
- * Shift chords act.
+ * The strip's fixed hardware shortcuts of spec C3: Ctrl+Tab / Ctrl+Shift+Tab step, Ctrl+1…8 jump,
+ * Ctrl+9 is the last tab. Browser conventions that take no prefix and no remap: none of them reaches
+ * a terminal usefully, so they are always the strip's. The rest of the strip's keys, Ctrl+T and
+ * Ctrl+W and the chords for the switcher and the unread tab, are the chord dispatcher's
+ * ([app.berth.android.ui.keyboard.HardwareShortcuts]), since the readline setting and the remaps
+ * decide them.
  */
 class TabShortcuts(
     private val step: (Int) -> Unit,
     /** Strip index, or -1 for the last tab. */
     private val jump: (Int) -> Unit,
-    private val newTab: () -> Unit,
-    private val closeActive: () -> Unit,
-    private val switcher: () -> Unit,
-    private val jumpToUnread: () -> Unit = {},
 ) {
-    fun handle(event: KeyEvent, ctrlTabKeysReachTerminal: Boolean): Boolean {
+    fun handle(event: KeyEvent): Boolean {
         if (event.type != KeyEventType.KeyDown || !event.isCtrlPressed || event.isAltPressed || event.isMetaPressed) return false
         val shift = event.isShiftPressed
         val digit = DIGITS.indexOf(event.key)
@@ -34,10 +31,6 @@ class TabShortcuts(
             event.key == Key.Tab -> { step(if (shift) -1 else 1); true }
             digit in 0..7 && !shift -> { jump(digit); true }
             digit == 8 && !shift -> { jump(-1); true }
-            event.key == Key.T && (shift || !ctrlTabKeysReachTerminal) -> { newTab(); true }
-            event.key == Key.W && (shift || !ctrlTabKeysReachTerminal) -> { closeActive(); true }
-            event.key == Key.A && shift -> { switcher(); true }
-            event.key == Key.U && shift -> { jumpToUnread(); true }
             else -> false
         }
     }

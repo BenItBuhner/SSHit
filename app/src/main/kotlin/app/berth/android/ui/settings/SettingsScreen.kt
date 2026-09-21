@@ -206,6 +206,8 @@ fun SettingsScreen(
 
             HardwareKeyboardPanel(vm)
 
+            VolumeButtonsPanel(vm)
+
             NotificationsSection(vm.notifier)
 
             SecurityPanel(vm, onKnownHosts)

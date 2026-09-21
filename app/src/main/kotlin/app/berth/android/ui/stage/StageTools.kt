@@ -46,11 +46,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -86,6 +91,7 @@ import app.berth.android.ui.keyboard.StageRegion
 import app.berth.android.ui.keyboard.rememberStageFocus
 import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
 import app.berth.android.ui.terminal.LinkTap
@@ -114,6 +120,8 @@ class StageTools {
     val viewport = TerminalViewport()
     var pendingPaste by mutableStateOf<PasteAnalysis?>(null)
     var notice by mutableStateOf<String?>(null)
+    /** The one-line hint with an action in the notice's slot (spec C22, the Ctrl+W hint); a new one replaces the last. */
+    var hint by mutableStateOf<StageHint?>(null)
     var historyOpen by mutableStateOf(false)
 
     /** The OSC 8 link tapped on the canvas and waiting for a look in [LinkOpenSheet] (spec A60). */
@@ -870,9 +878,17 @@ fun controlWarning(analysis: PasteAnalysis): String {
     return "Has $n control ${if (n == 1) "character" else "characters"} (${analysis.controlNames.joinToString(", ")}) the shell would act on."
 }
 
-/** The passing confirmation over the terminal ("Copied"): the existing pill, gone after a moment. */
+/**
+ * The passing confirmation over the terminal ("Copied"): the existing pill, gone after a moment.
+ * A [StageTools.hint] takes the slot instead while it stands: the one line that says something
+ * once and offers one action.
+ */
 @Composable
 fun NoticePill(tools: StageTools, modifier: Modifier = Modifier) {
+    tools.hint?.let { hint ->
+        HintBar(hint, onDone = { if (tools.hint == hint) tools.hint = null }, modifier = modifier)
+        return
+    }
     val text = tools.notice ?: return
     val c = Berth.colors
     LaunchedEffect(text) {
@@ -883,6 +899,67 @@ fun NoticePill(tools: StageTools, modifier: Modifier = Modifier) {
         Pill(text, color = c.surface3, textColor = c.text1)
     }
 }
+
+/**
+ * One line said once, with one action: `Ctrl+W closes the tab here · Shell keeps it` (spec C22, the
+ * hint after a first Ctrl+W). Held as long as the shell's notice bars ([NOTICE_BAR_MS]), or until
+ * the action, and gone for good after; the Stage decides when a hint is due.
+ */
+data class StageHint(val text: String, val action: String, val onAction: () -> Unit)
+
+/**
+ * The hint drawn the way the shell's notice bars are (`Closed prod-web · Reopen`): a 32 dp
+ * full-radius bar on surface.3 in a 44 dp row, Caption text, a middle dot, the action in accent
+ * with a concentric surface.4 pill when pressed. Over the top of the terminal, where "Copied" sits,
+ * rather than its foot: the prompt the user is typing at is at the foot.
+ */
+@Composable
+private fun HintBar(hint: StageHint, onDone: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Berth.colors
+    LaunchedEffect(hint) {
+        delay(NOTICE_BAR_MS)
+        onDone()
+    }
+    Row(
+        modifier
+            .padding(top = 6.dp)
+            .padding(horizontal = 12.dp)
+            .height(44.dp)
+            .drawBehind {
+                val h = 32.dp.toPx()
+                drawRoundRect(color = c.surface3, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
+            }
+            .padding(horizontal = 6.dp)
+            .testTag(StageHintTag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // The text yields to the action, the way the shell's bars do.
+        Text(hint.text, style = BerthType.caption, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp))
+        Text("\u00B7", style = BerthType.caption, color = c.text3)
+        val interaction = remember { MutableInteractionSource() }
+        val pressed by interaction.collectIsPressedAsState()
+        val focused = interaction.showsFocus()
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .clickable(interactionSource = interaction, indication = null, onClick = { hint.onAction(); onDone() })
+                .semantics { role = Role.Button }
+                .drawBehind {
+                    if (pressed || focused) {
+                        val h = 24.dp.toPx()
+                        drawRoundRect(color = c.surface4, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
+                    }
+                }
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(hint.action, style = BerthType.caption, color = c.accent, maxLines = 1)
+        }
+    }
+}
+
+/** The hint bar's tag, for a test to find the one line it waits for. */
+const val StageHintTag = "stage-hint"
 
 private const val NOTICE_MS = 1_400L
 private const val PREVIEW_LINES = 12

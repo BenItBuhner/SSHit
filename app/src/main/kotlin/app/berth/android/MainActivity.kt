@@ -2,9 +2,11 @@ package app.berth.android
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -16,6 +18,8 @@ import app.berth.android.security.WindowSecurity
 import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.keyboard.LocalVolumeKeys
+import app.berth.android.ui.keyboard.VolumeKeys
 import app.berth.domain.model.SecuritySettings
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -33,6 +37,9 @@ class MainActivity : ComponentActivity() {
 
     /** An intent not yet read for a notification's tab or a link: the launch's, or one onNewIntent brought; read in onResume. */
     private var intentPending = false
+
+    /** The volume buttons' router (spec A43): the Stage binds it while a shell tab has a use for them, and every other screen leaves them to the system. */
+    private val volumeKeys = VolumeKeys()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Hands the launch theme (graphite plus the monogram) over to Theme.App once content is up.
@@ -60,7 +67,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContent {
-            AppRoot()
+            CompositionLocalProvider(LocalVolumeKeys provides volumeKeys) {
+                AppRoot()
+            }
         }
         // A recreation (rotation, a restore after a kill) keeps the launch intent; only a fresh launch acts on it.
         if (savedInstanceState == null) intentPending = true
@@ -95,6 +104,9 @@ class MainActivity : ComponentActivity() {
             SessionNotifier.ACTION_OPEN_FILES -> sessions.activateFilesFromNotification(id)
         }
     }
+
+    /** A volume press the Stage has a use for is taken before the window sees it, or the system would set the volume for it. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = volumeKeys.dispatch(event) || super.dispatchKeyEvent(event)
 
     private fun applyWindowSecurity(settings: SecuritySettings) {
         if (windowSettings == settings) return
