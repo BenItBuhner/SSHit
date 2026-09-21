@@ -746,6 +746,12 @@ class TerminalEmulatorTest {
         assertEquals(m.linkAt(0), m.linkAt(1), "the same id and URL is one link")
         assertTrue(m.linkAt(0) != m.linkAt(2), "another id on the same URL is another link")
         assertEquals("https://c.example", t.linkAt(1, 2))
+        t.write("\r\n" + link("https://d.example", "p", params = "foo=bar:id=one") + link("https://d.example", "q", params = "id=one:foo=baz") + link("https://d.example", "r", params = "foo=bar:id="))
+        val n = t.line(2)
+        assertEquals(n.linkAt(0), n.linkAt(1), "the id is found among other params, last or first")
+        assertTrue(n.linkAt(0) != n.linkAt(2), "an empty id is none, so this is the bare URL's link")
+        t.write(link("https://d.example", "s"))
+        assertEquals(n.linkAt(2), n.linkAt(3), "and the bare URL printed again is that link")
     }
 
     @Test

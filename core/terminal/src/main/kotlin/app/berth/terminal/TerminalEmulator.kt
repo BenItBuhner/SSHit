@@ -552,13 +552,18 @@ class TerminalEmulator(
         val sep = payload.indexOf(';')
         val code = oscCode(payload, if (sep < 0) payload.length else sep)
         if (code < 0) return
+        if (code == 8) {
+            // A listing prints one of these a link and another to close it, so it reads the payload in place.
+            currentLink = oscHyperlink(payload, sep + 1)
+            markDirty()
+            return
+        }
         val arg = if (sep < 0) "" else payload.substring(sep + 1)
         when (code) {
             0, 2 -> setTitle(arg)
             1 -> Unit
             4 -> oscPalette(arg)
             7 -> listener.onWorkingDirectoryChanged(arg)
-            8 -> currentLink = oscHyperlink(arg)
             9 -> oscNotification9(arg)
             99 -> oscNotification99(arg)
             133 -> if (arg.isNotEmpty()) shellMark(arg[0], arg.substringAfter(';', ""))
@@ -592,26 +597,26 @@ class TerminalEmulator(
 
     /**
      * OSC 8 hyperlinks (spec A60): `8;params;URL` opens a link that the cells printed from here
-     * carry, `8;;` closes it. The params are `key=value` pairs separated by colons, of which `id`
-     * names the link so two runs of it (a name wrapped over two rows) are one; the URL itself may
-     * hold semicolons, so only the first is a separator. Returns the id the cells take, 0 for none.
+     * carry, `8;;` closes it. The params, from [start] in [payload], are `key=value` pairs
+     * separated by colons, of which `id` names the link so two runs of it (a name wrapped over two
+     * rows) are one; the URL itself may hold semicolons, so only the first is a separator. Returns
+     * the id the cells take, 0 for none; the common `8;;URL` costs the URL's own copy and no more.
      */
-    private fun oscHyperlink(arg: String): Int {
-        val sep = arg.indexOf(';')
-        if (sep < 0 || sep + 1 == arg.length) return 0
-        // A listing prints a link a line, so the common `8;;URL` takes no more than the URL's own copy.
-        val idParam = if (sep == 0) "" else idParamOf(arg, sep)
-        return links.register(idParam, arg.substring(sep + 1))
+    private fun oscHyperlink(payload: String, start: Int): Int {
+        val sep = payload.indexOf(';', start)
+        if (sep < 0 || sep + 1 == payload.length) return 0
+        val idParam = if (sep == start) "" else idParamOf(payload, start, sep)
+        return links.register(idParam, payload.substring(sep + 1))
     }
 
-    /** The value of the `id=` pair among the colon-separated params in [arg] before [end], or empty. */
-    private fun idParamOf(arg: String, end: Int): String {
-        var start = 0
-        while (start < end) {
-            var stop = arg.indexOf(':', start)
+    /** The value of the `id=` pair among the colon-separated params in [payload] from [start] to [end], or empty. */
+    private fun idParamOf(payload: String, start: Int, end: Int): String {
+        var from = start
+        while (from < end) {
+            var stop = payload.indexOf(':', from)
             if (stop < 0 || stop > end) stop = end
-            if (arg.startsWith("id=", start) && stop - start >= 3) return arg.substring(start + 3, stop)
-            start = stop + 1
+            if (payload.startsWith("id=", from) && stop - from >= 3) return payload.substring(from + 3, stop)
+            from = stop + 1
         }
         return ""
     }
