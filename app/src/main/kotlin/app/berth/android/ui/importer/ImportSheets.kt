@@ -47,6 +47,8 @@ import app.berth.android.ui.KnownHostsImport
 import app.berth.android.ui.KnownHostsImported
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
@@ -228,7 +230,8 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
  * type for an address is the changed-key case (C13) in a file: the row starts unticked with the
  * saved key and its date under it in the danger tint, and ticking it is the Replace decision, which
  * the button then names. An address with a pinned key takes no other key, so such a row is not
- * offered and says where the pin is undone. A hashed name (`ssh-keygen -H`, the default on many
+ * offered: a lock stands where its tick would, and it says where the pin is undone. A hashed name
+ * (`ssh-keygen -H`, the default on many
  * systems) is read for a saved or known host whose address hashes the same and is marked as matched;
  * the ones no host matches are counted in one line, since the name itself is not in the file.
  * Wildcards, negations, CA and revoked lines are skipped and said, each with its line.
@@ -310,7 +313,7 @@ fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (
                                 subtitle = "$facts\nPinned to ${standing.saved.algorithmLabel} ${shortFingerprint(standing.saved.fingerprintSha256)}; unpin it under Known hosts first.",
                                 subtitleMaxLines = 4,
                                 minHeight = 52.dp,
-                                leading = { TickDot(ticked = false) },
+                                leading = { PinLock() },
                             )
                             // A different key of a type already trusted: C13's changed-key decision, unticked until it is made.
                             is KnownHostsCandidate.Standing.Conflicting -> TickRow(
@@ -411,6 +414,18 @@ private fun TickRow(title: String, subtitle: String, ticked: Boolean, onTicked: 
         interactionSource = interaction,
         leading = { TickDot(ticked) },
     )
+}
+
+/**
+ * The mark on a pinned endpoint's row, in the tick's place: a lock, in the subtitle's tone, since
+ * the row is read and not offered, and an unticked dot there would read as a box that will not
+ * tick. Decorative; the row's second line says what the lock means.
+ */
+@Composable
+private fun PinLock() {
+    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+        BerthIcon(BerthIcons.lock, tint = Berth.colors.text2, size = 16.dp)
+    }
 }
 
 /** The tick on a candidate row: an 8 dp dot, accent when the key or host will import, text.3 when it will not. The row's own state says which; the dot is the picture. */
