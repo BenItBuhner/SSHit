@@ -68,8 +68,9 @@ class ImportedFamily(val name: String, val dir: File, val files: Map<FontFace, F
  * its regular and bold (its italics would double it), with the missing faces made from the regular
  * one, as they are for a System font. Symbols Nerd Font Mono is 1.6 MB compressed and is not
  * bundled; the Nerd Font fallback draws the glyphs a family lacks from a Nerd Font the user has
- * imported, and, with none, from the Powerline arrows and dividers alone, a 15 KB subset of it
- * ([R.font.berth_powerline_symbols]), so a prompt's separators are never tofu out of the box.
+ * imported, and, with none, from the Powerline range alone (U+E0A0 to U+E0D7: the arrows, the
+ * rounded, flame and pixel dividers), a 15 KB subset of it ([R.font.berth_powerline_symbols]), so
+ * a prompt's separators are never tofu out of the box, whatever family draws the letters.
  */
 object TerminalFonts {
     const val SYSTEM = "System monospace"
@@ -169,7 +170,7 @@ object TerminalFonts {
             if (dir.listFiles()?.none { it.isFile && it.name != NAME_FILE } == true) dir.deleteRecursively()
             return@withContext ImportResult.Failed("Android couldn't open that font.")
         }
-        withContext(Dispatchers.Main) { invalidate() }
+        invalidate()
         ImportResult.Done(family, face)
     }
 
