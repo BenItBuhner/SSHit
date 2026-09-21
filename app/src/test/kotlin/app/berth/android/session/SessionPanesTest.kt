@@ -378,6 +378,9 @@ class SessionPanesTest {
     fun `nothing is written before the strip is restored, so a relaunch never erases the split it is about to rebuild`() {
         graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
         awaitStored(StageSplit("s-homelab", StageSide.RIGHT))
+        // Both of the split's writes, before the first relaunch: with the active id still the old
+        // one, the document names the active tab as its own companion and restore rightly drops it.
+        awaitActiveStored("s-pihole")
         repeat(20) {
             graph = graph.relaunch()
             // The manager's own restore runs on its scope from init; whichever of the two reaches the lock first, the split stands.
