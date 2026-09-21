@@ -8,6 +8,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -64,7 +65,12 @@ fun LookSheet(vm: AppViewModel, hostId: String, onDismiss: () -> Unit) {
     val hosts by vm.hosts.collectAsState()
     val host = hosts.firstOrNull { it.id == hostId }
     val themes by vm.terminalThemes.collectAsState()
-    if (host == null) return
+    if (host == null) {
+        // Deleted under the sheet: there is nothing left to set, so the sheet closes rather than
+        // standing open with nothing in it and holding the Session sheet's place (#20 review).
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
     val appearance = host.appearance
     val inheritsAll = appearance.terminalThemeId == null && appearance.fontFamily == null && appearance.fontSizeSp == null
     fun set(next: AppearanceOverride) = vm.saveHost(host.copy(appearance = next), password = null)
