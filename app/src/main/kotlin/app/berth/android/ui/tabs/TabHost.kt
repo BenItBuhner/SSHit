@@ -385,12 +385,15 @@ class Notice(val text: String, val action: String, val maxLines: Int = 1, val on
  * The one bar at the Stage's bottom edge, for everything that shares it: `Closed prod-web · Reopen`,
  * a link's reason, `Sessions keep running…`, `Landed in /tmp · Paste path`. [notices] are those
  * sources under a key each, up (a [Notice]) or down (null). Of the ones up at once the one raised
- * last shows, and when it goes the one raised before it is back if it is still up: closing a tab
- * whose neighbour holds paths raises Reopen over Landed, and Landed is there again when Reopen's
- * six seconds are done. One bar, so two never draw over each other and the state pill has one
- * band to stand clear of ([BottomEdge]). A source's notice may change while up (a count growing)
- * and keeps its place; the last notice shown is kept through the bar's exit, so the text does not
- * blank as it slides away.
+ * last shows, and when it goes the one raised before it is back if it is still up: a link's reason
+ * over Landed, and Landed again when the reason is dismissed. Two raised in one frame show the
+ * later in [notices]' order. A source whose notice would rise with another's and outlast it is the
+ * caller's to hold down while the other is up, since the slot knows nothing of how long each
+ * stays: the shell holds Landed down while Reopen is up, so closing a tab whose neighbour holds
+ * paths shows Reopen's six seconds and then Landed (`AppRoot`). One bar, so two never draw over
+ * each other and the state pill has one band to stand clear of ([BottomEdge]). A source's notice
+ * may change while up (a count growing) and keeps its place; the last notice shown is kept through
+ * the bar's exit, so the text does not blank as it slides away.
  */
 @Composable
 fun NoticeSlot(notices: Map<Any, Notice?>, modifier: Modifier = Modifier) {

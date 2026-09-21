@@ -525,7 +525,10 @@ private fun Shell(vm: AppViewModel) {
     // was the link; Back's line, read whole on two; and a dropped file's path that landed while its
     // terminal was off stage or in the alternate screen, for as long as that terminal is on stage
     // with it unpasted: the line says it landed, Paste puts it on the shell's line
-    // (AppViewModel.landDroppedPath).
+    // (AppViewModel.landDroppedPath). Landed is held down while Reopen is up: closing the tab on
+    // stage moves the stage to its neighbour, and if that one holds paths its Landed rises with
+    // Reopen, in the same frame or a dispatch after, and would sit over the six-second offer for as
+    // long as the paths are held. So Reopen shows, and Landed is there when Reopen goes.
     val reopen = reopenNotice(tabUi, vm)
     val heldPaths by vm.heldPaths.collectAsState()
     val landed = active?.takeIf { onStage }?.let { tab ->
@@ -539,7 +542,7 @@ private fun Shell(vm: AppViewModel) {
                 ShellNotice.REOPEN to reopen,
                 ShellNotice.LINK to linkNotice?.let { reason -> Notice(reason, "OK") { linkNotice = null } },
                 ShellNotice.BACK to if (backNotice) Notice(BACKGROUND_NOTICE, "OK", maxLines = 2) { backNotice = false } else null,
-                ShellNotice.LANDED to landed,
+                ShellNotice.LANDED to landed?.takeIf { reopen == null },
             ),
             modifier = Modifier.align(Alignment.BottomCenter),
         )
