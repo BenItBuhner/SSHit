@@ -21,6 +21,9 @@ import kotlin.math.roundToInt
  */
 class FrameOverlay {
     var selection: CellRange? = null
+
+    /** Whether [selection] is a block between its corners rather than a stream from start to end (spec C18). */
+    var selectionRectangular: Boolean = false
     var selectionColor: Int = 0
     val matches = ArrayList<CellRange>()
     var matchColor: Int = 0
@@ -32,6 +35,7 @@ class FrameOverlay {
 
     fun clear() {
         selection = null
+        selectionRectangular = false
         matches.clear()
         current = null
     }
@@ -119,7 +123,7 @@ object TerminalRenderer {
             // Selection and search highlights sit between the cell backgrounds and the glyphs, so the
             // text keeps its colour over them (spec: selection text unchanged).
             if (overlay != null) {
-                overlay.selection?.let { fillRange(nc, it, y, cols, cw, ch, top, overlay.selectionColor, paints) }
+                overlay.selection?.let { fillRange(nc, it, y, cols, cw, ch, top, overlay.selectionColor, paints, overlay.selectionRectangular) }
                 for (m in overlay.matches) if (m.touches(y)) fillRange(nc, m, y, cols, cw, ch, top, overlay.matchColor, paints)
                 overlay.current?.let { if (it.touches(y)) fillRange(nc, it, y, cols, cw, ch, top, overlay.currentColor, paints) }
             }
@@ -245,9 +249,11 @@ object TerminalRenderer {
         }
     }
 
-    private fun fillRange(nc: Canvas, range: CellRange, y: Int, cols: Int, cw: Float, ch: Float, top: Float, color: Int, paints: TerminalPaints) {
-        val a = range.firstCol(y) ?: return
-        val b = range.lastCol(y, cols) ?: return
+    /** Fills the cells of [range] on view row [y]: the block's columns on every row when [rectangular], else the stream's. */
+    private fun fillRange(nc: Canvas, range: CellRange, y: Int, cols: Int, cw: Float, ch: Float, top: Float, color: Int, paints: TerminalPaints, rectangular: Boolean = false) {
+        if (!range.touches(y)) return
+        val a = if (rectangular) range.left else range.firstCol(y) ?: return
+        val b = if (rectangular) range.right else range.lastCol(y, cols) ?: return
         if (b < a) return
         paints.fill.color = color
         nc.drawRect(a * cw, top, (b + 1).coerceAtMost(cols) * cw, top + ch, paints.fill)

@@ -31,9 +31,27 @@ data class CellRange(val start: CellPos, val end: CellPos) {
 
     fun shiftRows(delta: Int): CellRange = CellRange(CellPos(start.row + delta, start.col), CellPos(end.row + delta, end.col))
 
+    /** The leftmost column the range covers when read as a rectangle: its corners' lesser column. */
+    val left: Int get() = minOf(start.col, end.col)
+
+    /** The rightmost column the range covers when read as a rectangle: its corners' greater column. */
+    val right: Int get() = maxOf(start.col, end.col)
+
     companion object {
         /** The range between two cells in either order. */
         fun of(a: CellPos, b: CellPos): CellRange = if (a <= b) CellRange(a, b) else CellRange(b, a)
+
+        /**
+         * The rectangle with [a] and [b] at opposite corners, stored top-left to bottom-right: a
+         * block selection (spec C18), read with [left] and [right] on every row from `start.row` to
+         * `end.row`. Since `start.col <= end.col` here, reading it as a stream gives the same corners.
+         */
+        fun block(a: CellPos, b: CellPos): CellRange =
+            CellRange(CellPos(minOf(a.row, b.row), minOf(a.col, b.col)), CellPos(maxOf(a.row, b.row), maxOf(a.col, b.col)))
+
+        /** The smallest rectangle holding both [a] and [b], each read as a rectangle. */
+        fun blockAround(a: CellRange, b: CellRange): CellRange =
+            CellRange(CellPos(minOf(a.start.row, b.start.row), minOf(a.left, b.left)), CellPos(maxOf(a.end.row, b.end.row), maxOf(a.right, b.right)))
     }
 }
 
@@ -196,6 +214,34 @@ object TerminalText {
                 x++
             }
             if (!continues && row < lastRow) sb.append('\n')
+        }
+        return sb.toString()
+    }
+
+    /**
+     * The text of [range] read as a rectangle (spec C18, the bar's Rectangular toggle): on each
+     * row from the start's to the end's, the cells from [CellRange.left] through [CellRange.right],
+     * trailing blanks trimmed, one row per line. Soft wraps are not rejoined, since a block is
+     * columns cut out of rows whatever the rows were part of; a column of numbers from a table
+     * comes out as the numbers. A wide character on either edge comes whole, and one whose head is
+     * inside the block and tail outside is copied once, as [extract] does.
+     */
+    fun extractBlock(grid: TextGrid, range: CellRange): String {
+        val sb = StringBuilder()
+        val lastRow = minOf(range.end.row, grid.rowCount - 1)
+        for (row in range.start.row.coerceAtLeast(0)..lastRow) {
+            val line = grid.line(row)
+            if (line.cols > 0) {
+                val from = headCol(line, range.left)
+                var end = minOf(tailCol(line, range.right) + 1, line.cols)
+                while (end > from && isBlankCell(line, end - 1)) end--
+                var x = from
+                while (x < end) {
+                    if (line.attrs[x] and Attr.WIDE_TAIL == 0) sb.append(line.cellText(x))
+                    x++
+                }
+            }
+            if (row < lastRow) sb.append('\n')
         }
         return sb.toString()
     }

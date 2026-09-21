@@ -486,7 +486,12 @@ fun TerminalCanvas(
             val ch = paints.cellHeight
             // Selection and search highlights for the rows in view, in this frame's row space.
             overlay.clear()
-            selection?.range?.let { r -> selection.anchor?.let { a -> overlay.selection = frame.viewRange(r, a) } }
+            selection?.range?.let { r ->
+                selection.anchor?.let { a ->
+                    overlay.selection = frame.viewRange(r, a, selection.rectangular)
+                    overlay.selectionRectangular = selection.rectangular
+                }
+            }
             overlay.selectionColor = opaqueRgb(theme.selection)
             if (search != null && search.open) {
                 val a = search.anchor
@@ -612,7 +617,7 @@ private class HandleHit(val handle: SelectionHandle, val offset: Offset)
 private fun handleAt(selection: TerminalSelection, frame: TerminalFrame, at: Offset, paints: TerminalPaints, radius: Float, reach: Float, width: Float, height: Float): HandleHit? {
     val range = selection.range ?: return null
     val anchor = selection.anchor ?: return null
-    val view = frame.viewRange(range, anchor) ?: return null
+    val view = frame.viewRange(range, anchor, selection.rectangular) ?: return null
     val cw = paints.cellWidth
     val ch = paints.cellHeight
     val (s, e) = handleCenters(view, frame.rows, cw, ch, radius, width, height)

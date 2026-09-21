@@ -179,4 +179,104 @@ class TerminalSelectionTest {
         assertEquals("2/2", search.countLabel)
         assertEquals(CellRange(CellPos(2, 0), CellPos(2, 2)), search.currentRange(t))
     }
+
+    // ---- rectangular selection (spec C18 as ruled in review #9: the bar's toggle) -----------------
+
+    private val table = listOf("PID   USER   CMD", "1     root   init", "42    demo   htop", "1337  demo   vim")
+
+    @Test
+    fun `the toggle reads a standing selection the other way with the same corners, and back`() {
+        val t = emulator(cols = 20, rows = 8)
+        t.type(table)
+        val sel = TerminalSelection()
+        synchronized(t.lock) {
+            sel.start(t, CellPos(0, 6), SelectionMode.CELL)
+            sel.extendTo(t, CellPos(3, 9))
+        }
+        assertFalse(sel.rectangular)
+        assertEquals("USER   CMD\n1     root   init\n42    demo   htop\n1337  demo", sel.text(t))
+        assertEquals("4 lines", sel.summary)
+
+        synchronized(t.lock) { sel.setRectangular(t, true) }
+        assertTrue(sel.rectangular)
+        assertEquals(CellRange(CellPos(0, 6), CellPos(3, 9)), sel.range)
+        assertEquals("USER\nroot\ndemo\ndemo", sel.text(t))
+        assertEquals("4 × 4 cells", sel.summary)
+
+        synchronized(t.lock) { sel.setRectangular(t, false) }
+        assertFalse(sel.rectangular)
+        assertEquals("USER   CMD\n1     root   init\n42    demo   htop\n1337  demo", sel.text(t))
+        assertEquals("4 lines", sel.summary)
+    }
+
+    @Test
+    fun `with the toggle on, a long-press and a drag make the block the word's columns span`() {
+        val t = emulator(cols = 20, rows = 8)
+        t.type(table)
+        val sel = TerminalSelection()
+        synchronized(t.lock) {
+            sel.setRectangular(t, true)
+            // Long-press on "USER", then drag down and to the left onto "1337".
+            sel.start(t, CellPos(0, 7), SelectionMode.WORD)
+            assertEquals("USER", sel.text(t))
+            assertEquals("4 chars", sel.summary)
+            sel.extendTo(t, CellPos(3, 2))
+        }
+        assertEquals(CellRange(CellPos(0, 0), CellPos(3, 9)), sel.range)
+        assertEquals("PID   USER\n1     root\n42    demo\n1337  demo", sel.text(t))
+        assertEquals("4 × 10 cells", sel.summary)
+        // The mode outlives the selection: the next one on this tab is a block too.
+        sel.clear()
+        assertTrue(sel.rectangular)
+        synchronized(t.lock) {
+            sel.start(t, CellPos(1, 13), SelectionMode.CELL)
+            sel.extendTo(t, CellPos(3, 16))
+        }
+        assertEquals("init\nhtop\nvim", sel.text(t))
+    }
+
+    @Test
+    fun `a block's handles are its corners, and moving one past the other keeps a block`() {
+        val t = emulator(cols = 20, rows = 8)
+        t.type(table)
+        val sel = TerminalSelection()
+        synchronized(t.lock) {
+            sel.setRectangular(t, true)
+            sel.start(t, CellPos(1, 6), SelectionMode.CELL)
+            sel.extendTo(t, CellPos(2, 9))
+        }
+        assertEquals("root\ndemo", sel.text(t))
+        // The bottom-right handle dragged onto the CMD column two rows down.
+        assertTrue(synchronized(t.lock) { sel.grab(t, SelectionHandle.END) })
+        synchronized(t.lock) { sel.moveTo(t, CellPos(3, 16)) }
+        assertEquals(SelectionHandle.END, sel.dragging)
+        assertEquals("root   init\ndemo   htop\ndemo   vim", sel.text(t))
+        sel.release()
+        // The top-left handle dragged past the other corner's column: the block flips, never inverts.
+        assertTrue(synchronized(t.lock) { sel.grab(t, SelectionHandle.START) })
+        synchronized(t.lock) { sel.moveTo(t, CellPos(2, 19)) }
+        assertEquals(SelectionHandle.START, sel.dragging)
+        assertEquals(CellRange(CellPos(2, 16), CellPos(3, 19)), sel.range)
+        assertEquals("p\n", sel.text(t))
+        assertEquals("2 × 4 cells", sel.summary)
+    }
+
+    @Test
+    fun `a block whose top left history keeps its left column`() {
+        val t = emulator(cols = 20, rows = 4, scrollback = 4)
+        t.type((0 until 8).map { "row%02d x%d".format(it, it) })
+        // Buffer: row00..row03 in history (4), row04..row07 on screen. The x column, rows 2 to 5.
+        val sel = TerminalSelection()
+        synchronized(t.lock) {
+            sel.setRectangular(t, true)
+            sel.start(t, CellPos(2, 6), SelectionMode.CELL)
+            sel.extendTo(t, CellPos(5, 7))
+        }
+        assertEquals("x2\nx3\nx4\nx5", sel.text(t))
+        t.write("\r\n" + (8 until 12).joinToString("\r\n") { "row%02d x%d".format(it, it) })
+        assertEquals(4L, t.linesDropped)
+        val now = synchronized(t.lock) { sel.current(t) }
+        assertEquals(CellRange(CellPos(0, 6), CellPos(1, 7)), now)
+        assertEquals("x4\nx5", sel.text(t))
+    }
 }

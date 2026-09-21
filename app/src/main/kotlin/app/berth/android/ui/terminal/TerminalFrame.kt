@@ -110,10 +110,11 @@ class TerminalFrame {
 
     /**
      * A range made under [anchor] in this frame's view rows (0 is the top row drawn), or null when
-     * the anchor no longer fits the buffer or nothing of the range is in view.
+     * the anchor no longer fits the buffer or nothing of the range is in view. A [rectangular]
+     * range keeps its left column when its top has left history.
      */
-    fun viewRange(range: CellRange, anchor: BufferAnchor): CellRange? {
-        val now = anchor.translate(range, linesDropped, alternateScreen, cols, rows) ?: return null
+    fun viewRange(range: CellRange, anchor: BufferAnchor, rectangular: Boolean = false): CellRange? {
+        val now = anchor.translate(range, linesDropped, alternateScreen, cols, rows, rectangular) ?: return null
         val top = scrollbackSize - offset
         val shifted = now.shiftRows(-top)
         return if (shifted.end.row < 0 || shifted.start.row >= rows) null else shifted

@@ -31,7 +31,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +68,7 @@ import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
@@ -143,6 +143,9 @@ class StageTools {
     companion object {
         /** The notice for a paste into a session without a shell. */
         const val NOT_CONNECTED = "Not connected"
+
+        /** The selection bar's overflow toggle for block selection (spec C18 as ruled in review #9). */
+        const val RECTANGULAR = "Rectangular"
     }
 }
 
@@ -226,23 +229,24 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
             Box {
                 IconAction(onClick = { menu = true }, description = "Selection options") { BerthIcon(BerthIcons.moreVert) }
                 BerthMenu(expanded = menu, onDismiss = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Select all", style = BerthType.body, color = c.text1) },
-                        onClick = {
-                            menu = false
-                            synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
-                        },
-                    )
-                    val link = remember(selection.range) { linkIn(text()) }
+                    BerthMenuItem("Select all", onClick = {
+                        menu = false
+                        synchronized(session.emulator.lock) { selection.selectAll(session.emulator) }
+                    })
+                    // The block between the selection's corners instead of the stream from one to the
+                    // other (review #9: a toggle, not a second-finger gesture); on, in accent, until
+                    // switched off, for this tab's later selections too.
+                    BerthMenuItem(StageTools.RECTANGULAR, selected = selection.rectangular, onClick = {
+                        menu = false
+                        synchronized(session.emulator.lock) { selection.setRectangular(session.emulator, !selection.rectangular) }
+                    })
+                    val link = remember(selection.range, selection.rectangular) { linkIn(text()) }
                     if (link != null) {
-                        DropdownMenuItem(
-                            text = { Text("Open link", style = BerthType.body, color = c.text1) },
-                            onClick = {
-                                menu = false
-                                selection.clear()
-                                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                            },
-                        )
+                        BerthMenuItem("Open link", onClick = {
+                            menu = false
+                            selection.clear()
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        })
                     }
                 }
             }

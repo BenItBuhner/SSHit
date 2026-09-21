@@ -194,4 +194,42 @@ class TerminalTextTest {
         val t = term(cols = 10, text = "user@h:~$ git status")
         assertEquals("user@h:~$ git status", t.cursorLineText())
     }
+
+    // ---- rectangular selection (C18, the bar's toggle) -------------------------------------------
+
+    @Test
+    fun `a block is the corners' columns cut from every row between them, one line per row`() {
+        val t = term(cols = 20, text = listOf("PID   USER   CMD", "1     root   init", "42    demo   htop", "1337  demo   vim").joinToString("\r\n"))
+        // The USER column, chosen top-left to bottom-right or the other way round.
+        assertEquals("USER\nroot\ndemo\ndemo", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(0, 6), CellPos(3, 10))))
+        assertEquals("USER\nroot\ndemo\ndemo", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(3, 10), CellPos(0, 6))))
+        // Corners at the top-right and bottom-left give the same block.
+        assertEquals(CellRange(CellPos(0, 6), CellPos(3, 10)), CellRange.block(CellPos(0, 10), CellPos(3, 6)))
+        // Trailing blanks inside the block are trimmed, and a row with nothing in the columns is an empty line.
+        assertEquals("PID\n1\n42\n1337", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(0, 0), CellPos(3, 4))))
+        assertEquals("CMD\ninit\nhtop\nvim", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(0, 13), CellPos(3, 19))))
+        assertEquals("\n\n\n", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(0, 18), CellPos(3, 19))))
+    }
+
+    @Test
+    fun `a block does not rejoin soft-wrapped rows and takes wide characters whole`() {
+        // "0123456789abcdef" wraps at ten columns; the stream rejoins it, the block keeps the rows apart.
+        val t = term(cols = 10, text = "0123456789abcdef\r\n日本語 ok")
+        val range = CellRange.block(CellPos(0, 2), CellPos(1, 4))
+        assertEquals("0123456789abcdef", TerminalText.extract(t.grid, CellRange(CellPos(0, 0), CellPos(1, 5))))
+        assertEquals("234\ncde", TerminalText.extractBlock(t.grid, range))
+        // A block edge inside a wide character copies the character once.
+        assertEquals("日本", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(2, 1), CellPos(2, 2))))
+        assertEquals("本語", TerminalText.extractBlock(t.grid, CellRange.block(CellPos(2, 3), CellPos(2, 4))))
+    }
+
+    @Test
+    fun `the block around two ranges is the smallest holding both`() {
+        val a = CellRange(CellPos(2, 5), CellPos(2, 8))
+        val b = CellRange(CellPos(0, 7), CellPos(0, 12))
+        assertEquals(CellRange(CellPos(0, 5), CellPos(2, 12)), CellRange.blockAround(a, b))
+        assertEquals(CellRange.blockAround(a, b), CellRange.blockAround(b, a))
+        assertEquals(5, CellRange.blockAround(a, b).left)
+        assertEquals(12, CellRange.blockAround(a, b).right)
+    }
 }

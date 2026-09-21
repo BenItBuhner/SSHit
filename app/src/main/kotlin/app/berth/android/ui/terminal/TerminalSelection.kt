@@ -30,16 +30,17 @@ data class BufferAnchor(val dropped: Long, val alternate: Boolean, val cols: Int
     /**
      * [range], made under this anchor, in the rows of a buffer that has now dropped [linesDropped]
      * lines; null once invalid. A start that has left the top of history is clamped to the first
-     * row, so what remains of the range is still the range.
+     * row, so what remains of the range is still the range: from its first column for a stream,
+     * from the same column for a [rectangular] one, whose left edge is every row's.
      */
-    fun translate(range: CellRange, linesDropped: Long, alternate: Boolean, cols: Int, rows: Int): CellRange? {
+    fun translate(range: CellRange, linesDropped: Long, alternate: Boolean, cols: Int, rows: Int, rectangular: Boolean = false): CellRange? {
         if (alternate != this.alternate || cols != this.cols) return null
         if (alternate && rows != this.rows) return null
         val shift = (dropped - linesDropped).toInt()
         if (range.end.row + shift < 0) return null
         if (shift == 0) return range
         val shifted = range.shiftRows(shift)
-        return if (shifted.start.row < 0) CellRange(CellPos(0, 0), shifted.end) else shifted
+        return if (shifted.start.row < 0) CellRange(CellPos(0, if (rectangular) shifted.start.col else 0), shifted.end) else shifted
     }
 
     companion object {
@@ -53,7 +54,9 @@ data class BufferAnchor(val dropped: Long, val alternate: Boolean, val cols: Int
  * One terminal's text selection (spec C18): a [CellRange] over the buffer plus the mode a gesture
  * grows it in. The range is anchored to buffer rows (see [BufferAnchor]) so new output does not
  * move it off its text and it stays until dismissed. The text itself is read at copy time, since
- * a program repainting the live screen can change what the cells hold.
+ * a program repainting the live screen can change what the cells hold. Read as a stream (reading
+ * order from start to end) unless [rectangular], the bar's overflow toggle, which makes it the
+ * block between its corners, the shape a desktop terminal's Alt-drag makes (review #9).
  */
 class TerminalSelection {
     var range by mutableStateOf<CellRange?>(null)
@@ -63,10 +66,21 @@ class TerminalSelection {
     var mode: SelectionMode = SelectionMode.CELL
         private set
 
+    /**
+     * Whether selections on this terminal are rectangles: columns cut out of rows, stored top-left
+     * to bottom-right. Set from the bar's overflow; it stays on for the tab's next selections until
+     * switched off, since it is a way of dragging, not a property of one selection.
+     */
+    var rectangular by mutableStateOf(false)
+        private set
+
     /** The end a finger is dragging, while it is. */
     var dragging by mutableStateOf<SelectionHandle?>(null)
 
-    /** How much Copy would give, for the bar: `24 chars` for one line, `3 lines` for more; a path wrapped over two rows is still one line. */
+    /**
+     * How much Copy would give, for the bar: `24 chars` for one line, `3 lines` for more (a path
+     * wrapped over two rows is still one line), `3 × 12 cells` for a block of more than one row.
+     */
     var summary by mutableStateOf("")
         private set
 
@@ -75,34 +89,63 @@ class TerminalSelection {
 
     val active: Boolean get() = range != null
 
+    /**
+     * Switches between the stream and the rectangle (the bar's Rectangular toggle). A standing
+     * selection is read the other way at once, with the same two corners: the block between them,
+     * or the stream from the first to the second. The caller holds the lock.
+     */
+    fun setRectangular(emulator: TerminalEmulator, on: Boolean) {
+        if (rectangular == on) return
+        rectangular = on
+        if (!active) return
+        val now = current(emulator)
+        if (now == null) {
+            clear()
+            return
+        }
+        val corners = if (on) CellRange.block(now.start, now.end) else CellRange.of(now.start, now.end)
+        mode = SelectionMode.CELL
+        fixed = corners
+        apply(emulator, corners)
+    }
+
     /** Begins a selection at [pos] (buffer rows) snapped for [mode]; the caller holds the emulator's lock. */
     fun start(emulator: TerminalEmulator, pos: CellPos, mode: SelectionMode) {
+        val first = snap(emulator, pos, mode)
+        this.mode = mode
+        fixed = first
+        apply(emulator, first)
+    }
+
+    /**
+     * Grows the selection begun with [start] to cover [pos] as well, snapping the same way; the
+     * caller holds the lock. A rectangle grows to the smallest block holding both the first snap
+     * and the new one, so a long-press on a word and a drag down gives the block that word's
+     * columns make.
+     */
+    fun extendTo(emulator: TerminalEmulator, pos: CellPos) {
+        val base = fixed ?: return
+        val other = snap(emulator, pos, mode)
+        val range = if (rectangular) CellRange.blockAround(base, other) else CellRange(minOf(base.start, other.start), maxOf(base.end, other.end))
+        apply(emulator, range)
+    }
+
+    /** The cells [pos] chooses under [mode]: the word, the logical line or the one character. */
+    private fun snap(emulator: TerminalEmulator, pos: CellPos, mode: SelectionMode): CellRange {
         val grid = emulator.grid
         val first = when (mode) {
             SelectionMode.WORD -> TerminalText.snapToWord(grid, pos)
             SelectionMode.LINE -> TerminalText.snapToLine(grid, pos)
             SelectionMode.CELL -> TerminalText.clamp(grid, pos).let { CellRange(it, CellPos(it.row, TerminalText.tailCol(grid.line(it.row), it.col))) }
         }
-        this.mode = mode
-        fixed = first
-        apply(emulator, first)
-    }
-
-    /** Grows the selection begun with [start] to cover [pos] as well, snapping the same way; the caller holds the lock. */
-    fun extendTo(emulator: TerminalEmulator, pos: CellPos) {
-        val grid = emulator.grid
-        val base = fixed ?: return
-        val other = when (mode) {
-            SelectionMode.WORD -> TerminalText.snapToWord(grid, pos)
-            SelectionMode.LINE -> TerminalText.snapToLine(grid, pos)
-            SelectionMode.CELL -> TerminalText.clamp(grid, pos).let { CellRange(it, CellPos(it.row, TerminalText.tailCol(grid.line(it.row), it.col))) }
-        }
-        apply(emulator, CellRange(minOf(base.start, other.start), maxOf(base.end, other.end)))
+        return if (rectangular) CellRange.block(first.start, first.end) else first
     }
 
     /**
      * Starts moving [handle]: the other end stays put and [moveTo] places this one, swapping ends
-     * when the finger crosses. Returns false when the selection is no longer valid on this buffer.
+     * when the finger crosses. On a rectangle the handles are its top-left and bottom-right
+     * corners, and the one held moves that corner. Returns false when the selection is no longer
+     * valid on this buffer.
      */
     fun grab(emulator: TerminalEmulator, handle: SelectionHandle): Boolean {
         val now = current(emulator) ?: return false
@@ -118,10 +161,10 @@ class TerminalSelection {
         val grid = emulator.grid
         val keep = fixed?.start ?: return
         val p = TerminalText.clamp(grid, pos)
-        val range = if (p <= keep) {
-            CellRange(p, CellPos(keep.row, TerminalText.tailCol(grid.line(keep.row), keep.col)))
-        } else {
-            CellRange(keep, CellPos(p.row, TerminalText.tailCol(grid.line(p.row), p.col)))
+        val range = when {
+            rectangular -> CellRange.block(keep, p)
+            p <= keep -> CellRange(p, CellPos(keep.row, TerminalText.tailCol(grid.line(keep.row), keep.col)))
+            else -> CellRange(keep, CellPos(p.row, TerminalText.tailCol(grid.line(p.row), p.col)))
         }
         dragging = if (p <= keep) SelectionHandle.START else SelectionHandle.END
         apply(emulator, range)
@@ -159,10 +202,10 @@ class TerminalSelection {
     fun current(emulator: TerminalEmulator): CellRange? {
         val r = range ?: return null
         val a = anchor ?: return null
-        val now = a.translate(r, emulator.linesDropped, emulator.isAlternateScreen, emulator.cols, emulator.rows) ?: return null
+        val now = a.translate(r, emulator.linesDropped, emulator.isAlternateScreen, emulator.cols, emulator.rows, rectangular) ?: return null
         val last = emulator.bufferRows - 1
         if (last < 0 || now.start.row > last) return null
-        return if (now.end.row <= last) now else CellRange(now.start, CellPos(last, (emulator.cols - 1).coerceAtLeast(0)))
+        return if (now.end.row <= last) now else CellRange(now.start, CellPos(last, if (rectangular) now.end.col else (emulator.cols - 1).coerceAtLeast(0)))
     }
 
     /** Ends the selection when the buffer no longer holds it (a change of width, a switch of screens); called after each capture. */
@@ -172,22 +215,27 @@ class TerminalSelection {
         if (stale) clear()
     }
 
-    /** The selected text, wrapped rows rejoined and trailing blanks trimmed; empty once the selection is stale. */
+    /** The selected text, wrapped rows rejoined and trailing blanks trimmed (a block: one line per row); empty once the selection is stale. */
     fun text(emulator: TerminalEmulator): String = synchronized(emulator.lock) {
         val now = current(emulator) ?: return ""
-        TerminalText.extract(emulator.grid, now)
+        extract(emulator, now)
     }
+
+    private fun extract(emulator: TerminalEmulator, range: CellRange): String =
+        if (rectangular) TerminalText.extractBlock(emulator.grid, range) else TerminalText.extract(emulator.grid, range)
 
     private fun apply(emulator: TerminalEmulator, range: CellRange) {
         anchor = BufferAnchor.of(emulator)
         this.range = range
-        val text = TerminalText.extract(emulator.grid, range)
+        val text = extract(emulator, range)
         val lines = text.count { it == '\n' } + 1
-        summary = if (lines == 1) {
-            val n = TerminalText.charCount(text)
-            if (n == 1) "1 char" else "$n chars"
-        } else {
-            "$lines lines"
+        summary = when {
+            lines == 1 -> {
+                val n = TerminalText.charCount(text)
+                if (n == 1) "1 char" else "$n chars"
+            }
+            rectangular -> "${range.rowCount} × ${range.right - range.left + 1} cells"
+            else -> "$lines lines"
         }
     }
 }
