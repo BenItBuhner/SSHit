@@ -134,8 +134,11 @@ sealed interface ChordRead {
  * ([leaderKey] null) the right-hand keys are the modifiers they are, except that Right Alt where the
  * layout makes it AltGr is the layout's before it is any chord's: a key with a third level under it
  * ([thirdLevelCharacter], the rule the terminal types by) is no chord at all, so a remap onto Alt+Q
- * fires on Left Alt and leaves a German keyboard its `@`. A Right Alt Leader takes the third level
- * with it, the cost its Settings row names. One reader per dispatcher, and one per sheet capturing
+ * fires on Left Alt and leaves a German keyboard its `@`. A Leader engaged, held or tapped, comes
+ * before the layout in turn: Right Ctrl with AltGr+Q is `Leader Alt+Q` either way, so what the sheet
+ * captures with the Leader held fires with it tapped too, and a tap is spent on a chord and never on
+ * a typed key. A Right Alt Leader takes the third level with it, the cost its Settings row names.
+ * One reader per dispatcher, and one per sheet capturing
  * a remap; nothing here decides what a chord does. A Leader chord that opens a sheet moves the keys
  * to the sheet's window, and the Leader's release lands there, never here: so the hold is checked
  * against the Leader's own bit in each key's meta state, and a key that arrives without it is read
@@ -179,8 +182,9 @@ class ChordReader {
             armed = false
             if (name == "ESCAPE" && plain) return ChordRead.Consumed
         }
-        // AltGr: the map answers under the modifiers held, so a Ctrl or a second Alt beside Right Alt is a chord still.
-        if (leaderKey != LeaderKey.RIGHT_ALT && thirdLevelCharacter(native.keyCharacterMap::get, native.keyCode, native.metaState) != 0) return ChordRead.Ignored
+        // AltGr: the map answers under the modifiers held, so a Ctrl or a second Alt beside Right Alt is a chord
+        // still; and a Leader engaged, held or tapped, is a chord's before the layout's, so no third level is asked for under it.
+        if (!withLeader && leaderKey != LeaderKey.RIGHT_ALT && thirdLevelCharacter(native.keyCharacterMap::get, native.keyCode, native.metaState) != 0) return ChordRead.Ignored
         var ctrl = event.isCtrlPressed
         var alt = event.isAltPressed
         if (withLeader) {

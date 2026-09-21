@@ -67,8 +67,9 @@ import org.robolectric.annotation.Config
  * as Alt as it did. The layouts are the platform's own `.kcm` rows, answering through
  * `KeyCharacterMap` itself ([ShadowKeyLayout]), so Compose's `utf16CodePoint` says what the
  * device's would, and the Settings row's probe ([layoutTypesWithRightAlt]) reads the same map by
- * the same rule. And beside AltGr the Stage's Leader on Right Ctrl fires as it did (spec C22),
- * where one chosen on Right Alt takes the third level with it, the cost the Settings row names.
+ * the same rule. And beside AltGr the Stage's Leader on Right Ctrl fires as it did (spec C22), a key
+ * under it the Leader's whether it is held or tapped, where one chosen on Right Alt takes the third
+ * level with it, the cost the Settings row names.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], shadows = [ShadowKeyLayout::class])
@@ -284,20 +285,6 @@ class TerminalInputAltGrTest {
         assertEquals(listOf("copy", "copy"), calls)
         assertEquals(listOf("text:@", "chord:Alt+a"), sink.sent)
 
-        // Under a Right Ctrl Leader nothing moves: held with AltGr+Q the map answers nothing to the Ctrl, so it is Leader Alt+Q,
-        // nobody's and swallowed as before; tapped, the tap is spent on the key, which types.
-        calls.clear(); sink.sent.clear()
-        val leader = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, ctrlWHintSeen = true).withRemap(ChordAction.COPY, ChordKey("Q", alt = true)))
-        stage(leader, KEYCODE_CTRL_RIGHT, rightCtrl)
-        stage(leader, KEYCODE_Q, rightCtrl or altGr)
-        stage(leader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
-        stage(leader, KEYCODE_CTRL_RIGHT, rightCtrl)
-        stage(leader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
-        stage(leader, KEYCODE_Q, altGr)
-        stage(leader, KEYCODE_Q, leftAlt)
-        assertEquals(listOf("copy"), calls)
-        assertEquals(listOf("text:@"), sink.sent)
-
         // The US layout has nothing under Right Alt, so Right Alt+Q is Alt+Q there and the remap fires, as it did.
         ShadowKeyLayout.layout = KeyLayout.US
         calls.clear(); sink.sent.clear()
@@ -305,6 +292,37 @@ class TerminalInputAltGrTest {
         stage(table, KEYCODE_C, altGr) // ç under either Alt is no third level: Alt+C, nobody's, the terminal's Meta+c
         assertEquals(listOf("copy"), calls)
         assertEquals(listOf("chord:Alt+c"), sink.sent)
+    }
+
+    @Test
+    fun `a Right Ctrl Leader engaged, held or tapped, makes AltGr+Q Leader Alt+Q either way, swallowed when nobody's and firing a remap onto it, and the layout keeps its @ once the Leader is let go`() {
+        // Copy on Alt+Q: the Leader's chord is not it. Held, the state carries the Leader's Ctrl; tapped, the arm; either way
+        // the key is the Leader's before it is the layout's, nobody's here and swallowed, and the terminal hears none of it.
+        val onAlt = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, ctrlWHintSeen = true).withRemap(ChordAction.COPY, ChordKey("Q", alt = true)))
+        stage(onAlt, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(onAlt, KEYCODE_Q, rightCtrl or altGr) // held: Leader Alt+Q
+        stage(onAlt, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(onAlt, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(onAlt, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(onAlt, KEYCODE_Q, altGr) // tapped: Leader Alt+Q, and the arm is spent on it
+        stage(onAlt, KEYCODE_Q, altGr) // the Leader let go: the layout's @
+        stage(onAlt, KEYCODE_Q, leftAlt) // Alt+Q, the remap
+        assertEquals(listOf("copy"), calls)
+        assertEquals(listOf("text:@"), sink.sent)
+
+        // Copy on Leader Alt+Q, the chord the sheet captures with the Leader held beside AltGr+Q: free to bind, and it fires tapped too.
+        calls.clear(); sink.sent.clear()
+        val leaderAltQ = ChordKey("Q", alt = true, leader = true)
+        assertEquals(null, ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER)).conflict(ChordAction.COPY, leaderAltQ))
+        val onLeader = ChordTable(HardwareKeyboardSettings(chordPrefix = ChordPrefix.LEADER, ctrlWHintSeen = true).withRemap(ChordAction.COPY, leaderAltQ))
+        stage(onLeader, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(onLeader, KEYCODE_Q, rightCtrl or altGr)
+        stage(onLeader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(onLeader, KEYCODE_CTRL_RIGHT, rightCtrl)
+        stage(onLeader, KEYCODE_CTRL_RIGHT, 0, ACTION_UP)
+        stage(onLeader, KEYCODE_Q, altGr)
+        assertEquals(listOf("copy", "copy"), calls)
+        assertEquals(emptyList<String>(), sink.sent)
     }
 
     @Test
