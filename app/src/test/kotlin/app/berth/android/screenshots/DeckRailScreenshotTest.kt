@@ -48,9 +48,7 @@ import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
-import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
-import app.berth.domain.model.DeckLayout
 import app.berth.domain.model.DeckSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
@@ -233,7 +231,6 @@ class DeckRailScreenshotTest {
         StageFixture.seed(graph)
         graph.sessions.setActive("s-homelab")
         graph.settings.deckGestures.value = DeckSettings(swipeDown = true)
-        runBlocking { graph.settings.setDeckLayout(layoutWithTertiaries()) }
         val live = StageFixture.liveHomelab()
         var opens = 0
         themed {
@@ -295,7 +292,6 @@ class DeckRailScreenshotTest {
     fun `live on a phone, the swipe down and the popover's chip land what the finger meant`() {
         assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
         graph.settings.deckGestures.value = DeckSettings(swipeDown = true)
-        runBlocking { graph.settings.setDeckLayout(layoutWithTertiaries()) }
         seedTestBox()
         compose.setContent { AppRoot(graph.viewModel) }
         val session = connectTestBox()
@@ -475,25 +471,6 @@ class DeckRailScreenshotTest {
 
     /** The Deck key labelled [label], on whichever row. */
     private fun key(label: String) = compose.onNode(hasTestTag(DeckKeyTag) and hasContentDescription(label))
-
-    /**
-     * The stock layout with a tertiary on three of Base's keys, the way a hand that turned swipe down
-     * on would bind them: Esc's `~` under its backtick, `-`'s `_` under its pipe, `/`'s `?` under its
-     * backslash.
-     */
-    private fun layoutWithTertiaries(): DeckLayout {
-        val stock = DeckLayout.default()
-        val base = stock.layers.first()
-        val keys = base.keys.map { key ->
-            when (key.label) {
-                "Esc" -> key.copy(down = DeckAction.Text("~"))
-                "-" -> key.copy(down = DeckAction.Text("_"))
-                "/" -> key.copy(down = DeckAction.Text("?"))
-                else -> key
-            }
-        }
-        return stock.copy(layers = listOf(base.copy(keys = keys)) + stock.layers.drop(1))
-    }
 
     private fun waitForText(text: String, timeout: Long = 5_000) {
         compose.waitUntil(timeout) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }

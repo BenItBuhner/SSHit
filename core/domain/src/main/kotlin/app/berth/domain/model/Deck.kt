@@ -193,18 +193,23 @@ data class DeckLayout(
 
         fun fromJson(text: String): DeckLayout = json.decodeFromString(serializer(), text)
 
-        /** The stock layout from the UX spec. */
+        /**
+         * The stock layout from the UX spec. Three of Base's keys carry a tertiary under their
+         * alternate (Esc's `~`, `-`'s `_`, `/`'s `?`), the shell's other half of each pair: silent
+         * until the swipe down is turned on (D2, off by default), and reached from the hold's
+         * popover either way, so the setting has something to do on a fresh install.
+         */
         fun default(): DeckLayout = DeckLayout(
             layers = listOf(
                 DeckLayer(
                     name = "Base",
                     keys = listOf(
-                        DeckKey(tap = DeckAction.Key(DeckKeyCode.ESC), up = DeckAction.Text("`")),
+                        DeckKey(tap = DeckAction.Key(DeckKeyCode.ESC), up = DeckAction.Text("`"), down = DeckAction.Text("~")),
                         DeckKey(tap = DeckAction.Key(DeckKeyCode.TAB), up = DeckAction.Combo("SHIFT TAB")),
                         DeckKey(tap = DeckAction.Modifier(DeckModifier.CTRL), up = DeckAction.Combo("CTRL c"), display = "Ctrl"),
                         DeckKey(tap = DeckAction.Modifier(DeckModifier.ALT), up = DeckAction.Combo("CTRL r"), display = "Alt"),
-                        DeckKey(tap = DeckAction.Text("-"), up = DeckAction.Text("|")),
-                        DeckKey(tap = DeckAction.Text("/"), up = DeckAction.Text("\\")),
+                        DeckKey(tap = DeckAction.Text("-"), up = DeckAction.Text("|"), down = DeckAction.Text("_")),
+                        DeckKey(tap = DeckAction.Text("/"), up = DeckAction.Text("\\"), down = DeckAction.Text("?")),
                         DeckKey(nub = true),
                     ),
                 ),

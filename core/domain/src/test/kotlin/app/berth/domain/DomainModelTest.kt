@@ -28,6 +28,8 @@ class DomainModelTest {
         val base = layout.layers[0]
         assertEquals(listOf("Esc", "Tab", "Ctrl", "Alt", "-", "/", "Nub"), base.keys.map { it.label })
         assertEquals(listOf("`", "S-Tab", "^C", "^R", "|", "\\", null), base.keys.map { it.secondaryLabel })
+        // The shell's other half of three pairs under the swipe down (D2), and nothing under the rest.
+        assertEquals(listOf("~", null, null, null, "_", "?", null), base.keys.map { it.tertiaryLabel })
         assertEquals("CTRL b", layout.layers[3].prefix)
 
         val json = layout.toJson()
