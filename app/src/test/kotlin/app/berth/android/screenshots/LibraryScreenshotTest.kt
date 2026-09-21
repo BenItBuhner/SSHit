@@ -12,10 +12,13 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
@@ -23,7 +26,10 @@ import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isOff
+import androidx.compose.ui.test.isOn
 import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -55,6 +61,7 @@ import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.prompts.PromptHost
+import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.rail.Drawer
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.tabs.GroupEditorSheet
@@ -746,9 +753,10 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("git.example.com").assertExists()
         compose.onNodeWithText("10.0.0.12:2222").assertExists()
         compose.onNode(hasText("matched by hash", substring = true)).assertExists()
-        compose.onNode(hasText("trusted already", substring = true)).assertExists()
-        compose.onNodeWithContentDescription("Will not import").assertExists()
-        compose.onAllNodesWithContentDescription("Will import").assertCountEquals(3)
+        // Each row is a checkbox to a reader (`checked, git.example.com`): the trusted one off, the three new ones on.
+        compose.onNode(hasText("trusted already", substring = true) and isToggleable()).assertIsOff()
+        compose.onAllNodes(isToggleable() and isOff()).assertCountEquals(1)
+        compose.onAllNodes(isToggleable() and isOn()).assertCountEquals(3)
         compose.onNodeWithText("1 hashed name matches no saved host and is left out; save the host first, then import again.").assertExists()
         compose.onNodeWithText("Line 7: a certificate authority, not a host key.\nLine 8: a wildcard pattern \u201C*.example.org\u201D.").assertExists()
         compose.onNodeWithText("Import 3 keys").performScrollTo()
@@ -765,6 +773,76 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertEquals(listOf("ssh-ed25519", "ssh-rsa"), keys.filter { it.host == "203.0.113.10" }.map { it.keyType }.sorted())
         assertEquals(trusted, keys.first { it.id == trusted.id })
         assertEquals(SshKeys.fingerprintSha256(prodRsa), keys.first { it.keyType == "ssh-rsa" }.fingerprintSha256)
+    }
+
+    /**
+     * A file that carries a different key of a type Berth already trusts for an address is the
+     * changed-key case (C13) in a file: the row starts unticked with the saved key and its date
+     * under it in the danger tint, the button counts it apart once ticked, and the import then
+     * replaces the saved key rather than adding a second beside it. An address with a pinned key
+     * takes no other key: its row is read, says where the pin is undone, and is not offered.
+     */
+    @Test
+    fun `known_hosts import holds a conflicting key unticked and a pinned endpoint's key back`() {
+        seedLibrary()
+        val rotated = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val nasPinned = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val nasOther = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val fresh = SshKeys.generate(KeyAlgorithm.ED25519).public
+        val trusted = graph.knownHosts.items.value.first { it.host == "203.0.113.10" }
+        val pin = KnownHostKey("kh-nas", "10.0.0.12", 2222, "ssh-ed25519", SshKeys.openSshPublic(nasPinned).split(" ")[1], SshKeys.fingerprintSha256(nasPinned), now - TimeUnit.DAYS.toMillis(30), now - TimeUnit.DAYS.toMillis(1), pinned = true)
+        runBlocking { graph.knownHosts.upsert(pin) }
+        themed { KnownHostsScreen(graph.viewModel, onBack = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("203.0.113.10", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Import known_hosts")
+        compose.onNodeWithText("Import known_hosts").performClick()
+        waitForText("Import known hosts")
+
+        // A rotated key for prod-api (conflicting), another key for the pinned NAS (held back), a new host's key (plainly new).
+        sheetField.performTextInput(
+            listOf(
+                "203.0.113.10 ${SshKeys.openSshPublic(rotated)}",
+                "[10.0.0.12]:2222 ${SshKeys.openSshPublic(nasOther)}",
+                "git.example.com ${SshKeys.openSshPublic(fresh)}",
+            ).joinToString("\n"),
+        )
+        waitForText("Import 1 key")
+        compose.onNodeWithText("3 keys".uppercase()).assertExists()
+        // The conflicting row: a checkbox, off, the saved key's fingerprint and date under it; the pinned one is no checkbox at all.
+        fun start(fingerprint: String) = "SHA256:" + fingerprint.removePrefix("SHA256:").take(4)
+        val conflict = compose.onNode(hasText("Differs from the saved ED25519 key ${start(trusted.fingerprintSha256)}", substring = true) and isToggleable())
+        conflict.assertIsOff()
+        conflict.assert(hasText("(trusted ${formatDate(trusted.firstSeenAt)}). Ticked, it replaces that key.", substring = true))
+        compose.onNode(hasText("Pinned to ED25519 ${start(pin.fingerprintSha256)}", substring = true)).assert(hasText("unpin it under Known hosts first.", substring = true))
+        compose.onNode(hasText("10.0.0.12:2222") and isToggleable()).assertDoesNotExist()
+        compose.onAllNodes(isToggleable()).assertCountEquals(2)
+        compose.onNode(hasText("git.example.com") and isToggleable()).assertIsOn()
+        compose.onNodeWithText("Import 1 key").performScrollTo()
+        compose.waitForIdle()
+        capture("import-known-hosts-conflict")
+        assertNoTextCut("the known_hosts import sheet with a conflicting and a pinned key")
+
+        // Ticking the conflict is the Replace decision, and the button says so before it is taken.
+        conflict.performClick()
+        waitForText("Import 1 key, replace 1")
+        conflict.assertIsOn()
+        compose.onNodeWithText("git.example.com").performClick()
+        waitForText("Replace 1 key")
+        compose.onNodeWithText("git.example.com").performClick()
+        waitForText("Import 1 key, replace 1")
+        capture("import-known-hosts-replace")
+        assertNoTextCut("the known_hosts import sheet with a conflict ticked")
+        compose.onNodeWithText("Import 1 key, replace 1").performClick()
+        waitForNoText("Import known hosts")
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.none { it.id == trusted.id } }
+        val keys = graph.knownHosts.items.value
+        // The saved prod-api key is gone and the rotated one stands alone for the address; the pin is untouched; git is new.
+        assertEquals(setOf("203.0.113.10" to 22, "10.0.0.12" to 2222, "git.example.com" to 22), keys.map { it.host to it.port }.toSet())
+        assertEquals(3, keys.size)
+        assertEquals(SshKeys.fingerprintSha256(rotated), keys.single { it.host == "203.0.113.10" }.fingerprintSha256)
+        assertEquals(pin, keys.single { it.host == "10.0.0.12" })
+        assertEquals(SshKeys.fingerprintSha256(fresh), keys.single { it.host == "git.example.com" }.fingerprintSha256)
     }
 
     /** Settings › Data has the same import as a row beside the config import's, opening the same sheet. */

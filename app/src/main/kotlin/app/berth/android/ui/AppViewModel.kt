@@ -570,28 +570,46 @@ class AppViewModel @Inject constructor(
     /**
      * A pasted or picked `known_hosts` read for import (spec A16): every line [KnownHostsFile]
      * reads, hashed names tried against the saved hosts' and the known hosts' addresses. Each entry
-     * is marked as already trusted when Berth has that very key for that address, so the sheet can
-     * start it unticked.
+     * comes with where it stands against what Berth already trusts for its address
+     * ([KnownHostsCandidate.Standing]), which is the decision the live policy makes when a server
+     * presents a key ([app.berth.android.session.KnownHostsPolicy]): the very key is already
+     * trusted; a different key of a type already trusted is the changed-key case, which the sheet
+     * starts unticked and takes as Replace; and an endpoint with a pinned key takes no key it does
+     * not already have, so the row is not offered.
      */
     suspend fun parseKnownHosts(text: String): KnownHostsImport {
         val saved = hostRepository.observeAll().first().map { it.address to it.port }
         val known = knownHostRepository.observeAll().first()
         val parsed = KnownHostsFile.parse(text, saved + known.map { it.host to it.port })
-        val trusted = known.map { Triple(it.host.lowercase(), it.port, it.publicKeyBase64) }.toSet()
+        val byEndpoint = known.groupBy { it.host.lowercase() to it.port }
         return KnownHostsImport(
-            parsed.entries.map { KnownHostsCandidate(it, existing = Triple(it.host.lowercase(), it.port, it.publicKeyBase64) in trusted) },
+            parsed.entries.map { entry -> KnownHostsCandidate(entry, standingOf(entry, byEndpoint[entry.host.lowercase() to entry.port].orEmpty())) },
             parsed.skipped,
             parsed.hashedUnresolved,
         )
     }
 
-    /** Saves [entries] as trusted keys, first seen now; one already held for its address is left as it is. Returns how many were added. */
-    suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): Int {
+    /**
+     * Saves [entries] as trusted keys, first seen now. One already held for its address is left as
+     * it is; one that differs from the saved key of its type replaces it, the way Replace on the
+     * changed-key sheet does (the saved key deleted, the new one saved), since a ticked conflict is
+     * that decision. A pinned endpoint takes nothing; the sheet does not offer those rows, and the
+     * import holds the line if one arrives. Returns how many keys were added and how many replaced.
+     */
+    suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): KnownHostsImported {
         var added = 0
+        var replaced = 0
         val now = System.currentTimeMillis()
         for (entry in entries) {
-            val present = knownHostRepository.find(entry.host, entry.port).any { it.publicKeyBase64 == entry.publicKeyBase64 }
-            if (present) continue
+            val here = knownHostRepository.find(entry.host, entry.port)
+            when (val standing = standingOf(entry, here)) {
+                KnownHostsCandidate.Standing.EXISTING, is KnownHostsCandidate.Standing.Pinned -> continue
+                is KnownHostsCandidate.Standing.Conflicting -> {
+                    knownHostRepository.delete(standing.saved.id)
+                    replaced++
+                }
+                KnownHostsCandidate.Standing.NEW -> added++
+            }
             knownHostRepository.upsert(
                 KnownHostKey(
                     id = UUID.randomUUID().toString(),
@@ -604,9 +622,18 @@ class AppViewModel @Inject constructor(
                     lastSeenAt = now,
                 ),
             )
-            added++
         }
-        return added
+        return KnownHostsImported(added, replaced)
+    }
+
+    /** Where [entry] stands against the keys Berth holds for its endpoint ([here]), as the live policy would judge the same key from the server. */
+    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostsCandidate.Standing {
+        if (here.any { it.publicKeyBase64 == entry.publicKeyBase64 }) return KnownHostsCandidate.Standing.EXISTING
+        val pinned = here.firstOrNull { it.pinned && it.keyType == entry.keyType } ?: here.firstOrNull { it.pinned }
+        if (pinned != null) return KnownHostsCandidate.Standing.Pinned(pinned)
+        val sameType = here.firstOrNull { it.keyType == entry.keyType }
+        if (sameType != null) return KnownHostsCandidate.Standing.Conflicting(sameType)
+        return KnownHostsCandidate.Standing.NEW
     }
 
     /**
@@ -972,12 +999,37 @@ class AppViewModel @Inject constructor(
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
 
 /** One `known_hosts` entry as the import sheet lists it; [existing] when Berth already trusts this key for this address. */
-data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val existing: Boolean) {
+data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: Standing) {
     val key: String get() = "${entry.host}:${entry.port}:${entry.publicKeyBase64}"
+
+    /** The very key is already trusted for the address: nothing to import, the row starts unticked and says so. */
+    val existing: Boolean get() = standing == Standing.EXISTING
+
+    /** A different key of a type already trusted for the address: ticking it is the Replace decision of the changed-key sheet. */
+    val conflicting: Boolean get() = standing is Standing.Conflicting
+
+    /** The address has a pinned key and this is not it: not offered, since a pin means no other key is taken. */
+    val pinned: Boolean get() = standing is Standing.Pinned
+
+    /** Whether the sheet ticks the row on arrival: only a key that is plainly new. */
+    val tickedByDefault: Boolean get() = standing == Standing.NEW
+
+    /** How the entry stands against what Berth holds for its endpoint; the live policy's three answers plus the plain new key. */
+    sealed interface Standing {
+        data object NEW : Standing
+        data object EXISTING : Standing
+        data class Conflicting(val saved: KnownHostKey) : Standing
+        data class Pinned(val saved: KnownHostKey) : Standing
+    }
 }
 
 /** A `known_hosts` text as read for the import sheet ([AppViewModel.parseKnownHosts]). */
 data class KnownHostsImport(val candidates: List<KnownHostsCandidate>, val skipped: List<KnownHostsFile.Skipped>, val hashedUnresolved: Int)
+
+/** What [AppViewModel.importKnownHosts] did: keys saved beside what was there, and keys that took a saved key's place. */
+data class KnownHostsImported(val added: Int, val replaced: Int) {
+    val total: Int get() = added + replaced
+}
 
 /** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {
