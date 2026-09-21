@@ -74,8 +74,12 @@ fun HostAltKeyPicker(vm: AppViewModel, hostId: String?, value: AltKeyMode?, onSe
     CyclePicker("Alt key", listOf<AltKeyMode?>(null) + AltKeyMode.entries, value, { hostAltKeyLabel(it, settings.altKey) }, caption = HOST_ALT_KEY_CAPTION, captionLines = 2, onSelect = onSelect)
 }
 
-/** Two lines beside the row's value; the Settings row carries the rest of the explanation. */
-private const val HOST_ALT_KEY_CAPTION = "A hardware keyboard\u2019s Alt on this host"
+/**
+ * Two lines beside the row's value, which is the widest of the editor's ("Inherit (escape prefix)")
+ * and leaves the caption less room than the clipboard row's has; the row sits in the host's editor,
+ * so "this host" is said by where it is, and the Settings row carries the rest of the explanation.
+ */
+private const val HOST_ALT_KEY_CAPTION = "For a hardware keyboard"
 
 fun altKeyLabel(mode: AltKeyMode): String = when (mode) {
     AltKeyMode.ESC_PREFIX -> "Escape prefix"

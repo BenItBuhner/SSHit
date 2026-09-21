@@ -50,6 +50,8 @@ import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -451,7 +453,8 @@ fun TunnelsPanelContent(vm: AppViewModel, host: Host, pending: @Composable () ->
         minHeight = 44.dp,
         onClick = { editor = TunnelEditorTarget(host.id, null) },
         titleColor = c.text2,
-        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Text("+", style = BerthType.title, color = c.text2) } },
+        // The glyph the Add jump host row wears, at the quiet row's tone: an icon, so no text runs past a 16 dp box at the font cap.
+        leading = { BerthIcon(BerthIcons.add, tint = c.text2, size = 16.dp) },
     )
     editor?.let { target -> TunnelEditorSheet(vm, hostId = target.hostId, existing = target.tunnel, onDismiss = { editor = null }) }
 }
