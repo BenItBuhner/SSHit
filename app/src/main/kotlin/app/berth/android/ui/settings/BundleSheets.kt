@@ -24,6 +24,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
@@ -32,20 +33,26 @@ import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
+import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.data.bundle.BundleException
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.BerthBundle
 import app.berth.domain.model.BundleFormatException
+import app.berth.domain.model.BundleImportOptions
+import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.Identity
 import app.berth.domain.model.RecreateNotice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.time.LocalDate
 
 /** A bundle file larger than this is not one Berth wrote; the sheet says so instead of reading it in. */
@@ -155,7 +162,7 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                 color = c.text3,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
-            if (hardware.isNotEmpty()) Text(hardwareStaysNote(hardware), style = BerthType.caption, color = c.attention, modifier = Modifier.padding(horizontal = 4.dp))
+            if (hardware.isNotEmpty()) Text(hardwareStaysNote(hardware), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
             BerthField(
                 passphrase,
                 { passphrase = it; failure = null },
@@ -201,6 +208,9 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var bundle by remember { mutableStateOf<BerthBundle?>(null) }
+    // What the import would do beyond writing records, read against this phone once the bundle is open.
+    var plan by remember { mutableStateOf<BundleImportPlan?>(null) }
+    var options by remember { mutableStateOf(BundleImportOptions()) }
     var report by remember { mutableStateOf<BundleImportReport?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -211,6 +221,7 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
             } else {
                 file = picked
                 bundle = null
+                plan = null
                 error = null
             }
         }
@@ -222,11 +233,17 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
         error = null
         scope.launch {
             try {
-                bundle = vm.openBundle(picked.bytes, passphrase.toCharArray())
+                val opened = vm.openBundle(picked.bytes, passphrase.toCharArray())
+                plan = vm.planBundle(opened)
+                options = BundleImportOptions()
+                bundle = opened
             } catch (e: BundleException) {
                 error = e.message
             } catch (e: BundleFormatException) {
                 error = e.message
+            } catch (e: OutOfMemoryError) {
+                // The codec turns its own allocation into a line; this is for anything past it, so the sheet stays up either way.
+                error = BundleException.TooCostly().message
             }
             busy = false
         }
@@ -236,7 +253,7 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
         val opened = bundle ?: return
         busy = true
         scope.launch {
-            val done = runCatching { vm.importBundle(opened) }.getOrElse { failure ->
+            val done = runCatching { vm.importBundle(opened, options) }.getOrElse { failure ->
                 error = failure.message ?: "Couldn't import the bundle."
                 busy = false
                 return@launch
@@ -274,9 +291,9 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                 }
                 opened != null -> {
                     SheetTitle("Import bundle", file?.let { "${it.name} \u00B7 made ${exportedOn(opened.exportedAt)}" })
-                    BundleContents(opened)
+                    BundleContents(opened, plan, options, onOptions = { options = it })
                     Text(
-                        "Anything already here with the same id is replaced by the bundle's copy; nothing here is removed.",
+                        IMPORT_DISCLOSURE,
                         style = BerthType.caption,
                         color = c.text3,
                         modifier = Modifier.padding(horizontal = 4.dp),
@@ -315,62 +332,106 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
     }
 }
 
-/** What an opened bundle holds, one row a kind, with the names where they fit in a caption. */
+/**
+ * What an opened bundle holds, one row a kind inside one panel (A1: grouped by the tonal step,
+ * not by boxes), with the names where they fit in a caption. The two things that are this phone's
+ * one copy, the Deck and the interface theme, are switches; what the import will not take as
+ * carried, a known host that differs from one this phone trusts and a tunnel that would listen on
+ * every interface, has its own row under the kind it belongs to once [plan] has been read.
+ */
 @Composable
-private fun BundleContents(bundle: BerthBundle) {
+private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options: BundleImportOptions, onOptions: (BundleImportOptions) -> Unit) {
     val c = Berth.colors
-    SectionLabel("In this bundle", Modifier.padding(start = 4.dp))
     if (bundle.isEmpty) {
+        SectionLabel("In this bundle", Modifier.padding(start = 4.dp))
         Text("Nothing: the phone it came from had no hosts, keys or settings of its own.", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
         return
     }
-    @Composable
-    fun row(count: Int, noun: String, names: List<String>) {
-        if (count == 0) return
-        ListRow(BundleImportReport.count(count, noun), subtitle = names.take(6).joinToString(", ") + if (names.size > 6) " and ${names.size - 6} more" else "", minHeight = 44.dp)
-    }
-    row(bundle.hosts.size, "host", bundle.hosts.map { it.name })
     val hardware = bundle.hardwareIdentities
     val software = bundle.identities.size - hardware.size
-    if (bundle.identities.isNotEmpty()) {
-        ListRow(
-            BundleImportReport.count(software, "key") + if (hardware.isNotEmpty()) " and ${BundleImportReport.count(hardware.size, "hardware key")} to make again" else "",
-            subtitle = bundle.identities.joinToString(", ") { it.identity.name },
-            minHeight = 44.dp,
-        )
+    Panel(label = "In this bundle") {
+        @Composable
+        fun row(title: String, names: List<String>) {
+            ListRow(title, subtitle = names.take(6).joinToString(", ") + if (names.size > 6) " and ${names.size - 6} more" else "", surface = Color.Transparent, minHeight = 44.dp)
+        }
+
+        @Composable
+        fun row(count: Int, noun: String, names: List<String>) {
+            if (count > 0) row(BundleImportReport.count(count, noun), names)
+        }
+        row(bundle.hosts.size, "host", bundle.hosts.map { it.name })
+        if (bundle.identities.isNotEmpty()) {
+            row(
+                BundleImportReport.count(software, "key") + if (hardware.isNotEmpty()) " and ${BundleImportReport.count(hardware.size, "hardware key")} to make again" else "",
+                bundle.identities.map { it.identity.name },
+            )
+        }
+        row(bundle.workspaces.size, "workspace", bundle.workspaces.map { it.name })
+        row(bundle.snippets.size, "snippet", bundle.snippets.map { it.name })
+        row(bundle.tunnels.size, "tunnel", bundle.tunnels.map { it.spec })
+        val everywhere = plan?.tunnelsOnEveryInterface.orEmpty()
+        if (everywhere.isNotEmpty()) row(tunnelsHeldOffLine(everywhere.size), everywhere.map { it.spec })
+        row(bundle.terminalThemes.size, "theme", bundle.terminalThemes.map { it.name })
+        bundle.deck?.let { deck ->
+            ToggleRow(
+                "The Deck",
+                checked = options.deck,
+                onCheckedChange = { onOptions(options.copy(deck = it)) },
+                caption = "Replaces this phone's Deck with " + deck.layers.joinToString(", ") { it.name },
+            )
+        }
+        if (bundle.interfaceTheme != null) {
+            ToggleRow(
+                "Interface theme",
+                checked = options.interfaceTheme,
+                onCheckedChange = { onOptions(options.copy(interfaceTheme = it)) },
+                caption = "Replaces this phone's look with the bundle's",
+            )
+        }
+        row(bundle.knownHosts.size, "known host", bundle.knownHosts.map { it.endpoint })
+        val kept = plan?.knownHostsKept.orEmpty()
+        if (kept.isNotEmpty()) row(knownHostsKeptLine(kept.size), kept.map { it.endpoint })
     }
-    row(bundle.workspaces.size, "workspace", bundle.workspaces.map { it.name })
-    row(bundle.snippets.size, "snippet", bundle.snippets.map { it.name })
-    row(bundle.tunnels.size, "tunnel", bundle.tunnels.map { it.spec })
-    row(bundle.terminalThemes.size, "theme", bundle.terminalThemes.map { it.name })
-    if (bundle.deck != null) ListRow("The Deck", subtitle = bundle.deck!!.layers.joinToString(", ") { it.name }, minHeight = 44.dp)
-    row(bundle.knownHosts.size, "known host", bundle.knownHosts.map { it.endpoint })
     if (hardware.isNotEmpty()) {
         val used = bundle.hosts.filter { host -> hardware.any { (host.auth as? AuthMethod.Key)?.identityId == it.id } }
         Text(
             recreateNote(hardware.map { it.name }, used.map { it.name }),
             style = BerthType.caption,
-            color = c.attention,
+            color = c.text2,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
     }
 }
 
-/** After the import: each key to make again and the hosts waiting on it, one row a key. */
+/** The line under the contents for what an import does to what is already here. */
+internal const val IMPORT_DISCLOSURE =
+    "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed."
+
+/** The row for bundled known hosts the import leaves as this phone has them. */
+internal fun knownHostsKeptLine(n: Int): String =
+    if (n == 1) "1 known host differs from yours and stays yours" else "$n known hosts differ from yours and stay yours"
+
+/** The row for bundled tunnels that would listen on every interface, imported switched off. */
+internal fun tunnelsHeldOffLine(n: Int): String =
+    if (n == 1) "1 tunnel listens on every interface; it stays off until you turn it on" else "$n tunnels listen on every interface; they stay off until you turn them on"
+
+/** After the import: each key to make again and the hosts waiting on it, one row a key, in one panel. */
 @Composable
 private fun RecreateList(notices: List<RecreateNotice>) {
     val c = Berth.colors
-    SectionLabel("Make again in Keys", Modifier.padding(start = 4.dp))
-    for (notice in notices) {
-        ListRow(
-            notice.identityName,
-            subtitle = notice.algorithm.displayName + " \u00B7 " + when (notice.hostNames.size) {
-                0 -> "no host used it"
-                1 -> "${notice.hostNames[0]} asks each time until you pick a key"
-                else -> notice.hostNames.joinToString(", ") + " ask each time until you pick a key"
-            },
-            minHeight = 44.dp,
-        )
+    Panel(label = "Make again in Keys") {
+        for (notice in notices) {
+            ListRow(
+                notice.identityName,
+                subtitle = notice.algorithm.displayName + " \u00B7 " + when (notice.hostNames.size) {
+                    0 -> "no host used it"
+                    1 -> "${notice.hostNames[0]} asks each time until you pick a key"
+                    else -> notice.hostNames.joinToString(", ") + " ask each time until you pick a key"
+                },
+                surface = Color.Transparent,
+                minHeight = 44.dp,
+            )
+        }
     }
     Text(
         "These were hardware-backed on the phone that made the bundle, and a hardware key never leaves its phone. Make a new key here, install it on each host, then pick it in the host's settings.",
@@ -409,14 +470,41 @@ private fun sizeLabel(bytes: Int): String = when {
 /** A picked bundle file: its bytes and the name the picker shows for it. */
 class PickedFile(val name: String, val bytes: ByteArray)
 
+/**
+ * The picked document, or null when it cannot be read or is larger than any bundle Berth wrote.
+ * The picker is `*∕*`, so the pick may be anything on the phone: the provider's own size refuses
+ * a wrong one before a byte is read where the provider gives a size, and the read itself stops at
+ * the limit where it does not, so no pick is ever held whole in memory to be measured.
+ */
 private suspend fun readBundleFile(context: Context, uri: Uri): PickedFile? = withContext(Dispatchers.IO) {
     runCatching {
+        val declared = documentSize(context, uri)
+        if (declared != null && declared > MAX_BUNDLE_BYTES) return@runCatching null
         context.contentResolver.openInputStream(uri)?.use { input ->
-            val bytes = input.readBytes()
-            if (bytes.size > MAX_BUNDLE_BYTES) null else PickedFile(documentName(context, uri) ?: "bundle.${BerthBundle.EXTENSION}", bytes)
+            readAtMost(input, MAX_BUNDLE_BYTES)?.let { bytes -> PickedFile(documentName(context, uri) ?: "bundle.${BerthBundle.EXTENSION}", bytes) }
         }
     }.getOrNull()
 }
+
+/** Up to [limit] bytes of [input], or null as soon as the stream proves to hold more than that. */
+internal fun readAtMost(input: InputStream, limit: Int): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(64 * 1024)
+    while (true) {
+        val n = input.read(buffer)
+        if (n < 0) return out.toByteArray()
+        if (out.size() + n > limit) return null
+        out.write(buffer, 0, n)
+    }
+}
+
+/** The size the provider declares for [uri], or null when it declares none. */
+private fun documentSize(context: Context, uri: Uri): Long? = runCatching {
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+        val column = cursor.getColumnIndex(OpenableColumns.SIZE)
+        if (column >= 0 && cursor.moveToFirst() && !cursor.isNull(column)) cursor.getLong(column) else null
+    }
+}.getOrNull()
 
 /** The display name the provider gives [uri], or its last path segment. */
 private fun documentName(context: Context, uri: Uri): String? = runCatching {

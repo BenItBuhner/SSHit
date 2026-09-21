@@ -25,10 +25,13 @@ import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.settings.ExportBundleSheet
+import app.berth.android.ui.settings.IMPORT_DISCLOSURE
 import app.berth.android.ui.settings.ImportBundleSheet
 import app.berth.android.ui.settings.MIN_BUNDLE_PASSPHRASE
 import app.berth.android.ui.settings.PickedFile
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.settings.knownHostsKeptLine
+import app.berth.android.ui.settings.tunnelsHeldOffLine
 import app.berth.android.ui.stage.CommandHistorySheet
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.data.bundle.BerthBundles
@@ -259,12 +262,16 @@ class PersistenceScreenshotTest {
     /**
      * Another phone's storage seals a bundle with a software key, a hardware key and the hosts on
      * them; this phone opens it. The wrong passphrase is told apart from a bad file; the opened
-     * sheet lists what is inside and names the key that did not travel and the host waiting on it;
-     * the import writes every table, leaves that host asking each time, and ends on the list of
-     * keys to make again, which stays until Done.
+     * sheet lists what is inside in one panel and names the key that did not travel and the host
+     * waiting on it, the known host that differs from the one this phone trusts for the same
+     * address and stays this phone's, the tunnel that would listen on every interface and comes in
+     * switched off, and the Deck and the interface theme as switches; the import writes every
+     * table as the sheet said, leaves that host asking each time, and ends on the list of keys to
+     * make again, which stays until Done.
      */
     private fun importSheet(name: String) {
         seedThisPhone()
+        val pinnedBefore = runBlocking { graph.knownHosts.items.value.first { it.id == "kh-1" } }
         val blob = runBlocking { sealedByAnotherPhone() }
         themed {
             SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
@@ -281,14 +288,22 @@ class PersistenceScreenshotTest {
         waitForText("IN THIS BUNDLE")
         waitForText("3 hosts")
         waitForText("1 key and 1 hardware key to make again")
+        waitForText("3 tunnels")
+        waitForText(tunnelsHeldOffLine(1))
+        waitForText("Replaces this phone's Deck with ", substring = true)
+        waitForText("Replaces this phone's look with the bundle's")
+        waitForText("1 known host")
+        waitForText(knownHostsKeptLine(1))
         waitForText("Phone key was hardware-backed on the other phone and is not in the file; db-primary will ask each time until you make a key here and pick it.")
+        waitForText(IMPORT_DISCLOSURE)
         capture("$name-contents")
         compose.assertNoTextCut("the opened bundle")
 
         // At the cap the opened list runs past the fold; the button is reached the way a thumb reaches it.
         compose.onNodeWithText("Import").performScrollTo().performClick()
         waitForText("MAKE AGAIN IN KEYS")
-        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 2 tunnels, 1 theme, 1 known host and the Deck.")
+        // No known host in the line: the one the bundle carried differed from this phone's and was not taken.
+        waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme and the Deck.")
         waitForText("db-primary asks each time until you pick a key", substring = true)
         capture("$name-recreate")
         compose.assertNoTextCut("the import's report")
@@ -303,8 +318,15 @@ class PersistenceScreenshotTest {
             assertTrue("the hardware key was not written", graph.identities.items.value.none { it.id == "id-phone-other" })
             assertTrue(graph.workspaces.items.value.any { it.id == "w-work-other" })
             assertEquals(setOf("s-disk", "s-tail"), graph.snippets.items.value.map { it.id }.filter { it.startsWith("s-") }.toSet())
-            assertTrue(graph.tunnels.items.value.any { it.id == "t-socks" })
-            assertTrue(graph.knownHosts.items.value.any { it.id == "k-web" })
+            val tunnels = graph.tunnels.items.value.associateBy { it.id }
+            assertTrue(tunnels.containsKey("t-socks"))
+            assertEquals("the tunnel on every interface came in switched off", false, tunnels.getValue("t-open").enabled)
+            assertEquals("the tunnel's bind is as the bundle had it", "*", tunnels.getValue("t-open").bindAddress)
+            // The bundle's key for 203.0.113.10 differed from the one this phone trusts: the pin stands, the bundle's is nowhere.
+            val knownHosts = graph.knownHosts.items.value
+            assertTrue("the bundle's known host was not written", knownHosts.none { it.id == "k-web" })
+            assertEquals("this phone's pin is as it was", pinnedBefore, knownHosts.first { it.id == "kh-1" })
+            assertEquals(1, knownHosts.count { it.endpoint == pinnedBefore.endpoint && it.keyType == pinnedBefore.keyType })
             assertTrue(graph.settings.terminalThemes.first().any { it.id == "mine" && !it.builtIn })
         }
     }
@@ -341,8 +363,9 @@ class PersistenceScreenshotTest {
     /**
      * Another phone's storage, filled and sealed: a software key with its private half, a hardware
      * key without one, three hosts (one on each key, one on a password), a workspace, two snippets,
-     * two tunnels, a known host, a theme of its own and the Deck. A light key derivation keeps the
-     * test quick; the container is the same.
+     * three tunnels (one bound to every interface), a known host for an address this phone pins
+     * under a different key, a theme of its own and the Deck. A light key derivation keeps the test
+     * quick; the container is the same.
      */
     private suspend fun sealedByAnotherPhone(): ByteArray {
         val other = TestStorage()
@@ -365,6 +388,8 @@ class PersistenceScreenshotTest {
         other.snippets.upsert(Snippet("s-tail", "tail", "tail -f {{file}}", hostId = "h-web", workspaceId = "w-work-other", pinnedToDeck = true))
         other.tunnels.upsert(Tunnel("t-web", "h-web", TunnelType.LOCAL, bindPort = 8080, destinationHost = "localhost", destinationPort = 80))
         other.tunnels.upsert(Tunnel("t-socks", "h-db", TunnelType.DYNAMIC, bindPort = 1080, enabled = false))
+        // Bound to every interface on the other phone: this phone takes it switched off.
+        other.tunnels.upsert(Tunnel("t-open", "h-nas", TunnelType.LOCAL, bindAddress = "*", bindPort = 9090, destinationHost = "localhost", destinationPort = 9090))
         other.knownHosts.upsert(KnownHostKey("k-web", "203.0.113.10", 22, "ssh-ed25519", SshKeys.openSshPublic(ed.public).split(" ")[1], SshKeys.fingerprintSha256(ed.public), 7, 8, pinned = true))
         other.settings.upsertTerminalTheme(TerminalTheme.BERTH_LIGHT.copy(id = "mine", name = "Mine", builtIn = false))
         other.settings.setDefaultTerminalTheme("mine")
