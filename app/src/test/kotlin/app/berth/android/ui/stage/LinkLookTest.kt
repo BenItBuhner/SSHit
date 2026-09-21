@@ -12,8 +12,9 @@ import org.junit.Test
  * and says what; which shown texts claim an address (a scheme, `www.`, a bare host that is neither
  * a file name nor a segment of the link's own path) and which do not (a directory listing's every
  * entry, a version tag, a decimal, `Node.js`, `PR #12`); the equivalences that make a text the
- * address itself; the dressed links the rule exists for, with their captions; and the path a
- * `file://` link hands to Copy path and Paste path, decoded and quoted for the shell.
+ * address itself; the dressed links the rule exists for, with their captions, the backslash a
+ * browser reads as a slash among them; and the path a `file://` link hands to Copy path and
+ * Paste path, decoded and quoted for the shell.
  */
 class LinkLookTest {
     private fun look(url: String, text: String) = LinkLook.of(LinkTap(url, text))
@@ -97,6 +98,22 @@ class LinkLookTest {
         assertWarns("https://evil.example/", "bank.co.uk/login", "Shown as \u201Cbank.co.uk/login\u201D, but goes to evil.example")
         // The caption keeps the text's own case: what the user saw, not a lowercased host.
         assertWarns("https://evil.example/", "GitHub.com", "Shown as \u201CGitHub.com\u201D, but goes to evil.example")
+    }
+
+    @Test
+    fun `a backslash is a slash in a web or file address, as the browser that opens it reads it`() {
+        // Chrome and Android's Uri end the authority at the backslash: this goes to evil.example, `/@google.com/` its path.
+        assertWarns("https://evil.example\\@google.com/", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to evil.example")
+        assertEquals("evil.example", LinkLook.hostOf("https://evil.example\\@google.com/"))
+        assertPlain("https://evil.example\\@google.com/", "https://evil.example\\@google.com/", "Goes to evil.example")
+        // The same reading clears a false alarm: this goes to google.com, the rest is its path.
+        assertPlain("https://google.com\\.evil.example/", "google.com", "Shown as \u201Cgoogle.com\u201D, goes to google.com")
+        // Backslashes for the scheme's own slashes still name the host, and a text drawn the same way is the address itself.
+        assertPlain("https:\\\\evil.example/", "click here", "Shown as \u201Cclick here\u201D, goes to evil.example")
+        assertPlain("https:\\\\evil.example/", "https:\\\\evil.example/", "Goes to evil.example")
+        // In a file address a raw backslash is a separator too, while an encoded one is a character of the name.
+        assertEquals("A file on homelab: /home/ben/notes.txt", look("file://homelab/home\\ben\\notes.txt", "notes.txt").caption)
+        assertEquals("/home/ben/back\\slash.txt", look("file://homelab/home/ben/back%5Cslash.txt", "back\\slash.txt").path)
     }
 
     @Test

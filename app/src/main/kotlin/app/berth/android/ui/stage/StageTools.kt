@@ -657,8 +657,11 @@ fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, ha
  * the link's own path, since a text that appears in the address is the address naming itself
  * (a directory listing's every entry). Version numbers and decimals end in digits and claim
  * nothing. The query is not exempt: `?r=google.com` is how a redirect dresses up. For a `file://`
- * link [path] is the file's path, percent-decoded. Pure, so the rule is tested on its own
- * ([LinkLookTest][app.berth.android.ui.stage.LinkLookTest]).
+ * link [path] is the file's path, percent-decoded. An `http`, `https` or `file` address is read
+ * the way the browser and Android's `Uri` that will open it read it, a `\` as a `/`, so its
+ * authority ends at the first of either and `https://evil.example\@google.com/` goes to
+ * evil.example, not to the host after the `@`; the sheet shows and opens the URL as it is. Pure,
+ * so the rule is tested on its own ([LinkLookTest][app.berth.android.ui.stage.LinkLookTest]).
  */
 class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, val path: String? = null) {
     enum class Posture {
@@ -677,6 +680,13 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#].*)?$""")
         private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
         private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
+
+        /**
+         * The schemes whose addresses a WHATWG parser, Chrome and Android's `Uri` among them, reads
+         * with `\` as `/`: the special schemes the sheet parses a host from. The parsers that read
+         * `https://evil.example\@google.com/` as google.com's are the ones that will never open it.
+         */
+        private val SLASH_SCHEMES = setOf("http", "https", "file")
 
         /** What a terminal prints as file names all day: a bare word ending in one of these is a name, not a host. */
         private val FILE_EXTENSIONS = setOf(
@@ -740,8 +750,19 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
             return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, path = path)
         }
 
-        /** The host of an address with a scheme and an authority, lowercased; null for one without (`mailto:`, a bare word). */
-        fun hostOf(url: String): String? = SCHEME_HOST.find(url.trim())?.groupValues?.get(1)?.lowercase()
+        /**
+         * The host of an address with a scheme and an authority, lowercased, as the parser that opens
+         * it would read it ([asRead]); null for one without (`mailto:`, a bare word).
+         */
+        fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.lowercase()
+
+        /**
+         * [url] as the parser that will open it reads it: in the [SLASH_SCHEMES] every `\` is a `/`,
+         * so the authority ends at the first of either. For reading only; the sheet's panel and
+         * `Uri.parse` get the URL as it is, since that is what is opened.
+         */
+        private fun asRead(url: String): String =
+            if (url.indexOf('\\') >= 0 && url.substringBefore(':', "").lowercase() in SLASH_SCHEMES) url.replace('\\', '/') else url
 
         /**
          * The host a shown [text] claims to be, or null when it claims none: the host of an address
@@ -790,12 +811,13 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
 
         private fun isHex(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
 
-        /** What follows `scheme://authority`: the path with its query and fragment, or nothing for an address with no path. */
+        /** What follows `scheme://authority`, read as [asRead]: the path with its query and fragment, or nothing for an address with no path. */
         private fun afterAuthority(url: String): String {
-            val start = url.indexOf("://")
+            val read = asRead(url)
+            val start = read.indexOf("://")
             if (start < 0) return ""
-            val slash = url.indexOf('/', start + 3)
-            return if (slash < 0) "" else url.substring(slash)
+            val slash = read.indexOf('/', start + 3)
+            return if (slash < 0) "" else read.substring(slash)
         }
 
         /** The path's segments, lowercased, empty ones dropped. */
@@ -812,9 +834,9 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
             return if (user.isEmpty()) hostPort else "$user@$hostPort"
         }
 
-        /** The text is the address itself, give or take the scheme, `www.` and a closing slash. */
+        /** The text is the address itself, give or take the scheme, `www.`, a closing slash and how its slashes are drawn ([asRead]). */
         private fun sameAddress(text: String, url: String): Boolean {
-            fun norm(s: String) = s.trim().lowercase().replace(SCHEME_PREFIX, "").removePrefix("www.").trimEnd('/')
+            fun norm(s: String) = asRead(s.trim()).lowercase().replace(SCHEME_PREFIX, "").removePrefix("www.").trimEnd('/')
             return norm(text) == norm(url)
         }
 
