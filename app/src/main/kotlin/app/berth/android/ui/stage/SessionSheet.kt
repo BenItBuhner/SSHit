@@ -2,11 +2,16 @@ package app.berth.android.ui.stage
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -40,7 +45,7 @@ import app.berth.domain.model.SessionState
  * host's Files tab, opened or brought on stage) and Snippets; a Files tab offers Connect or
  * Reconnect for the terminal it rides and Terminal to go there.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SessionSheet(
     vm: AppViewModel,
@@ -62,18 +67,25 @@ fun SessionSheet(
     val others by vm.workspaceTabs.collectAsState()
     val tunnels by vm.tunnels.collectAsState()
     val tunnelStatuses by vm.tunnelStatuses.collectAsState()
+    val savedHosts by vm.hosts.collectAsState()
     val now = ageTicker()
     val host = record.hostSnapshot
+    // A Quick connect tab's host is nobody's in the library (spec C11): the sheet offers to save it rather than to edit what is not there.
+    val hostSaved = savedHosts.any { it.id == record.hostId }
     val hostTunnels = record.hostId?.let { id -> tunnels.filter { it.hostId == id } } ?: emptyList()
     val up = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Up }
     val failed = hostTunnels.count { tunnelStatuses[it.id] is TunnelStatus.Failed }
     var snippets by remember { mutableStateOf(false) }
     var history by remember { mutableStateOf(false) }
 
-    BerthSheet(onDismiss = onDismiss) {
+    // The sheet opens whole, as the prompts do, rather than at half the window with its second row of
+    // pills below the fold at the interface cap; and the column scrolls, for a window shorter than the
+    // facts and the pills at that size (a half-open sheet without a scroll would lay them out unreached).
+    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -115,31 +127,37 @@ fun SessionSheet(
                     )
                 }
             }
-            // Two deliberate rows (C6): the tab's own actions, then the host's and the exit.
+            // Two deliberate rows (C6): the tab's own actions, then the host's and the exit. The pills are
+            // the spec's, each at its label's width and wrapping onto another line where the width runs
+            // out (four of them at the interface cap); a pill given a share of the row instead cut its label.
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (session != null) {
-                        if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                        else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() }, modifier = Modifier.weight(1f))
-                        BerthButton("Files", onClick = { onOpenFiles(session.id); onDismiss() }, modifier = Modifier.weight(1f))
+                        if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() })
+                        else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() })
+                        BerthButton("Files", onClick = { onOpenFiles(session.id); onDismiss() })
                         if (record.state == SessionState.LIVE) {
-                            BerthButton("Snippets", onClick = { snippets = true }, modifier = Modifier.weight(1f))
+                            BerthButton("Snippets", onClick = { snippets = true })
                         }
-                        BerthButton("History", onClick = { history = true }, modifier = Modifier.weight(1f))
+                        BerthButton("History", onClick = { history = true })
                     } else if (filesTab != null) {
                         when {
-                            ride == null -> BerthButton("Connect", kind = ButtonKind.PRIMARY, onClick = { vm.connectFor(filesTab); onDismiss() }, modifier = Modifier.weight(1f))
-                            !record.state.isActive -> BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
+                            ride == null -> BerthButton("Connect", kind = ButtonKind.PRIMARY, onClick = { vm.connectFor(filesTab); onDismiss() })
+                            !record.state.isActive -> BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(tab.id); onDismiss() })
                         }
-                        BerthButton("Terminal", onClick = { onOpenTerminal(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
+                        BerthButton("Terminal", onClick = { onOpenTerminal(tab.id); onDismiss() })
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     record.hostId?.let { hostId ->
-                        BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() }, modifier = Modifier.weight(1f))
-                        BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() }, modifier = Modifier.weight(1f))
+                        if (hostSaved) {
+                            BerthButton(if (up > 0) "Tunnels $up" else "Tunnels", onClick = { onOpenTunnels(hostId); onDismiss() })
+                            BerthButton("Host", onClick = { onEditHost(hostId); onDismiss() })
+                        } else {
+                            BerthButton("Save as host", onClick = { vm.saveSnapshotAsHost(host) { saved -> onEditHost(saved.id) }; onDismiss() })
+                        }
                     }
-                    BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() }, modifier = Modifier.weight(1f))
+                    BerthButton("Close", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.close(tab.id); onDismiss() })
                 }
             }
             val rest = others.filter { it.id != tab.id }

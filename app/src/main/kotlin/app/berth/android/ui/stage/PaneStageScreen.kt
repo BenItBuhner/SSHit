@@ -146,6 +146,7 @@ fun PaneStageScreen(
     onEditHost: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenDeckEditor: () -> Unit = {},
+    onGroups: () -> Unit = {},
 ) {
     val active by vm.activeTab.collectAsState()
     val panes by vm.panes.collectAsState()
@@ -231,6 +232,7 @@ fun PaneStageScreen(
             tools = activeTools,
             onSplit = onSplit,
             onUnsplit = onUnsplit,
+            onGroups = onGroups,
             focus = focus,
             layer = { tab, body ->
                 val two = panes

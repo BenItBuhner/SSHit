@@ -47,14 +47,15 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.HoldButton
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.Host
 import app.berth.ssh.FingerprintCheck
+import app.berth.ssh.Randomart
 import app.berth.ssh.SshKeys
 
 /**
@@ -138,10 +139,10 @@ internal fun HostLine(host: Host) {
             NameAndEndpoint(
                 name = { Text(host.name, style = BerthType.body, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 separator = { Text(" \u00B7 ", style = BerthType.body, color = c.text3) },
-                endpoint = { Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                endpoint = { Text(endpoint, style = BerthType.monoBody, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         } else {
-            Text(endpoint, style = BerthType.body.copy(fontFamily = JetBrainsMono), color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(endpoint, style = BerthType.monoBody, color = c.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -223,6 +224,10 @@ private fun KeyInvalidatedSheet(p: Prompt.KeyInvalidated) {
  * fingerprint; a mismatch leads the sheet in danger, said once in the caption, with the offered
  * key and the link's fingerprint as two labelled rows of one size (C13's `SAVED` / `OFFERED`
  * treatment, never a box beside a row) and no primary action, the way the changed-key sheet has none.
+ * Under the fingerprint, C13's two ways of checking it that need no one else: the key's randomart
+ * behind `Show visual fingerprint`, to hold next to what the server prints at login, and under
+ * COMPARE ON THE SERVER the `ssh-keygen -lf` command that prints this key type's fingerprint
+ * there, with a copy.
  */
 @Composable
 private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
@@ -230,6 +235,7 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
     val link = p.link
     val mismatched = link?.takeIf { it.check == FingerprintCheck.MISMATCH }
     val mismatch = mismatched != null
+    val art = remember(p.request.fingerprintSha256) { Randomart.of(p.request.publicKey) }
     PromptSheet(onDismiss = p::cancel) {
         if (mismatch) {
             SheetTitle(
@@ -247,8 +253,10 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
         if (mismatched != null) {
             Fingerprint(p.request.keyType, p.request.fingerprintSha256, label = "Offered")
             LinkFingerprintRow(mismatched)
+            VisualFingerprint(art, label = "offered")
         } else {
             Fingerprint(p.request.keyType, p.request.fingerprintSha256, boxed = true)
+            VisualFingerprint(art)
             if (link != null) {
                 when (link.check) {
                     FingerprintCheck.MATCH -> Text("The link that opened this connection carried the same fingerprint as this key's.", style = BerthType.body, color = c.text2)
@@ -264,6 +272,7 @@ private fun TrustHostKeySheet(p: Prompt.TrustHostKey) {
                 color = c.text2,
             )
         }
+        CopyableLine("Compare on the server", SshKeys.serverFingerprintCommand(p.request.keyType))
         if (mismatch) {
             Text("Either the link or the server is not what it says it is. Do not trust this key on the link's word; check the fingerprint with the server's administrator.", style = BerthType.body, color = c.text2)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -358,7 +367,8 @@ private fun HostKeyChangedSheet(p: Prompt.HostKeyChanged) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             BerthButton("Disconnect", onClick = { p.decide(HostKeyChangedDecision.DISCONNECT) }, kind = ButtonKind.SECONDARY, modifier = Modifier.fillMaxWidth())
             BerthButton("Connect once without saving", onClick = { p.decide(HostKeyChangedDecision.TRUST_ONCE) }, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
-            BerthButton("Replace the saved key", onClick = { p.decide(HostKeyChangedDecision.REPLACE_SAVED) }, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            // C13's `Replace saved key — hold to confirm`: the one answer that rewrites what Berth trusts is held, not tapped.
+            HoldButton("Replace saved key \u2014 hold to confirm", onConfirm = { p.decide(HostKeyChangedDecision.REPLACE_SAVED) }, modifier = Modifier.fillMaxWidth())
         }
     }
 }

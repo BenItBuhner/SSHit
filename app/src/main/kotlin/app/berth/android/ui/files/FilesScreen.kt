@@ -44,7 +44,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -98,6 +97,7 @@ import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.Chip
 import app.berth.android.ui.components.EmptyState
@@ -448,7 +448,7 @@ fun FilesPane(
             Box {
                 // Named for the folder it acts on, apart from a host's own overflow, the plain "More".
                 IconAction(onClick = { menu = true }, description = "Folder options") { BerthIcon(BerthIcons.moreVert) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                BerthMenu(expanded = menu, onDismiss = { menu = false }) {
                     folderRows { menu = false }
                 }
             }

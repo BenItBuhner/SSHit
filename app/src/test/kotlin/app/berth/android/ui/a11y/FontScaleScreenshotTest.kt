@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -20,10 +21,12 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -209,6 +212,55 @@ class FontScaleScreenshotTest {
     }
 
     /**
+     * A menu is a window of its own, and the Compose view in it provides the density afresh from
+     * its Context, uncapped: a raw `DropdownMenu` set its rows at the system's 2× while the screen
+     * around it stopped at the cap (the review's probe of the library slice found fourteen). Every
+     * menu goes through `BerthMenu` now, which applies the cap again inside, and two of the fourteen
+     * are opened here at 2×: the Stage's overflow, then a tab's long-press menu. The density each
+     * row's text was laid out with is read off its layout, the interface's cap and not the system's.
+     */
+    @Test
+    fun `the Stage's overflow at 2x sets its rows at the cap, as the screen around it does`() {
+        stageWithLiveHomelab()
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Session")).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("the overflow's rows stop at the cap", MAX_INTERFACE_FONT_SCALE, scaleOf("Session"))
+        assertEquals("every row of the menu is laid out at one scale", MAX_INTERFACE_FONT_SCALE, scaleOf("Tabs"))
+        capture("stage-overflow-font-scale-2x")
+        compose.assertNoTextCut("the Stage's overflow at the interface's font cap", within = isPopup())
+    }
+
+    @Test
+    fun `a tab's long-press menu at 2x sets its rows at the cap`() {
+        stageWithLiveHomelab()
+        compose.onNode(hasContentDescription("pi-hole, detached", substring = true)).performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Close others")).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("the tab menu's rows stop at the cap", MAX_INTERFACE_FONT_SCALE, scaleOf("Close others"))
+        assertEquals("the row that leads to the groups page too", MAX_INTERFACE_FONT_SCALE, scaleOf("Move to group"))
+        capture("tab-menu-font-scale-2x")
+        compose.assertNoTextCut("a tab's long-press menu at the interface's font cap", within = isPopup())
+    }
+
+    /** The Stage over the seeded library with homelab's tab live, its strip reading three tabs open. */
+    private fun stageWithLiveHomelab() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, live, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Tabs, 3 open")).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    /** The font scale the text named [text] was laid out with: the density of its layout's input, which is the window's where nothing caps it. */
+    private fun scaleOf(text: String): Float {
+        val layout = compose.onNode(hasText(text), useUnmergedTree = true).fetchSemanticsNode().textLayout()
+        assertTrue("'$text' has a layout", layout != null)
+        return layout!!.layoutInput.density.fontScale
+    }
+
+    /**
      * The tallest of the prompt sheets at the cap: the changed-key sheet with a link's fingerprint as
      * its third row stands taller than the phone's window, so the sheet scrolls and its three answers
      * are laid out at a height and reached by scrolling, where an unscrolled column laid them out at
@@ -242,7 +294,7 @@ class FontScaleScreenshotTest {
         assertTextWhole("deploy@203.0.113.10")
         // As opened: the title, the host on two lines, the three fingerprints; then scrolled to the answers.
         capture("prompt-host-key-changed-font-scale-2x")
-        assertSheetButtonsReachable("Disconnect", "Connect once without saving", "Replace the saved key")
+        assertSheetButtonsReachable("Disconnect", "Connect once without saving", "Replace saved key \u2014 hold to confirm")
         capture("prompt-host-key-changed-font-scale-2x-scrolled")
         (graph.prompts.current.value as Prompt.HostKeyChanged).decide(HostKeyChangedDecision.DISCONNECT)
         compose.waitUntil(5_000) { graph.prompts.current.value == null }

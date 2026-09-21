@@ -55,6 +55,7 @@ import app.berth.domain.repository.WorkspaceRepository
 import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshConfigParseResult
+import app.berth.ssh.KnownHostsFile
 import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshLink
@@ -316,28 +317,61 @@ class AppViewModel @Inject constructor(
      * the trust sheet while the field still names the link's server.
      */
     fun quickConnect(spec: String, identityId: String?, workspaceId: String? = null, fromLink: LinkOutcome.QuickConnect? = null): String? {
-        val link = when (val result = SshLink.parse(spec)) {
-            is SshLink.Result.Malformed -> return result.reason
-            is SshLink.Result.Parsed -> result.link
-        }
-        if (!link.plain) return QUICK_CONNECT_IS_A_SHELL
+        val (link, problem) = quickLink(spec)
+        if (link == null) return problem
         // A fingerprint typed into the field counts as the link's would; one the link carried holds while the field still names its server.
         val linkFingerprint = link.fingerprint ?: fromLink?.fingerprintFor(link)
+        val host = quickHost(link, identityId, id = "quick-" + UUID.randomUUID().toString())
+        viewModelScope.launch { sessions.open(host, workspaceId, linkFingerprint = linkFingerprint) }
+        return null
+    }
+
+    /**
+     * Quick connect's Save as host (spec C11): the spec read as [quickConnect] reads it, saved as a
+     * host named after its address under an id of its own, with the identity the sheet picked;
+     * [onSaved] gets the saved host, for the editor to open on so it can be named. Null once saved;
+     * otherwise the sentence for the field's helper line, as [quickConnect] would give it.
+     */
+    fun saveQuickConnectAsHost(spec: String, identityId: String?, onSaved: (Host) -> Unit): String? {
+        val (link, problem) = quickLink(spec)
+        if (link == null) return problem
+        viewModelScope.launch { onSaved(saveHostNow(quickHost(link, identityId, id = UUID.randomUUID().toString()), null)) }
+        return null
+    }
+
+    /**
+     * The Session sheet's Save as host (spec C11) for a tab opened by Quick connect: the tab's host,
+     * as the login was made with it, saved under the id the tab already carries, so the tab is that
+     * host's from here on (its Host button, its reconnects, its place in the library). [onSaved] gets
+     * the host, for the editor to open on.
+     */
+    fun saveSnapshotAsHost(host: Host, onSaved: (Host) -> Unit = {}) {
+        viewModelScope.launch { onSaved(saveHostNow(host.copy(createdAt = System.currentTimeMillis()), null)) }
+    }
+
+    /** The link a Quick connect spec parses to, or the one sentence that stops it. */
+    private fun quickLink(spec: String): Pair<SshLink?, String?> {
+        val link = when (val result = SshLink.parse(spec)) {
+            is SshLink.Result.Malformed -> return null to result.reason
+            is SshLink.Result.Parsed -> result.link
+        }
+        if (!link.plain) return null to QUICK_CONNECT_IS_A_SHELL
+        return link to null
+    }
+
+    private fun quickHost(link: SshLink, identityId: String?, id: String): Host {
         val (user, address, port) = link.quickTarget()
-        val name = address
-        val host = Host(
-            id = "quick-" + UUID.randomUUID().toString(),
-            name = name,
-            color = SwatchColor.forName(name),
-            monogram = Host.monogramFor(name),
+        return Host(
+            id = id,
+            name = address,
+            color = SwatchColor.forName(address),
+            monogram = Host.monogramFor(address),
             address = address,
             port = port,
             user = user,
             auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
             createdAt = System.currentTimeMillis(),
         )
-        viewModelScope.launch { sessions.open(host, workspaceId, linkFingerprint = linkFingerprint) }
-        return null
     }
 
     fun setActive(id: String?) = sessions.setActive(id)
@@ -420,18 +454,35 @@ class AppViewModel @Inject constructor(
 
     fun setWorkspace(id: String) = sessions.setCurrentWorkspace(id)
 
-    /** Creates a group; with [switchTo] it becomes the target for the next new tab. Returns its id through [onCreated]. */
-    fun createWorkspace(name: String, switchTo: Boolean = true, color: SwatchColor? = null, onCreated: (Workspace) -> Unit = {}) {
+    /**
+     * Creates a group; with [switchTo] it becomes the target for the next new tab. A [monogram]
+     * typed in the editor (spec C8, "auto, editable") replaces the name's own; blank keeps it.
+     * Returns the group through [onCreated].
+     */
+    fun createWorkspace(name: String, switchTo: Boolean = true, color: SwatchColor? = null, monogram: String = "", onCreated: (Workspace) -> Unit = {}) {
         viewModelScope.launch {
-            val ws = sessions.createWorkspace(name, color ?: SwatchColor.forName(name))
+            var ws = sessions.createWorkspace(name, color ?: SwatchColor.forName(name))
+            if (monogram.isNotBlank() && monogram != ws.monogram) {
+                // Written through the repository from the group just returned: the manager's list may not carry it yet.
+                ws = ws.copy(monogram = monogram)
+                workspaceRepository.upsert(ws)
+            }
             if (switchTo) sessions.setCurrentWorkspace(ws.id)
             onCreated(ws)
         }
     }
 
-    fun renameWorkspace(id: String, name: String) = sessions.renameWorkspace(id, name)
+    /**
+     * The group editor's Done (spec C8): the name and the monogram in one write, so neither change
+     * overtakes the other; a blank [monogram] is the name's own (A8).
+     */
+    fun renameWorkspace(id: String, name: String, monogram: String = "") =
+        sessions.updateWorkspace(id) { copy(name = name, monogram = monogram.ifBlank { Host.monogramFor(name) }) }
     fun setWorkspaceColor(id: String, color: SwatchColor) = sessions.setWorkspaceColor(id, color)
     fun setWorkspaceCollapsed(id: String, collapsed: Boolean) = sessions.setWorkspaceCollapsed(id, collapsed)
+
+    /** The group editor's Reconnect tabs at launch (spec C8): restore honours it per group when the app starts. */
+    fun setWorkspaceReconnectAtLaunch(id: String, reconnect: Boolean) = sessions.updateWorkspace(id) { copy(reconnectAtLaunch = reconnect) }
     fun moveGroup(id: String, toIndex: Int) = sessions.moveGroup(id, toIndex)
     fun closeGroup(id: String) = sessions.closeGroup(id)
     fun deleteWorkspace(id: String, closeTabs: Boolean) = sessions.deleteWorkspace(id, closeTabs)
@@ -482,6 +533,147 @@ class AppViewModel @Inject constructor(
             security.forgetHost(id)
             settings.updateHardwareKeyboardSettings { it.withoutHost(id) }
         }
+    }
+
+    /**
+     * Connect in new group (spec C9): a group named and coloured after the host is made and made
+     * current, and the host's tab opens in it, so a login that deserves a group of its own gets
+     * one without a trip through the group editor.
+     */
+    fun openInNewGroup(host: Host) {
+        viewModelScope.launch {
+            val ws = sessions.createWorkspace(host.name, host.color)
+            sessions.setCurrentWorkspace(ws.id)
+            sessions.connect(host, ws.id)
+        }
+    }
+
+    /**
+     * Duplicate (spec C9): a copy of the host under a new id, named `<name> copy` (`copy 2`, `copy
+     * 3` while such a name is taken), never connected, created now. A stored password is copied
+     * under the copy's own secret id, since secrets are per host; every other field, tags and
+     * environment included, comes along as it is. [onDone] gets the copy, for the editor to open on.
+     */
+    fun duplicateHost(id: String, onDone: (Host) -> Unit = {}) {
+        viewModelScope.launch {
+            val all = hostRepository.observeAll().first()
+            val host = all.firstOrNull { it.id == id } ?: return@launch
+            val taken = all.map { it.name.lowercase() }.toSet()
+            var name = "${host.name} copy"
+            var n = 2
+            while (name.lowercase() in taken) name = "${host.name} copy ${n++}"
+            var copy = host.copy(id = UUID.randomUUID().toString(), name = name, lastConnectedAt = null, createdAt = System.currentTimeMillis())
+            val auth = host.auth
+            if (auth is AuthMethod.Password) {
+                val secret = auth.secretId?.let { secrets.get(it) }
+                copy = if (secret != null) {
+                    val secretId = AuthResolver.passwordSecretId(copy.id)
+                    secrets.put(secretId, secret)
+                    copy.copy(auth = AuthMethod.Password(secretId))
+                } else {
+                    copy.copy(auth = AuthMethod.Password(null))
+                }
+            }
+            hostRepository.upsert(copy)
+            onDone(copy)
+        }
+    }
+
+    // ---- known hosts import ----------------------------------------------------------------------
+
+    /**
+     * A pasted or picked `known_hosts` read for import (spec A16): every line [KnownHostsFile]
+     * reads, hashed names tried against the saved hosts' and the known hosts' addresses. Each entry
+     * comes with where it stands against what Berth already trusts for its address
+     * ([KnownHostsCandidate.Standing]), which is the decision the live policy makes when a server
+     * presents a key ([app.berth.android.session.KnownHostsPolicy]): the very key is already
+     * trusted; a different key of a type already trusted is the changed-key case, which the sheet
+     * starts unticked and takes as Replace; and an endpoint with a pinned key takes no key it does
+     * not already have, so the row is not offered.
+     */
+    suspend fun parseKnownHosts(text: String): KnownHostsImport {
+        val saved = hostRepository.observeAll().first().map { it.address to it.port }
+        val known = knownHostRepository.observeAll().first()
+        val parsed = KnownHostsFile.parse(text, saved + known.map { it.host to it.port })
+        return KnownHostsImport(
+            parsed.entries.map { entry -> KnownHostsCandidate(entry, standingOf(entry, known.forEndpoint(entry.host, entry.port))) },
+            parsed.skipped,
+            parsed.hashedUnresolved,
+        )
+    }
+
+    /**
+     * Saves [entries] as trusted keys, first seen now. One already held for its address is left as
+     * it is; one that differs from the saved key of its type replaces it, the way Replace on the
+     * changed-key sheet does (the saved key deleted, the new one saved in its place, under the
+     * address as the saved key spelt it, which is the spelling the live lookup reads), since a
+     * ticked conflict is that decision. A pinned endpoint takes nothing; the sheet does not offer
+     * those rows, and the import holds the line if one arrives. Each entry is judged as the sheet
+     * judged it ([forEndpoint], the name case-blind), read afresh so a key this import has just
+     * written is seen. Returns how many keys were added and how many replaced.
+     */
+    suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): KnownHostsImported {
+        var added = 0
+        var replaced = 0
+        val now = System.currentTimeMillis()
+        for (entry in entries) {
+            val here = knownHostRepository.observeAll().first().forEndpoint(entry.host, entry.port)
+            val host = when (val standing = standingOf(entry, here)) {
+                KnownHostsCandidate.Standing.EXISTING, is KnownHostsCandidate.Standing.Pinned -> continue
+                is KnownHostsCandidate.Standing.Conflicting -> {
+                    knownHostRepository.delete(standing.saved.id)
+                    replaced++
+                    standing.saved.host
+                }
+                KnownHostsCandidate.Standing.NEW -> {
+                    added++
+                    entry.host
+                }
+            }
+            knownHostRepository.upsert(
+                KnownHostKey(
+                    id = UUID.randomUUID().toString(),
+                    host = host,
+                    port = entry.port,
+                    keyType = entry.keyType,
+                    publicKeyBase64 = entry.publicKeyBase64,
+                    fingerprintSha256 = entry.fingerprintSha256,
+                    firstSeenAt = now,
+                    lastSeenAt = now,
+                ),
+            )
+        }
+        return KnownHostsImported(added, replaced)
+    }
+
+    /**
+     * The keys held for `host:port`, the name compared case-blind as DNS reads it: OpenSSH writes
+     * a `known_hosts` name in lowercase, and a host saved as `Prod-API.example.com` is the same
+     * endpoint. The parse and the import judge by this one reading, so what the sheet showed as a
+     * conflict is what the write replaces.
+     */
+    private fun List<KnownHostKey>.forEndpoint(host: String, port: Int): List<KnownHostKey> =
+        filter { it.port == port && it.host.equals(host, ignoreCase = true) }
+
+    /** Where [entry] stands against the keys Berth holds for its endpoint ([here]), as the live policy would judge the same key from the server. */
+    private fun standingOf(entry: KnownHostsFile.Entry, here: List<KnownHostKey>): KnownHostsCandidate.Standing {
+        if (here.any { it.publicKeyBase64 == entry.publicKeyBase64 }) return KnownHostsCandidate.Standing.EXISTING
+        val pinned = here.firstOrNull { it.pinned && it.keyType == entry.keyType } ?: here.firstOrNull { it.pinned }
+        if (pinned != null) return KnownHostsCandidate.Standing.Pinned(pinned)
+        val sameType = here.firstOrNull { it.keyType == entry.keyType }
+        if (sameType != null) return KnownHostsCandidate.Standing.Conflicting(sameType)
+        return KnownHostsCandidate.Standing.NEW
+    }
+
+    /**
+     * Share as `ssh://` link (spec C9): `ssh://user@address[:port]#name`, the form the spec's deep
+     * link reads and the parser takes back, with the fingerprint of the key trusted for the host
+     * as the draft's `;fingerprint=` parameter when one is (the most recently seen, if several), so
+     * the trust sheet on the receiving side can say the server's key is the one this side saw.
+     */
+    suspend fun shareLink(host: Host): String {
+        val trusted = knownHostRepository.find(host.address, host.port).maxByOrNull { it.lastSeenAt }
+        return SshLink.format(host.user, host.address, host.port, fingerprint = trusted?.fingerprintSha256, name = host.name)
     }
 
     // ---- identities ------------------------------------------------------------------------------
@@ -834,6 +1026,39 @@ class AppViewModel @Inject constructor(
 }
 
 fun List<Workspace>.byId(id: String?): Workspace? = firstOrNull { it.id == id }
+
+/** One `known_hosts` entry as the import sheet lists it; [existing] when Berth already trusts this key for this address. */
+data class KnownHostsCandidate(val entry: KnownHostsFile.Entry, val standing: Standing) {
+    val key: String get() = "${entry.host}:${entry.port}:${entry.publicKeyBase64}"
+
+    /** The very key is already trusted for the address: nothing to import, the row starts unticked and says so. */
+    val existing: Boolean get() = standing == Standing.EXISTING
+
+    /** A different key of a type already trusted for the address: ticking it is the Replace decision of the changed-key sheet. */
+    val conflicting: Boolean get() = standing is Standing.Conflicting
+
+    /** The address has a pinned key and this is not it: not offered, since a pin means no other key is taken. */
+    val pinned: Boolean get() = standing is Standing.Pinned
+
+    /** Whether the sheet ticks the row on arrival: only a key that is plainly new. */
+    val tickedByDefault: Boolean get() = standing == Standing.NEW
+
+    /** How the entry stands against what Berth holds for its endpoint; the live policy's three answers plus the plain new key. */
+    sealed interface Standing {
+        data object NEW : Standing
+        data object EXISTING : Standing
+        data class Conflicting(val saved: KnownHostKey) : Standing
+        data class Pinned(val saved: KnownHostKey) : Standing
+    }
+}
+
+/** A `known_hosts` text as read for the import sheet ([AppViewModel.parseKnownHosts]). */
+data class KnownHostsImport(val candidates: List<KnownHostsCandidate>, val skipped: List<KnownHostsFile.Skipped>, val hashedUnresolved: Int)
+
+/** What [AppViewModel.importKnownHosts] did: keys saved beside what was there, and keys that took a saved key's place. */
+data class KnownHostsImported(val added: Int, val replaced: Int) {
+    val total: Int get() = added + replaced
+}
 
 /** What an incoming link came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {

@@ -127,6 +127,9 @@ fun HostEditorScreen(
     var jumpHostIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var tunnelsOnly by remember { mutableStateOf(fromLink?.tunnelsOnly ?: false) }
     var altKey by remember { mutableStateOf<AltKeyMode?>(null) }
+    var tags by remember { mutableStateOf("") }
+    var environment by remember { mutableStateOf("") }
+    var muteBell by remember { mutableStateOf(false) }
     var colorPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(hostId) {
@@ -155,6 +158,9 @@ fun HostEditorScreen(
                 addressFamily = h.addressFamily
                 jumpHostIds = h.jumpHostIds
                 tunnelsOnly = h.tunnelsOnly
+                tags = HostEditorFields.tagsText(h.tags)
+                environment = HostEditorFields.environmentText(h.environment)
+                muteBell = h.muteBell
             }
         }
         loaded = true
@@ -170,13 +176,17 @@ fun HostEditorScreen(
     fun pendingProblem(index: Int): String? = pendingDrafts[index].validate(allTunnels + keptDrafts)
     // A kept row with a problem holds Save, as the tunnel editor's own Save is held: switching the row off lets the rest through.
     val pendingProblem = pending.indices.any { pending[it] !in leftOut && pendingProblem(it) != null }
-    val canSave = address.isNotBlank() && user.isNotBlank() && !portError && !pendingProblem
+    // A line that is not NAME=value holds Save the way a bad port does: said under the field, by its number, not found at login.
+    val environmentValue = HostEditorFields.parseEnvironment(environment)
+    val environmentProblem = HostEditorFields.environmentProblem(environment)
+    val environmentError = environmentProblem != null
+    val canSave = address.isNotBlank() && user.isNotBlank() && !portError && !pendingProblem && !environmentError
 
     fun save() {
         val base = original
         val finalName = name.ifBlank { address }
-        // The saved host is the base, so what this screen has no field for (tags, agent forwarding,
-        // environment, the bell) comes through unchanged rather than reset to the defaults.
+        // The saved host is the base, so what this screen has no field for (agent forwarding, which
+        // waits on the agent protocol) comes through unchanged rather than reset to the default.
         val host = (base ?: Host(id = UUID.randomUUID().toString(), name = finalName, color = color, monogram = "", address = "", user = "", createdAt = System.currentTimeMillis())).copy(
             name = finalName,
             color = color,
@@ -198,6 +208,9 @@ fun HostEditorScreen(
             addressFamily = addressFamily,
             appearance = (base?.appearance ?: app.berth.domain.model.AppearanceOverride()).copy(terminalThemeId = themeId, fontSizeSp = fontSize),
             tunnelsOnly = tunnelsOnly,
+            tags = HostEditorFields.parseTags(tags),
+            environment = environmentValue ?: base?.environment ?: emptyMap(),
+            muteBell = muteBell,
         )
         val secret = password.takeIf { it.isNotEmpty() }
         if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
@@ -260,6 +273,8 @@ fun HostEditorScreen(
                 }
                 BerthField(name, { name = it }, label = "Name", placeholder = address.ifBlank { "prod-web" }, modifier = Modifier.weight(1f))
             }
+            // Beside the name, not in a panel: tags say what the host is in the library (the chips on Hosts, C9), as the name does.
+            BerthField(tags, { tags = it }, label = "Tags", placeholder = "prod, homelab", keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
             if (colorPicker) {
                 Panel(label = "Colour and monogram") {
                     // The options' 48 dp targets set the pitch; the swatches inside them sit 12 dp apart.
@@ -370,8 +385,22 @@ fun HostEditorScreen(
 
             Panel(label = "Advanced") {
                 BerthField(startupCommand, { startupCommand = it }, label = "Startup command", placeholder = "none", mono = true)
+                // Sent with the shell request as SSH env (SshConnection.openShell); the server's AcceptEnv decides what lands.
+                BerthField(
+                    environment,
+                    { environment = it },
+                    label = "Environment",
+                    placeholder = "LANG=C.UTF-8",
+                    mono = true,
+                    singleLine = false,
+                    minLines = 2,
+                    isError = environmentError,
+                    helper = environmentProblem?.helper ?: "One NAME=value per line; the server's AcceptEnv decides which arrive.",
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                )
                 BerthField(terminalType, { terminalType = it }, label = "Terminal type", mono = true)
                 ToggleRow("Compression", compression, { compression = it })
+                ToggleRow("Mute bell", muteBell, { muteBell = it }, caption = "No buzz when the shell rings; off stage the tab still lights.")
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
                 HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }

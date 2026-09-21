@@ -22,15 +22,24 @@ val LocalSystemFontScale = staticCompositionLocalOf { 1f }
 /**
  * Provides the interface's density: the system's own up to the cap, and at the cap beyond it;
  * the uncapped scale stays readable through [LocalSystemFontScale].
+ *
+ * The theme applies it once; a window of its own applies it again. A sheet, a dialog and a menu
+ * each open a window with a Compose view of its own, which provides [LocalDensity] afresh from its
+ * Context, uncapped, over whatever the composition around it provided; so `BerthSheet` and
+ * `BerthMenu` wrap their content in this too, and text inside them stops at the cap as text
+ * outside does. Called inside an already capped tree (no window between), the density here is
+ * the cap itself and says nothing about the system; the scale the tree above read stands.
  */
 @Composable
 fun CappedFontScale(content: @Composable () -> Unit) {
     val system = LocalDensity.current
+    val above = LocalSystemFontScale.current
+    val systemScale = if (system.fontScale == MAX_INTERFACE_FONT_SCALE && above > MAX_INTERFACE_FONT_SCALE) above else system.fontScale
     val capped = remember(system) {
         if (system.fontScale > MAX_INTERFACE_FONT_SCALE) Density(system.density, MAX_INTERFACE_FONT_SCALE) else system
     }
     CompositionLocalProvider(
-        LocalSystemFontScale provides system.fontScale,
+        LocalSystemFontScale provides systemScale,
         LocalDensity provides capped,
         content = content,
     )

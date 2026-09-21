@@ -123,6 +123,10 @@ class CrashReporterTest {
         // The process that crashed shows no sheet; the next launch over the same store does, once. install()
         // reads the store on a thread of its own, off the startup path, so the launch waits for it here.
         assertNull(reports.unread.value)
+        // That read landing after the crash (its thread is the scheduler's to time) changes nothing: the
+        // crashed process still shows no sheet, and the marker stays on disk for the launch that follows.
+        reports.reload()
+        assertNull("the crashed process's own read of its crash", reports.unread.value)
         val next = reporter().also { it.install() }
         await("the next launch has read the store") { next.unread.value != null }
         assertEquals(report.id, next.unread.value?.id)

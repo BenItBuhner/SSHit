@@ -1,9 +1,11 @@
 package app.berth.android.screenshots
 
+import android.content.Context
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityCheckOptions
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityChecker
@@ -27,9 +29,10 @@ import java.io.File
  * contrast measured against the pixels just drawn, duplicate descriptions, traversal order) runs
  * over every Compose root on screen, so a sheet or a menu is audited along with the screen under
  * it, and a result at the ERROR level fails the test that took the picture. `BERTH_A11Y_LEVEL`
- * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. Three findings
+ * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. A few findings
  * are exempt by what they are, never by lowering the bar: a Deck key's width, a row cut at the
- * window's edge on its way in or out of a list, and the contrast of a disabled control's text.
+ * window's edge on its way in or out of a list or under a half-open sheet, the strip of scrim a
+ * tall sheet leaves above itself, and the contrast of a disabled control's text.
  */
 @OptIn(ExperimentalRoborazziApi::class)
 fun ComposeTestRule.captureAudited(file: File) {
@@ -57,10 +60,13 @@ private val AuditOptions = RoborazziATFAccessibilityCheckOptions(
     failureLevel = Level,
 )
 
-/** A sheet's or a menu's window: the same audit, and a row the half-open sheet has not yet shown is not a finding. */
+/**
+ * A sheet's or a menu's window: the same audit, and neither a row the half-open sheet has not yet
+ * shown nor the strip of scrim a tall sheet leaves above itself is a finding.
+ */
 @OptIn(ExperimentalRoborazziApi::class)
 private val SheetAuditOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, DisabledControlContrast)),
+    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, DisabledControlContrast)),
     failureLevel = Level,
 )
 
@@ -120,6 +126,32 @@ private object UnderTheHalfOpenSheet : TypeSafeMatcher<AccessibilityViewCheckRes
         if (!result.isClippingFinding()) return false
         val element = result.element ?: return false
         return element.boundsInScreen.bottom >= element.window.boundsInScreen.bottom - 1
+    }
+}
+
+/**
+ * And in a sheet's window too: the scrim's sliver. M3's bottom sheet dismisses from its scrim, a
+ * node the size of the window that Compose reports to a reader less whatever is drawn over it, so
+ * above a sheet whose content stops a few dp short of the top edge it is a "Close sheet" target a
+ * few dp tall (the known_hosts import with four keys listed leaves 3). That is Material's
+ * geometry, not a control of the sheet's: the handle carries Dismiss for a reader, a swipe or the
+ * back gesture for a finger, and every sheet ends in its own answer. Exempt only a touch-target
+ * finding on the scrim itself, named by the string Compose gives it, where it meets the window's
+ * top edge; a short control of ours resting anywhere else in the sheet is not.
+ */
+private object SheetScrimSliver : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+    private val closeSheet: String by lazy {
+        ApplicationProvider.getApplicationContext<Context>().getString(androidx.compose.ui.R.string.close_sheet)
+    }
+
+    override fun describeTo(description: Description) {
+        description.appendText("a touch-target finding on the strip of scrim above a tall sheet")
+    }
+
+    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
+        if (result.accessibilityHierarchyCheck != TouchTargetSizeCheck::class.java) return false
+        val element = result.element ?: return false
+        return element.contentDescription?.toString() == closeSheet && element.boundsInScreen.top <= element.window.boundsInScreen.top + 1
     }
 }
 

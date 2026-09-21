@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +40,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
+import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -92,39 +96,61 @@ fun RenameTabSheet(
 }
 
 /**
- * Create or edit a group (spec C3, Groups): name and colour, the colour picked from the twelve
- * swatches. Editing an existing [group] applies as you go; creating one commits on Create.
+ * Create or edit a group (spec C3, Groups; C8, the editor): name, colour and monogram, the colour
+ * picked from the twelve swatches, the monogram the name's own (A8) until it is typed over, and
+ * for an existing [group] the spec's Reconnect at launch switch, which is off by default so a
+ * launch restores the group's frames and reconnects on a tap. Editing an existing group's colour
+ * and switch applies as you go; its name and monogram, being typed, commit together on Done
+ * through [onRename], the monogram blank when it is the name's own; creating one commits on
+ * Create. The sheet is a fixed set of controls, so it opens at its content height rather than at
+ * half the window, where Done and Cancel stood below the fold at the interface's font cap (A11),
+ * and its column scrolls for a window shorter than the controls.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupEditorSheet(
     group: Workspace?,
-    onCreate: (name: String, color: SwatchColor) -> Unit,
-    onRename: (String) -> Unit,
+    onCreate: (name: String, color: SwatchColor, monogram: String) -> Unit,
+    onRename: (name: String, monogram: String) -> Unit,
     onRecolor: (SwatchColor) -> Unit,
     onDismiss: () -> Unit,
+    onReconnectAtLaunch: (Boolean) -> Unit = {},
 ) {
     val c = Berth.colors
     var name by remember { mutableStateOf(group?.name ?: "") }
     var color by remember { mutableStateOf(group?.color ?: SwatchColor.SLATE) }
     var touchedColor by remember { mutableStateOf(group != null) }
+    var reconnect by remember { mutableStateOf(group?.reconnectAtLaunch ?: false) }
+    // A saved monogram that is not the name's own was typed once; the field keeps it and the auto stops.
+    var monogram by remember { mutableStateOf(group?.monogram ?: "") }
+    var monogramEdited by remember { mutableStateOf(group != null && group.monogram != Host.monogramFor(group.name)) }
     val trimmed = name.trim()
     val previewColor = if (touchedColor || group != null) color else SwatchColor.forName(trimmed.ifBlank { "Group" })
+    val autoMonogram = Host.monogramFor(trimmed.ifBlank { "Group" })
+    val shownMonogram = if (monogramEdited) monogram else autoMonogram
     fun commit() {
         if (trimmed.isEmpty()) return
-        if (group == null) onCreate(trimmed, previewColor) else if (trimmed != group.name) onRename(trimmed)
+        // Blank is the name's own, so a field emptied to be retyped and left that way falls back rather than saving nothing.
+        val typed = if (monogramEdited) monogram.trim() else ""
+        if (group == null) {
+            onCreate(trimmed, previewColor, typed)
+        } else if (trimmed != group.name || typed.ifBlank { Host.monogramFor(trimmed) } != group.monogram) {
+            onRename(trimmed, typed)
+        }
         onDismiss()
     }
-    BerthSheet(onDismiss = onDismiss) {
+    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Swatch(previewColor, Host.monogramFor(trimmed.ifBlank { "Group" }), 40.dp)
+                // The swatch shows what Done or Create saves: the typed monogram, or the name's own while the field is empty.
+                Swatch(previewColor, shownMonogram.ifBlank { autoMonogram }, 40.dp)
                 SheetTitle(if (group == null) "New group" else "Edit group", if (group == null) "A run of tabs with its own chip" else null)
             }
             BerthField(
@@ -142,6 +168,22 @@ fun GroupEditorSheet(
             }
             Row(Modifier.fillMaxWidth()) {
                 for (swatch in SwatchColor.entries.drop(6)) SwatchOption(swatch, previewColor == swatch) { color = swatch; touchedColor = true; if (group != null) onRecolor(swatch) }
+            }
+            // Monogram (auto, editable), as the host editor's swatch tap offers it: two characters, the name's own until typed over.
+            BerthField(
+                value = shownMonogram,
+                onValueChange = { monogram = it.take(2).uppercase(); monogramEdited = true },
+                label = "Monogram",
+                mono = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false),
+            )
+            if (group != null) {
+                ToggleRow(
+                    "Reconnect tabs at launch",
+                    reconnect,
+                    { reconnect = it; onReconnectAtLaunch(it) },
+                    caption = "Off, its tabs come back as saved frames and reconnect when tapped.",
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton(if (group == null) "Create" else "Done", kind = ButtonKind.PRIMARY, enabled = trimmed.isNotEmpty(), onClick = ::commit)

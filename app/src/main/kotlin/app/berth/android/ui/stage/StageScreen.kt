@@ -36,7 +36,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -93,6 +92,7 @@ import app.berth.android.ui.byId
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.Pill
@@ -125,7 +125,6 @@ import app.berth.android.ui.tunnels.TunnelsTabBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
@@ -162,6 +161,8 @@ fun StageScreen(
     /** Overflow › Split and Unsplit (spec C3, C23), offered when the window fits two panes; one at a time. */
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
+    /** Overflow › Groups: the groups overview (spec C8, "from the rail ... and from the Overflow"), the door a window without the drawer's GROUPS label has to it. */
+    onGroups: () -> Unit = {},
     /** Lays out the body area for the active [tab] under the header, with the modifier that fills it. */
     layer: (@Composable StageBodies.(tab: ManagedTab, modifier: Modifier) -> Unit)? = null,
     /**
@@ -310,6 +311,7 @@ fun StageScreen(
                         onHistory = { tools.historyOpen = true },
                         onSplit = onSplit,
                         onUnsplit = onUnsplit,
+                        onGroups = onGroups,
                     )
                 },
             )
@@ -461,11 +463,11 @@ private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
 typealias OverflowRows = @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
 
 /**
- * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Library,
- * Close. A Files tab has no Deck and no connection of its own, so it offers Connect (no terminal on
- * the host) or Reconnect (its terminal is down) and Terminal in their place, and its body lends the
- * folder rows as a leading section over an 8 dp break, [extra]. Without a tab it offers New tab
- * and Library.
+ * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Groups
+ * (the overview, spec C8), Library, Close. A Files tab has no Deck and no connection of its own, so
+ * it offers Connect (no terminal on the host) or Reconnect (its terminal is down) and Terminal in
+ * their place, and its body lends the folder rows as a leading section over an 8 dp break,
+ * [extra]. Without a tab it offers New tab, Groups and Library.
  */
 @Composable
 private fun StageOverflow(
@@ -481,6 +483,7 @@ private fun StageOverflow(
     onHistory: () -> Unit = {},
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
+    onGroups: () -> Unit = {},
 ) {
     val c = Berth.colors
     var menu by remember { mutableStateOf(false) }
@@ -490,7 +493,7 @@ private fun StageOverflow(
         IconAction(onClick = { menu = true }, description = "More") {
             BerthIcon(BerthIcons.moreVert)
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface3, shape = RoundedCornerShape(BerthRadius.row)) {
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
             @Composable fun item(text: String, destructive: Boolean = false, action: () -> Unit) {
                 DropdownMenuItem(
                     text = { Text(text, style = BerthType.body, color = if (destructive) c.danger else c.text1) },
@@ -528,11 +531,15 @@ private fun StageOverflow(
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
                 item("Tabs", action = actions::openSwitcher)
+                // The groups overview (spec C8) is reached from here as from the drawer's label, which a
+                // window whose drawer stands as a column without labels (spec C7, C23) does not have.
+                item("Groups", action = onGroups)
                 // With the drawer standing as a rail (spec C7) the library is already in view.
                 if (onOpenDrawer != null) item("Library", action = onOpenDrawer)
                 item("Close", destructive = true) { actions.close(tab.id) }
             } else {
                 item("New tab", action = actions::newTab)
+                item("Groups", action = onGroups)
                 if (onOpenDrawer != null) item("Library", action = onOpenDrawer)
             }
         }
@@ -1010,4 +1017,4 @@ fun ageTicker(): Long {
 }
 
 /** Mono style for fingerprints and specs in sheets. */
-val MonoBody get() = BerthType.body.copy(fontFamily = JetBrainsMono)
+val MonoBody get() = BerthType.monoBody

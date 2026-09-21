@@ -567,7 +567,7 @@ class BerthScreenshotTest {
         seedDetachedSessions()
         runBlocking { graph.sessions.restore() }
         themed {
-            Drawer(graph.viewModel, tabActions(), onGroupTap = {}, onNewGroup = {}, onLibrary = {})
+            Drawer(graph.viewModel, tabActions(), onGroupTap = {}, onNewGroup = {}, onGroups = {}, onLibrary = {})
         }
         compose.waitUntil(10_000) { graph.viewModel.tabs.value.size >= 3 }
         capture("drawer-groups")

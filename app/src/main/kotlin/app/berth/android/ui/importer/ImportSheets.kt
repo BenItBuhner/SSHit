@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +17,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,22 +35,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.KnownHostsCandidate
+import app.berth.android.ui.KnownHostsImport
+import app.berth.android.ui.KnownHostsImported
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
+import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.SshConfigHost
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.Dispatchers
@@ -167,12 +179,11 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
                     SectionLabel("${candidates.size} " + if (candidates.size == 1) "host" else "hosts", Modifier.padding(start = 4.dp))
                     for (cand in candidates) {
                         val selected = cand.alias in selection
-                        ListRow(
+                        TickRow(
                             title = cand.alias,
                             subtitle = captionFor(cand),
-                            minHeight = 52.dp,
-                            onClick = { selection = if (selected) selection - cand.alias else selection + cand.alias },
-                            leading = { TickDot(selected) },
+                            ticked = selected,
+                            onTicked = { selection = if (it) selection + cand.alias else selection - cand.alias },
                         )
                     }
                     if (jumpsNew) {
@@ -212,17 +223,221 @@ fun ImportHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (Int) 
     }
 }
 
-/** The tick on a candidate row: an 8 dp dot, accent when the host will import, text.3 when it will not. */
+/**
+ * Server keys from a pasted or picked `known_hosts` (spec A16), beside the config import. Every
+ * address the file names becomes a row, `host:port · TYPE · SHA256:…`; rows whose key Berth already
+ * trusts for that address start unticked and say so. A key that differs from the saved key of its
+ * type for an address is the changed-key case (C13) in a file: the row starts unticked with the
+ * saved key and its date under it in the danger tint, and ticking it is the Replace decision, which
+ * the button then names. An address with a pinned key takes no other key, so such a row is not
+ * offered: a lock stands where its tick would, and it says where the pin is undone. A hashed name
+ * (`ssh-keygen -H`, the default on many
+ * systems) is read for a saved or known host whose address hashes the same and is marked as matched;
+ * the ones no host matches are counted in one line, since the name itself is not in the file.
+ * Wildcards, negations, CA and revoked lines are skipped and said, each with its line.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TickDot(selected: Boolean) {
+fun ImportKnownHostsSheet(vm: AppViewModel, onDismiss: () -> Unit, onImported: (KnownHostsImported) -> Unit = {}) {
+    val c = Berth.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var text by remember { mutableStateOf("") }
+    var fileNote by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var parsed by remember { mutableStateOf<KnownHostsImport?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            val read = readDocument(context, uri)
+            if (read == null) fileNote = "Couldn't read that file." else { text = read; fileNote = null }
+        }
+    }
+    // The read consults the saved and known hosts for hashed names, so it runs where they are read, not in composition.
+    LaunchedEffect(text) { parsed = if (text.isBlank()) null else vm.parseKnownHosts(text) }
+    val candidates = parsed?.candidates.orEmpty()
+    var selection by remember(parsed) { mutableStateOf(candidates.filter { it.tickedByDefault }.map { it.key }.toSet()) }
+    val picked = candidates.filter { it.key in selection }
+    val replacing = picked.count { it.conflicting }
+
+    BerthSheet(onDismiss = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SheetTitle("Import known hosts", "Paste your ~/.ssh/known_hosts, or choose the file")
+            BerthField(
+                text,
+                { text = it },
+                placeholder = "[10.0.0.12]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\u2026",
+                mono = true,
+                singleLine = false,
+                minLines = 4,
+                modifier = Modifier.heightIn(max = 220.dp),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                helper = fileNote,
+                isError = fileNote != null,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                BerthButton("Choose file", onClick = { picker.launch(arrayOf("*/*")) })
+                if (text.isNotEmpty()) BerthButton("Clear", kind = ButtonKind.TEXT, onClick = { text = "" })
+            }
+
+            val read = parsed
+            if (read != null) {
+                if (candidates.isEmpty()) {
+                    Text(
+                        if (read.hashedUnresolved > 0) "No key here names a host Berth can hold: the names are hashed, and none hashes to a saved host's address." else "No server keys found.",
+                        style = BerthType.caption,
+                        color = c.text2,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                } else {
+                    SectionLabel("${candidates.size} " + if (candidates.size == 1) "key" else "keys", Modifier.padding(start = 4.dp))
+                    for (cand in candidates) {
+                        val selected = cand.key in selection
+                        val facts = buildList {
+                            add(KnownHostKey.algorithmLabelFor(cand.entry.keyType))
+                            add(shortFingerprint(cand.entry.fingerprintSha256))
+                            if (cand.existing) add("trusted already")
+                            if (cand.entry.hashed) add("matched by hash")
+                        }.joinToString(" \u00B7 ")
+                        when (val standing = cand.standing) {
+                            // A pin means no other key for the address: the row is read, not offered, and says where the pin is undone.
+                            is KnownHostsCandidate.Standing.Pinned -> ListRow(
+                                title = cand.entry.address,
+                                subtitle = "$facts\nPinned to ${standing.saved.algorithmLabel} ${shortFingerprint(standing.saved.fingerprintSha256)}; unpin it under Known hosts first.",
+                                subtitleMaxLines = 4,
+                                minHeight = 52.dp,
+                                leading = { PinLock() },
+                            )
+                            // A different key of a type already trusted: C13's changed-key decision, unticked until it is made.
+                            is KnownHostsCandidate.Standing.Conflicting -> TickRow(
+                                title = cand.entry.address,
+                                subtitle = facts,
+                                ticked = selected,
+                                onTicked = { selection = if (it) selection + cand.key else selection - cand.key },
+                                warning = "Differs from the saved ${standing.saved.algorithmLabel} key ${shortFingerprint(standing.saved.fingerprintSha256)} (trusted ${formatDate(standing.saved.firstSeenAt)}). Ticked, it replaces that key.",
+                            )
+                            else -> TickRow(
+                                title = cand.entry.address,
+                                subtitle = facts,
+                                ticked = selected,
+                                onTicked = { selection = if (it) selection + cand.key else selection - cand.key },
+                            )
+                        }
+                    }
+                }
+                if (read.hashedUnresolved > 0) {
+                    Text(
+                        (if (read.hashedUnresolved == 1) "1 hashed name matches no saved host and is left out; " else "${read.hashedUnresolved} hashed names match no saved host and are left out; ") +
+                            "save the host first, then import again.",
+                        style = BerthType.caption,
+                        color = c.text3,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+                val otherSkips = read.skipped.filter { !it.reason.startsWith("a hashed host name") }
+                if (otherSkips.isNotEmpty()) {
+                    Text(
+                        otherSkips.take(4).joinToString("\n") { "Line ${it.line}: ${it.reason}." } + if (otherSkips.size > 4) "\nAnd ${otherSkips.size - 4} more." else "",
+                        style = BerthType.caption,
+                        color = c.text3,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                BerthButton(
+                    if (busy) "Importing\u2026" else importKnownHostsLabel(picked.size, replacing),
+                    kind = ButtonKind.PRIMARY,
+                    enabled = picked.isNotEmpty() && !busy,
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            val result = vm.importKnownHosts(picked.map { it.entry })
+                            busy = false
+                            onImported(result)
+                            onDismiss()
+                        }
+                    },
+                )
+                BerthButton("Cancel", kind = ButtonKind.TEXT, onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * The import button's word for [picked] keys, of which [replacing] take a saved key's place:
+ * `Import 3 keys`, `Import 2 keys, replace 1`, `Replace 1 key` when that is all it does.
+ */
+internal fun importKnownHostsLabel(picked: Int, replacing: Int): String {
+    fun keys(n: Int) = if (n == 1) "1 key" else "$n keys"
+    val adding = picked - replacing
+    return when {
+        replacing == 0 -> "Import ${keys(picked)}"
+        adding == 0 -> "Replace ${keys(replacing)}"
+        else -> "Import ${keys(adding)}, replace $replacing"
+    }
+}
+
+/** `SHA256:` and the first four groups of the hash, enough to tell keys apart on a row. */
+private fun shortFingerprint(fingerprint: String): String =
+    "SHA256:" + fingerprint.removePrefix("SHA256:").chunked(4).take(4).joinToString(" ") + "\u2026"
+
+/**
+ * A candidate row that is ticked or not: a [ListRow] that toggles as a checkbox, so a screen reader
+ * hears `checked, git.example.com` rather than a button whose description changes, with the dot
+ * as its only mark. A [warning] under the facts, in the danger tint, is what ticking the row would
+ * undo: the saved key a conflicting one replaces.
+ */
+@Composable
+private fun TickRow(title: String, subtitle: String, ticked: Boolean, onTicked: (Boolean) -> Unit, warning: String? = null) {
+    val c = Berth.colors
+    val interaction = remember { MutableInteractionSource() }
+    ListRow(
+        title = title,
+        subtitle = if (warning == null) subtitle else buildAnnotatedString {
+            append(subtitle)
+            append("\n")
+            withStyle(SpanStyle(color = c.danger)) { append(warning) }
+        },
+        subtitleMaxLines = if (warning == null) 2 else 4,
+        minHeight = 52.dp,
+        modifier = Modifier.toggleable(value = ticked, role = Role.Checkbox, interactionSource = interaction, indication = null, onValueChange = onTicked),
+        interactionSource = interaction,
+        leading = { TickDot(ticked) },
+    )
+}
+
+/**
+ * The mark on a pinned endpoint's row, in the tick's place: a lock, in the subtitle's tone, since
+ * the row is read and not offered, and an unticked dot there would read as a box that will not
+ * tick. Decorative; the row's second line says what the lock means.
+ */
+@Composable
+private fun PinLock() {
+    Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+        BerthIcon(BerthIcons.lock, tint = Berth.colors.text2, size = 16.dp)
+    }
+}
+
+/** The tick on a candidate row: an 8 dp dot, accent when the key or host will import, text.3 when it will not. The row's own state says which; the dot is the picture. */
+@Composable
+private fun TickDot(ticked: Boolean) {
     val c = Berth.colors
     Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (selected) c.accent else c.text3)
-                .semantics { contentDescription = if (selected) "Will import" else "Will not import" },
+                .background(if (ticked) c.accent else c.text3),
         )
     }
 }

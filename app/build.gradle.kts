@@ -288,9 +288,25 @@ androidComponents {
                 // mapping.txt: "original -> renamed:" per class, members indented under it. It says what a missing
                 // name became; presence is the DEX's to say, since a class kept under its own name with no member
                 // left (PEMDecryptor, an interface whose one method nothing calls) has no line here.
-                val renamed: Map<String, String> = mappingFile.readLines()
+                val mappingLines = mappingFile.readLines()
+                val renamed: Map<String, String> = mappingLines
                     .filter { it.endsWith(":") && !it.startsWith(" ") && !it.startsWith("#") && " -> " in it }
                     .associate { line -> line.removeSuffix(":").split(" -> ").let { it[0] to it[1] } }
+                // The classes R8 made rather than read: outlines of repeated code, lambdas, backports. Each is named
+                // after a class of the program it was made from ("ECGOST$Mappings$$ExternalSyntheticOutline0", an
+                // outline that happens to hold sshj code) and carries {"id":"com.android.tools.r8.synthesized"} in
+                // the comment lines under its class line. Such a class is reached by invoke, never by name, so its
+                // renaming is no one's concern, whatever package its context put it in.
+                val synthesized = HashSet<String>()
+                var current: String? = null
+                for (line in mappingLines) {
+                    when {
+                        line.startsWith(" ") -> Unit // a member, or a member's own comment
+                        line.startsWith("#") -> if (current != null && "\"com.android.tools.r8.synthesized\"" in line) synthesized += current
+                        line.endsWith(":") && " -> " in line -> current = line.substringBefore(" -> ")
+                        else -> current = null
+                    }
+                }
                 // A line table at all (R8's own numbering, "56:58:void <init>(...):88:88", not the source's): without
                 // it every frame reads as line 0 and nothing retraces (-keepattributes LineNumberTable).
                 val lineNumbers = mappingFile.useLines { lines -> lines.any { it.startsWith("    ") && Regex("""^\s+\d+:\d+:""").containsMatchIn(it) } }
@@ -300,7 +316,7 @@ androidComponents {
                 // (yp3.Q(r8-map-id-75b2...:57)) name the mapping that reads them; checked below against the DEX.
                 val mapId = mappingFile.useLines { lines -> lines.take(20).firstOrNull { it.startsWith("# pg_map_id: ") }?.removePrefix("# pg_map_id: ")?.trim() }
                 if (mapId.isNullOrEmpty()) problems += "the mapping has no pg_map_id header; a report's frames could not name it"
-                renamed.filter { (from, to) -> from.startsWith("org.bouncycastle.jcajce.provider.") && from != to }.keys.take(5)
+                renamed.filter { (from, to) -> from.startsWith("org.bouncycastle.jcajce.provider.") && from != to && from !in synthesized }.keys.take(5)
                     .forEach { problems += "$it was renamed to ${renamed[it]}; BouncyCastleProvider loads it by name" }
 
                 val byName = listOf(
@@ -351,7 +367,7 @@ androidComponents {
                 }
 
                 if (problems.isNotEmpty()) throw GradleException("Release keep rules do not hold:\n" + problems.joinToString("\n") { "  - $it" })
-                logger.lifecycle("verifyReleaseKeepRules: ${byName.size} classes defined by name, $providerClasses BouncyCastle provider classes, constructors and the SLF4J service file present in ${apks.map { it.name }}; every class's SourceFile is the mapping's id r8-map-id-$mapId")
+                logger.lifecycle("verifyReleaseKeepRules: ${byName.size} classes defined by name, $providerClasses BouncyCastle provider classes, constructors and the SLF4J service file present in ${apks.map { it.name }}; every class's SourceFile is the mapping's id r8-map-id-$mapId; ${synthesized.size} classes of R8's own making set aside")
             }
         }
         tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }

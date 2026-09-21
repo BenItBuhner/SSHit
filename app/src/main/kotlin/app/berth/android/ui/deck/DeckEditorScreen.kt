@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,6 +57,7 @@ import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.BerthSlider
 import app.berth.android.ui.components.ButtonKind
@@ -286,7 +286,7 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                                 onClick = { if (i == layerIndex) layerMenu = i else { layer = i; slot = null } },
                                 onLongClick = { layerMenu = i },
                             )
-                            DropdownMenu(expanded = layerMenu == i, onDismissRequest = { layerMenu = null }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                            BerthMenu(expanded = layerMenu == i, onDismiss = { layerMenu = null }) {
                                 MenuItem("Rename") { layerMenu = null; layer = i; renaming = true }
                                 MenuItem(if (l.prefix == null) "Set tmux prefix" else "tmux prefix \u00B7 ${l.prefix}") { layerMenu = null; layer = i; prefixing = true }
                                 if (i > 0) MenuItem("Move left") { layerMenu = null; edit(draft.moveLayer(i, i - 1)); layer = i - 1 }
@@ -375,7 +375,7 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 BerthButton("Import", onClick = { importError = null; importing = true })
                 Box {
                     BerthButton("Export", onClick = { exportMenu = true })
-                    DropdownMenu(expanded = exportMenu, onDismissRequest = { exportMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+                    BerthMenu(expanded = exportMenu, onDismiss = { exportMenu = false }) {
                         MenuItem("Share Berth JSON") { exportMenu = false; shareText(context, "berth-deck.json", draft.toJson()) }
                         MenuItem("Save JSON to file") { exportMenu = false; saver.save("berth-deck.json", draft.toJson()) }
                         MenuItem("Share as Termux extra-keys") { exportMenu = false; shareText(context, "termux.properties", TermuxExtraKeys.export(draft), mime = "text/plain") }

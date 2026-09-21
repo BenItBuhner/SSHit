@@ -98,6 +98,35 @@ data class SshLink(
         private val HOST_NAME = Regex("""^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?$""")
         private val IPV6 = Regex("""^[0-9A-Fa-f:.]+(?:%[A-Za-z0-9._-]+)?$""")
 
+        /**
+         * Writes the link [parse] reads back: `ssh://[user[;fingerprint=fp]@]host[:port][#name]`.
+         * The port is left out when it is 22, an IPv6 address is bracketed, and the user, the
+         * fingerprint and the name are percent-encoded where the draft needs it (`/` in a base64
+         * fingerprint would end the authority; a space cannot stand in a fragment). Sharing a
+         * host writes this: the receiving Berth opens it in the editor, and any other client reads
+         * the plain `ssh://user@host:port` in front of the fragment.
+         */
+        fun format(user: String?, host: String, port: Int, fingerprint: String? = null, name: String? = null): String = buildString {
+            append("ssh://")
+            if (!user.isNullOrEmpty()) {
+                append(encode(user))
+                if (!fingerprint.isNullOrBlank()) append(";fingerprint=").append(encode(fingerprint.trim()))
+                append('@')
+            }
+            append(if (':' in host) "[$host]" else host)
+            if (port != 22) append(':').append(port)
+            if (!name.isNullOrBlank()) append('#').append(encode(name.trim()))
+        }
+
+        /** Percent-encodes everything but RFC 3986's unreserved characters, upper-case hex as the RFC prefers. */
+        private fun encode(text: String): String = buildString {
+            for (byte in text.toByteArray(Charsets.UTF_8)) {
+                val ch = byte.toInt() and 0xFF
+                val plain = ch in 'A'.code..'Z'.code || ch in 'a'.code..'z'.code || ch in '0'.code..'9'.code || ch == '-'.code || ch == '.'.code || ch == '_'.code || ch == '~'.code
+                if (plain) append(ch.toChar()) else append('%').append("%02X".format(ch))
+            }
+        }
+
         /** Reads [text] as a link; a [Result.Malformed] names the first thing wrong with it and never throws. */
         fun parse(text: String): Result {
             if (text.length > MAX_LENGTH) return Result.Malformed("The link is too long.")

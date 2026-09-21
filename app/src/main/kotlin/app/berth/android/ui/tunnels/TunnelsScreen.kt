@@ -20,9 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Switch
@@ -50,6 +48,9 @@ import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
+import app.berth.android.ui.components.BerthIcon
+import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -64,7 +65,6 @@ import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
@@ -245,7 +245,7 @@ fun TunnelRow(
                 TunnelSwitch(checked = tunnel.enabled, onCheckedChange = { vm.setTunnelEnabled(tunnel.id, it) })
             },
         )
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
+        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
             DropdownMenuItem(text = { Text("Edit", style = BerthType.body, color = c.text1) }, onClick = { menu = false; onEdit() })
             DropdownMenuItem(
                 text = { Text("Duplicate", style = BerthType.body, color = c.text1) },
@@ -451,7 +451,8 @@ fun TunnelsPanelContent(vm: AppViewModel, host: Host, pending: @Composable () ->
         minHeight = 44.dp,
         onClick = { editor = TunnelEditorTarget(host.id, null) },
         titleColor = c.text2,
-        leading = { Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Text("+", style = BerthType.title, color = c.text2) } },
+        // The glyph the Add jump host row wears, at the quiet row's tone: an icon, so no text runs past a 16 dp box at the font cap.
+        leading = { BerthIcon(BerthIcons.add, tint = c.text2, size = 16.dp) },
     )
     editor?.let { target -> TunnelEditorSheet(vm, hostId = target.hostId, existing = target.tunnel, onDismiss = { editor = null }) }
 }

@@ -107,6 +107,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.berth.android.R
 import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
@@ -505,6 +506,8 @@ fun PanelNote(text: String, modifier: Modifier = Modifier) {
  * surface.4; on a bare screen or a sheet (no panel, taken as surface.1) it is surface.3. Call it
  * where a [DropdownMenu] would go: inside the [Box] that holds the row it hangs from, or inside a
  * [TrailingMenuAnchor] there to have it open under the row's value rather than over its title.
+ * The menu is a window of its own, so the interface's font cap is applied again inside it
+ * ([CappedFontScale]), as a sheet's is.
  */
 @Composable
 fun BerthMenu(
@@ -522,8 +525,9 @@ fun BerthMenu(
         modifier = modifier,
         containerColor = c.surface(step + 2),
         shape = RoundedCornerShape(BerthRadius.row),
-        content = content,
-    )
+    ) {
+        CappedFontScale { content() }
+    }
 }
 
 /**
@@ -998,10 +1002,17 @@ fun BerthField(
             }
         }
         if (helper != null) {
-            Text(helper, style = BerthType.caption.copy(letterSpacing = 0.sp), color = if (isError) c.danger else c.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+            // In a panel the field's box is the panel's own surface, unseen, and its bottom half (the
+            // 44 dp less the line of text) is the gap to the label under it; the helper stands where
+            // that half was, so it carries the same gap rather than leaving the next label 4 dp off.
+            val bottom = if (LocalPanelSurface.current != null) FieldHelperPanelGap else 0.dp
+            Text(helper, style = BerthType.caption.copy(letterSpacing = 0.sp), color = if (isError) c.danger else c.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = bottom))
         }
     }
 }
+
+/** What a field's box leaves under its text: (44 dp − the body's 22 sp line) / 2, given to a helper inside a [Panel]. */
+private val FieldHelperPanelGap = 11.dp
 
 // ---- Sheets and misc ---------------------------------------------------------------------------------
 

@@ -16,9 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +36,8 @@ import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.EmptyState
@@ -51,7 +50,6 @@ import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.importer.rememberPublicKeySaver
 import app.berth.android.ui.importer.sharePublicKey
 import app.berth.android.ui.theme.Berth
-import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Identity
@@ -62,15 +60,23 @@ import app.berth.domain.model.KeyProtection
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.launch
 
-/** Identities: name, algorithm, fingerprint and protection; long-press copies or deletes. */
+/**
+ * Identities (spec C12): name, algorithm, fingerprint and protection. A tap opens the key's detail
+ * sheet (fingerprint, randomart, the `ssh-keygen -lf` line, Show QR and Install on host); a
+ * long-press opens the row's menu, the spec's list less Rename and Change protection, which are
+ * not yet built. [onOpenTab] puts a tab on the Stage, for the install sheet's way to the shell it typed into.
+ */
 @Composable
-fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier, onOpenTab: (String) -> Unit = {}) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
     var generate by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
     var headerMenu by remember { mutableStateOf(false) }
     var blocked by remember { mutableStateOf<Pair<Identity, List<String>>?>(null) }
+    var detail by remember { mutableStateOf<Identity?>(null) }
+    var qr by remember { mutableStateOf<Identity?>(null) }
+    var install by remember { mutableStateOf<Identity?>(null) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -87,8 +93,8 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
             IconAction(onClick = { generate = true }, description = "New key") { BerthIcon(BerthIcons.add) }
             Box {
                 IconAction(onClick = { headerMenu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
-                DropdownMenu(expanded = headerMenu, onDismissRequest = { headerMenu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                    DropdownMenuItem(text = { Text("Import key", style = BerthType.body, color = c.text1) }, onClick = { headerMenu = false; importKey = true })
+                BerthMenu(expanded = headerMenu, onDismiss = { headerMenu = false }) {
+                    BerthMenuItem("Import key", onClick = { headerMenu = false; importKey = true })
                 }
             }
         })
@@ -116,24 +122,18 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
                             subtitle = identity.summary(model),
                             subtitleStyle = BerthType.caption,
                             subtitleMaxLines = 2,
-                            onClick = { menu = true },
+                            onClick = { detail = identity },
                             onLongClick = { menu = true },
                         )
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = c.surface2, shape = RoundedCornerShape(BerthRadius.row)) {
-                            DropdownMenuItem(
-                                text = { Text("Copy public key", style = BerthType.body, color = c.text1) },
-                                onClick = { menu = false; clipboard.setText(AnnotatedString(identity.publicKeyOpenSsh)) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Share public key", style = BerthType.body, color = c.text1) },
-                                onClick = { menu = false; sharePublicKey(context, identity) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Save public key\u2026", style = BerthType.body, color = c.text1) },
-                                onClick = { menu = false; savePublicKey(identity) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Delete", style = BerthType.body, color = c.danger) },
+                        BerthMenu(expanded = menu, onDismiss = { menu = false }) {
+                            BerthMenuItem("Copy public key", onClick = { menu = false; clipboard.setText(AnnotatedString(identity.publicKeyOpenSsh)) })
+                            BerthMenuItem("Share public key", onClick = { menu = false; sharePublicKey(context, identity) })
+                            BerthMenuItem("Save public key\u2026", onClick = { menu = false; savePublicKey(identity) })
+                            BerthMenuItem("Show QR", onClick = { menu = false; qr = identity })
+                            BerthMenuItem("Install on host", onClick = { menu = false; install = identity })
+                            BerthMenuItem(
+                                "Delete",
+                                destructive = true,
                                 onClick = {
                                     menu = false
                                     scope.launch {
@@ -151,6 +151,17 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
 
     if (generate) GenerateKeySheet(vm, onDismiss = { generate = false })
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
+    detail?.let { identity ->
+        KeyDetailSheet(
+            vm,
+            identity,
+            onDismiss = { detail = null },
+            onShowQr = { detail = null; qr = identity },
+            onInstall = { detail = null; install = identity },
+        )
+    }
+    qr?.let { identity -> PublicKeyQrSheet(identity, onDismiss = { qr = null }) }
+    install?.let { identity -> InstallKeySheet(vm, identity, onDismiss = { install = null }, onOpenTab = { install = null; onOpenTab(it) }) }
     blocked?.let { (identity, names) ->
         InfoSheet(
             title = "${identity.name} is still in use",

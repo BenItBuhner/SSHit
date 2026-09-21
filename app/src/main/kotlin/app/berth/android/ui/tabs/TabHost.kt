@@ -187,22 +187,23 @@ fun TabSheets(vm: AppViewModel, ui: TabUiState, actions: TabActions, onAddHost: 
                 } else {
                     GroupEditorSheet(
                         group = group,
-                        onCreate = { _, _ -> },
-                        onRename = { vm.renameWorkspace(group.id, it) },
+                        onCreate = { _, _, _ -> },
+                        onRename = { name, monogram -> vm.renameWorkspace(group.id, name, monogram) },
                         onRecolor = { vm.setWorkspaceColor(group.id, it) },
                         onDismiss = { ui.groupEditor = null },
+                        onReconnectAtLaunch = { vm.setWorkspaceReconnectAtLaunch(group.id, it) },
                     )
                 }
             }
             is GroupEditorRequest.Create -> GroupEditorSheet(
                 group = null,
-                onCreate = { name, color ->
-                    vm.createWorkspace(name, switchTo = request.moveTabId == null, color = color) { created ->
+                onCreate = { name, color, monogram ->
+                    vm.createWorkspace(name, switchTo = request.moveTabId == null, color = color, monogram = monogram) { created ->
                         request.moveTabId?.let { vm.moveToGroup(it, created.id) }
                         if (request.thenNewTab) ui.newTab = NewTabRequest(created.id)
                     }
                 },
-                onRename = {},
+                onRename = { _, _ -> },
                 onRecolor = {},
                 onDismiss = { ui.groupEditor = null },
             )

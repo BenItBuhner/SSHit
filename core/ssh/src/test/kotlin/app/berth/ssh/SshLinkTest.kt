@@ -245,4 +245,42 @@ class SshLinkTest {
         assertEquals("/srv/data", parsed("sftp://host/srv/data;type=d").path)
         assertNull(parsed("sftp://host/;type=dir").path, "the home folder either way")
     }
+
+    @Test
+    fun `a shared link is written the way the parser reads it`() {
+        assertEquals("ssh://ben@10.0.0.12", SshLink.format("ben", "10.0.0.12", 22))
+        assertEquals("ssh://ben@10.0.0.12:2222", SshLink.format("ben", "10.0.0.12", 2222))
+        assertEquals("ssh://host.example.org:2200", SshLink.format(null, "host.example.org", 2200), "no user, no @")
+        assertEquals("ssh://ben@[fe80::1]:2200", SshLink.format("ben", "fe80::1", 2200))
+        assertEquals("ssh://ben@10.0.0.12#prod-web", SshLink.format("ben", "10.0.0.12", 22, name = "prod-web"))
+        assertEquals("ssh://ben@10.0.0.12#Prod%20web%20%28eu%29", SshLink.format("ben", "10.0.0.12", 22, name = "Prod web (eu)"))
+        assertEquals(
+            "ssh://ben;fingerprint=SHA256%3Aabc%2Bx%2Fdef@10.0.0.12:2222#prod-web",
+            SshLink.format("ben", "10.0.0.12", 2222, fingerprint = "SHA256:abc+x/def", name = "prod-web"),
+            "the slash that would end the authority is encoded",
+        )
+        assertEquals("ssh://ben%40REALM@10.0.0.12", SshLink.format("ben@REALM", "10.0.0.12", 22))
+        assertEquals("ssh://10.0.0.12", SshLink.format(null, "10.0.0.12", 22, fingerprint = "SHA256:abc"), "a fingerprint rides with the user; without one it has no place")
+    }
+
+    @Test
+    fun `format then parse gives back the host, user, port, fingerprint and name`() {
+        val cases = listOf(
+            Triple("ben", "10.0.0.12", 2222) to ("SHA256:abc+x/def" to "prod web"),
+            Triple("deploy", "host.example.org", 22) to (null to null),
+            Triple(null, "fe80::1%eth0", 2200) to (null to "lab (gpu)"),
+            Triple("ben@REALM", "db.internal", 22) to ("MD5:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff" to null),
+        )
+        for ((who, extras) in cases) {
+            val (user, host, port) = who
+            val (fingerprint, name) = extras
+            val link = parsed(SshLink.format(user, host, port, fingerprint, name))
+            assertEquals(user, link.user, "user of $who")
+            assertEquals(host, link.host, "host of $who")
+            assertEquals(port, link.port, "port of $who")
+            assertEquals(if (user == null) null else fingerprint, link.fingerprint, "fingerprint of $who rides with the user")
+            assertEquals(name, link.name, "name of $who")
+            assertEquals(name == null, link.plain, "a link with a name is one the editor takes")
+        }
+    }
 }

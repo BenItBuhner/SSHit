@@ -46,6 +46,7 @@ import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.diagnostics.CrashReportHost
 import app.berth.android.ui.diagnostics.DiagnosticsScreen
+import app.berth.android.ui.groups.GroupsScreen
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.QuickConnectSheet
@@ -97,6 +98,8 @@ sealed interface Screen : NavKey {
     /** The editor for [hostId], or for a new host; [link] is the `ssh://` or `sftp://` link a new host starts from, or one whose forwards a saved host has to confirm. */
     @Serializable data class HostEditor(val hostId: String?, val link: String? = null) : Screen
     @Serializable data object Keys : Screen
+    /** The groups overview (spec C8), from the drawer's Groups label. */
+    @Serializable data object Groups : Screen
     @Serializable data object Settings : Screen
     @Serializable data object KnownHosts : Screen
     /** One host's tunnels, or every host's when [hostId] is null. */
@@ -233,6 +236,10 @@ private fun Shell(vm: AppViewModel) {
                 closeDrawer()
                 tabUi.groupEditor = GroupEditorRequest.Create(thenNewTab = true)
             },
+            onGroups = {
+                closeDrawer()
+                go(Screen.Groups)
+            },
             onLibrary = { lib ->
                 closeDrawer()
                 go(
@@ -273,6 +280,7 @@ private fun Shell(vm: AppViewModel) {
                                 onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
+                                onGroups = { go(Screen.Groups) },
                             )
                         } else {
                             StageScreen(
@@ -283,6 +291,7 @@ private fun Shell(vm: AppViewModel) {
                                 onOpenSessionSheet = { sessionSheet = true },
                                 onEditHost = { go(Screen.HostEditor(it)) },
                                 onOpenDeckEditor = { go(Screen.DeckEditor) },
+                                onGroups = { go(Screen.Groups) },
                             )
                         }
                     }
@@ -291,6 +300,10 @@ private fun Shell(vm: AppViewModel) {
                             vm = vm,
                             onConnect = { host ->
                                 vm.open(host)
+                                toStage()
+                            },
+                            onConnectInNewGroup = { host ->
+                                vm.openInNewGroup(host)
                                 toStage()
                             },
                             onFiles = { host ->
@@ -312,7 +325,28 @@ private fun Shell(vm: AppViewModel) {
                     is Screen.HostEditor -> NavEntry(key) {
                         HostEditorScreen(vm = vm, hostId = key.hostId, onDone = { back() }, link = key.link)
                     }
-                    is Screen.Keys -> NavEntry(key) { KeysScreen(vm, onBack = { back() }) }
+                    is Screen.Keys -> NavEntry(key) {
+                        KeysScreen(
+                            vm,
+                            onBack = { back() },
+                            onOpenTab = { id ->
+                                vm.setActive(id)
+                                toStage()
+                            },
+                        )
+                    }
+                    is Screen.Groups -> NavEntry(key) {
+                        GroupsScreen(
+                            vm,
+                            actions = tabActions,
+                            onBack = { back() },
+                            onOpenGroup = { id ->
+                                vm.setWorkspace(id)
+                                toStage()
+                            },
+                            onNewGroup = { tabUi.groupEditor = GroupEditorRequest.Create() },
+                        )
+                    }
                     is Screen.Settings -> NavEntry(key) {
                         SettingsScreen(
                             vm,
@@ -415,6 +449,10 @@ private fun Shell(vm: AppViewModel) {
                 sessionSheet = false
                 toStage()
                 if (drawer.isOpen) closeDrawer()
+            },
+            onSaved = { host ->
+                quickConnectLink = null
+                go(Screen.HostEditor(host.id))
             },
         )
     }
