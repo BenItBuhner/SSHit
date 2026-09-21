@@ -46,6 +46,8 @@ import app.berth.android.ui.hosts.CyclePicker
 import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
+import app.berth.android.ui.keys.GenerateKeySheet
+import app.berth.android.ui.keys.NewKeyPrefill
 import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.terminal.resolvedFamily
 import app.berth.android.ui.theme.Berth
@@ -91,6 +93,8 @@ fun SettingsScreen(
     var fontPicker by remember { mutableStateOf(false) }
     var exportBundle by remember { mutableStateOf(false) }
     var importBundle by remember { mutableStateOf(false) }
+    // The New key sheet the import's report opens, on the key it names to make again (spec C20).
+    var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
     // One line at the foot of the screen for what a row just did (cleared, exported, imported); the text stays for the exit animation.
     var notice by remember { mutableStateOf<String?>(null) }
     val shownNotice = remember { mutableStateOf<String?>(null) }
@@ -108,7 +112,8 @@ fun SettingsScreen(
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
     if (fontPicker) FontPickerSheet(vm, onDismiss = { fontPicker = false })
     if (exportBundle) ExportBundleSheet(vm, onDismiss = { exportBundle = false }, onNotice = onNotice)
-    if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice)
+    if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice, onMakeKey = { makeKey = it })
+    makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
 
     Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(

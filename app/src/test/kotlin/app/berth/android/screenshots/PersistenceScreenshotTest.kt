@@ -4,18 +4,24 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -28,6 +34,8 @@ import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.session.AuthResolver
+import app.berth.android.ui.keys.GenerateKeySheet
+import app.berth.android.ui.keys.NewKeyPrefill
 import app.berth.android.ui.prompts.formatDate
 import app.berth.android.ui.settings.ExportBundleSheet
 import app.berth.android.ui.settings.IMPORT_DISCLOSURE
@@ -276,9 +284,10 @@ class PersistenceScreenshotTest {
      * the key for an address this phone pins as a lock row, read and not offered. Ticking the
      * conflict is the Replace, and the button says so; the import then writes every table as the
      * sheet said, puts the bundle's key in the saved one's place and leaves the pin alone, leaves
-     * that host asking each time, and ends on the list of keys to make again, which stays until Done.
-     * Four frames: the sheet as it opens, its end with the decisions unticked, the same with the
-     * conflict ticked and the button naming it, and the report.
+     * that host asking each time, and ends on the list of keys to make again, which stays until
+     * Done, with Make a key beside it opening the New key sheet on the key named. Four frames: the
+     * sheet as it opens, its end with the decisions unticked, the same with the conflict ticked and
+     * the button naming it, and the report.
      */
     private fun importSheet(name: String) {
         seedThisPhone()
@@ -290,9 +299,12 @@ class PersistenceScreenshotTest {
             keys.first { it.id == "kh-1" } to pinned
         }
         val blob = runBlocking { sealedByAnotherPhone() }
+        // Wired as Settings wires it: the report's Make a key closes the import and opens the New key sheet on the key it named.
+        var makeKey by mutableStateOf<NewKeyPrefill?>(null)
         themed {
             SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
-            ImportBundleSheet(graph.viewModel, onDismiss = {}, onNotice = {}, initialFile = PickedFile("berth-2026-09-14.berth", blob))
+            if (makeKey == null) ImportBundleSheet(graph.viewModel, onDismiss = {}, onNotice = {}, initialFile = PickedFile("berth-2026-09-14.berth", blob), onMakeKey = { makeKey = it })
+            makeKey?.let { GenerateKeySheet(graph.viewModel, onDismiss = {}, prefill = it) }
         }
         waitForText("berth-2026-09-14.berth \u00B7 ", substring = true)
         compose.onNode(hasSetTextAction()).performTextInput("not the passphrase")
@@ -345,8 +357,17 @@ class PersistenceScreenshotTest {
         // Two known hosts in the line, the replaced one said so; the pinned endpoint's key was not taken and is not counted.
         waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme, 2 known hosts (1 replaced), the Deck, the interface theme and the default terminal theme.")
         waitForText("db-primary asks each time until you pick a key", substring = true)
+        compose.onNodeWithText("Done").assertExists()
         capture("$name-recreate")
         compose.assertNoTextCut("the import's report")
+
+        // Make a key opens the New key sheet on the key the report named: its name, hardware-backed as it was, the rest the user's.
+        compose.onNodeWithText("Make a key").performClick()
+        waitForText("New key")
+        assertEquals(NewKeyPrefill("Phone key", KeyAlgorithm.ECDSA_P256, hardware = true), makeKey)
+        compose.onNode(hasSetTextAction() and hasText("Phone key")).assertExists()
+        compose.onNode(hasText("ECDSA P-256, hardware") and isSelectable()).assertIsSelected()
+        compose.onNode(hasText("Ed25519") and isSelectable()).assertIsNotSelected()
 
         runBlocking {
             val hosts = graph.hosts.items.value.associateBy { it.id }

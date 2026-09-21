@@ -42,6 +42,7 @@ import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.importer.keyFacts
 import app.berth.android.ui.importer.pinnedToLine
 import app.berth.android.ui.importer.replacesSavedKeyLine
+import app.berth.android.ui.keys.NewKeyPrefill
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
 import app.berth.data.bundle.BundleException
@@ -200,12 +201,20 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
  * Settings › Data › Import bundle (spec C20): choose the file, open it with its passphrase, see
  * what is in it, import. A hardware-backed key the bundle names comes without its private half
  * by construction; the sheet says which keys those are and which hosts used them, before the
- * import and again after it, so the user knows what to make again in Keys. A file that arrived
- * already read, [initialFile], skips the picker and waits on its passphrase.
+ * import and again after it, so the user knows what to make again in Keys, and [onMakeKey], where
+ * the caller has a New key sheet to open, puts a Make a key beside Done that opens it on the first
+ * of them ([NewKeyPrefill]). A file that arrived already read, [initialFile], skips the picker
+ * and waits on its passphrase.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String) -> Unit, initialFile: PickedFile? = null) {
+fun ImportBundleSheet(
+    vm: AppViewModel,
+    onDismiss: () -> Unit,
+    onNotice: (String) -> Unit,
+    initialFile: PickedFile? = null,
+    onMakeKey: ((NewKeyPrefill) -> Unit)? = null,
+) {
     val c = Berth.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -296,6 +305,10 @@ fun ImportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                     RecreateList(finished.needsRecreation)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         BerthButton("Done", kind = ButtonKind.PRIMARY, onClick = onDismiss)
+                        // The list says to make a key: the way to do it, opening on the first key named, hardware-backed as it was.
+                        if (onMakeKey != null) {
+                            BerthButton("Make a key", kind = ButtonKind.SECONDARY, onClick = { onMakeKey(NewKeyPrefill(finished.needsRecreation.first())); onDismiss() })
+                        }
                     }
                 }
                 opened != null -> {

@@ -57,6 +57,7 @@ import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
+import app.berth.domain.model.RecreateNotice
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.launch
 
@@ -200,12 +201,32 @@ fun biometricModelLabel(model: KeyAuthModel?): String = when (model) {
 
 private enum class KeyKind(val label: String) { ED25519("Ed25519"), HARDWARE("ECDSA P-256, hardware"), RSA("RSA 4096") }
 
+/**
+ * What the New key sheet opens set to when another surface asks for a key it can name: the
+ * bundle import's Make a key (spec C20), for a hardware-backed key that stayed on the phone the
+ * bundle came from, opens on that key's [name] and its type, [hardware] on this phone too, since
+ * that is the key it stands in for. Everything else on the sheet is the user's to choose.
+ */
+data class NewKeyPrefill(val name: String, val algorithm: KeyAlgorithm, val hardware: Boolean) {
+    /** The bundle import's recreate notice as a prefill: the key's name, hardware-backed as the one it replaces was. */
+    constructor(notice: RecreateNotice) : this(notice.identityName, notice.algorithm, hardware = true)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GenerateKeySheet(vm: AppViewModel, onDismiss: () -> Unit) {
+fun GenerateKeySheet(vm: AppViewModel, onDismiss: () -> Unit, prefill: NewKeyPrefill? = null) {
     val c = Berth.colors
-    var kind by remember { mutableStateOf(KeyKind.ED25519) }
-    var name by remember { mutableStateOf("") }
+    var kind by remember {
+        mutableStateOf(
+            when {
+                prefill == null -> KeyKind.ED25519
+                prefill.hardware -> KeyKind.HARDWARE
+                prefill.algorithm == KeyAlgorithm.RSA_4096 -> KeyKind.RSA
+                else -> KeyKind.ED25519
+            },
+        )
+    }
+    var name by remember { mutableStateOf(prefill?.name ?: "") }
     var comment by remember { mutableStateOf("") }
     var protection by remember { mutableStateOf(0) }
     var passphrase by remember { mutableStateOf("") }
