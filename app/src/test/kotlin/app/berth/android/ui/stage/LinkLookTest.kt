@@ -13,8 +13,8 @@ import org.junit.Test
  * a file name nor a segment of the link's own path) and which do not (a directory listing's every
  * entry, a version tag, a decimal, `Node.js`, `PR #12`); the equivalences that make a text the
  * address itself; the dressed links the rule exists for, with their captions, the backslash a
- * browser reads as a slash among them; and the path a `file://` link hands to Copy path and
- * Paste path, decoded and quoted for the shell.
+ * browser reads as a slash and the host after the last `@` among them; and the path a `file://`
+ * link hands to Copy path and Paste path, decoded and quoted for the shell.
  */
 class LinkLookTest {
     private fun look(url: String, text: String) = LinkLook.of(LinkTap(url, text))
@@ -98,6 +98,19 @@ class LinkLookTest {
         assertWarns("https://evil.example/", "bank.co.uk/login", "Shown as \u201Cbank.co.uk/login\u201D, but goes to evil.example")
         // The caption keeps the text's own case: what the user saw, not a lowercased host.
         assertWarns("https://evil.example/", "GitHub.com", "Shown as \u201CGitHub.com\u201D, but goes to evil.example")
+        // The shown text is the attacker's to draw: a backslash for the slash claims the host all the same.
+        assertWarns("https://evil.example/", "google.com\\login", "Shown as \u201Cgoogle.com\\login\u201D, but goes to evil.example")
+        assertEquals("google.com", LinkLook.hostClaim("google.com\\login", "https://x.example/"))
+    }
+
+    @Test
+    fun `the host is what follows the last @, as the browser and SshLink read it`() {
+        // A user@REALM login, which SshLink allows, over its own host is no lie.
+        assertPlain("ssh://ben@CORP@host.example/", "host.example", "Shown as \u201Chost.example\u201D, opens in Berth: ben@CORP@host.example", LinkLook.Posture.BERTH)
+        // Chrome goes to the host after the last @; the caption and the deception check go with it.
+        assertWarns("https://google.com@google.com@evil.example/", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to evil.example")
+        assertPlain("https://google.com@evil.example@google.com/", "https://google.com@evil.example@google.com/", "Goes to google.com")
+        assertEquals("b.google.com", LinkLook.hostOf("https://a@evil.example@b.google.com/"))
     }
 
     @Test
@@ -130,6 +143,9 @@ class LinkLookTest {
         // The host must end in `.` and the claim, not merely in the claim's letters: evil.example can carry google.com, not be under it.
         assertWarns("https://google.com.evil.example/", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to google.com.evil.example")
         assertWarns("https://notgithub.com/", "github.com", "Shown as \u201Cgithub.com\u201D, but goes to notgithub.com")
+        // `www.` shorn from a claim must leave a domain: www.com is no parent of every .com host, www.google.com of google's is.
+        assertWarns("https://evil.com/", "www.com", "Shown as \u201Cwww.com\u201D, but goes to evil.com")
+        assertPlain("https://mail.google.com/", "www.google.com", "Shown as \u201Cwww.google.com\u201D, goes to mail.google.com")
     }
 
     @Test
@@ -180,6 +196,10 @@ class LinkLookTest {
         assertPlain("ssh://root:hunter2@homelab/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: root@homelab", LinkLook.Posture.BERTH)
         assertPlain("sftp://ben@homelab/srv/www;fingerprint=SHA256:abc", "www", "Shown as \u201Cwww\u201D, opens in Berth: ben@homelab", LinkLook.Posture.BERTH)
         assertEquals("homelab", LinkLook.hostOf("sftp://ben@homelab;fingerprint=SHA256:abc"))
+        // The draft URI keeps the fingerprint parameter in the userinfo, where SshLink reads it; the caption keeps the host and port.
+        assertPlain("ssh://ben;fingerprint=SHA256%3Aabc@host.example:2222/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: ben@host.example:2222", LinkLook.Posture.BERTH)
+        assertPlain("ssh://ben:hunter2;fingerprint=SHA256%3Aabc@host.example", "host.example", "Shown as \u201Chost.example\u201D, opens in Berth: ben@host.example", LinkLook.Posture.BERTH)
+        assertPlain("ssh://ben@homelab;fingerprint=SHA256:abc", "homelab", "Shown as \u201Chomelab\u201D, opens in Berth: ben@homelab", LinkLook.Posture.BERTH)
         // Dressed as a site, an ssh link is a lie like any other.
         assertWarns("ssh://root@evil.example/", "github.com", "Shown as \u201Cgithub.com\u201D, but opens in Berth: root@evil.example", LinkLook.Posture.BERTH)
     }

@@ -678,8 +678,10 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
     }
 
     companion object {
-        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^@/?#\s]*@)?(\[[^\]]*\]|[^/?#:;\s]+)""")
-        private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#].*)?$""")
+        /** Scheme, an authority whose userinfo runs to its last `@` (the browser's and `SshLink`'s reading), then the host: a bracketed IPv6 literal or a name. */
+        private val SCHEME_HOST = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://(?:[^/?#\s]*@)?(\[[^\]]*\]|[^/?#:;@\s]+)""")
+        /** A host of two labels or more, `www.` or not, a port and a tail drawn with any of the slashes a text can wear. */
+        private val BARE_HOST = Regex("""^(?:www\.)?([a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+)(?::\d+)?(?:[/?#\\].*)?$""")
         private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
         private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
 
@@ -756,11 +758,12 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
          * [claim] names the site the link goes [to]: that host, give or take `www.`, or a parent of it,
          * since `github.com` over gist.github.com is no lie and an attacker cannot make evil.example
          * end in `.google.com`, only carry it. One way: a claim deeper than the host is another host.
+         * A parent is a domain, not a bare TLD: `www.com` shorn of its `www.` is no parent of every `.com`.
          */
         private fun sameSite(claim: String, to: String): Boolean {
             val c = claim.removePrefix("www.")
             val t = to.removePrefix("www.")
-            return c == t || t.endsWith(".$c")
+            return c == t || ('.' in c && t.endsWith(".$c"))
         }
 
         /**
@@ -836,14 +839,18 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         /** The path's segments, lowercased, empty ones dropped. */
         private fun segments(path: String): Set<String> = path.split('/').mapNotNullTo(HashSet()) { it.lowercase().takeIf { s -> s.isNotEmpty() } }
 
-        /** `user@host:port` for an `ssh://` or `sftp://` link, the user's password (never a caption's business) and any `;fingerprint=` parameter left out. */
+        /**
+         * `user@host:port` for an `ssh://` or `sftp://` link, read as `SshLink` reads it: the authority to
+         * the first `/`, `?` or `#`, the host after its last `@`, and the user's `;fingerprint=`
+         * parameter (the draft URI keeps it in the userinfo) and password, never a caption's business, left out.
+         */
         private fun sshTarget(url: String): String {
             val start = url.indexOf("://") + 3
-            val end = url.indexOfAny(charArrayOf('/', '?', '#', ';'), start).let { if (it < 0) url.length else it }
+            val end = url.indexOfAny(charArrayOf('/', '?', '#'), start).let { if (it < 0) url.length else it }
             val authority = url.substring(start, end)
             val at = authority.lastIndexOf('@')
-            val user = if (at < 0) "" else authority.substring(0, at).substringBefore(':')
-            val hostPort = authority.substring(at + 1)
+            val user = if (at < 0) "" else authority.substring(0, at).substringBefore(';').substringBefore(':')
+            val hostPort = authority.substring(at + 1).substringBefore(';')
             return if (user.isEmpty()) hostPort else "$user@$hostPort"
         }
 
