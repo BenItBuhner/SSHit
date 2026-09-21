@@ -5,6 +5,7 @@ import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
 import app.berth.sftp.SftpFileType
 import app.berth.sftp.SftpPaths
+import app.berth.sftp.SftpPermissions
 import app.berth.sftp.TextRead
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -120,11 +121,11 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         return entry(n, node(n))
     }
 
-    override suspend fun mkdir(path: String) {
+    override suspend fun mkdir(path: String, permissions: Int) {
         val n = SftpPaths.normalize(path)
         node(SftpPaths.parent(n))
         if (n in nodes) throw SftpError.AlreadyExists(n)
-        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = System.currentTimeMillis(), permissions = 0b111_101_101)
+        nodes[n] = FakeNode(SftpFileType.DIRECTORY, modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF)
     }
 
     override suspend fun rename(from: String, to: String) {
@@ -164,11 +165,13 @@ class FakeSftpFileSystem(val homePath: String = "/home/demo") : SftpFileSystem {
         onProgress(sent, total)
     }
 
-    override suspend fun upload(source: InputStream, size: Long, path: String, onProgress: (bytes: Long, total: Long) -> Unit) {
+    override suspend fun upload(source: InputStream, size: Long, path: String, permissions: Int, onProgress: (bytes: Long, total: Long) -> Unit) {
         val n = SftpPaths.normalize(path)
         node(SftpPaths.parent(n))
+        // A private file is made new, as the client's exclusive create is: anything at the name, a link included, is a refusal.
+        if (permissions != SftpPermissions.FILE && n in nodes) throw SftpError.AlreadyExists(n)
         val bytes = source.readBytes()
-        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = System.currentTimeMillis(), content = bytes)
+        nodes[n] = FakeNode(SftpFileType.REGULAR, size = bytes.size.toLong(), modifiedAt = System.currentTimeMillis(), permissions = permissions and 0xFFF, content = bytes)
         onProgress(bytes.size.toLong(), bytes.size.toLong())
     }
 

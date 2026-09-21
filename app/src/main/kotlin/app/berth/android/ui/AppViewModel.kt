@@ -26,6 +26,8 @@ import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.BerthBundle
+import app.berth.domain.model.BundleImportOptions
+import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
@@ -317,11 +319,26 @@ class AppViewModel @Inject constructor(
         _linkOutcome.value = LinkOutcome.Staged
     }
 
-    /** Text shared with no file behind it: pasted into the live terminal on stage, as a paste from the clipboard would be. */
+    /**
+     * Text shared with no file behind it: handed to the Stage as a paste into the live terminal on
+     * stage, through the same gate as one from the clipboard (spec C18, `StageTools.paste`), so a
+     * shared note of several lines or with control characters meets the preview and pastes nothing
+     * until it is confirmed. The Stage takes it from [sharedPaste] once it is composed for the session.
+     */
     private fun dropText(text: String) {
         val session = liveSessionOnStage() ?: return
-        session.paste(text)
+        _sharedPaste.value = SharedPaste(session.id, text)
         _linkOutcome.value = LinkOutcome.Staged
+    }
+
+    private val _sharedPaste = MutableStateFlow<SharedPaste?>(null)
+
+    /** A share's text waiting for the Stage of the session it is for; the Stage pastes it through its gate and clears it. */
+    val sharedPaste: StateFlow<SharedPaste?> = _sharedPaste.asStateFlow()
+
+    /** The Stage has taken [paste] to its gate; nothing else will. */
+    fun sharedPasteTaken(paste: SharedPaste) {
+        _sharedPaste.compareAndSet(paste, null)
     }
 
     private fun liveSessionOnStage(): TerminalSession? {
@@ -1054,8 +1071,11 @@ class AppViewModel @Inject constructor(
         bundles.open(blob, passphrase)
     }
 
-    /** Writes [bundle] into the library and says what it did. */
-    suspend fun importBundle(bundle: BerthBundle): BundleImportReport = bundles.apply(bundle)
+    /** What importing [bundle] would do here beyond writing its records, for the sheet to say before it does. */
+    suspend fun planBundle(bundle: BerthBundle): BundleImportPlan = bundles.plan(bundle)
+
+    /** Writes [bundle] into the library, the Deck and the interface theme as [options] say, and says what it did. */
+    suspend fun importBundle(bundle: BerthBundle, options: BundleImportOptions = BundleImportOptions()): BundleImportReport = bundles.apply(bundle, options)
 
     // ---- settings -------------------------------------------------------------------------------------
 
@@ -1283,6 +1303,9 @@ data class KnownHostsImport(val candidates: List<KnownHostsCandidate>, val skipp
 data class KnownHostsImported(val added: Int, val replaced: Int) {
     val total: Int get() = added + replaced
 }
+
+/** Text shared to Berth, for the Stage of [sessionId] to paste through its preview gate ([AppViewModel.sharedPaste]). */
+data class SharedPaste(val sessionId: String, val text: String)
 
 /** What an arrival (a link, a launcher shortcut, a share) came to ([AppViewModel.linkOutcome]); the shell acts on it once and clears it. */
 sealed interface LinkOutcome {

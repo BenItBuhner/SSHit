@@ -48,6 +48,8 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.sftp.SftpPaths
+import app.berth.sftp.TextRead
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,9 +79,10 @@ import kotlin.io.path.createTempDirectory
 /**
  * The surfaces of share-to-session and the launcher's shortcuts (spec C24, Part B App shortcuts,
  * A80): the notice a share meets with nothing live on stage, at 1× and at the interface's 1.3×
- * font cap (A11), the Stage after a file shared to Berth has landed in the live shell's `/tmp`
- * with its path pasted (which needs the sshd), and the five icons a long press on Berth offers,
- * drawn as a launcher masks them. The icons do not scale with the font, so they are held once.
+ * font cap (A11), the Stage after a file shared to Berth has landed in a folder of the login's own
+ * under the live shell's `/tmp` with its path pasted, the paste preview a shared note of two lines
+ * meets (both of which need the sshd), and the five icons a long press on Berth offers, drawn as a
+ * launcher masks them. The icons do not scale with the font, so they are held once.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -135,6 +138,9 @@ class ShortcutAndShareScreenshotTest {
     private fun waitForText(text: String, substring: Boolean = false) =
         compose.waitUntil(5_000) { compose.onAllNodes(hasText(text, substring = substring)).fetchSemanticsNodes().isNotEmpty() }
 
+    private fun waitForNoText(text: String) =
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isEmpty() }
+
     /** Real time passes while the compose clock keeps ticking, so a bar's entrance finishes. */
     private fun settle(ms: Long) {
         val end = System.currentTimeMillis() + ms
@@ -186,32 +192,82 @@ class ShortcutAndShareScreenshotTest {
     // ---- C24: the share landed -----------------------------------------------------------------------------
 
     /**
-     * A live shell on the sshd on stage and a file shared to Berth: it goes to the host's `/tmp`
-     * through the transfer queue and its path, quoted for the space in its name, is pasted onto the
-     * shell's line, where the Stage shows it. The copy is removed through the shell afterwards.
+     * A live shell on the sshd on stage and a file shared to Berth: it goes to a folder of the
+     * login's own under the host's `/tmp` through the transfer queue and its path, quoted for the
+     * space in its name, is pasted onto the shell's line, where the Stage shows it. The folder is
+     * removed through the shell afterwards.
      */
     @Test
     fun `a shared file lands in tmp and its path is pasted onto the live shell's line`() {
         val session = liveOnStage()
         val local = createTempDirectory("berth-share").toFile()
         val report = File(local, "berth drop ${UUID.randomUUID().toString().take(8)}.txt").apply { writeText("quarterly numbers\n") }
-        val quoted = TransferManager.shellQuote("/tmp/${report.name}")
+        var folder: String? = null
         try {
             graph.inbox.offer(Arrival.Files(listOf(Uri.fromFile(report))))
             compose.waitUntil(45_000) {
                 val rows = graph.files.transfers.transfers.value
                 rows.size == 1 && rows.single().state == TransferState.DONE
             }
-            assertEquals("/tmp/${report.name}", graph.files.transfers.transfers.value.single().remotePath)
+            val landed = graph.files.transfers.transfers.value.single().remotePath
+            val dir = SftpPaths.parent(landed)
+            folder = dir
+            assertTrue(landed, Regex("/tmp/${TransferManager.DROP_FOLDER_PREFIX}[0-9a-f]{8}").matches(dir))
+            assertEquals("$dir/${report.name}", landed)
+            val quoted = TransferManager.shellQuote(landed)
             compose.waitUntil(10_000) { session.emulator.cursorLineText().endsWith(quoted) }
             settle(600)
             capture("share-landed-on-stage")
-            assertEquals("quarterly numbers\n", File("/tmp", report.name).readText())
-            session.sendText("\u0015rm -f $quoted\r")
-            compose.waitUntil(10_000) { !File("/tmp", report.name).exists() }
+            // The folder is the login's alone, so the bytes are read back over its own sftp channel.
+            runBlocking {
+                val fs = session.openSftp()
+                try {
+                    assertEquals("quarterly numbers\n", (fs.readText(landed, 1024) as TextRead.Text).content)
+                    assertEquals(0b110_000_000, fs.stat(landed).permissions and 0b111_111_111)
+                } finally {
+                    fs.close()
+                }
+            }
         } finally {
+            folder?.let { dir ->
+                session.sendText("\u0015rm -rf ${TransferManager.shellQuote(dir)}\r")
+                compose.waitUntil(10_000) { !File(dir).exists() }
+            }
             local.deleteRecursively()
         }
+    }
+
+    /**
+     * A note of two lines shared to Berth with a live shell on stage: it is a paste like the
+     * clipboard's, so it meets the Stage's preview (spec C18) and nothing reaches the shell until
+     * the sheet says so. Cancel keeps it off the wire; Paste sends it, and the shell shows both lines.
+     */
+    @Test
+    fun `shared text of two lines meets the paste preview, and nothing lands until it is confirmed`() {
+        val session = liveOnStage()
+        val marker = "shared-${UUID.randomUUID().toString().take(8)}"
+        val text = "echo $marker one\necho $marker two"
+        fun onScreen() = session.emulator.screenText().any { it.contains(marker) }
+
+        graph.inbox.offer(Arrival.Text(text))
+        waitForText("Paste 2 lines")
+        compose.waitUntil(5_000) { graph.viewModel.sharedPaste.value == null }
+        assertFalse("nothing reached the shell ahead of the sheet", onScreen())
+        settle(600)
+        capture("share-text-preview")
+        compose.onNodeWithText("Cancel").performClick()
+        waitForNoText("Paste 2 lines")
+        settle(1_000)
+        assertFalse("Cancel kept the text off the wire", onScreen())
+
+        // Shared again and confirmed: the two lines land at the prompt, as one block under the shell's bracketed paste.
+        graph.inbox.offer(Arrival.Text(text))
+        waitForText("Paste 2 lines")
+        compose.onNodeWithText("Paste").performClick()
+        waitForNoText("Paste 2 lines")
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.contains("echo $marker two") } }
+        // The line is left unrun and cleared, so the box is as it was.
+        session.sendText("\u0003")
     }
 
     /** The shell up with a live login on the sshd on stage, or the test is skipped. */

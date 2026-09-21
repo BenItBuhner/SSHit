@@ -644,6 +644,15 @@ private fun StageBody(
     val accessibility = remember(session.id) { TerminalAccessibility() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
+    // A share's text (spec C24) is one more paste: it waits in the view model for this session's
+    // Stage and comes through the same gate, so a note of several lines meets the preview here.
+    val shared by vm.sharedPaste.collectAsState()
+    LaunchedEffect(shared, session.id) {
+        val waiting = shared ?: return@LaunchedEffect
+        if (waiting.sessionId != session.id) return@LaunchedEffect
+        vm.sharedPasteTaken(waiting)
+        paste(waiting.text)
+    }
     val input = remember(session.id) {
         StageInput(
             session = { session },

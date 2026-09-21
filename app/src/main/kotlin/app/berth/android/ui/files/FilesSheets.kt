@@ -210,7 +210,7 @@ fun NameSheet(
     val trimmed = field.text.trim()
     val problem = when {
         trimmed.isEmpty() -> null
-        !SftpPaths.isValidName(trimmed) -> "Names cannot contain / and cannot be . or .."
+        !SftpPaths.isValidName(trimmed) -> "Names cannot contain / or control characters, and cannot be . or .."
         trimmed != initial && trimmed in existing -> "$trimmed is already here."
         else -> null
     }
