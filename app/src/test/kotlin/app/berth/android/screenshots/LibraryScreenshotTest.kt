@@ -297,6 +297,10 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         chip("lab").assertExists()
         chip("prod").assertExists()
         section("Recent").assertExists()
+        // Recent is the three last connected, the latest first; All is the rest in the same order, here
+        // the one host that has never connected. Each host is on the screen once (nit 1).
+        val standing = listOf("RECENT", "homelab", "prod-api", "pi-hole", "ALL", "build box").map { it to compose.onNodeWithText(it).fetchSemanticsNode().positionInRoot.y }
+        assertEquals(standing.map { it.first }, standing.sortedBy { it.second }.map { it.first })
         capture("hosts-library")
         assertNoTextCut("the Hosts library")
 
@@ -329,6 +333,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("pi-hole").assertIsDisplayed()
         hasNoText("build box")
         section("Recent").assertDoesNotExist()
+        // The one list keeps the sort's order: homelab connected after pi-hole did.
+        assertTrue(compose.onNodeWithText("homelab").fetchSemanticsNode().positionInRoot.y < compose.onNodeWithText("pi-hole").fetchSemanticsNode().positionInRoot.y)
         chip("lab").assertIsSelected()
         capture("hosts-tag-chip")
         search.performTextInput("zzz")

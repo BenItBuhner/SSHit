@@ -71,7 +71,7 @@ import kotlinx.coroutines.launch
 
 /** The Hosts screen's order (spec C9, Overflow › Sort). */
 enum class HostSort(val label: String) {
-    /** The three last connected under Recent, then everyone by name. */
+    /** The three last connected under Recent, then the rest under All in the same order, the never-connected last by name ([byRecency]). */
     RECENT("Recent"),
     NAME("Name"),
 
@@ -212,16 +212,19 @@ fun HostsScreen(
                 }
                 when (sort) {
                     HostSort.RECENT -> {
-                        // Recent heads the whole library (C9); a search or a chip narrows it to one list of
-                        // matches, since a shortcut over a list of two would only say each of them twice.
+                        // Recent heads the whole library (C9) and All is the rest of it, in the same order;
+                        // a search or a chip narrows it to one list of matches, since a shortcut over a list
+                        // of two would only say each of them twice.
                         val narrowed = query.isNotBlank() || tag != null
-                        val recent = if (narrowed) emptyList() else shown.filter { it.lastConnectedAt != null }.sortedByDescending { it.lastConnectedAt }.take(3)
+                        val ordered = shown.byRecency()
+                        val recent = if (narrowed) emptyList() else ordered.filter { it.lastConnectedAt != null }.take(3)
+                        val rest = ordered.drop(recent.size)
                         if (recent.isNotEmpty()) {
                             label("Recent", true)
-                            items(recent, key = { "recent-" + it.id }) { host -> row(host) }
-                            label("All", false)
+                            items(recent, key = { it.id }) { host -> row(host) }
+                            if (rest.isNotEmpty()) label("All", false)
                         }
-                        items(shown.sortedBy { it.name.lowercase() }, key = { it.id }) { host -> row(host) }
+                        items(rest, key = { it.id }) { host -> row(host) }
                     }
                     HostSort.NAME -> items(shown.sortedBy { it.name.lowercase() }, key = { it.id }) { host -> row(host) }
                     HostSort.TAG -> {
@@ -280,6 +283,14 @@ internal fun List<Host>.matching(query: String, tag: String?): List<Host> {
             }
     }
 }
+
+/**
+ * Sort › Recent's order (spec C9, the drawing's `4m, 1h` over the line and `2d, 2w, 3w, 3w` under
+ * it): the last connected first, back through time, then the hosts that have never connected, by
+ * name; two connected in the same instant stand by name too.
+ */
+internal fun List<Host>.byRecency(): List<Host> =
+    sortedWith(compareByDescending<Host> { it.lastConnectedAt ?: Long.MIN_VALUE }.thenBy { it.name.lowercase() })
 
 /** Sort by tag (spec C9): a section per tag in alphabetical order, its hosts by name; the untagged last, when there are any. */
 internal fun List<Host>.byTag(): List<Pair<String, List<Host>>> {

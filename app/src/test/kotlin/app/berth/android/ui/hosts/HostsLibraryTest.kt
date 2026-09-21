@@ -7,8 +7,8 @@ import org.junit.Test
 
 /** The Hosts screen's search, chips and Sort by tag (spec C9) as the pure functions behind them. */
 class HostsLibraryTest {
-    private fun host(name: String, tags: List<String> = emptyList(), address: String = "$name.local", user: String = "ben", port: Int = 22, jump: List<String> = emptyList()) =
-        Host(id = name, name = name, color = SwatchColor.COPPER, monogram = Host.monogramFor(name), address = address, port = port, user = user, tags = tags, jumpHostIds = jump, createdAt = 0)
+    private fun host(name: String, tags: List<String> = emptyList(), address: String = "$name.local", user: String = "ben", port: Int = 22, jump: List<String> = emptyList(), connected: Long? = null) =
+        Host(id = name, name = name, color = SwatchColor.COPPER, monogram = Host.monogramFor(name), address = address, port = port, user = user, tags = tags, jumpHostIds = jump, lastConnectedAt = connected, createdAt = 0)
 
     private val hosts = listOf(
         host("web", tags = listOf("prod", "Web")),
@@ -39,6 +39,21 @@ class HostsLibraryTest {
         assertEquals(listOf("db"), hosts.matching("db", "prod").map { it.name })
         assertEquals("a chip is matched case aside too", listOf("web"), hosts.matching("", "web").map { it.name })
         assertEquals(emptyList<String>(), hosts.matching("", "nowhere").map { it.name })
+    }
+
+    @Test
+    fun `sort by recent is the last connected first, the never-connected last by name`() {
+        val library = listOf(
+            host("staging", connected = 2_000),
+            host("Bastion"),
+            host("api-gateway", connected = 9_000),
+            host("lab-gpu", connected = 5_000),
+            host("archive"),
+            host("mirror", connected = 5_000),
+        )
+        assertEquals(listOf("api-gateway", "lab-gpu", "mirror", "staging", "archive", "Bastion"), library.byRecency().map { it.name })
+        assertEquals("nothing connected yet is the alphabet", listOf("archive", "Bastion"), listOf(host("Bastion"), host("archive")).byRecency().map { it.name })
+        assertEquals(emptyList<Host>(), emptyList<Host>().byRecency())
     }
 
     @Test
