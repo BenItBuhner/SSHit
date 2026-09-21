@@ -55,8 +55,12 @@ class BundledFamily(val name: String, val regular: Int, val bold: Int?, val ital
     }
 }
 
-/** A family the user imported: its display name and the face files under its folder in the app's files. */
-class ImportedFamily(val name: String, val dir: File, val files: Map<FontFace, File>) {
+/**
+ * A family the user imported: its display name, the face files under its folder in the app's
+ * files, and whether its regular face holds a column ([monospaced], measured once at import and
+ * kept in the name file, so listing the families opens no font).
+ */
+class ImportedFamily(val name: String, val dir: File, val files: Map<FontFace, File>, val monospaced: Boolean = true) {
     val faces: Int get() = files.size
 
     /** The regular face, or the first face there is when the user imported only a bold or an italic. */
@@ -101,17 +105,29 @@ object TerminalFonts {
 
     fun importedDir(context: Context): File = File(context.filesDir, "fonts")
 
-    /** The imported families, by name; read from disk each time, which is a directory listing and a name file per family. */
+    /**
+     * The imported families, by name; read from disk each time, which is a directory listing and a
+     * name file per family: the family's name on its first line, `monospaced` or `proportional`
+     * on its second. A name file from before the second line was kept has the face measured here, once.
+     */
     fun imported(context: Context): List<ImportedFamily> {
         val root = importedDir(context)
         val dirs = root.listFiles { f -> f.isDirectory } ?: return emptyList()
         return dirs.mapNotNull { dir ->
-            val name = runCatching { File(dir, NAME_FILE).readText(StandardCharsets.UTF_8).trim() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val lines = runCatching { File(dir, NAME_FILE).readText(StandardCharsets.UTF_8).lines() }.getOrNull() ?: return@mapNotNull null
+            val name = lines.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             val files = HashMap<FontFace, File>()
             for (face in FontFace.entries) {
                 dir.listFiles { f -> f.isFile && f.nameWithoutExtension == face.fileStem }?.firstOrNull()?.let { files[face] = it }
             }
-            if (files.isEmpty()) null else ImportedFamily(name, dir, files)
+            if (files.isEmpty()) return@mapNotNull null
+            val primary = files[FontFace.REGULAR] ?: files.values.first()
+            val monospaced = when (lines.getOrNull(1)?.trim()) {
+                MONOSPACED -> true
+                PROPORTIONAL -> false
+                else -> isMonospaced(primary)
+            }
+            ImportedFamily(name, dir, files, monospaced)
         }.sortedBy { it.name.lowercase() }
     }
 
@@ -121,9 +137,7 @@ object TerminalFonts {
     fun choices(context: Context): List<FontChoice> =
         bundled.map { FontChoice(it.name, FontChoice.Kind.BUNDLED, it.faces, it.licence) } +
             FontChoice(SYSTEM, FontChoice.Kind.SYSTEM, 4) +
-            imported(context).map { fam ->
-                FontChoice(fam.name, FontChoice.Kind.IMPORTED, fam.faces, monospaced = fam.primary?.let { isMonospaced(it) } ?: true)
-            }
+            imported(context).map { fam -> FontChoice(fam.name, FontChoice.Kind.IMPORTED, fam.faces, monospaced = fam.monospaced) }
 
     /**
      * The imported family the Nerd Font fallback draws from: the symbols font itself when it is
@@ -158,21 +172,23 @@ object TerminalFonts {
         val face = names.face
         val dir = File(importedDir(context), slug(family)).also { it.mkdirs() }
         if (!dir.isDirectory) return@withContext ImportResult.Failed("Couldn't make room for the font.")
-        // A face already in the family goes, whatever its extension, so the folder never holds two of one face.
-        dir.listFiles { f -> f.nameWithoutExtension == face.fileStem }?.forEach { it.delete() }
         val ext = if (names.cff) "otf" else "ttf"
         val target = File(dir, "${face.fileStem}.$ext")
+        // Named so it is never a face to [imported] and never what the delete below matches.
+        val tmp = File(dir, "import-${face.fileStem}.tmp")
         val ok = runCatching {
-            File(dir, "$face.tmp").let { tmp ->
-                tmp.writeBytes(bytes)
-                if (!tmp.renameTo(target)) { tmp.delete(); error("rename") }
-            }
-            File(dir, NAME_FILE).writeText(family, StandardCharsets.UTF_8)
-            // A font Android cannot open is no font to us; the copy goes back out.
-            Font.Builder(target).build()
+            tmp.writeBytes(bytes)
+            // A font Android cannot open is no font to us, proven on the copy before anything the
+            // family already had is touched, so a bad file over a good face leaves the good face.
+            Font.Builder(tmp).build()
+            // The face already in the family goes, whatever its extension, so the folder never holds two of one face.
+            dir.listFiles { f -> f.isFile && f.nameWithoutExtension == face.fileStem }?.forEach { it.delete() }
+            if (!tmp.renameTo(target)) error("rename")
+            val primary = dir.listFiles { f -> f.isFile && f.nameWithoutExtension == FontFace.REGULAR.fileStem }?.firstOrNull() ?: target
+            File(dir, NAME_FILE).writeText("$family\n${if (isMonospaced(primary)) MONOSPACED else PROPORTIONAL}", StandardCharsets.UTF_8)
         }.isSuccess
         if (!ok) {
-            target.delete()
+            tmp.delete()
             if (dir.listFiles()?.none { it.isFile && it.name != NAME_FILE } == true) dir.deleteRecursively()
             return@withContext ImportResult.Failed("Android couldn't open that font.")
         }
@@ -186,7 +202,7 @@ object TerminalFonts {
         invalidate()
     }
 
-    /** Whether the font draws `i` and `M` at one width, measured once at import and for the picker's note. */
+    /** Whether the font draws `i` and `M` at one width, measured once at import for the picker's note. */
     fun isMonospaced(file: File): Boolean = runCatching {
         val paint = Paint().apply { typeface = Typeface.createFromFile(file); textSize = 100f }
         val narrow = paint.measureText("i")
@@ -219,6 +235,8 @@ object TerminalFonts {
     }
 
     private const val NAME_FILE = "family.txt"
+    private const val MONOSPACED = "monospaced"
+    private const val PROPORTIONAL = "proportional"
     private const val MAX_FONT_BYTES = 40 * 1_000_000
     private const val MAX_NAME_LENGTH = 60
 }

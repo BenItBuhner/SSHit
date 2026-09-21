@@ -30,8 +30,10 @@ import java.nio.ByteBuffer
  * The font families (spec C20, Fonts): each bundled family loads as its own faces, not the system's
  * monospace under another name; the Nerd Font fallback puts the Powerline glyphs behind a family
  * that lacks them and nowhere else; a TTF or OTF import is filed under the family and face the
- * file's own name table gives, listed, drawn, and removable; and what is not a font is turned down
- * by name.
+ * file's own name table gives, listed, drawn, and removable; what is not a font is turned down by
+ * name, and a file that names itself but will not open is turned down with the face it would have
+ * replaced left standing; and whether a family holds a column is measured once, at import, and
+ * kept in its name file.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -211,6 +213,82 @@ class TerminalFontsTest {
         assertEquals(TerminalFonts.ImportResult.Failed("Couldn't read that file."), TerminalFonts.import(context, Uri.fromFile(File(context.cacheDir, "missing.ttf"))))
         assertTrue(TerminalFonts.imported(context).isEmpty())
         assertFalse(File(TerminalFonts.importedDir(context), "font").exists())
+    }
+
+    /**
+     * [bytes] with the named tables struck from the directory (their tags overwritten, the data
+     * left where it was): the name table still reads, so the file names its family, and FreeType
+     * refuses a TrueType font with no horizontal header, so Android will not open it.
+     */
+    private fun withoutTables(bytes: ByteArray, vararg tags: String): ByteArray {
+        val out = bytes.copyOf()
+        val b = ByteBuffer.wrap(out)
+        val numTables = b.getShort(4).toInt() and 0xFFFF
+        var struck = 0
+        for (i in 0 until numTables) {
+            val rec = 12 + i * 16
+            val tag = String(out, rec, 4, Charsets.ISO_8859_1)
+            if (tag in tags) {
+                b.putInt(rec, 0x7A7A7A30 + struck) // 'zzz0', 'zzz1', ...
+                struck++
+            }
+        }
+        assertEquals("every named table was there to strike", tags.size, struck)
+        return out
+    }
+
+    @Test
+    fun `a file that names a family but will not open is refused, and the face it would have replaced stands`() = runBlocking {
+        assertEquals(TerminalFonts.ImportResult.Done("Hack", FontFace.REGULAR), TerminalFonts.import(context, fileUri("hack.ttf", resource(R.font.hack_regular))))
+        val family = TerminalFonts.imported(context).single()
+        val good = family.files.getValue(FontFace.REGULAR)
+        val goodBytes = good.readBytes()
+        val nameFile = File(family.dir, "family.txt").readLines()
+        val version = TerminalFonts.version
+
+        // The same face, its horizontal metrics struck: it still says Hack, Regular, so it gets as far
+        // as the open check, and fails there, on its own copy, before the face it would replace is touched.
+        val broken = withoutTables(resource(R.font.hack_regular), "hhea", "hmtx", "maxp")
+        assertEquals("Hack" to FontFace.REGULAR, SfntNames.parse(broken)!!.let { it.family to it.face })
+        assertEquals(TerminalFonts.ImportResult.Failed("Android couldn't open that font."), TerminalFonts.import(context, fileUri("broken.ttf", broken)))
+
+        val after = TerminalFonts.imported(context).single()
+        assertEquals(setOf(FontFace.REGULAR), after.files.keys)
+        assertEquals(good, after.files.getValue(FontFace.REGULAR))
+        assertTrue("the good face is byte for byte what it was", goodBytes.contentEquals(good.readBytes()))
+        assertEquals("the name file too", nameFile, File(family.dir, "family.txt").readLines())
+        assertTrue("no copy of the bad file is left behind", family.dir.listFiles()!!.none { it.name.endsWith(".tmp") })
+        assertEquals("nothing changed, so nothing was told to redraw", version, TerminalFonts.version)
+        // The face still draws as Hack's own.
+        assertEquals(ink(TypefaceCache.forFamily(context, "Hack", nerdFallback = false)[0]), ink(TypefaceCache.forFamily(context, after.name, nerdFallback = false)[0]))
+    }
+
+    @Test
+    fun `whether a family holds a column is measured at import and kept on the name file's second line`() = runBlocking {
+        // A proportional face, the interface's own: the name file says so, and the picker's note follows without opening the font again.
+        assertEquals(TerminalFonts.ImportResult.Done("IBM Plex Sans", FontFace.REGULAR), TerminalFonts.import(context, fileUri("sans.ttf", resource(R.font.ibm_plex_sans_regular))))
+        val sans = TerminalFonts.imported(context).single()
+        assertFalse(sans.monospaced)
+        assertEquals(listOf("IBM Plex Sans", "proportional"), File(sans.dir, "family.txt").readLines())
+        assertFalse(TerminalFonts.choices(context).last().monospaced)
+        assertTrue(TerminalFonts.choices(context).last().note, TerminalFonts.choices(context).last().note.contains("not monospaced"))
+
+        // A monospaced one says so too.
+        TerminalFonts.import(context, fileUri("mono.ttf", resource(R.font.ibm_plex_mono_regular)))
+        val mono = TerminalFonts.imported(context).first { it.name == "IBM Plex Mono" }
+        assertTrue(mono.monospaced)
+        assertEquals(listOf("IBM Plex Mono", "monospaced"), File(mono.dir, "family.txt").readLines())
+
+        // A second face joining a family re-measures its regular face, not the newcomer: the sans family stays proportional.
+        assertEquals(TerminalFonts.ImportResult.Done("IBM Plex Sans", FontFace.BOLD), TerminalFonts.import(context, fileUri("sans-bold.ttf", resource(R.font.ibm_plex_sans_semibold))))
+        assertEquals(listOf("IBM Plex Sans", "proportional"), File(sans.dir, "family.txt").readLines())
+
+        // A name file from before the second line was kept: the face is measured here instead, and the family is listed all the same.
+        File(mono.dir, "family.txt").writeText("Plex Mono Imported")
+        val legacy = TerminalFonts.imported(context).first { it.name == "Plex Mono Imported" }
+        assertTrue(legacy.monospaced)
+        File(sans.dir, "family.txt").writeText("Plex Sans Imported\n")
+        assertFalse(TerminalFonts.imported(context).first { it.name == "Plex Sans Imported" }.monospaced)
     }
 
     @Test
