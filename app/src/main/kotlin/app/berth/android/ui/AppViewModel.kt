@@ -19,9 +19,12 @@ import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import android.os.Build
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.BerthBundle
+import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
@@ -106,6 +109,8 @@ class AppViewModel @Inject constructor(
     /** Crash and connection reports on the phone; the sheet on launch and Settings › Diagnostics talk to this directly. */
     val reports: CrashReporter,
     private val commandHistory: CommandHistoryRepository,
+    /** The `.berth` bundle (spec C20, Data): Settings › Data's export and import talk to this through [exportBundle], [openBundle] and [importBundle]. */
+    private val bundles: BerthBundles,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
@@ -952,6 +957,21 @@ class AppViewModel @Inject constructor(
         identityRepository.insert(identity, pem.toByteArray(Charsets.UTF_8))
         KeyImportResult.Done(identity)
     }
+
+    // ---- the .berth bundle (spec C20, Data) ----------------------------------------------------------------
+
+    /** Everything the bundle covers, sealed under [passphrase]; a second or two of key derivation, off the main thread. */
+    suspend fun exportBundle(passphrase: CharArray, appVersion: String): ByteArray = withContext(Dispatchers.Default) {
+        bundles.export(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
+    }
+
+    /** The document [blob] seals, read with [passphrase]; throws [app.berth.data.bundle.BundleException] or [app.berth.domain.model.BundleFormatException]. */
+    suspend fun openBundle(blob: ByteArray, passphrase: CharArray): BerthBundle = withContext(Dispatchers.Default) {
+        bundles.open(blob, passphrase)
+    }
+
+    /** Writes [bundle] into the library and says what it did. */
+    suspend fun importBundle(bundle: BerthBundle): BundleImportReport = bundles.apply(bundle)
 
     // ---- settings -------------------------------------------------------------------------------------
 

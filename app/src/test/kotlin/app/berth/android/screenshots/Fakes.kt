@@ -24,6 +24,7 @@ import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppViewModel
+import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.DeckLayout
@@ -340,7 +341,8 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     /** Where a test drops an `ssh://` link, as MainActivity does with one from another app. */
     val links = LinkInbox()
     val viewModel: AppViewModel by lazy {
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports, commandHistory)
+        val bundles = BerthBundles(hosts, identities, workspaces, snippets, tunnels, knownHosts, settings, secrets)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, links, reports, commandHistory, bundles)
     }
 
     private companion object {

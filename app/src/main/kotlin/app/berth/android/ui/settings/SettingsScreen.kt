@@ -89,6 +89,8 @@ fun SettingsScreen(
     var importKnownHosts by remember { mutableStateOf(false) }
     var importKey by remember { mutableStateOf(false) }
     var fontPicker by remember { mutableStateOf(false) }
+    var exportBundle by remember { mutableStateOf(false) }
+    var importBundle by remember { mutableStateOf(false) }
     // One line at the foot of the screen for what a row just did (cleared, exported, imported); the text stays for the exit animation.
     var notice by remember { mutableStateOf<String?>(null) }
     val shownNotice = remember { mutableStateOf<String?>(null) }
@@ -105,6 +107,8 @@ fun SettingsScreen(
     if (importKnownHosts) ImportKnownHostsSheet(vm, onDismiss = { importKnownHosts = false })
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
     if (fontPicker) FontPickerSheet(vm, onDismiss = { fontPicker = false })
+    if (exportBundle) ExportBundleSheet(vm, onDismiss = { exportBundle = false }, onNotice = onNotice)
+    if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice)
 
     Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
@@ -227,6 +231,8 @@ fun SettingsScreen(
             SecurityPanel(vm, onKnownHosts)
 
             Panel(label = "Data") {
+                ListRow("Export encrypted bundle", subtitle = "Hosts, keys, snippets, themes and the rest in one .berth file, under a passphrase", surface = Color.Transparent, minHeight = 44.dp, onClick = { exportBundle = true }, trailing = chevron)
+                ListRow("Import bundle", subtitle = "A .berth file from this phone or another", surface = Color.Transparent, minHeight = 44.dp, onClick = { importBundle = true }, trailing = chevron)
                 ListRow("Import ssh config", subtitle = "Hosts and forwards from ~/.ssh/config", surface = Color.Transparent, minHeight = 44.dp, onClick = { importConfig = true }, trailing = chevron)
                 ListRow("Import known_hosts", subtitle = "Server keys from ~/.ssh/known_hosts", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKnownHosts = true }, trailing = chevron)
                 ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
