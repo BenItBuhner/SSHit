@@ -16,6 +16,7 @@ import app.berth.android.security.AppLockController
 import app.berth.android.security.LockState
 import app.berth.android.security.RemoteClipboardGate
 import app.berth.domain.model.AltKeyMode
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
@@ -273,8 +274,26 @@ class SessionManager @Inject constructor(
     private val commandHistoryEnabled = settings.commandHistoryEnabled.stateIn(scope, SharingStarted.Eagerly, true)
     private val hardwareKeyboard = settings.hardwareKeyboardSettings.stateIn(scope, SharingStarted.Eagerly, HardwareKeyboardSettings())
 
+    /** Settings › Connection (spec C20): the idle-detach policy and whether the battery explainer has had its one showing. */
+    private val connectionSettings: StateFlow<ConnectionSettings> = settings.connectionSettings.stateIn(scope, SharingStarted.Eagerly, ConnectionSettings())
+
     /** Settings › Connection › Detach idle sessions, as the span in milliseconds or null for Never; one read for every session. */
-    private val idleDetachAfter: StateFlow<Long?> = settings.connectionSettings.map { it.idleDetach.millis }.stateIn(scope, SharingStarted.Eagerly, null)
+    private val idleDetachAfter: StateFlow<Long?> = connectionSettings.map { it.idleDetach.millis }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    private val _batteryExplainerDue = MutableStateFlow(false)
+
+    /**
+     * Whether the battery-optimisation explainer is owed its one showing (vision §4.4): a live
+     * connection was lost while the app was away, for a reason a network change does not account
+     * for, and the explainer has never been raised. The shell raises Settings › Connection ›
+     * Background over whatever is up on the next return and calls [batteryExplainerRaised]; the
+     * setting it marks then keeps this from ever going true again.
+     */
+    val batteryExplainerDue: StateFlow<Boolean> = _batteryExplainerDue.asStateFlow()
+
+    fun batteryExplainerRaised() {
+        _batteryExplainerDue.value = false
+    }
 
     /**
      * The network's changes once for every session rather than a callback each (the system caps
@@ -570,8 +589,19 @@ class SessionManager @Inject constructor(
     private fun track(session: TerminalSession) {
         trackers.remove(session.id)?.cancel()
         trackers[session.id] = scope.launch {
-            session.problems.collect { problem ->
-                if (!onScreen()) notifier.postProblem(session.record.value, problem)
+            launch {
+                session.problems.collect { problem ->
+                    if (!onScreen()) notifier.postProblem(session.record.value, problem)
+                }
+            }
+            launch {
+                // The first connection lost with the app away, unless the network moved under it
+                // (the probe's own reason), is the cue for the battery explainer, once (vision §4.4).
+                session.drops.collect { reason ->
+                    if (!_foreground.value && reason != TerminalSession.PROBE_LOST_REASON && !connectionSettings.value.batteryExplained) {
+                        _batteryExplainerDue.value = true
+                    }
+                }
             }
         }
     }

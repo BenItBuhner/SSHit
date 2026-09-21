@@ -243,6 +243,16 @@ class TerminalSession(
     val problems: SharedFlow<SessionProblem> = _problems.asSharedFlow()
 
     /**
+     * A live connection fell over, with the reason the `connection lost` marker gives; the reconnect
+     * loop is already running when this lands. The manager reads the first one that comes while the
+     * app is away, and that a network change does not account for ([PROBE_LOST_REASON]), as the cue
+     * for the battery-optimisation explainer (vision §4.4). Not a [SessionProblem]: a drop that is
+     * being retried is no news for the shade, whose ongoing line already says `reconnecting`.
+     */
+    private val _drops = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val drops: SharedFlow<String> = _drops.asSharedFlow()
+
+    /**
      * Holds [onStage] and the attention state together. Output raises attention on the reader's
      * thread (the emulator's listener, under its lock) while the manager moves the stage from
      * another, and the check "off stage, so ring" must not interleave with the move "on stage, and
@@ -640,6 +650,7 @@ class TerminalSession(
                     marker("connection lost: ${outcome.reason}")
                     BerthLog.w(LOG_TAG, "[${host.name}] connection lost: ${outcome.reason}", outcome.cause)
                     env.onTransportFailure(host, "Connection lost", outcome.cause, outcome.reason)
+                    _drops.tryEmit(outcome.reason)
                 }
                 is Outcome.Failed -> {
                     val e = outcome.error

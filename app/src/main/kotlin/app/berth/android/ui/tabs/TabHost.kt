@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
@@ -381,10 +383,13 @@ fun ReopenBar(ui: TabUiState, vm: AppViewModel, modifier: Modifier = Modifier) {
  * The Stage's one-line notice with one action, `Closed prod-web · Reopen` (spec C3, Closing) and
  * `Notifications are off · Settings` (spec C21): a full-radius bar on `surface.3` above the
  * keyboard and the navigation bar, Caption text, a middle dot, the action in accent. It stays
- * composed and [visible] drives it, so the exit animates; the owner decides when it goes.
+ * composed and [visible] drives it, so the exit animates; the owner decides when it goes. A line
+ * that has to be read whole (`Sessions keep running. Detach all from the notification.`, spec
+ * Part B) asks for [maxLines] of two and the bar grows to hold it at the font cap, its radius
+ * kept at the one-line pill's so the two shapes agree.
  */
 @Composable
-fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Unit, modifier: Modifier = Modifier) {
+fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Unit, modifier: Modifier = Modifier, maxLines: Int = 1) {
     val c = Berth.colors
     Box(
         modifier
@@ -400,10 +405,13 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
             Row(
                 Modifier
                     .padding(bottom = 12.dp)
-                    .height(44.dp)
+                    // As tall as its lines ask, 44 at the least; fixed to that, so the action fills it and no further.
+                    .heightIn(min = 44.dp)
+                    .height(IntrinsicSize.Min)
                     .drawBehind {
-                        val h = 32.dp.toPx()
-                        drawRoundRect(color = c.surface3, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
+                        // 6 dp of air above and below the pill; one line leaves the pill at 32.
+                        val h = size.height - 12.dp.toPx()
+                        drawRoundRect(color = c.surface3, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(16.dp.toPx()))
                     }
                     .padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -413,9 +421,9 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
                     text,
                     style = BerthType.caption,
                     color = c.text2,
-                    maxLines = 1,
+                    maxLines = maxLines,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
+                    modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp, vertical = if (maxLines > 1) 12.dp else 0.dp),
                 )
                 Text("\u00B7", style = BerthType.caption, color = c.text3)
                 BarAction(action, onAction)

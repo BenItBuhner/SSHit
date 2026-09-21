@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -65,6 +66,8 @@ import app.berth.android.ui.rail.MediumRail
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
+import app.berth.android.ui.settings.BackgroundSheet
+import app.berth.android.ui.settings.BatteryOptimization
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.SnippetsScreen
@@ -123,6 +126,9 @@ private val RailWidth = 280.dp
 
 /** The Stage's gutter on its rail side (spec A, the gap between panels), narrow rail or wide: the terminal's first column is not against the rail's tonal edge. */
 private val RailGutter = 12.dp
+
+/** What Back says, once, the first time it would leave the app with a login up (spec Part B). */
+const val BACKGROUND_NOTICE = "Sessions keep running. Detach all from the notification."
 
 /**
  * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
@@ -224,6 +230,38 @@ private fun Shell(vm: AppViewModel) {
     val rail = layout.rail
     val securitySettings by vm.security.settings.collectAsState()
     BackHandler(enabled = drawer.isOpen) { closeDrawer() }
+
+    // Back on the Stage leaves for the launcher with the logins running on in the service (spec
+    // Part B). The first time it would do that with a session or a tunnel up, the line "Sessions
+    // keep running. Detach all from the notification." is shown instead and the leave waits for
+    // the next Back; the line is never shown again. The keyboard's own Back (the Stage's handler,
+    // composed after this one) still comes first, so the order is keyboard, then the line, then out.
+    val connection by vm.connectionSettings.collectAsState()
+    val running by vm.notifier.summary.collectAsState()
+    var backNotice by remember { mutableStateOf(false) }
+    val backNoticeDue = onStage && !drawer.isOpen && !connection.backgroundNoticeShown && (running.active > 0 || running.tunnels > 0)
+    BackHandler(enabled = backNoticeDue && !backNotice) {
+        backNotice = true
+        vm.markBackgroundNoticeShown()
+    }
+    LaunchedEffect(backNotice) {
+        if (!backNotice) return@LaunchedEffect
+        delay(NOTICE_BAR_MS)
+        backNotice = false
+    }
+
+    // The battery-optimisation explainer, once, on its own (vision §4.4): a connection was lost
+    // while the app was away, so on this return Settings › Connection › Background opens over the
+    // Stage, unless the exemption is already granted, in which case there is nothing to explain and
+    // the one showing is spent quietly. Raised or spent, it is marked, and never raises itself again.
+    val context = LocalContext.current
+    val batteryDue by vm.batteryExplainerDue.collectAsState()
+    var batterySheet by remember { mutableStateOf(false) }
+    LaunchedEffect(batteryDue) {
+        if (!batteryDue) return@LaunchedEffect
+        vm.batteryExplainerRaised()
+        if (!BatteryOptimization.isExempt(context)) batterySheet = true
+    }
 
     // What the drawer's rows do, in whichever form the drawer takes (spec C7): a group's tap goes to
     // its last active tab on the Stage, New group opens the editor into the New tab sheet, Groups
@@ -485,7 +523,16 @@ private fun Shell(vm: AppViewModel) {
             onAction = { linkNotice = null },
             modifier = Modifier.align(Alignment.BottomCenter),
         )
+        NoticeBar(
+            visible = backNotice,
+            text = BACKGROUND_NOTICE,
+            action = "OK",
+            onAction = { backNotice = false },
+            modifier = Modifier.align(Alignment.BottomCenter),
+            maxLines = 2,
+        )
     }
+    if (batterySheet) BackgroundSheet(vm, onDismiss = { batterySheet = false })
     // On the launch after a crash the restore reconnects while the crash sheet is up, and a password,
     // passphrase or unlock prompt would rise under it: two sheets, two scrims. The transport's prompts
     // wait (they block on PromptCenter either way) until the crash sheet is closed, so there is one sheet.

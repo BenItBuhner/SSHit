@@ -25,6 +25,7 @@ import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.BerthBundle
 import app.berth.domain.model.BundleImportReport
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckLayout
@@ -34,6 +35,7 @@ import app.berth.domain.model.HardwareKeyboardSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.HostCommand
 import app.berth.domain.model.Identity
+import app.berth.domain.model.IdleDetach
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
@@ -198,6 +200,9 @@ class AppViewModel @Inject constructor(
     val tabSwipeGesture: StateFlow<TabSwipeGesture> = settings.tabSwipeGesture.stateIn(viewModelScope, SharingStarted.Eagerly, TabSwipeGesture.TWO_FINGER)
     val ctrlTabKeysReachTerminal: StateFlow<Boolean> = settings.ctrlTabKeysReachTerminal.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val commandHistoryEnabled: StateFlow<Boolean> = settings.commandHistoryEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** Settings › Connection (spec C20): the idle-detach policy and the two one-time notices about the background. */
+    val connectionSettings: StateFlow<ConnectionSettings> = settings.connectionSettings.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionSettings())
 
     /** The commands the host under [key] ran (spec C16), oldest first; [key] is a [Host.commandHistoryKey]. */
     fun commandHistoryOf(key: String): Flow<List<HostCommand>> = commandHistory.observeForHost(key)
@@ -548,6 +553,29 @@ class AppViewModel @Inject constructor(
 
     fun setCommandHistoryEnabled(enabled: Boolean) {
         viewModelScope.launch { settings.setCommandHistoryEnabled(enabled) }
+    }
+
+    /** Settings › Connection › Detach idle sessions (spec C20, vision §4.4). */
+    fun setIdleDetach(policy: IdleDetach) {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(idleDetach = policy) } }
+    }
+
+    /**
+     * The explainer is owed its one showing (vision §4.4): a connection was lost while the app was
+     * away and it has never been raised. The shell raises it on the return and says so with
+     * [batteryExplainerRaised]. Opening it from Settings › Connection › Background counts too.
+     */
+    val batteryExplainerDue: StateFlow<Boolean> = sessions.batteryExplainerDue
+
+    /** The battery-optimisation explainer was raised, on its own or from Settings; it never raises itself again (vision §4.4). */
+    fun batteryExplainerRaised() {
+        sessions.batteryExplainerRaised()
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(batteryExplained = true) } }
+    }
+
+    /** Back has said once that sessions keep running in the background (spec Part B); it never says it again. */
+    fun markBackgroundNoticeShown() {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(backgroundNoticeShown = true) } }
     }
 
     // ---- hosts --------------------------------------------------------------------------------------
