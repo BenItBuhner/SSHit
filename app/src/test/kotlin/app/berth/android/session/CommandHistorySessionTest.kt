@@ -1,6 +1,7 @@
 package app.berth.android.session
 
 import app.berth.domain.model.Host
+import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
@@ -29,8 +30,11 @@ private const val PROMPT = "demo@box:~$ "
 class CommandHistorySessionTest {
     private val host = Host(id = "h", name = "box", color = SwatchColor.MOSS, monogram = "B", address = "127.0.0.1", user = "demo", createdAt = 0)
 
+    // Live with no shell behind it, as the Stage fixtures read: what is typed is tracked and goes
+    // nowhere. A Detached record would have the first key reconnect (review #15), against a host
+    // nothing answers for, on a fixture whose network flow ends at once.
     private fun record(id: String = "s") = SessionRecord(
-        id = id, workspaceId = "home", hostId = host.id, hostSnapshot = host, state = SessionState.DETACHED, sortOrder = 0, createdAt = 0,
+        id = id, workspaceId = "home", hostId = host.id, hostSnapshot = host, state = SessionState.LIVE, layer = PersistenceLayer.IN_APP, sortOrder = 0, createdAt = 0,
     )
 
     private fun env(historyOn: Boolean = true) = object : SessionEnvironment {
