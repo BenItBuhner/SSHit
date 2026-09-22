@@ -509,13 +509,13 @@ class TerminalSurfaceScreenshotTest {
         compose.waitUntil(5_000) { tools.pendingLink == null }
         assertEquals(dressed, shadowOf(application).nextStartedActivity?.dataString)
 
-        // A host that is a homograph of the text it wears: the panel shows the address as it came, which
-        // reads as Apple's, and the caption names the host as its punycode, so the two read apart (#16's
-        // Public Suffix List note, hardening 4).
+        // A host that is a homograph of the text it wears: the caption names the host as its punycode, and
+        // the panel draws it the same way, so the sheet's largest text cannot read as Apple's over a caption
+        // that says otherwise (#16's Public Suffix List note, hardening 4; #22 nit 5).
         val (homographRow, homographCol) = cellOf(session, "apple.com")
         canvas.performTouchInput { click(cellCenter(homographRow, homographCol + 3)) }
         waitForText("Shown as \u201Capple.com\u201D, but goes to xn--pple-43d.com")
-        compose.onNodeWithContentDescription("Link address, $homograph").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Link address, https://xn--pple-43d.com/id").assertIsDisplayed()
         compose.onNodeWithText("Open anyway").assertIsDisplayed()
         compose.onAllNodesWithText("Open").assertCountEquals(0)
         settle(300)
@@ -525,6 +525,12 @@ class TerminalSurfaceScreenshotTest {
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(5_000) { tools.pendingLink == null }
         assertNull("Cancel opens nothing", shadowOf(application).nextStartedActivity)
+        // Open anyway opens the address the link carries, its Cyrillic а and all, not the ASCII the panel drew.
+        canvas.performTouchInput { click(cellCenter(homographRow, homographCol + 3)) }
+        waitForText("Open anyway")
+        compose.onNodeWithText("Open anyway").performClick()
+        compose.waitUntil(5_000) { tools.pendingLink == null }
+        assertEquals(homograph, shadowOf(application).nextStartedActivity?.dataString)
 
         // The platform's own name over a page any customer of it can put there warns, where github.com
         // over gist.github.com does not: sites.google.com is a registrable boundary to the caption.

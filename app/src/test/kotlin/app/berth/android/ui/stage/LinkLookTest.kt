@@ -214,6 +214,27 @@ class LinkLookTest {
     }
 
     @Test
+    fun `the panel's address is the link's as it came, its host in ASCII once the caption says but`() {
+        // The sheet's largest text and its warning agree: a Cyrillic а cannot read as apple's over a caption naming xn--pple-43d.com.
+        assertEquals("https://xn--pple-43d.com/id", look("https://\u0430pple.com/id", "apple.com").address)
+        assertEquals("mailto:ben@xn--pple-43d.com", look("mailto:ben@\u0430pple.com", "ben@apple.com").address)
+        // A host the text names truly, or claims nothing over, stands as written, since that is what is opened.
+        assertEquals("https://\u0430pple.com/id", look("https://\u0430pple.com/id", "\u0430pple.com").address)
+        assertEquals("https://\u0430pple.com/id", look("https://\u0430pple.com/id", "click here").address)
+        assertEquals("https://m\u00FCnchen.de/", look("https://m\u00FCnchen.de/", "m\u00FCnchen.de").address)
+        // An ASCII host is drawn as it is whether the caption warns or not.
+        assertEquals("https://evil.example/login", look("https://evil.example/login", "https://github.com/berth/releases").address)
+        // Only the host is redrawn: the scheme's case, the path and a query outside ASCII stand, the host is the one after the last @,
+        // a mailbox's domain is its host, and a host UTS #46 refuses is left as it came.
+        assertEquals("HTTPS://xn--pple-43d.com/Id?q=\u0430", LinkLook.withAsciiHost("HTTPS://\u0410pple.com/Id?q=\u0430"))
+        assertEquals("https://user@xn--pple-43d.com/", LinkLook.withAsciiHost("https://user@\u0430pple.com/"))
+        assertEquals("mailto:ben@xn--pple-43d.com?subject=hi", LinkLook.withAsciiHost("mailto:ben@\u0430pple.com?subject=hi"))
+        val tooLong = "https://" + "\u00C4".repeat(60) + ".com/"
+        assertEquals(tooLong, LinkLook.withAsciiHost(tooLong))
+        assertEquals("a bare word", LinkLook.withAsciiHost("a bare word"))
+    }
+
+    @Test
     fun `an IPv6 literal keeps its brackets`() {
         assertPlain("https://[::1]:8080/", "the dashboard", "Shown as \u201Cthe dashboard\u201D, goes to [::1]")
         assertPlain("https://[2001:db8::1]/x", "https://[2001:db8::1]/x", "Goes to [2001:db8::1]")

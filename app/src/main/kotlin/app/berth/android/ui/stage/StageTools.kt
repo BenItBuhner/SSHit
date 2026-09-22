@@ -574,7 +574,9 @@ fun PastePreviewSheet(analysis: PasteAnalysis, session: TerminalSession, haptics
  * the weight goes to Cancel with Open anyway plain beside it. When the text on screen claimed
  * another address than the link's (a link dressed as another site), the caption says so in the
  * danger colour and the weight goes to Cancel likewise, as the clipboard notice weighs its
- * answers. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first. A
+ * answers, and the panel draws the host as the caption names it, in ASCII ([LinkLook.address]),
+ * so the sheet's largest text and its warning agree; Open anyway and Copy take the address as it
+ * came. Copy puts the address on the clipboard, Berth's copy, for a look elsewhere first. A
  * link nothing on the phone handles says so in the notice pill rather than doing nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -614,10 +616,10 @@ fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, ha
             Panel {
                 // Left to right whatever the address holds, so a right-to-left run in a path can never re-order the scheme and host.
                 Text(
-                    link.url,
+                    look.address,
                     style = MonoBody.copy(textDirection = TextDirection.Ltr),
                     color = c.text1,
-                    modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${link.url}" },
+                    modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()).semantics { contentDescription = "Link address, ${look.address}" },
                 )
             }
             when {
@@ -671,15 +673,18 @@ fun LinkOpenSheet(link: LinkTap, session: TerminalSession, tools: StageTools, ha
  * true of the platform and says nothing of the page, so it warns. The query is not exempt:
  * `?r=google.com` is how a redirect dresses up. Every host the caption names is in ASCII, a
  * label outside it as its punycode ([asciiHost]), so `https://аpple.com/` with a Cyrillic а reads
- * *goes to xn--pple-43d.com* and not as Apple's, in the caption where the panel, which shows the
- * address as it is, cannot tell them apart. For a `file://`
+ * *goes to xn--pple-43d.com* and not as Apple's. The panel's [address] is the link's as it came,
+ * save that when the text claimed another site than the link's the host is drawn there as the
+ * caption names it ([withAsciiHost]), so the sheet's largest text cannot read apple.com over a
+ * caption that says otherwise; a host the text names truly, or claims nothing over, stands as
+ * written, since that is what is opened. For a `file://`
  * link [path] is the file's path, percent-decoded. An `http`, `https` or `file` address is read
  * the way the browser and Android's `Uri` that will open it read it, a `\` as a `/`, so its
  * authority ends at the first of either and `https://evil.example\@google.com/` goes to
  * evil.example, not to the host after the `@`; the sheet shows and opens the URL as it is. Pure,
  * so the rule is tested on its own ([LinkLookTest][app.berth.android.ui.stage.LinkLookTest]).
  */
-class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, val path: String? = null) {
+class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, val address: String, val path: String? = null) {
     enum class Posture {
         /** A web page or a mail address: Open filled, Copy and Cancel beside it. */
         OPEN,
@@ -698,6 +703,8 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         private val BARE_HOST = Regex("""^(?:www\.)?([\p{L}\p{N}\-]+(?:\.[\p{L}\p{N}\-]+)+)(?::\d+)?(?:[/?#\\].*)?$""")
         private val EMAIL = Regex("""^[^\s@<>"']+@[a-zA-Z0-9\-]+(?:\.[a-zA-Z0-9\-]+)+$""")
         private val SCHEME_PREFIX = Regex("""^[a-z][a-z0-9+.\-]*:(?://)?""")
+        /** A `mailto:` link's domain: what follows the mailbox's last `@`, to its `?` if it carries one. */
+        private val MAILTO_DOMAIN = Regex("""^mailto:[^?]*@([^?\s]+)""", RegexOption.IGNORE_CASE)
 
         /**
          * The schemes whose addresses a WHATWG parser, Chrome and Android's `Uri` among them, reads
@@ -763,11 +770,13 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
             val namesItself = shown.isEmpty() || sameAddress(shown, url) ||
                 (posture == Posture.FILE && path != null && shown.lowercase() in segments(path)) ||
                 (mailbox != null && percentDecode(shown.lowercase().removePrefix("mailto:")) == mailbox)
-            if (namesItself) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false, posture = posture, path = path)
+            if (namesItself) return LinkLook(where.replaceFirstChar(Char::uppercase), warning = false, posture = posture, address = link.url, path = path)
             // A mail address as the text claims that mailbox; the same one named itself above, so what is left is another's.
             val claim = hostClaim(shown, url) ?: EMAIL.matchEntire(shown)?.value?.lowercase()?.takeIf { mailbox != null }
             val deceptive = claim != null && (to == null || !sameSite(claim, to))
-            return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, path = path)
+            // The panel's host as the caption's, once the caption says "but": the two agree on where the tap goes.
+            val address = if (deceptive) withAsciiHost(url) else link.url
+            return LinkLook("Shown as $truncated, ${if (deceptive) "but " else ""}$where", warning = deceptive, posture = posture, address = address, path = path)
         }
 
         /**
@@ -826,9 +835,27 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         }
 
         /**
+         * [url] with its host as [asciiHost] names it and the rest as it came: the panel's [address]
+         * when the text on screen claimed another site than the link's, so the sheet's largest text
+         * and the caption's *but goes to* agree and a Cyrillic а cannot read as apple's there. The
+         * host is the authority's after its last `@` ([SCHEME_HOST]), or a `mailto:` mailbox's domain;
+         * an address with no host, one whose host is ASCII already, or one UTS #46 refuses, is [url]
+         * itself. Read as [asRead], which keeps every index, so the range is [url]'s own.
+         */
+        fun withAsciiHost(url: String): String {
+            val range = SCHEME_HOST.find(asRead(url))?.groups?.get(1)?.range
+                ?: MAILTO_DOMAIN.find(url)?.groups?.get(1)?.range
+                ?: return url
+            val host = url.substring(range)
+            if (host.all { it.code < 0x80 }) return url
+            val ascii = asciiHost(host)
+            return if (ascii.any { it.code >= 0x80 }) url else url.replaceRange(range, ascii)
+        }
+
+        /**
          * [url] as the parser that will open it reads it: in the [SLASH_SCHEMES] every `\` is a `/`,
-         * so the authority ends at the first of either. For reading only; the sheet's panel and
-         * `Uri.parse` get the URL as it is, since that is what is opened.
+         * so the authority ends at the first of either. For reading only; `Uri.parse` gets the URL as
+         * it is, since that is what is opened, and so does the panel save the one host [withAsciiHost] redraws.
          */
         private fun asRead(url: String): String =
             if (url.indexOf('\\') >= 0 && url.substringBefore(':', "").lowercase() in SLASH_SCHEMES) url.replace('\\', '/') else url
