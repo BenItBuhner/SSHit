@@ -30,8 +30,8 @@ import kotlin.concurrent.thread
 
 /**
  * The font families (spec C20, Fonts): each bundled family loads as its own faces, not the system's
- * monospace under another name; the Nerd Font fallback puts the Powerline glyphs behind a family
- * that lacks them and nowhere else; a TTF or OTF import is filed under the family and face the
+ * monospace under another name; the Nerd Font fallback puts the bundled symbols font behind a family
+ * that lacks its glyphs and nowhere else, with an imported Nerd Font in front of it; a TTF or OTF import is filed under the family and face the
  * file's own name table gives, listed, drawn, and removable; what is not a font is turned down by
  * name, and a file that names itself but will not open is turned down with the face it would have
  * replaced left standing; and whether a family holds a column is measured once, at import, and
@@ -128,17 +128,24 @@ class TerminalFontsTest {
     }
 
     @Test
-    fun `the Nerd Font fallback puts the Powerline glyphs behind a family that lacks them`() {
+    fun `the Nerd Font fallback puts the whole symbols font behind a family that lacks it`() {
         // IBM Plex Mono is the bundled family without the Powerline range (the other four carry it themselves).
         val paint = Paint()
         paint.typeface = TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = false)[0]
         assertFalse("IBM Plex Mono has no Powerline arrow of its own", paint.hasGlyph("\uE0B0"))
         assertFalse(paint.hasGlyph("\uE0B6"))
+        assertFalse("nor any icon", paint.hasGlyph("\uF418"))
         paint.typeface = TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = true)[0]
         assertTrue("the fallback supplies it", paint.hasGlyph("\uE0B0"))
         assertTrue("and the dividers", paint.hasGlyph("\uE0B1") && paint.hasGlyph("\uE0B2") && paint.hasGlyph("\uE0B3"))
         assertTrue("and the rest of the Powerline range", paint.hasGlyph("\uE0B6") && paint.hasGlyph("\uE0C0") && paint.hasGlyph("\uE0D4"))
-        assertFalse("but not the icon sets, which an imported Nerd Font brings", paint.hasGlyph("\uE7A2"))
+        // One glyph from each set the font collects, the supplementary plane's Material Design Icons among them.
+        val sets = mapOf(
+            "Seti" to "\uE5FA", "Devicons" to "\uE7A2", "Font Awesome" to "\uF015", "Font Awesome Extension" to "\uE235",
+            "Octicons" to "\uF418", "Font Logos" to "\uF31B", "Codicons" to "\uEA60", "Weather Icons" to "\uE30D",
+            "Pomicons" to "\uE000", "Power Symbols" to "\u23FB", "Material Design Icons" to String(Character.toChars(0xF024B)),
+        )
+        for ((set, glyph) in sets) assertTrue("$set is in the bundled symbols", paint.hasGlyph(glyph))
         // The letters stay the family's own: the symbols cover none of them.
         assertEquals(ink(TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = false)[0]), ink(paint.typeface))
         // The system's monospace gets the same glyphs in front of it, and keeps its own letters.
@@ -303,13 +310,21 @@ class TerminalFontsTest {
     }
 
     @Test
-    fun `a Nerd Font the user imported is the fallback's source over the bundled subset`() = runBlocking {
+    fun `a Nerd Font the user imported goes in front of the bundled symbols, which still cover what it lacks`() = runBlocking {
         assertNull(TerminalFonts.nerdFallback(context))
-        // Any face will do for the test: what makes it a Nerd Font here is the family name the file carries, which this one is given.
-        TerminalFonts.import(context, fileUri("nerd.ttf", resource(R.font.source_code_pro_regular)))
+        val arrow = "\uE0B0"
+        val bundledArrow = ink(TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = true)[0], arrow)
+        val hackArrow = ink(TypefaceCache.forFamily(context, "Hack", nerdFallback = false)[0], arrow)
+        assertNotEquals("Hack draws its own Powerline arrow, not the symbols font's", bundledArrow, hackArrow)
+        // What makes an import a Nerd Font here is the family name the file carries, which Hack's regular face is given.
+        TerminalFonts.import(context, fileUri("nerd.ttf", resource(R.font.hack_regular)))
         val fam = TerminalFonts.imported(context).single()
-        File(fam.dir, "family.txt").writeText("Symbols Nerd Font Mono")
-        assertEquals("Symbols Nerd Font Mono", TerminalFonts.nerdFallback(context)?.name)
+        File(fam.dir, "family.txt").writeText("Hack Nerd Font Mono")
+        TypefaceCache.clear()
+        assertEquals("Hack Nerd Font Mono", TerminalFonts.nerdFallback(context)?.name)
         assertTrue(TerminalFonts.imported(context).single().isNerdFont)
+        val plex = TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = true)[0]
+        assertEquals("the import's arrow wins where it has one", hackArrow, ink(plex, arrow))
+        assertTrue("and the bundled symbols draw the icons it lacks", Paint().apply { typeface = plex }.hasGlyph("\uF418"))
     }
 }

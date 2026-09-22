@@ -96,8 +96,9 @@ import java.io.File
  * the drag-for-arrows switch), the font picker sheet with every family set in its own face and an
  * import landing through the document picker's result, the sheet a tap on an OSC 8 link opens in
  * its two postures, rectangular selection from the selection bar's overflow, and the Session
- * sheet's Predictive text row (C6) with the grip it lights and the keyboard attributes it changes.
- * Every capture is an accessibility audit, and the screens at the cap are held to no text cut and
+ * sheet's Predictive text row (C6) with the grip it lights and the keyboard attributes it changes,
+ * and the bundled Nerd Font symbols drawing what starship, powerlevel10k, lsd and eza print, with the
+ * Settings caption and About line that name them. Every capture is an accessibility audit, and the screens at the cap are held to no text cut and
  * no button pushed past the sheet's edge. The gestures are driven for real on the canvas.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -731,4 +732,64 @@ class TerminalSurfaceScreenshotTest {
 
     @Test
     fun `predictive text row and grip at the 1,3 cap`() = predictiveText(cap = true)
+
+    // ---- the bundled Nerd Font symbols (vision §7, spec C20) ----------------------------------------------------
+
+    private fun g(codePoint: Int): String = String(Character.toChars(codePoint))
+
+    private fun sgr(codes: String): String = "\u001b[${codes}m"
+
+    /**
+     * The glyphs four tools print, in the default family with nothing imported, each as the tool
+     * lays it out: starship's Nerd Font preset over a Kotlin project and a Rust one, lsd's one-a-line
+     * listing, powerlevel10k's rainbow segments with its nerdfont-v3 icons, and eza's grid.
+     */
+    private fun nerdGlyphs(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        StageFixture.seed(graph)
+        val session = StageFixture.liveHomelab().also { sessions += it }
+        val tools = StageTools()
+        var settings by mutableStateOf(false)
+        themed { if (settings) SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) else Stage(session, tools) }
+        awaitGrid(session)
+        val prompt = "${sgr("1;32")}\u276F${sgr("0")} "
+        val dir = sgr("1;34")
+        val off = sgr("0")
+        session.emulator.write("\u001b[H\u001b[2J")
+        session.emulator.write("${sgr("1;36")}~/src/berth$off on ${sgr("1;35")}\uF418 main$off via ${sgr("1;34")}\uE634 v2.1.0$off\r\n")
+        session.emulator.write("${prompt}lsd -1\r\n")
+        session.emulator.write("$dir\uF115 app$off\r\n$dir\uE5FB .git$off\r\n\uE634 build.gradle.kts\r\n\uE609 README.md\r\n\uE60A LICENSE\r\n\uF489 install.sh\r\n")
+        session.emulator.write("${sgr("30;47")} \uF31B ${sgr("37;44")}\uE0B0${sgr("97;44")} \uF07C ~/src/berth ${sgr("34;42")}\uE0B0${sgr("30;42")} \uF126 main \uF06A1 \uF0592 ${sgr("0;32")}\uE0B0$off\r\n")
+        session.emulator.write("${prompt}eza --icons\r\n")
+        session.emulator.write("$dir\uE5FF app$off  $dir\uE5FB .git$off  \uE660 build.gradle.kts\r\n${g(0xF00BA)} README.md  \uF02D LICENSE  \uF023 gradle.lock\r\n")
+        session.emulator.write("${sgr("1;36")}~/sshit$off on ${sgr("1;35")}\uF418 main$off is ${sgr("1;38;5;208")}${g(0xF03D7)} v0.2.0$off via ${sgr("1;31")}${g(0xF1617)} v1.81$off\r\n")
+        session.emulator.write(prompt)
+        compose.waitUntil(5_000) { session.emulator.screenText().any { it.contains("v1.81") } }
+        // Nothing wrapped: every line the tools print is one row at a phone's width.
+        val rows = session.emulator.screenText()
+        assertTrue(rows.toString(), rows.any { it.startsWith("\uE5FF app  \uE5FB .git  \uE660 build.gradle.kts") })
+        assertTrue(rows.toString(), rows.any { it.contains("\uF126 main \uF06A1 \uF0592 \uE0B0") })
+        settle(400)
+        capture("terminal-nerd-font-glyphs$suffix")
+
+        // Settings › About names the symbols font and its icon sets' licences beside the other fonts.
+        settings = true
+        waitForText("Nerd Font fallback")
+        compose.onNodeWithText("Nerd Font fallback").performScrollTo()
+        compose.onNodeWithText("Icons and separators the family lacks", substring = true).assertIsDisplayed()
+        settle(200)
+        capture("settings-nerd-font-fallback$suffix")
+        compose.assertNoTextCut("the Nerd Font fallback's caption${if (cap) " at the interface's font cap" else ""}")
+        compose.onNodeWithText("Symbols Nerd Font Mono", substring = true).performScrollTo()
+        compose.onNodeWithText("Font Logos the Unlicense", substring = true).assertIsDisplayed()
+        settle(200)
+        capture("settings-about-fonts$suffix")
+        compose.assertNoTextCut("Settings › About${if (cap) " at the interface's font cap" else ""}")
+    }
+
+    @Test
+    fun `the prompts' and listings' Nerd Font icons on the stage, and their licences in About`() = nerdGlyphs(cap = false)
+
+    @Test
+    fun `nerd font icons on the stage and About at the 1,3 cap`() = nerdGlyphs(cap = true)
 }

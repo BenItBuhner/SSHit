@@ -76,11 +76,13 @@ class ImportedFamily(val name: String, val dir: File, val files: Map<FontFace, F
  * name in the file. Bundling stops at what a family costs, under 300 KB compressed each: IBM Plex
  * Mono ships all four faces at 236 KB, Fira Code its two, and Hack and Source Code Pro their regular
  * and bold (their italics would add 160 to 300 KB a family), with the missing faces made from the
- * regular one, as they are for a System font. Symbols Nerd Font Mono is 1.6 MB compressed and is not
- * bundled; the Nerd Font fallback draws the glyphs a family lacks from a Nerd Font the user has
- * imported, and, with none, from the Powerline range alone (U+E0A0 to U+E0D7: the arrows, the
- * rounded, flame and pixel dividers), a 15 KB subset of it ([R.font.berth_powerline_symbols]), so
- * a prompt's separators are never tofu out of the box, whatever family draws the letters.
+ * regular one, as they are for a System font. The one exception to that budget is the Nerd Font
+ * fallback's own face: all of Symbols Nerd Font Mono v3.5.1 ([R.font.symbols_nerd_font_mono], 1.6 MB
+ * compressed), since a prompt's icons come from every set it collects (Powerline, Font Awesome,
+ * Devicons, Octicons, Seti, Codicons, Material Design, the distribution logos) and a subset is
+ * tofu for whichever prompt it did not foresee. The fallback draws the glyphs a family lacks from a
+ * Nerd Font the user has imported first, then from the bundled symbols, so an import made for a
+ * prompt still wins where it has the glyph and the bundle covers the rest.
  */
 object TerminalFonts {
     const val SYSTEM = "System monospace"
@@ -164,7 +166,7 @@ object TerminalFonts {
 
     /**
      * The imported family the Nerd Font fallback draws from: the symbols font itself when it is
-     * there, else the first patched Nerd Font by name; null with none, when the bundled Powerline set stands in.
+     * there, else the first patched Nerd Font by name; null with none, when the bundled symbols stand alone.
      */
     fun nerdFallback(context: Context): ImportedFamily? {
         val nerd = imported(context).filter { it.isNerdFont && it.primary != null }
@@ -358,9 +360,9 @@ internal class SfntNames(val family: String, val subfamily: String, val bold: Bo
 
 /**
  * The regular, bold, italic and bold-italic [Typeface]s of each family, built once per process
- * and per fallback setting. Each face is its own font with, when the Nerd Font fallback is on, the
- * symbols family behind it and the system's monospace behind that, so a glyph the family lacks is
- * looked for in that order. A face the family does not have is made from its regular one, the way
+ * and per fallback setting. Each face is its own font with, when the Nerd Font fallback is on, an
+ * imported Nerd Font and the bundled symbols behind it and the system's monospace behind those, so
+ * a glyph the family lacks is looked for in that order. A face the family does not have is made from its regular one, the way
  * the System font's always were.
  */
 internal object TypefaceCache {
@@ -378,7 +380,7 @@ internal object TypefaceCache {
     }
 
     private fun load(context: Context, family: String, nerdFallback: Boolean): List<Typeface> {
-        val fallback: FontFamily? = if (nerdFallback) nerdFamily(context) else null
+        val fallback: List<FontFamily> = if (nerdFallback) nerdFamilies(context) else emptyList()
         // The fonts of each face the family has: a resource for a bundled one, a file for an import.
         val fonts: Map<FontFace, Font> = when {
             family == TerminalFonts.SYSTEM -> emptyMap()
@@ -392,7 +394,7 @@ internal object TypefaceCache {
             fonts[FontFace.REGULAR] != null -> build(fonts.getValue(FontFace.REGULAR), fallback)
             fonts.isNotEmpty() -> build(fonts.values.first(), fallback)
             // The system's monospace, with the symbols in front of it when asked: they cover no letter, so every letter still comes from it.
-            fallback != null -> Typeface.CustomFallbackBuilder(fallback).setSystemFallback("monospace").build()
+            fallback.isNotEmpty() -> Typeface.CustomFallbackBuilder(fallback.first()).also { b -> fallback.drop(1).forEach(b::addCustomFallback) }.setSystemFallback("monospace").build()
             else -> Typeface.MONOSPACE
         }
         fun face(face: FontFace, style: Int): Typeface = fonts[face]?.let { build(it, fallback) } ?: Typeface.create(regular, style)
@@ -404,17 +406,20 @@ internal object TypefaceCache {
         )
     }
 
-    private fun build(font: Font, fallback: FontFamily?): Typeface {
+    private fun build(font: Font, fallback: List<FontFamily>): Typeface {
         val builder = Typeface.CustomFallbackBuilder(FontFamily.Builder(font).build())
-        if (fallback != null) builder.addCustomFallback(fallback)
+        fallback.forEach(builder::addCustomFallback)
         return builder.setSystemFallback("monospace").build()
     }
 
-    /** The symbols family the fallback draws from: an imported Nerd Font's primary face, else the bundled Powerline subset. */
-    private fun nerdFamily(context: Context): FontFamily? {
-        val imported = TerminalFonts.nerdFallback(context)?.primary?.let { file -> runCatching { Font.Builder(file).build() }.getOrNull() }
-        val font = imported ?: runCatching { Font.Builder(context.resources, R.font.berth_powerline_symbols).build() }.getOrNull() ?: return null
-        return FontFamily.Builder(font).build()
+    // Built once per process and shared by every family's typefaces: the face is 2.6 MB unpacked, and [clear] is about imports, not it.
+    private var bundledSymbols: FontFamily? = null
+
+    /** The symbols families the fallback draws from, in order: an imported Nerd Font's primary face, then the bundled Symbols Nerd Font Mono. */
+    private fun nerdFamilies(context: Context): List<FontFamily> {
+        val imported = TerminalFonts.nerdFallback(context)?.primary?.let { file -> runCatching { Font.Builder(file).build() }.getOrNull() }?.let { FontFamily.Builder(it).build() }
+        val bundled = bundledSymbols ?: runCatching { FontFamily.Builder(Font.Builder(context.resources, R.font.symbols_nerd_font_mono).build()).build() }.getOrNull()?.also { bundledSymbols = it }
+        return listOfNotNull(imported, bundled)
     }
 }
 
