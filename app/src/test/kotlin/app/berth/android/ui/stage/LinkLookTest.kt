@@ -206,11 +206,23 @@ class LinkLookTest {
         assertEquals("A file on xn--mnchen-3ya: /etc/hosts", look("file://m\u00FCnchen/etc/hosts", "hosts").caption)
         assertPlain("mailto:ben@\u0430pple.com", "ben@\u0430pple.com", "Mails ben@xn--pple-43d.com")
         assertWarns("mailto:ben@\u0430pple.com", "ben@apple.com", "Shown as \u201Cben@apple.com\u201D, but mails ben@xn--pple-43d.com")
-        // ASCII is only lowercased; a bracketed literal is left alone; a name UTS #46 refuses stands as it is, lowercased.
+        // ASCII is only lowercased; a bracketed literal is left alone; a name the browser refuses too stands as it is, lowercased.
         assertEquals("github.com", LinkLook.asciiHost("GitHub.com"))
         assertEquals("[2001:db8::1]", LinkLook.asciiHost("[2001:DB8::1]"))
-        val tooLong = "\u00C4".repeat(60) + ".com"
-        assertEquals(tooLong.lowercase(), LinkLook.asciiHost(tooLong))
+        val leadingMark = "\u0301x.com"
+        assertEquals(leadingMark, LinkLook.asciiHost(leadingMark))
+    }
+
+    @Test
+    fun `a host is encoded under the browser's profile, not STD3's or DNS's lengths`() {
+        // Chrome's WHATWG host parser runs UTS #46 without STD3's character set, so a _ label beside a homograph
+        // is still punycoded; under STD3 the whole host was refused and the caption named the Cyrillic а as it is.
+        assertEquals("my_shop.xn--pple-43d.com", LinkLook.asciiHost("my_shop.\u0430pple.com"))
+        assertPlain("https://my_shop.\u0430pple.com/", "click here", "Shown as \u201Cclick here\u201D, goes to my_shop.xn--pple-43d.com")
+        assertWarns("https://my_shop.\u0430pple.com/", "https://my_shop.apple.com/", "Shown as \u201Chttps://my_shop.apple.com/\u201D, but goes to my_shop.xn--pple-43d.com")
+        // Nor does it check DNS's lengths or a label's hyphens: a label past 63 bytes is encoded all the same.
+        assertEquals("xn--4c" + "a".repeat(60) + ".com", LinkLook.asciiHost("\u00C4".repeat(60) + ".com"))
+        assertEquals("xn--ab--c-kra.de", LinkLook.asciiHost("ab--c\u00E4.de"))
     }
 
     @Test
@@ -225,12 +237,12 @@ class LinkLookTest {
         // An ASCII host is drawn as it is whether the caption warns or not.
         assertEquals("https://evil.example/login", look("https://evil.example/login", "https://github.com/berth/releases").address)
         // Only the host is redrawn: the scheme's case, the path and a query outside ASCII stand, the host is the one after the last @,
-        // a mailbox's domain is its host, and a host UTS #46 refuses is left as it came.
+        // a mailbox's domain is its host, and a host the browser refuses is left as it came.
         assertEquals("HTTPS://xn--pple-43d.com/Id?q=\u0430", LinkLook.withAsciiHost("HTTPS://\u0410pple.com/Id?q=\u0430"))
         assertEquals("https://user@xn--pple-43d.com/", LinkLook.withAsciiHost("https://user@\u0430pple.com/"))
         assertEquals("mailto:ben@xn--pple-43d.com?subject=hi", LinkLook.withAsciiHost("mailto:ben@\u0430pple.com?subject=hi"))
-        val tooLong = "https://" + "\u00C4".repeat(60) + ".com/"
-        assertEquals(tooLong, LinkLook.withAsciiHost(tooLong))
+        val leadingMark = "https://\u0301x.com/"
+        assertEquals(leadingMark, LinkLook.withAsciiHost(leadingMark))
         assertEquals("a bare word", LinkLook.withAsciiHost("a bare word"))
     }
 

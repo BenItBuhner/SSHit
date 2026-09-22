@@ -108,6 +108,7 @@ import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.ScrollbackSearch
 import kotlinx.coroutines.delay
+import java.util.EnumSet
 /**
  * The Stage's text tools for one terminal tab (spec C16, C17, C18): its selection, its search,
  * its viewport, the paste waiting for a look in the preview sheet, the passing notice pill and
@@ -807,31 +808,44 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.let(::asciiHost)
 
         /**
-         * The UTS #46 processor the browsers name a host by: non-transitional, so `ß` and a final
-         * `ς` stand and are encoded where IDNA2003 (`java.net.IDN`) mapped them to `ss` and `σ`,
-         * with the checks a resolver makes (bidi, the joiners' context, STD3's character set).
-         * Built once, on the first host outside ASCII; the instance is immutable.
+         * The UTS #46 processor the browsers name a host by, with the WHATWG URL Standard's options
+         * as Chrome sets them (`url_idna_icu.cc`): non-transitional, so `ß` and a final `ς` stand
+         * and are encoded where IDNA2003 (`java.net.IDN`) mapped them to `ss` and `σ`; the bidi and
+         * joiner checks; and not STD3's character set, so a `_` label beside one outside ASCII is
+         * encoded as the browser encodes it. Built once, on the first host outside ASCII; the
+         * instance is immutable.
          */
         private val UTS46: IDNA by lazy {
-            IDNA.getUTS46Instance(IDNA.NONTRANSITIONAL_TO_ASCII or IDNA.CHECK_BIDI or IDNA.CHECK_CONTEXTJ or IDNA.USE_STD3_RULES)
+            IDNA.getUTS46Instance(IDNA.NONTRANSITIONAL_TO_ASCII or IDNA.CHECK_BIDI or IDNA.CHECK_CONTEXTJ)
         }
 
         /**
+         * What ICU reports that the WHATWG host parser sets aside (`beStrict` false: CheckHyphens
+         * and VerifyDnsLength off), masked as Chrome masks them, so a label past 63 bytes or with
+         * hyphens in its third and fourth places is encoded rather than refused.
+         */
+        private val LENIENT = EnumSet.of(
+            IDNA.Error.LEADING_HYPHEN, IDNA.Error.TRAILING_HYPHEN, IDNA.Error.HYPHEN_3_4,
+            IDNA.Error.EMPTY_LABEL, IDNA.Error.LABEL_TOO_LONG, IDNA.Error.DOMAIN_NAME_TOO_LONG,
+        )
+
+        /**
          * [host] as the resolver reads it: lowercased, and a label outside ASCII as its punycode
-         * under UTS #46, non-transitional ([UTS46]), the way the browser that opens the link writes
-         * a confusable host in its address bar, so `аpple.com` with a Cyrillic а is xn--pple-43d.com
-         * wherever the caption names it and a claim of `apple.com` over it is measured against that,
-         * and `straße.de` is xn--strae-oqa.de, the name the tap resolves, rather than strasse.de
-         * (IDNA2003's reading, and a name another registrant may hold). A bracketed IPv6 literal is
-         * ASCII already; a host UTS #46 refuses (a label too long, an empty one, a character no host
-         * may carry) stands as it is, lowercased.
+         * under UTS #46 as Chrome runs it ([UTS46], [LENIENT]), the way the browser that opens the
+         * link writes a confusable host in its address bar, so `аpple.com` with a Cyrillic а is
+         * xn--pple-43d.com wherever the caption names it and a claim of `apple.com` over it is
+         * measured against that, and `straße.de` is xn--strae-oqa.de, the name the tap resolves,
+         * rather than strasse.de (IDNA2003's reading, and a name another registrant may hold). A
+         * bracketed IPv6 literal is ASCII already; a host the browser refuses too (a code point
+         * UTS #46 disallows, a label opening on a combining mark, a bidi or joiner rule broken)
+         * stands as it is, lowercased.
          */
         fun asciiHost(host: String): String {
             val lower = host.lowercase()
             if (lower.all { it.code < 0x80 }) return lower
             val info = IDNA.Info()
             val ascii = UTS46.nameToASCII(lower, StringBuilder(), info)
-            return if (info.hasErrors()) lower else ascii.toString().lowercase()
+            return if (info.errors.any { it !in LENIENT }) lower else ascii.toString().lowercase()
         }
 
         /**
