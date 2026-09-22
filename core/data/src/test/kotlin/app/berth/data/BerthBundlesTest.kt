@@ -109,7 +109,8 @@ class BerthBundlesTest {
         protection = KeyProtection.BIOMETRIC, publicKeyOpenSsh = "ecdsa-sha2-nistp256 AAAAphone", fingerprintSha256 = "SHA256:phone",
         keystoreAlias = "berth.identity.id-phone", createdAt = 2,
     )
-    private val web = Host(id = "h-web", name = "prod-web", color = SwatchColor.VERDIGRIS, monogram = "PW", address = "203.0.113.10", user = "deploy", auth = AuthMethod.Key("id-laptop"), tags = listOf("prod"), createdAt = 3)
+    private val web = Host(id = "h-web", name = "prod-web", color = SwatchColor.VERDIGRIS, monogram = "PW", address = "203.0.113.10", user = "deploy", auth = AuthMethod.Key("id-laptop"), tags = listOf("prod"),
+        scrollbackLines = 50_000, ciphers = listOf("aes256-gcm@openssh.com", "aes256-ctr"), createdAt = 3)
     private val db1 = Host(id = "h-db", name = "db-primary", color = SwatchColor.SLATE, monogram = "DB", address = "db.internal", port = 2200, user = "postgres", auth = AuthMethod.Key("id-phone"), jumpHostIds = listOf("h-web"), createdAt = 4)
     private val nas = Host(id = "h-nas", name = "nas", color = SwatchColor.MOSS, monogram = "NA", address = "10.0.0.5", user = "admin", auth = AuthMethod.Password("host-password:h-nas"), createdAt = 5)
     private val work = Workspace(id = "w-work", name = "Work", color = SwatchColor.PLUM, monogram = "WK", sortOrder = 1, createdAt = 6, reconnectAtLaunch = true)

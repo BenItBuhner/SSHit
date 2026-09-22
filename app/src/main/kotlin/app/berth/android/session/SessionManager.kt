@@ -25,6 +25,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabOrder
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.CommandHistoryRepository
@@ -290,6 +291,14 @@ class SessionManager @Inject constructor(
     /** Settings › Connection › Detach idle sessions, as the span in milliseconds or null for Never; one read for every session. */
     private val idleDetachAfter: StateFlow<Long?> = connectionSettings.map { it.idleDetach.millis }.stateIn(scope, SharingStarted.Eagerly, null)
 
+    /**
+     * Settings › Terminal › Scrollback, one read for every session; a host with its own cap stands
+     * over it. Shared without a starting value, so no tab is held to the default before the setting
+     * is read and a restored frame kept under a wider cap is not cut on the way in.
+     */
+    private val appScrollback: SharedFlow<Int> =
+        settings.terminalSettings.map { it.scrollbackLines }.distinctUntilChanged().shareIn(scope, SharingStarted.Eagerly, replay = 1)
+
     private val _batteryExplainerDue = MutableStateFlow(false)
 
     /**
@@ -344,6 +353,13 @@ class SessionManager @Inject constructor(
         override val idleDetachAfter: Flow<Long?> = this@SessionManager.idleDetachAfter
         // The document itself, not the eager copy: a tab restored at launch may connect before that copy's first read lands.
         override suspend fun connectionDefaults(): ConnectionSettings = settings.connectionSettings.first()
+
+        // The saved host as it is now, so an edit in the host editor reaches its open tabs; a
+        // Quick-connect login or a host deleted since keeps the snapshot the tab opened with.
+        override fun scrollbackLinesFor(host: Host): Flow<Int> =
+            combine(hostRepository.observe(host.id).map { it ?: host }, appScrollback) { saved, app ->
+                TerminalSettings.scrollbackFor(saved.scrollbackLines, app)
+            }.distinctUntilChanged()
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override suspend fun agentSignsSilently(host: Host): Boolean = settings.securitySettings.first().signsAgentSilently(host.id)
 

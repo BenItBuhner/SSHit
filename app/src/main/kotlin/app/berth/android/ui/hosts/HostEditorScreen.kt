@@ -78,7 +78,9 @@ import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TmuxMode
+import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshLink
 import kotlinx.coroutines.flow.filterNotNull
@@ -152,13 +154,15 @@ fun HostEditorScreen(
     var tags by remember { mutableStateOf("") }
     var environment by remember { mutableStateOf("") }
     var muteBell by remember { mutableStateOf(false) }
+    var scrollbackLines by remember { mutableStateOf<Int?>(null) }
+    var ciphers by remember { mutableStateOf<List<String>>(emptyList()) }
     var colorPicker by remember { mutableStateOf(false) }
     var discardPrompt by remember { mutableStateOf(false) }
 
     fun draft() = HostDraft(
         name, monogramEdited, monogram, color, address, port, user, auth, password, keepalive, reconnectMinutes, tmux, tmuxPrefix,
         themeId, fontFamily, fontSize, startupCommand, terminalType, compression, addressFamily, remoteClipboard, jumpHostIds,
-        tunnelsOnly, altKey, tags, environment, muteBell, leftOut,
+        tunnelsOnly, altKey, tags, environment, muteBell, scrollbackLines, ciphers, leftOut,
     )
     // The fields as the screen opened with them, once loaded: what Back compares against.
     var opened by remember { mutableStateOf<HostDraft?>(null) }
@@ -196,6 +200,8 @@ fun HostEditorScreen(
                 tags = HostEditorFields.tagsText(h.tags)
                 environment = HostEditorFields.environmentText(h.environment)
                 muteBell = h.muteBell
+                scrollbackLines = h.scrollbackLines
+                ciphers = h.ciphers
             }
         }
         opened = draft()
@@ -254,6 +260,8 @@ fun HostEditorScreen(
             tags = HostEditorFields.parseTags(tags),
             environment = environmentValue ?: base?.environment ?: emptyMap(),
             muteBell = muteBell,
+            scrollbackLines = scrollbackLines,
+            ciphers = ciphers,
         )
         val secret = password.takeIf { it.isNotEmpty() }
         if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
@@ -460,10 +468,12 @@ fun HostEditorScreen(
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                 )
                 BerthField(terminalType, { terminalType = it }, label = "Terminal type", mono = true)
+                HostScrollbackPicker(vm, scrollbackLines) { scrollbackLines = it }
                 ToggleRow("Compression", compression, { compression = it })
                 ToggleRow("Mute bell", muteBell, { muteBell = it }, caption = "No buzz when the shell rings; off stage the tab still lights.")
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
+                HostCiphersPicker(ciphers) { ciphers = it }
                 HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }
                 HostAltKeyPicker(vm, original?.id, altKey) { altKey = it }
             }
@@ -513,6 +523,8 @@ private data class HostDraft(
     val tags: String,
     val environment: String,
     val muteBell: Boolean,
+    val scrollbackLines: Int?,
+    val ciphers: List<String>,
     val leftOut: Set<SshConfigForward>,
 )
 
@@ -530,6 +542,57 @@ internal fun DiscardChangesSheet(hostName: String?, onDiscard: () -> Unit, onKee
             BerthButton("Keep editing", onClick = onKeepEditing, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
         }
     }
+}
+
+/**
+ * Lines of history this host's terminals keep (spec C2, "Very long output"): Inherit follows
+ * Settings › Terminal › Scrollback and says what that is now; a value the choices lack, as a
+ * bundle may carry, is offered beside them rather than dropped.
+ */
+@Composable
+private fun HostScrollbackPicker(vm: AppViewModel, value: Int?, onSelect: (Int?) -> Unit) {
+    val app by vm.terminalSettings.collectAsState()
+    val options = listOf<Int?>(null) + (TerminalSettings.SCROLLBACK_CHOICES + listOfNotNull(value)).distinct().sorted()
+    CyclePicker(
+        "Scrollback",
+        options,
+        value,
+        // Inherit's count without the unit, like "Inherit (blocked)": with it the value takes the
+        // title's room at the 1.3x font cap and one word has nowhere to wrap.
+        { lines -> if (lines == null) "Inherit (%,d)".format(app.scrollbackLines) else "%,d lines".format(lines) },
+        caption = "History kept above the screen",
+        onSelect = onSelect,
+    )
+}
+
+/**
+ * The ciphers offered to this host (spec C10, Advanced › Ciphers): every one Berth knows, for the
+ * servers that still speak only the old ones, or the modern set. A list neither names, as a bundle
+ * may carry, reads as Custom and is kept on offer until Save, so trying another choice can go back.
+ */
+@Composable
+private fun HostCiphersPicker(value: List<String>, onSelect: (List<String>) -> Unit) {
+    val stored = remember { value.takeUnless { it.isEmpty() || it == SshCiphers.MODERN } }
+    CyclePicker(
+        "Ciphers",
+        listOfNotNull(emptyList(), SshCiphers.MODERN, stored),
+        value,
+        { list ->
+            when {
+                list.isEmpty() -> "Default"
+                list == SshCiphers.MODERN -> "Modern only"
+                else -> "Custom"
+            }
+        },
+        caption = when {
+            value.isEmpty() -> "Every cipher Berth knows, old ones too"
+            value == SshCiphers.MODERN -> "ChaCha20, AES-GCM and AES-CTR only"
+            // By name without the vendor suffix, so a pair fits the caption's two lines.
+            else -> "Offers " + value.take(2).joinToString(", ") { it.removeSuffix("@openssh.com") } +
+                if (value.size > 2) " and ${value.size - 2} more" else ""
+        },
+        onSelect = onSelect,
+    )
 }
 
 /** The host's swatch colour as a [ColorOption]: named for a screen reader, in a 48 dp target. */

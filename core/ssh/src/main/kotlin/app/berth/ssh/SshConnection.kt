@@ -63,6 +63,8 @@ data class SshEndpoint(
     val connectTimeoutMillis: Int = 15_000,
     /** Preferred address family; null lets the resolver choose. */
     val preferIpv6: Boolean? = null,
+    /** The cipher names offered, most preferred first ([SshCiphers.select]); empty offers sshj's own list. */
+    val ciphers: List<String> = emptyList(),
 )
 
 /**
@@ -77,6 +79,13 @@ sealed class SshError(message: String, cause: Throwable? = null) : Exception(mes
     class AuthenticationFailed(user: String, cause: Throwable?) : SshError("Authentication failed for $user", cause)
     class ConnectFailed(host: String, port: Int, cause: Throwable) : SshError("Couldn't reach $host:$port: ${cause.message ?: cause.javaClass.simpleName}", cause)
     class Disconnected(reason: String) : SshError(reason)
+
+    /**
+     * Key exchange found no cipher both sides speak: the server accepts none of [offered]. Not
+     * something a retry fixes; the host's cipher list (or the server's) has to change.
+     */
+    class NoCommonCipher(host: String, port: Int, val offered: List<String>, cause: Throwable?) :
+        SshError("$host${if (port == 22) "" else ":$port"} accepts none of the ciphers offered: ${offered.joinToString(", ")}", cause)
 
     /**
      * A jump host, not the target, failed: [reason] is what went wrong there, [hop] which hop
@@ -229,6 +238,10 @@ class SshConnection(
     @Volatile private var agent: SshAgent? = null
     private var agentOpener: AgentChannelOpener? = null
 
+    /** The cipher key exchange settled on with the target, client to server (the first of the host's list its server speaks). */
+    @Volatile var negotiatedCipher: String? = null
+        private set
+
     init {
         SshSecurity.ensureProviders()
     }
@@ -288,13 +301,33 @@ class SshConnection(
         is UserAuthException -> SshError.AuthenticationFailed(ep.user, this)
         is TransportException ->
             if (disconnectReason == DisconnectReason.HOST_KEY_NOT_VERIFIABLE) SshError.HostKeyRejected(ep.host)
+            else if (isCipherSettlementFailure()) SshError.NoCommonCipher(ep.host, ep.port, offeredCiphers(ep), this)
             else SshError.ConnectFailed(ep.host, ep.port, this)
-        else -> SshError.ConnectFailed(ep.host, ep.port, this)
+        else ->
+            if (isCipherSettlementFailure()) SshError.NoCommonCipher(ep.host, ep.port, offeredCiphers(ep), this)
+            else SshError.ConnectFailed(ep.host, ep.port, this)
     }
 
+    /** sshj's word for a key exchange with no cipher in common, either direction, anywhere in the chain of causes. */
+    private fun Throwable.isCipherSettlementFailure(): Boolean = generateSequence(this) { it.cause }.take(8).any { e ->
+        val message = e.message.orEmpty()
+        message.contains("settlement of") && message.contains("CipherAlgorithms")
+    }
+
+    private fun offeredCiphers(ep: SshEndpoint): List<String> = SshCiphers.select(DefaultConfig().cipherFactories, ep.ciphers).map { it.name }
+
     private fun newClient(ep: SshEndpoint, policy: HostKeyPolicy, isTarget: Boolean): SSHClient {
-        val config = DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE }
+        val config = DefaultConfig().apply {
+            keepAliveProvider = KeepAliveProvider.KEEP_ALIVE
+            cipherFactories = SshCiphers.select(cipherFactories, ep.ciphers)
+        }
         val c = SSHClient(config)
+        if (isTarget) {
+            c.transport.addAlgorithmsVerifier { negotiated ->
+                negotiatedCipher = negotiated.client2ServerCipherAlgorithm
+                true
+            }
+        }
         c.addHostKeyVerifier(
             PolicyHostKeyVerifier(
                 host = ep.host,
@@ -579,7 +612,7 @@ class SshConnection(
 
 /** True for the failures that a reconnect loop should treat as transient. */
 fun Throwable.isTransientSshFailure(): Boolean = when (this) {
-    is SshError.HostKeyRejected, is SshError.AuthenticationFailed -> false
+    is SshError.HostKeyRejected, is SshError.AuthenticationFailed, is SshError.NoCommonCipher -> false
     is SshError.JumpHopFailed -> reason.isTransientSshFailure()
     is SshError.ConnectFailed, is SshError.Disconnected -> true
     is ConnectionException, is TransportException, is IOException -> true

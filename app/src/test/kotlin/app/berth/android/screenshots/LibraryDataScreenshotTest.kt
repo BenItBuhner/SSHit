@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -24,6 +26,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
@@ -44,6 +48,7 @@ import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SwatchColor
+import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
@@ -65,8 +70,8 @@ import java.util.concurrent.TimeUnit
 /**
  * The library's data surfaces of wave four (spec C9, C10, C12, C13) through Robolectric's native
  * graphics, each at the system's 1× and at 2×, where interface text stops at its 1.3× cap (A11):
- * the host editor's question when Back would drop edits, and Rename and Change protection on
- * the Keys screen. Every capture is the accessibility audit
+ * the host editor's question when Back would drop edits and its Advanced › Scrollback and
+ * Ciphers rows, and Rename and Change protection on the Keys screen. Every capture is the accessibility audit
  * too, and no text on these surfaces is cut at either size.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
@@ -129,6 +134,13 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
     private fun assertNoTextCut(where: String, within: SemanticsMatcher? = null) {
         val cut = compose.cutTexts(within)
         assertTrue("text cut on $where at ${systemFontScale}x: $cut", cut.isEmpty())
+    }
+
+    /** [text] laid out on one line: a one-word title its row's value squeezes breaks mid-word, which no ellipsis marks. */
+    private fun assertOneLine(text: String) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText(text, useUnmergedTree = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals("$text on one line at ${systemFontScale}x", 1, layouts.single().lineCount)
     }
 
     private fun pressBack() {
@@ -260,6 +272,103 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         inSheet("Discard").performClick()
         compose.waitUntil(5_000) { done == 1 }
         assertTrue("nothing was saved", graph.hosts.items.value.isEmpty())
+    }
+
+    // ---- the host editor's Scrollback and Ciphers (C2, C10 Advanced) ------------------------------
+
+    /**
+     * Advanced › Scrollback on a host that has none of its own: Inherit, saying what Settings ›
+     * Terminal holds now; Ciphers on Default, with what that offers. The menu lists Settings' own
+     * choices under Inherit, and one picked is the host's, saved with it and asked about on Back.
+     */
+    @Test
+    fun `Scrollback says what Inherit is and saves the host's own, beside Ciphers on Default`() {
+        seedLibrary()
+        runBlocking { graph.settings.updateTerminalSettings { it.copy(scrollbackLines = 20_000) } }
+        var done = 0
+        editor("homelab", onDone = { done++ }, onPopped = {})
+        waitForText("Ciphers")
+        compose.onNodeWithText("Ciphers").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Scrollback").assertIsDisplayed()
+        compose.onNodeWithText("Inherit (20,000)").assertIsDisplayed()
+        compose.onNodeWithText("History kept above the screen").assertIsDisplayed()
+        compose.onNodeWithText("Default").assertIsDisplayed()
+        compose.onNodeWithText("Every cipher Berth knows, old ones too").assertIsDisplayed()
+        capture("host-editor-advanced-scrollback-ciphers")
+        assertNoTextCut("the host editor's Advanced panel")
+        assertOneLine("Scrollback")
+        assertOneLine("Ciphers")
+
+        compose.onNodeWithText("Scrollback").performClick()
+        waitForText("50,000 lines")
+        for (lines in listOf("1,000 lines", "10,000 lines", "100,000 lines")) compose.onAllNodesWithText(lines).assertCountEquals(1)
+        capture("host-editor-scrollback-menu")
+        compose.onNodeWithText("50,000 lines").performClick()
+        waitForNoText("Inherit (20,000)")
+        compose.onNodeWithText("50,000 lines").assertIsDisplayed()
+
+        pressBack()
+        waitForText("Discard changes?")
+        inSheet("Keep editing").performClick()
+        waitForNoText("Discard changes?")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { done == 1 }
+        val saved = graph.hosts.items.value.first { it.id == "homelab" }
+        assertEquals(50_000, saved.scrollbackLines)
+        assertEquals("Ciphers left on Default", emptyList<String>(), saved.ciphers)
+    }
+
+    /**
+     * A cipher list neither choice names, as a bundle from another phone may carry, reads as
+     * Custom with the ciphers it offers; opening the editor on it is no edit, the menu keeps it
+     * beside Default and Modern only, and Modern only picked is what Save keeps.
+     */
+    @Test
+    fun `Ciphers shows a list from elsewhere as Custom, keeps it on offer, and saves Modern only`() {
+        seedLibrary()
+        val custom = listOf("aes256-gcm@openssh.com", "aes256-ctr")
+        runBlocking { graph.hosts.upsert(graph.hosts.items.value.first { it.id == "build-box" }.copy(ciphers = custom)) }
+        var done = 0
+        var popped = 0
+        editor("build-box", onDone = { done++ }, onPopped = { popped++ })
+        waitForText("Ciphers")
+        compose.onNodeWithText("Ciphers").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Custom").assertIsDisplayed()
+        compose.onNodeWithText("Offers aes256-gcm, aes256-ctr").assertIsDisplayed()
+        capture("host-editor-ciphers-custom")
+        assertNoTextCut("the host editor's Ciphers row on a custom list")
+        assertOneLine("Scrollback")
+        assertOneLine("Ciphers")
+
+        compose.onNodeWithText("Ciphers").performClick()
+        waitForText("Modern only")
+        compose.onAllNodesWithText("Custom").assertCountEquals(2)
+        capture("host-editor-ciphers-menu")
+        compose.onNodeWithText("Modern only").performClick()
+        waitForText("ChaCha20, AES-GCM and AES-CTR only")
+        compose.onNodeWithText("Ciphers").performScrollTo()
+        compose.waitForIdle()
+        capture("host-editor-ciphers-modern")
+        assertNoTextCut("the host editor's Ciphers row on Modern only")
+
+        // The list the editor opened with is still one pick away.
+        compose.onNodeWithText("Ciphers").performClick()
+        waitForText("Custom")
+        compose.onNodeWithText("Custom").performClick()
+        waitForText("Offers aes256-gcm, aes256-ctr")
+        pressBack()
+        compose.waitUntil(5_000) { popped == 1 }
+        hasNoText("Discard changes?")
+
+        compose.onNodeWithText("Ciphers").performClick()
+        waitForText("Modern only")
+        compose.onNodeWithText("Modern only").performClick()
+        waitForText("ChaCha20, AES-GCM and AES-CTR only")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { done == 1 }
+        assertEquals(SshCiphers.MODERN, graph.hosts.items.value.first { it.id == "build-box" }.ciphers)
     }
 
     // ---- Keys: Rename and Change protection (C12) ------------------------------------------------

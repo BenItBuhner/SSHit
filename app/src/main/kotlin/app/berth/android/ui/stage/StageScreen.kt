@@ -146,7 +146,6 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
-import app.berth.domain.model.TerminalSettings
 import app.berth.terminal.CursorStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -704,12 +703,10 @@ private fun StageBody(
         session.markSeen()
         viewport.scrollOffset = 0
     }
-    // Settings › Terminal reaches the emulator here: the history it keeps, and the cursor the user
-    // chose, which stands until the program on the other end asks for its own (DECSCUSR).
+    // Settings › Terminal reaches the emulator here for the cursor the user chose, which stands
+    // until the program on the other end asks for its own (DECSCUSR); the session holds its own
+    // history cap (SessionEnvironment.scrollbackLinesFor), on stage or not.
     val terminalSettings by vm.terminalSettings.collectAsState()
-    LaunchedEffect(session.id, terminalSettings.scrollbackLines) {
-        session.emulator.maxScrollback = terminalSettings.scrollbackLines.coerceIn(TerminalSettings.MIN_SCROLLBACK, TerminalSettings.MAX_SCROLLBACK)
-    }
     LaunchedEffect(session.id, fontSetting.cursorShape, fontSetting.cursorBlink) {
         session.emulator.defaultCursorStyle = CursorStyle(cursorShapeOf(fontSetting.cursorShape), fontSetting.cursorBlink)
     }

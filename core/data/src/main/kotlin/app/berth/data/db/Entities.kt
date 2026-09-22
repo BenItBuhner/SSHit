@@ -35,6 +35,10 @@ data class HostEntity(
     val createdAt: Long,
     /** Added in schema version 4: Connect opens the host's tunnels with no shell; every earlier host opens a terminal. */
     @ColumnInfo(defaultValue = "0") val tunnelsOnly: Boolean = false,
+    /** Added in schema version 8: the host's own scrollback cap; null, as every earlier host has, follows Settings. */
+    val scrollbackLines: Int? = null,
+    /** Added in schema version 8: the host's cipher names as a JSON list; `[]`, as every earlier host has, offers the client's own. */
+    @ColumnInfo(defaultValue = "'[]'") val ciphersJson: String = "[]",
 )
 
 @Entity(tableName = "identities", indices = [Index("name")])
