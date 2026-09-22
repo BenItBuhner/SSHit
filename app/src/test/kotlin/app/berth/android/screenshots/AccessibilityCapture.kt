@@ -1,6 +1,8 @@
 package app.berth.android.screenshots
 
 import android.content.Context
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.isRoot
@@ -17,11 +19,13 @@ import com.google.android.apps.common.testing.accessibility.framework.checks.Spe
 import com.google.android.apps.common.testing.accessibility.framework.checks.TextContrastCheck
 import com.google.android.apps.common.testing.accessibility.framework.checks.TouchTargetSizeCheck
 import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
+import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.stage.DeckKeyTag
 import org.hamcrest.CoreMatchers.anyOf
 import org.hamcrest.Description
 import org.hamcrest.TypeSafeMatcher
 import java.io.File
+import kotlin.math.abs
 
 /**
  * Every screenshot is also an accessibility audit. After the frame is written, the Accessibility
@@ -31,8 +35,9 @@ import java.io.File
  * it, and a result at the ERROR level fails the test that took the picture. `BERTH_A11Y_LEVEL`
  * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. A few findings
  * are exempt by what they are, never by lowering the bar: a Deck key's width, a row cut at the
- * window's edge on its way in or out of a list or under a half-open sheet, the strip of scrim a
- * tall sheet leaves above itself, and the contrast of a disabled control's text.
+ * window's edge on its way in or out of a list or under a half-open sheet, a whole control cut by
+ * the reach of a row the list beside it has scrolled past, the strip of scrim a tall sheet leaves
+ * above itself, and the contrast of a disabled control's text.
  */
 @OptIn(ExperimentalRoborazziApi::class)
 fun ComposeTestRule.captureAudited(file: File) {
@@ -40,16 +45,21 @@ fun ComposeTestRule.captureAudited(file: File) {
     file.parentFile?.mkdirs()
     captureScreenRoboImage(file.path)
     if (System.getenv("BERTH_A11Y_DUMP") != null) dumpA11yFindings(file.nameWithoutExtension)
+    val minTarget = with(density) { TouchTargetSize.toPx() }
     val roots = onAllNodes(isRoot()).fetchSemanticsNodes().size
     for (index in 0 until roots) {
         val root = onAllNodes(isRoot())[index]
-        val sheet = root.fetchSemanticsNode().holdsDialog()
-        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = if (sheet) SheetAuditOptions else AuditOptions)
+        val rootNode = root.fetchSemanticsNode()
+        val sheet = rootNode.holdsDialog()
+        val nodes = onAllNodes(isRoot(), useUnmergedTree = true).fetchSemanticsNodes().first { it.id == rootNode.id }.flatten()
+        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, UnderAScrolledRowsReach(nodes, minTarget)))
     }
 }
 
 private fun SemanticsNode.holdsDialog(): Boolean =
     config.contains(SemanticsProperties.IsDialog) || children.any { it.holdsDialog() }
+
+private fun SemanticsNode.flatten(): List<SemanticsNode> = listOf(this) + children.flatMap { it.flatten() }
 
 /**
  * Lets [ms] of real time pass while the compose clock keeps ticking. The platform ripple a
@@ -69,19 +79,22 @@ fun ComposeTestRule.settle(ms: Long) {
 @OptIn(ExperimentalRoborazziApi::class)
 private val Level = RoborazziATFAccessibilityChecker.CheckLevel.valueOf(System.getenv("BERTH_A11Y_LEVEL") ?: "Error")
 
-@OptIn(ExperimentalRoborazziApi::class)
-private val AuditOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, DisabledControlContrast)),
-    failureLevel = Level,
-)
-
 /**
- * A sheet's or a menu's window: the same audit, and neither a row the half-open sheet has not yet
- * shown nor the strip of scrim a tall sheet leaves above itself is a finding.
+ * The audit of one window. [reach] is built from that window's own semantics tree, since it reads
+ * the controls' real boxes; the other exemptions read the framework's hierarchy alone. A sheet's
+ * or a menu's window ([sheet]) takes the same audit, and neither a row the half-open sheet has not
+ * yet shown nor the strip of scrim a tall sheet leaves above itself is a finding there.
  */
 @OptIn(ExperimentalRoborazziApi::class)
-private val SheetAuditOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(preset = AccessibilityCheckPreset.LATEST, suppressions = anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, DisabledControlContrast)),
+private fun auditOptions(sheet: Boolean, reach: UnderAScrolledRowsReach) = RoborazziATFAccessibilityCheckOptions(
+    checker = RoborazziATFAccessibilityChecker(
+        preset = AccessibilityCheckPreset.LATEST,
+        suppressions = if (sheet) {
+            anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, reach, DisabledControlContrast)
+        } else {
+            anyOf(DeckKeyTargets, ScrolledPastTheEdge, reach, DisabledControlContrast)
+        },
+    ),
     failureLevel = Level,
 )
 
@@ -101,7 +114,7 @@ private object DeckKeyTargets : TypeSafeMatcher<AccessibilityViewCheckResult>() 
 }
 
 /**
- * The other: a row scrolled partly out of a list. Compose reports a node's bounds clipped to the
+ * The second: a row scrolled partly out of a list. Compose reports a node's bounds clipped to the
  * window, so the last row of a sheet's list, cut at the screen's bottom edge, reads as a 9 dp
  * target with no text on it; the framework can see the clipping for a View but not for a Compose
  * node, and would otherwise fail every capture of a list longer than the screen. A finding is
@@ -122,6 +135,73 @@ private object ScrolledPastTheEdge : TypeSafeMatcher<AccessibilityViewCheckResul
             ancestor = ancestor.parentView
         }
         return false
+    }
+}
+
+/**
+ * The third: a whole control cut by the reach of a row the list beside it has scrolled past.
+ * Compose measures a control's box for a reader as its target, the layout grown to 48 dp, and
+ * where a clipping parent cuts a row it keeps the 24 dp of reach a finger gets around it, so a
+ * row scrolled just past the top of a list still claims the 24 dp above the list's edge, and a
+ * header control standing there is reported less that band: the Deck editor's Done and Undo at
+ * the font cap, their 48 dp boxes read as 28 where the scrolled preview's keys reach up under
+ * them. The finger's tap there is still the header's (a direct hit beats a hit in a neighbour's
+ * reach). A finding is exempt only when the control's own target is full and whole in the
+ * window, the framework's box is that target less one band, and every node reaching into the
+ * band is a row of a list whose window lies clear of it, read from the window's own semantics
+ * tree; a control a neighbour beside it really claims from, or one that is itself short, is not.
+ */
+private class UnderAScrolledRowsReach(private val nodes: List<SemanticsNode>, private val minTarget: Float) : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+    override fun describeTo(description: Description) {
+        description.appendText("a touch-target finding on a whole control cut by a scrolled row's reach")
+    }
+
+    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
+        if (result.accessibilityHierarchyCheck != TouchTargetSizeCheck::class.java) return false
+        val element = result.element ?: return false
+        val cut = element.boundsInScreen.let { Rect(it.left.toFloat(), it.top.toFloat(), it.right.toFloat(), it.bottom.toFloat()) }
+        // The control the framework measured: the smallest one that takes a tap and whose target is the finding's plus one band.
+        val control = nodes
+            .filter { it.config.contains(SemanticsActions.OnClick) && it.touchBoundsInRoot.isCutTo(cut) }
+            .minByOrNull { it.touchBoundsInRoot.width * it.touchBoundsInRoot.height } ?: return false
+        val target = control.touchBoundsInRoot
+        if (target.width < minTarget - 1 || target.height < minTarget - 1) return false
+        val shown = control.boundsInWindow
+        if (abs(shown.width - control.size.width) > 1 || abs(shown.height - control.size.height) > 1) return false
+        val band = target.less(cut)
+        val related = HashSet<Int>()
+        var up: SemanticsNode? = control
+        while (up != null) { related += up.id; up = up.parent }
+        control.flatten().forEach { related += it.id }
+        val reaching = nodes.filter { it.id !in related && it.touchBoundsInRoot.overlaps(band) }
+        if (reaching.isEmpty()) return false
+        return reaching.all { row ->
+            !row.boundsInWindow.overlaps(band) && row.scrollingAncestor()?.boundsInWindow?.overlaps(band) == false
+        }
+    }
+
+    private fun SemanticsNode.scrollingAncestor(): SemanticsNode? {
+        var up = parent
+        while (up != null) {
+            if (up.config.contains(SemanticsActions.ScrollBy)) return up
+            up = up.parent
+        }
+        return null
+    }
+
+    /** This box is [cut] plus one band: three edges shared within a pixel, the fourth further out. */
+    private fun Rect.isCutTo(cut: Rect): Boolean {
+        val shared = listOf(abs(left - cut.left) <= 1, abs(top - cut.top) <= 1, abs(right - cut.right) <= 1, abs(bottom - cut.bottom) <= 1)
+        if (shared.count { it } != 3) return false
+        return left <= cut.left + 1 && top <= cut.top + 1 && right >= cut.right - 1 && bottom >= cut.bottom - 1
+    }
+
+    /** The band this box has and [cut] has not. */
+    private fun Rect.less(cut: Rect): Rect = when {
+        abs(bottom - cut.bottom) > 1 -> Rect(left, cut.bottom, right, bottom)
+        abs(top - cut.top) > 1 -> Rect(left, top, right, cut.top)
+        abs(right - cut.right) > 1 -> Rect(cut.right, top, right, bottom)
+        else -> Rect(left, top, cut.left, bottom)
     }
 }
 
