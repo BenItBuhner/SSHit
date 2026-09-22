@@ -76,6 +76,7 @@ import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshLink
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -905,6 +906,12 @@ class AppViewModel @Inject constructor(
         data class Failed(val reason: String) : KeyGenResult
     }
 
+    sealed interface KeyChangeResult {
+        data object Done : KeyChangeResult
+        data object WrongPassphrase : KeyChangeResult
+        data class Failed(val reason: String) : KeyChangeResult
+    }
+
     val strongBoxAvailable: Boolean get() = hardwareKeys.strongBoxAvailable
 
     /**
@@ -972,6 +979,52 @@ class AppViewModel @Inject constructor(
     fun deleteIdentity(id: String) {
         viewModelScope.launch { identityRepository.delete(id) }
     }
+
+    /** A new name for the key; its key pair, fingerprint and the hosts using it are unchanged. */
+    suspend fun renameIdentity(id: String, name: String) {
+        val identity = identityRepository.get(id) ?: return
+        identityRepository.update(identity.copy(name = name.trim()))
+    }
+
+    /**
+     * Re-encodes a software key's private half under [next], or with no passphrase when [next] is
+     * null or empty, after opening it with [current] (needed when it has one now). The key pair,
+     * and so its fingerprint and every host that trusts it, stays the same; only the file at rest
+     * changes, still encrypted under the Keystore as every stored secret is. A hardware key's
+     * protection was fixed when it was generated and is not Berth's to change.
+     */
+    suspend fun changeProtection(identity: Identity, current: CharArray?, next: CharArray?): KeyChangeResult =
+        withContext(Dispatchers.Default) {
+            try {
+                if (identity.isHardwareBacked) return@withContext KeyChangeResult.Failed("A hardware key's protection is fixed when it is made.")
+                val pem = identityRepository.privateKey(identity.id)?.toString(Charsets.UTF_8)
+                    ?: return@withContext KeyChangeResult.Failed("The private key for ${identity.name} is missing.")
+                val opened = try {
+                    SshKeys.importPrivate(pem, current?.copyOf())
+                } catch (_: SshKeys.ImportError.PassphraseNeeded) {
+                    return@withContext KeyChangeResult.WrongPassphrase
+                } catch (_: SshKeys.ImportError.WrongPassphrase) {
+                    return@withContext KeyChangeResult.WrongPassphrase
+                }
+                if (SshKeys.fingerprintSha256(opened.pair.public) != identity.fingerprintSha256) {
+                    return@withContext KeyChangeResult.Failed("The stored key file does not match ${identity.name}'s fingerprint, so it was left as it is.")
+                }
+                val passphrase = next?.takeIf { it.isNotEmpty() }
+                val reencoded = SshKeys.openSshPrivate(opened.pair, identity.comment, passphrase)
+                identityRepository.replacePrivateKey(
+                    identity.copy(protection = if (passphrase != null) KeyProtection.PASSPHRASE else KeyProtection.NONE),
+                    reencoded.toByteArray(Charsets.UTF_8),
+                )
+                KeyChangeResult.Done
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                KeyChangeResult.Failed(e.message ?: e.javaClass.simpleName)
+            } finally {
+                current?.fill('\u0000')
+                next?.fill('\u0000')
+            }
+        }
 
     fun forgetKnownHost(id: String) {
         viewModelScope.launch { knownHostRepository.delete(id) }

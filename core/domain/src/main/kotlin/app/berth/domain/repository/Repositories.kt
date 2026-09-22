@@ -51,6 +51,12 @@ interface IdentityRepository {
     /** Decrypted OpenSSH private key for a software identity; null for hardware keys. */
     suspend fun privateKey(id: String): ByteArray?
 
+    /**
+     * Writes a software identity's record and its OpenSSH private key together, for a key
+     * re-encoded under a new protection: both land or neither does.
+     */
+    suspend fun replacePrivateKey(identity: Identity, privateKeyOpenSsh: ByteArray)
+
     /** Hosts referencing this identity, to block deletion with a list. */
     suspend fun hostsUsing(id: String): List<Host>
 }

@@ -66,20 +66,25 @@ import kotlinx.coroutines.launch
 /**
  * Identities (spec C12): name, algorithm, fingerprint and protection. A tap opens the key's detail
  * sheet (fingerprint, randomart, the `ssh-keygen -lf` line, Show QR and Install on host); a
- * long-press opens the row's menu, the spec's list less Rename and Change protection, which are
- * not yet built. [onOpenTab] puts a tab on the Stage, for the install sheet's way to the shell it typed into.
+ * long-press opens the row's menu in the spec's order, with Save public key beside Share. Change
+ * protection re-encodes a software key under a new passphrase or none; a hardware-backed key's is
+ * fixed at generation, and its sheet offers a new hardware key instead. [onOpenTab] puts a tab on
+ * the Stage, for the install sheet's way to the shell it typed into.
  */
 @Composable
 fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier, onOpenTab: (String) -> Unit = {}) {
     val c = Berth.colors
     val identities by vm.identities.collectAsState()
     var generate by remember { mutableStateOf(false) }
+    var generatePrefill by remember { mutableStateOf<NewKeyPrefill?>(null) }
     var importKey by remember { mutableStateOf(false) }
     var headerMenu by remember { mutableStateOf(false) }
     var blocked by remember { mutableStateOf<Pair<Identity, List<String>>?>(null) }
     var detail by remember { mutableStateOf<Identity?>(null) }
     var qr by remember { mutableStateOf<Identity?>(null) }
     var install by remember { mutableStateOf<Identity?>(null) }
+    var rename by remember { mutableStateOf<Identity?>(null) }
+    var protect by remember { mutableStateOf<Identity?>(null) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -134,6 +139,8 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
                             BerthMenuItem("Save public key\u2026", onClick = { menu = false; savePublicKey(identity) })
                             BerthMenuItem("Show QR", onClick = { menu = false; qr = identity })
                             BerthMenuItem("Install on host", onClick = { menu = false; install = identity })
+                            BerthMenuItem("Rename", onClick = { menu = false; rename = identity })
+                            BerthMenuItem("Change protection", onClick = { menu = false; protect = identity })
                             BerthMenuItem(
                                 "Delete",
                                 destructive = true,
@@ -152,8 +159,21 @@ fun KeysScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifi
         }
     }
 
-    if (generate) GenerateKeySheet(vm, onDismiss = { generate = false })
+    if (generate) GenerateKeySheet(vm, onDismiss = { generate = false; generatePrefill = null }, prefill = generatePrefill)
     if (importKey) ImportKeySheet(vm, onDismiss = { importKey = false })
+    rename?.let { identity -> RenameKeySheet(vm, identity, onDismiss = { rename = null }) }
+    protect?.let { identity ->
+        ChangeProtectionSheet(
+            vm,
+            identity,
+            onDismiss = { protect = null },
+            onNewHardwareKey = {
+                protect = null
+                generatePrefill = NewKeyPrefill(name = "", algorithm = KeyAlgorithm.ECDSA_P256, hardware = true)
+                generate = true
+            },
+        )
+    }
     detail?.let { identity ->
         KeyDetailSheet(
             vm,

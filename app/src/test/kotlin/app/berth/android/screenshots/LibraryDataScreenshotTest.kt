@@ -7,25 +7,33 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.security.FakeKeystore
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.hosts.HostEditorScreen
+import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
@@ -41,6 +49,7 @@ import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -56,7 +65,8 @@ import java.util.concurrent.TimeUnit
 /**
  * The library's data surfaces of wave four (spec C9, C10, C12, C13) through Robolectric's native
  * graphics, each at the system's 1× and at 2×, where interface text stops at its 1.3× cap (A11):
- * the host editor's question when Back would drop edits. Every capture is the accessibility audit
+ * the host editor's question when Back would drop edits, and Rename and Change protection on
+ * the Keys screen. Every capture is the accessibility audit
  * too, and no text on these surfaces is cut at either size.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
@@ -146,7 +156,12 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         return compose.onNode(SemanticsMatcher("the field under $label") { it.id == under.id })
     }
 
+    private fun sheetFieldUnder(label: String) = fieldUnder(label, inDialog = true)
+
     private fun inSheet(text: String) = compose.onNode(hasText(text) and hasAnyAncestor(isDialog()))
+
+    private fun waitForTextContaining(text: String, timeout: Long = 5_000) =
+        compose.waitUntil(timeout) { compose.onAllNodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty() }
 
     // ---- the host editor's unsaved-changes guard (C10) ----------------------------------------------
 
@@ -245,6 +260,158 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         inSheet("Discard").performClick()
         compose.waitUntil(5_000) { done == 1 }
         assertTrue("nothing was saved", graph.hosts.items.value.isEmpty())
+    }
+
+    // ---- Keys: Rename and Change protection (C12) ------------------------------------------------
+
+    private fun keyMenu(name: String, item: String) {
+        waitForText(name)
+        compose.onNodeWithText(name).performTouchInput { longClick() }
+        waitForText(item)
+        compose.onNodeWithText(item).performClick()
+    }
+
+    private fun storedKey(id: String) = runBlocking { String(requireNotNull(graph.identities.privateKey(id)), Charsets.UTF_8) }
+
+    /** The row's menu in the spec's order, Save public key beside Share as it was, the two new entries before Delete. */
+    @Test
+    fun `the key row's menu has Rename and Change protection before Delete`() {
+        seedLibrary()
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        waitForText("laptop ed25519")
+        compose.onNodeWithText("laptop ed25519").performTouchInput { longClick() }
+        waitForText("Change protection")
+        val order = listOf("Copy public key", "Share public key", "Save public key\u2026", "Show QR", "Install on host", "Rename", "Change protection", "Delete")
+        val tops = order.map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
+        assertEquals("the menu reads in the spec's order", tops.sorted(), tops)
+        capture("keys-row-menu-rename-protection")
+        assertNoTextCut("the key row's menu")
+    }
+
+    /** Rename changes the name Berth shows and nothing else: the key pair, its fingerprint and the host that uses it stay. */
+    @Test
+    fun `Rename changes the key's name and nothing else`() {
+        seedLibrary()
+        val before = graph.identities.items.value.first { it.id == "id-ci" }
+        val pem = storedKey("id-ci")
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        keyMenu("ci deploy", "Rename")
+        waitForText("Rename key")
+        inSheet("Only the name changes. The key, its fingerprint and the hosts that use it stay as they are.").assertExists()
+        inSheet("Rename").assertIsNotEnabled()
+        compose.assertSheetAtContentHeight("Rename", "Cancel")
+        capture("key-rename")
+        assertNoTextCut("the Rename key sheet")
+
+        compose.onNode(hasSetTextAction() and hasText("ci deploy") and hasAnyAncestor(isDialog())).performTextReplacement("   ")
+        inSheet("Rename").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextReplacement("  ci deploy 2026 ")
+        inSheet("Rename").assertIsEnabled().performClick()
+        waitForNoText("Rename key")
+        waitForText("ci deploy 2026")
+        val after = graph.identities.items.value.first { it.id == "id-ci" }
+        assertEquals(before.copy(name = "ci deploy 2026"), after)
+        assertEquals("the private key is untouched", pem, storedKey("id-ci"))
+        assertEquals(listOf("build-box"), runBlocking { graph.identities.hostsUsing("id-ci") }.map { it.id })
+    }
+
+    /**
+     * A key with a passphrase: the current one opens it, a wrong one is named on its field and
+     * changes nothing, and None writes the same key pair back with no passphrase.
+     */
+    @Test
+    fun `a passphrase is taken off after the current one opens the key`() {
+        seedLibrary()
+        val before = graph.identities.items.value.first { it.id == "id-laptop" }
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        keyMenu("laptop ed25519", "Change protection")
+        waitForText("Current passphrase".uppercase())
+        inSheet("laptop ed25519 \u00B7 Ed25519").assertExists()
+        inSheet("The new passphrase replaces the old one and is asked for on each connection.").assertExists()
+        inSheet("New passphrase".uppercase()).assertExists()
+        inSheet("Save").assertIsNotEnabled()
+        compose.assertSheetAtContentHeight("Save", "Cancel")
+        capture("key-change-protection-passphrase")
+        assertNoTextCut("the Change protection sheet on a passphrase key")
+
+        inSheet("None").performClick()
+        waitForText("Signs in without asking. The key file stays encrypted at rest under this phone's Keystore.")
+        hasNoText("New passphrase".uppercase())
+        sheetFieldUnder("Current passphrase").performTextInput("wrong horse")
+        inSheet("Save").assertIsEnabled().performClick()
+        waitForText("That passphrase didn't unlock the key.", timeout = 15_000)
+        assertEquals("a wrong passphrase changes nothing", before, graph.identities.items.value.first { it.id == "id-laptop" })
+        assertTrue(SshKeys.isEncrypted(storedKey("id-laptop")))
+        capture("key-change-protection-wrong-passphrase")
+        assertNoTextCut("the Change protection sheet with a wrong passphrase")
+
+        sheetFieldUnder("Current passphrase").performTextReplacement("correct horse")
+        hasNoText("That passphrase didn't unlock the key.")
+        inSheet("Save").performClick()
+        waitForNoText("Change protection", timeout = 15_000)
+        val after = graph.identities.items.value.first { it.id == "id-laptop" }
+        assertEquals(before.copy(protection = KeyProtection.NONE), after)
+        val pem = storedKey("id-laptop")
+        assertFalse("the key file has no passphrase now", SshKeys.isEncrypted(pem))
+        assertEquals("the same key pair", before.fingerprintSha256, SshKeys.fingerprintSha256(SshKeys.importPrivate(pem).pair.public))
+    }
+
+    /** A key without one gets a passphrase typed twice; until the two agree, Save waits and the second field says why. */
+    @Test
+    fun `a passphrase is put on a key that had none, typed twice`() {
+        seedLibrary()
+        val before = graph.identities.items.value.first { it.id == "id-ci" }
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        keyMenu("ci deploy", "Change protection")
+        waitForText("Signs in without asking. The key file is encrypted at rest under this phone's Keystore.")
+        hasNoText("Current passphrase".uppercase())
+        inSheet("Save").assertIsNotEnabled()
+        capture("key-change-protection-none")
+        assertNoTextCut("the Change protection sheet on a key without a passphrase")
+
+        inSheet("Passphrase").performClick()
+        waitForText("Asked for on each connection; the key file is also encrypted at rest.")
+        sheetFieldUnder("New passphrase").performTextInput("tr0ub4dor")
+        sheetFieldUnder("Confirm new passphrase").performTextInput("tr0ub4dor!")
+        waitForText("The two passphrases don't match.")
+        inSheet("Save").assertIsNotEnabled()
+        compose.assertSheetAtContentHeight("Save", "Cancel")
+        capture("key-change-protection-mismatch")
+        assertNoTextCut("the Change protection sheet with passphrases that differ")
+
+        sheetFieldUnder("Confirm new passphrase").performTextReplacement("tr0ub4dor")
+        hasNoText("The two passphrases don't match.")
+        inSheet("Save").assertIsEnabled().performClick()
+        waitForNoText("Change protection", timeout = 15_000)
+        assertEquals(before.copy(protection = KeyProtection.PASSPHRASE), graph.identities.items.value.first { it.id == "id-ci" })
+        val pem = storedKey("id-ci")
+        assertTrue(SshKeys.isEncrypted(pem))
+        assertTrue(runCatching { SshKeys.importPrivate(pem) }.exceptionOrNull() is SshKeys.ImportError.PassphraseNeeded)
+        assertEquals(before.fingerprintSha256, SshKeys.fingerprintSha256(SshKeys.importPrivate(pem, "tr0ub4dor".toCharArray()).pair.public))
+        waitForTextContaining("Passphrase \u00B7 asked for on each connection")
+    }
+
+    /** A hardware key's protection is the secure hardware's: the sheet says so, changes nothing, and offers a new hardware key. */
+    @Test
+    fun `a hardware key's protection is explained and left as it is`() {
+        seedLibrary()
+        val before = graph.identities.items.value.first { it.id == "id-phone" }
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        keyMenu("this phone", "Change protection")
+        waitForText("this phone \u00B7 hardware-backed")
+        inSheet("Protect").assertExists()
+        hasNoText("Current passphrase".uppercase())
+        hasNoText("Save")
+        // "Close" alone would also find the sheet's own "Close sheet"; the button is the one with the role.
+        compose.assertSheetAtContentHeight("New hardware key")
+        compose.onNode(hasText("Close") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        capture("key-change-protection-hardware")
+        assertNoTextCut("the Change protection sheet on a hardware key")
+
+        inSheet("New hardware key").performClick()
+        waitForText("New key")
+        waitForTextContaining("Hardware-backed keys never leave this phone's secure hardware")
+        assertEquals("the hardware key is as it was", before, graph.identities.items.value.first { it.id == "id-phone" })
     }
 
     // ---- fixtures ---------------------------------------------------------------------------------

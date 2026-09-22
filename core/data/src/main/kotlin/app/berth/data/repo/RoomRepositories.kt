@@ -1,5 +1,6 @@
 package app.berth.data.repo
 
+import androidx.room.withTransaction
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
@@ -150,6 +151,15 @@ class RoomIdentityRepository(
     }
 
     override suspend fun privateKey(id: String): ByteArray? = secrets.get(secretId(id))
+
+    override suspend fun replacePrivateKey(identity: Identity, privateKeyOpenSsh: ByteArray) {
+        require(identity.storage == KeyStorage.SOFTWARE_ENCRYPTED) { "only a software identity has a private key to replace" }
+        db.withTransaction {
+            requireNotNull(db.identities().get(identity.id)) { "no identity ${identity.id}" }
+            db.identities().upsert(identity.toEntity())
+            secrets.put(secretId(identity.id), privateKeyOpenSsh)
+        }
+    }
 
     override suspend fun hostsUsing(id: String): List<Host> =
         db.hosts().findByAuthContaining("%\"$id\"%").map { it.toDomain() }
