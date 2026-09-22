@@ -1,17 +1,20 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.os.Looper
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -22,17 +25,20 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -75,6 +81,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -146,6 +153,33 @@ class EditorScreenshotTest {
         StageScreen(graph.viewModel, session, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
     }
 
+    /**
+     * Runs the main looper with the compose clock until [condition] holds, then once more so what
+     * follows from it on the main thread has landed: a tap in a sheet or menu, its own window, is
+     * delivered through the looper, and so is every view-model flow (the view model's scope), none
+     * of which a bare waitUntil runs.
+     */
+    private fun awaitOnMain(what: String, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            compose.waitForIdle()
+            if (condition()) {
+                shadowOf(Looper.getMainLooper()).idle()
+                compose.waitForIdle()
+                return
+            }
+            Thread.sleep(20)
+        }
+        throw AssertionError("timed out waiting for $what")
+    }
+
+    /** Swipes the screen's scrolling column up to its end, so a capture shows the page's foot whole. */
+    private fun scrollToEnd() {
+        compose.onRoot().performTouchInput { swipeUp() }
+        compose.waitForIdle()
+    }
+
     /** Taps the modal sheet's scrim near the top of the screen, where the sheet itself is not. */
     private fun dismissSheet() {
         compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(width / 2f, 60f)) }
@@ -180,7 +214,7 @@ class EditorScreenshotTest {
     @Test
     fun `terminal theme editor at the 1,3 cap`() {
         RuntimeEnvironment.setFontScale(2f)
-        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.BERTH_DARK_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = {}) }
+        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.BERTH_DARK_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = { _, _ -> }) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark")).fetchSemanticsNodes().isNotEmpty() }
         capture("terminal-theme-editor-font-scale-2x")
         compose.onNodeWithContentDescription("Back").assertIsDisplayed()
@@ -197,7 +231,7 @@ class EditorScreenshotTest {
 
     @Test
     fun `terminal theme editor and its colour sheet`() {
-        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.BERTH_DARK_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = {}) }
+        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.BERTH_DARK_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = { _, _ -> }) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark")).fetchSemanticsNodes().isNotEmpty() }
         capture("terminal-theme-editor")
 
@@ -222,7 +256,7 @@ class EditorScreenshotTest {
 
     /** Dracula's links are its purple, not its blue, and Ghostty has no link colour: that row is off and says so. */
     private fun exportSheet(name: String) {
-        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.DRACULA_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = {}) }
+        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.DRACULA_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = { _, _ -> }) }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Export").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Export").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Export Dracula").fetchSemanticsNodes().isNotEmpty() }
@@ -257,7 +291,7 @@ class EditorScreenshotTest {
         var editor by mutableStateOf(false)
         themed { if (editor) AppearanceScreen(graph.viewModel, onBack = {}) else SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         compose.onNodeWithText("Rose").performScrollTo().performClick()
-        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == AccentPreset.ROSE.rgb }
         compose.onNodeWithText("Material You").assertIsNotSelected()
         capture("settings-accent$suffix")
 
@@ -266,7 +300,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Custom").assertIsNotSelected()
         compose.onNodeWithText("Custom").performClick()
         compose.onNode(hasSetTextAction()).performTextReplacement("#4FA3D9")
-        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == 0x4FA3D9 }
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == 0x4FA3D9 }
         compose.onNodeWithText("Rose").assertIsNotSelected()
         capture("appearance-accent-custom$suffix")
 
@@ -274,7 +308,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Custom").performScrollTo().assertIsSelected()
         compose.onNodeWithText("Rose").assertIsNotSelected()
         compose.onNodeWithText("Verdigris").performClick()
-        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == AccentPreset.VERDIGRIS.rgb }
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == AccentPreset.VERDIGRIS.rgb }
         compose.onNodeWithText("Custom").assertIsNotSelected()
     }
 
@@ -307,18 +341,16 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Inherit").performScrollTo().assertIsSelected()
         capture("group-editor-accent$suffix")
 
-        // The sheet is its own window, whose taps land when the main looper idles; waitUntil alone does not idle it.
         compose.onNodeWithText("Rose").performClick()
-        compose.waitForIdle()
-        compose.waitUntil(5_000) { home().accentRgb == AccentPreset.ROSE.rgb }
+        awaitOnMain("Home's accent to be Rose") { home().accentRgb == AccentPreset.ROSE.rgb }
         assertEquals(Workspace.DEFAULT_ID, graph.viewModel.currentWorkspaceId.value)
-        compose.waitUntil(5_000) { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        awaitOnMain("the write to reach the view model") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
         assertEquals("the app's own accent is untouched", AccentPreset.COPPER.rgb, graph.viewModel.interfaceTheme.value.accent)
         compose.onNodeWithText("Inherit").assertIsNotSelected()
         capture("group-editor-accent-rose$suffix")
 
         graph.viewModel.setWorkspaceAccent("ws-work", AccentPreset.MOSS.rgb)
-        compose.waitUntil(5_000) { graph.workspaces.items.value.first { it.id == "ws-work" }.accentRgb == AccentPreset.MOSS.rgb }
+        awaitOnMain("Work's accent to reach the view model") { graph.viewModel.workspaces.value.first { it.id == "ws-work" }.accentRgb == AccentPreset.MOSS.rgb }
         assertEquals("Work is not current", AccentPreset.ROSE.rgb, graph.viewModel.shownInterfaceTheme.value.accent)
 
         ui.groupEditor = null
@@ -329,9 +361,129 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Edit group").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Rose").performScrollTo().assertIsSelected()
         compose.onNodeWithText("Inherit").performClick()
-        compose.waitForIdle()
-        compose.waitUntil(5_000) { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.COPPER.rgb }
-        assertEquals(null, home().accentRgb)
+        awaitOnMain("Home to inherit the app's accent") { home().accentRgb == null }
+        awaitOnMain("the write to reach the view model") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.COPPER.rgb }
+    }
+
+    @Test
+    fun `applying a theme offers its suggested accent`() = accentOffer("")
+
+    @Test
+    fun `applying a theme offers its suggested accent at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        accentOffer("-font-scale-2x")
+    }
+
+    /**
+     * The suggested accent on apply (spec A10): Dracula applied to Work offers its purple for the
+     * interface while Work is current, and taking it sets Work's accent and leaves the app's; applied
+     * to the app default it offers the purple again, for the app now, and taken, the offer goes;
+     * applied to a host, which has no accent, it offers nothing.
+     */
+    private fun accentOffer(suffix: String) {
+        val purple = TerminalTheme.DRACULA.suggestedAccent!!
+        shellThemed {
+            TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.DRACULA_ID, scope = ThemeScope.ForWorkspace("ws-work"), onDone = {}, onOpenTheme = { _, _ -> })
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Apply to work").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Apply to work").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(AccentOffer).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Applied to work.").assertExists()
+        compose.onNodeWithText("#bd93f9, while Work is current").assertExists()
+        scrollToEnd()
+        capture("theme-editor-accent-offer-group$suffix")
+        compose.onNodeWithText(AccentOffer).performClick()
+        awaitOnMain("the write to reach the view model") { graph.workspaces.items.value.first { it.id == "ws-work" }.accentRgb == purple }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(AccentOffer).fetchSemanticsNodes().isEmpty() }
+        assertEquals("the app's accent is left", AccentPreset.COPPER.rgb, graph.viewModel.interfaceTheme.value.accent)
+
+        compose.onNodeWithText("Apply to").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("App default").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("App default").performClick()
+        awaitOnMain("the app default picked") { compose.onAllNodesWithText("Apply to app default").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Apply to app default").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Applied to the app default.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("#bd93f9").assertExists()
+        scrollToEnd()
+        capture("theme-editor-accent-offer$suffix")
+        compose.onNodeWithText(AccentOffer).performClick()
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == purple }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(AccentOffer).fetchSemanticsNodes().isEmpty() }
+        scrollToEnd()
+        capture("theme-editor-accent-taken$suffix")
+
+        compose.onNodeWithText("Apply to").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Host \u00B7 homelab").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Host \u00B7 homelab").performClick()
+        awaitOnMain("homelab picked") { compose.onAllNodesWithText("Apply to homelab").fetchSemanticsNodes().isNotEmpty() }
+        // Back to copper, so the purple would be on offer if a host were offered anything.
+        graph.viewModel.setInterfaceTheme(graph.viewModel.interfaceTheme.value.copy(accent = AccentPreset.COPPER.rgb))
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == AccentPreset.COPPER.rgb }
+        compose.onNodeWithText("Apply to homelab").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Applied to homelab.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText(AccentOffer).assertCountEquals(0)
+    }
+
+    /**
+     * Applying an edited stock theme stores a copy and the editor carries on in it, fresh, as the
+     * shell's back stack swaps the entry; the apply's note and the copy's inherited suggestion come
+     * with it.
+     */
+    @Test
+    fun `an edited stock theme's copy opens with the apply's note and accent offer`() {
+        var screen by mutableStateOf(Triple<String, ThemeScope, Boolean>(TerminalTheme.DRACULA_ID, ThemeScope.AppDefault, false))
+        shellThemed {
+            val (id, scope, applied) = screen
+            key(id) {
+                TerminalThemeEditorScreen(
+                    graph.viewModel,
+                    themeId = id,
+                    scope = scope,
+                    onDone = {},
+                    onOpenTheme = { newId, appliedTo -> screen = Triple(newId, appliedTo ?: scope, appliedTo != null) },
+                    applied = applied,
+                )
+            }
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Dracula")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Background").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Pick from preview")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasSetTextAction()).performTextReplacement("#1B2A41")
+        compose.onNodeWithText("Done").performClick()
+        awaitOnMain("the colour sheet closed") { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithText("Apply to app default").performScrollTo().performClick()
+        awaitOnMain("the write to reach the view model") { graph.viewModel.defaultTerminalTheme.value.background == 0x1B2A41 }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Dracula copy")).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(ThemeScope.AppDefault to true, screen.second to screen.third)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Applied to the app default.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(AccentOffer).assertExists()
+    }
+
+    @Test
+    fun `setting a theme as the app default in the gallery offers its accent`() = galleryAccentOffer("")
+
+    @Test
+    fun `setting a theme as the app default in the gallery offers its accent at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        galleryAccentOffer("-font-scale-2x")
+    }
+
+    /** The gallery's Set as app default offers the theme's accent on the notice bar, and its action takes it. */
+    private fun galleryAccentOffer(suffix: String) {
+        val mauve = TerminalTheme.CATPPUCCIN_MOCHA.suggestedAccent!!
+        shellThemed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
+        val tile = hasContentDescription("Theme Catppuccin Mocha")
+        compose.waitUntil(5_000) { compose.onAllNodes(tile).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(tile).performTouchInput { longClick() }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Set as app default").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Set as app default").performClick()
+        awaitOnMain("the accent offered") { compose.onAllNodesWithText("Use its accent").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(TerminalTheme.CATPPUCCIN_MOCHA_ID, graph.viewModel.defaultTerminalTheme.value.id)
+        compose.onNodeWithText("Catppuccin Mocha is the app default").assertExists()
+        capture("themes-accent-offer$suffix")
+        compose.onNodeWithText("Use its accent").performClick()
+        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == mauve }
+        assertEquals(false, graph.viewModel.interfaceTheme.value.materialYou)
     }
 
     @Test
@@ -462,7 +614,7 @@ class EditorScreenshotTest {
             if (onStage) {
                 Stage(session)
             } else {
-                TerminalThemeEditorScreen(graph.viewModel, themeId = themeId, scope = ThemeScope.AppDefault, onDone = { onStage = true }, onOpenTheme = { themeId = it })
+                TerminalThemeEditorScreen(graph.viewModel, themeId = themeId, scope = ThemeScope.AppDefault, onDone = { onStage = true }, onOpenTheme = { id, _ -> themeId = id })
             }
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark")).fetchSemanticsNodes().isNotEmpty() }
@@ -561,3 +713,5 @@ class EditorScreenshotTest {
         return out.toByteArray()
     }
 }
+
+private const val AccentOffer = "Use this theme's accent for the interface"

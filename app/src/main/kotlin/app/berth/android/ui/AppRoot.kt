@@ -115,7 +115,8 @@ sealed interface Screen : NavKey {
     @Serializable data class Tunnels(val hostId: String? = null) : Screen
     @Serializable data object Snippets : Screen
     @Serializable data object Themes : Screen
-    @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault) : Screen
+    /** [applied]: the theme was just applied to [scope], as a stock theme's edited copy is. */
+    @Serializable data class ThemeEditor(val themeId: String, val scope: ThemeScope = ThemeScope.AppDefault, val applied: Boolean = false) : Screen
     @Serializable data object Appearance : Screen
     @Serializable data object DeckEditor : Screen
     @Serializable data object Diagnostics : Screen
@@ -420,7 +421,8 @@ private fun Shell(vm: AppViewModel) {
                             scope = key.scope,
                             onDone = { back() },
                             // Duplicating or saving a copy of a stock theme continues in the new theme without growing the stack.
-                            onOpenTheme = { id -> backStack[backStack.lastIndex] = Screen.ThemeEditor(id, key.scope) },
+                            onOpenTheme = { id, applied -> backStack[backStack.lastIndex] = Screen.ThemeEditor(id, applied ?: key.scope, applied = applied != null) },
+                            applied = key.applied,
                         )
                     }
                     is Screen.Appearance -> NavEntry(key) { AppearanceScreen(vm, onBack = { back() }) }

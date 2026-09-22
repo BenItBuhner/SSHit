@@ -24,6 +24,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,8 @@ import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.io.rememberOpenNamedTextFile
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.terminal.PreviewScript
 import app.berth.android.ui.terminal.TerminalPreview
 import app.berth.android.ui.theme.Berth
@@ -60,10 +63,13 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TerminalThemes
+import kotlinx.coroutines.delay
 
 /**
  * The terminal theme gallery (UX spec C19): every theme as a tile that is a live mini-render of
  * its own colours. Tap opens the editor; long-press offers default, duplicate, export and delete.
+ * Setting as the app default a theme that suggests an accent other than the interface's offers
+ * it at the foot for the notice bar's six seconds (A10).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,11 +84,22 @@ fun ThemesScreen(
     val themes by vm.terminalThemes.collectAsState()
     val default by vm.defaultTerminalTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
+    val appTheme by vm.interfaceTheme.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var pasteSheet by remember { mutableStateOf(false) }
     var importNote by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf<TerminalTheme?>(null) }
     val saver = rememberSaveTextFile()
+    // The theme whose accent is on offer; the bar keeps showing the last one through its exit.
+    var accentOffer by remember { mutableStateOf<TerminalTheme?>(null) }
+    val shownOffer = remember { mutableStateOf<TerminalTheme?>(null) }
+    if (accentOffer != null) shownOffer.value = accentOffer
+    LaunchedEffect(accentOffer) {
+        if (accentOffer != null) {
+            delay(NOTICE_BAR_MS)
+            accentOffer = null
+        }
+    }
 
     // iTerm2, Ghostty and Termux files carry no name of their own; the file's name stands in.
     fun importText(text: String, fileName: String? = null) {
@@ -107,10 +124,10 @@ fun ThemesScreen(
         onOpen(id)
     }
 
+    Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(c.surface0)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -144,7 +161,10 @@ fun ThemesScreen(
                     font = font,
                     isDefault = theme.id == default.id,
                     onOpen = { onOpen(theme.id) },
-                    onSetDefault = { vm.setDefaultTerminalTheme(theme.id) },
+                    onSetDefault = {
+                        vm.setDefaultTerminalTheme(theme.id)
+                        accentOffer = theme.takeIf { t -> t.suggestedAccent?.let { AccentChoice.Colour(it) != appTheme.accentChoice } == true }
+                    },
                     onDuplicate = {
                         val id = AppViewModel.newThemeId()
                         vm.saveTerminalTheme(theme.duplicate(id))
@@ -165,6 +185,19 @@ fun ThemesScreen(
                 }
             }
         }
+    }
+    NoticeBar(
+        visible = accentOffer != null,
+        text = "${shownOffer.value?.name ?: ""} is the app default",
+        action = "Use its accent",
+        onAction = {
+            shownOffer.value?.suggestedAccent?.let { vm.setInterfaceTheme(appTheme.withAccent(AccentChoice.Colour(it))) }
+            accentOffer = null
+        },
+        modifier = Modifier.align(Alignment.BottomCenter),
+        // A long theme name at the font cap would cut "app default" off; the line is read whole.
+        maxLines = 2,
+    )
     }
 
     if (pasteSheet) {

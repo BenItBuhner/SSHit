@@ -68,6 +68,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.ColorMath
 import app.berth.domain.model.HexColorSerializer
 import app.berth.domain.model.TerminalTheme
@@ -87,6 +88,11 @@ sealed interface ThemeScope {
  * The terminal theme editor (UX spec C19): a live preview on a real emulator, the sixteen ANSI
  * swatches, the named colours as rows, and a primary action that applies the theme to the app
  * default, a host or a workspace. Stock themes are never edited in place; saving one stores a copy.
+ * Applying a theme that suggests an accent (A10) offers it, as a row under the note, for the
+ * interface or for the workspace it went to, until the accent there is that colour; a host has no
+ * accent of its own, so applying to one offers nothing. [onOpenTheme] continues in another theme,
+ * with the scope the theme was just applied to when an apply stored the copy, and [applied] opens
+ * the editor with that apply's note and offer standing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,8 +101,9 @@ fun TerminalThemeEditorScreen(
     themeId: String,
     scope: ThemeScope,
     onDone: () -> Unit,
-    onOpenTheme: (String) -> Unit,
+    onOpenTheme: (id: String, applied: ThemeScope?) -> Unit,
     modifier: Modifier = Modifier,
+    applied: Boolean = false,
 ) {
     val c = Berth.colors
     val themes by vm.terminalThemes.collectAsState()
@@ -104,6 +111,7 @@ fun TerminalThemeEditorScreen(
     val font by vm.terminalFont.collectAsState()
     val hosts by vm.hosts.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
+    val appTheme by vm.interfaceTheme.collectAsState()
     val stored = themes.firstOrNull { it.id == themeId }
     if (stored == null) {
         // A theme saved a moment ago may still be on its way to disk; only a theme that stays
@@ -122,7 +130,7 @@ fun TerminalThemeEditorScreen(
     var menu by remember { mutableStateOf(false) }
     var scopeMenu by remember { mutableStateOf(false) }
     var applyTo by remember(scope) { mutableStateOf(scope) }
-    var note by remember { mutableStateOf<String?>(null) }
+    var appliedTo by remember { mutableStateOf(if (applied) scope else null) }
     var exporting by remember { mutableStateOf(false) }
     val saver = rememberSaveTextFile()
     val dirty = draft != stored
@@ -133,8 +141,11 @@ fun TerminalThemeEditorScreen(
         is ThemeScope.ForWorkspace -> workspaces.byId(s.workspaceId)?.name ?: "workspace"
     }
 
-    /** Stores the draft: in place for a custom theme, as a fresh copy for a stock one. Returns the stored id. */
-    fun save(): String {
+    /**
+     * Stores the draft: in place for a custom theme, as a fresh copy for a stock one, which the
+     * editor continues in, [applying] to the scope an apply is storing it for. Returns the stored id.
+     */
+    fun save(applying: ThemeScope? = null): String {
         if (!stored.builtIn) {
             vm.saveTerminalTheme(draft)
             return draft.id
@@ -142,18 +153,29 @@ fun TerminalThemeEditorScreen(
         val id = AppViewModel.newThemeId()
         val name = if (draft.name == stored.name) "${stored.name} copy" else draft.name
         vm.saveTerminalTheme(draft.copy(id = id, name = name, builtIn = false))
-        onOpenTheme(id)
+        onOpenTheme(id, applying)
         return id
     }
 
     fun apply() {
-        val id = if (dirty) save() else stored.id
+        val id = if (dirty) save(applying = applyTo) else stored.id
         when (val s = applyTo) {
             ThemeScope.AppDefault -> vm.setDefaultTerminalTheme(id)
             is ThemeScope.ForHost -> vm.setHostTerminalTheme(s.hostId, id)
             is ThemeScope.ForWorkspace -> vm.setWorkspaceTerminalTheme(s.workspaceId, id)
         }
-        note = "Applied to ${scopeLabel(applyTo).lowercase().let { if (applyTo == ThemeScope.AppDefault) "the app default" else it }}."
+        appliedTo = applyTo
+    }
+
+    val suggested = stored.suggestedAccent
+    // Where the accent offer stands: the scope just applied to, while the accent there is not already the suggestion.
+    val offerFor = appliedTo?.takeIf { target ->
+        val wanted = AccentChoice.Colour(suggested ?: return@takeIf false)
+        when (target) {
+            ThemeScope.AppDefault -> appTheme.accentChoice != wanted
+            is ThemeScope.ForWorkspace -> workspaces.byId(target.workspaceId)?.let { ws -> (ws.accentRgb?.let(AccentChoice::Colour) ?: appTheme.accentChoice) != wanted } ?: false
+            is ThemeScope.ForHost -> false
+        }
     }
 
     Column(
@@ -172,7 +194,7 @@ fun TerminalThemeEditorScreen(
                         menu = false
                         val id = AppViewModel.newThemeId()
                         vm.saveTerminalTheme(draft.duplicate(id))
-                        onOpenTheme(id)
+                        onOpenTheme(id, null)
                     }
                     MenuItem("Rename") { menu = false; renaming = true }
                     if (default.id != stored.id) MenuItem("Set as app default") { menu = false; applyTo = ThemeScope.AppDefault; apply() }
@@ -300,8 +322,30 @@ fun TerminalThemeEditorScreen(
                     BerthButton("Apply to ${scopeLabel(applyTo).lowercase().let { if (applyTo == ThemeScope.AppDefault) "app default" else it }}", onClick = ::apply, kind = ButtonKind.PRIMARY, modifier = Modifier.weight(1f))
                     BerthButton("Export", onClick = { exporting = true })
                 }
-                val n = note
-                if (n != null) Text(n, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                val done = appliedTo
+                if (done != null) {
+                    val where = if (done == ThemeScope.AppDefault) "the app default" else scopeLabel(done).lowercase()
+                    Text("Applied to $where.", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                }
+                if (offerFor != null && suggested != null) {
+                    val colour = AccentPreset.of(suggested)?.title ?: HexColorSerializer.toHex(suggested)
+                    Spacer(Modifier.height(4.dp))
+                    ListRow(
+                        title = "Use this theme's accent for the interface",
+                        subtitle = if (offerFor is ThemeScope.ForWorkspace) "$colour, while ${scopeLabel(offerFor)} is current" else colour,
+                        surface = Color.Transparent,
+                        minHeight = 44.dp,
+                        titleMaxLines = 2,
+                        leading = { ColorDot(suggested, 24.dp) },
+                        onClick = {
+                            when (offerFor) {
+                                ThemeScope.AppDefault -> vm.setInterfaceTheme(appTheme.withAccent(AccentChoice.Colour(suggested)))
+                                is ThemeScope.ForWorkspace -> vm.setWorkspaceAccent(offerFor.workspaceId, suggested)
+                                is ThemeScope.ForHost -> Unit
+                            }
+                        },
+                    )
+                }
             }
         }
     }
