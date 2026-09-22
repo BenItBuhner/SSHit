@@ -39,9 +39,10 @@ fun interface AgentSigner {
 /**
  * The one key a forwarded agent holds: the key that logged in to the host whose agent this is
  * (never the rest of the library), as its public half, the comment `ssh-add -L` prints, and
- * the way it signs. The private half stays behind [signer]; it never crosses the wire.
+ * the way it signs. The private half stays behind [signer]; it never crosses the wire. [name] is
+ * what the app calls the key when it asks the user about a request, which the remote never sees.
  */
-class AgentKey(val publicKey: PublicKey, val comment: String, private val signer: AgentSigner) {
+class AgentKey(val publicKey: PublicKey, val comment: String, val name: String = comment, private val signer: AgentSigner) {
     val blob: ByteArray = SshKeys.publicKeyBlob(publicKey)
     val keyType: String = SshKeys.keyTypeName(publicKey)
 
@@ -53,9 +54,9 @@ class AgentKey(val publicKey: PublicKey, val comment: String, private val signer
          * with sshj's own signatures, the ones its `publickey` method uses, so an RSA key answers
          * `rsa-sha2-256` and `rsa-sha2-512` requests with those and a flagless one with `ssh-rsa`.
          */
-        fun software(provider: KeyProvider, comment: String): AgentKey {
+        fun software(provider: KeyProvider, comment: String, name: String = comment): AgentKey {
             val public = provider.public
-            return AgentKey(public, comment) { data, flags ->
+            return AgentKey(public, comment, name) { data, flags ->
                 val signature = signatureFor(KeyType.fromKey(public), flags)
                 signature.initSign(provider.private)
                 signature.update(data)

@@ -3,6 +3,8 @@ package app.berth.android.session
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
+import app.berth.ssh.AgentSignPurpose
+import app.berth.ssh.AgentSignRequest
 import app.berth.ssh.FingerprintCheck
 import app.berth.ssh.HostKeyFingerprints
 import app.berth.ssh.HostKeyRequest
@@ -59,19 +61,9 @@ data class LinkFingerprint(
 
     /**
      * [expected] as a sheet may quote it when it is unreadable, which is the one time the link's
-     * own text reaches the screen: control characters, format characters (bidirectional overrides
-     * and zero-width marks, which would reorder or hide the sentence around it) and line and
-     * paragraph separators are dropped, and it is cut to [QUOTED_MAX] characters with an ellipsis.
+     * own text reaches the screen: cleaned and cut to [QUOTED_MAX] characters ([quoteFromOutside]).
      */
-    val quoted: String
-        get() {
-            val clean = expected.filterNot {
-                it.isISOControl() || it.category == CharCategory.FORMAT || it.category == CharCategory.LINE_SEPARATOR ||
-                    it.category == CharCategory.PARAGRAPH_SEPARATOR || it.category == CharCategory.SURROGATE ||
-                    it.category == CharCategory.UNASSIGNED || it.category == CharCategory.PRIVATE_USE
-            }
-            return if (clean.length > QUOTED_MAX) clean.take(QUOTED_MAX) + "\u2026" else clean
-        }
+    val quoted: String get() = quoteFromOutside(expected)
 
     companion object {
         const val QUOTED_MAX = 40
@@ -98,6 +90,21 @@ data class LinkFingerprint(
             return if (normalized == saved.fingerprintSha256) FingerprintCheck.MATCH else FingerprintCheck.MISMATCH
         }
     }
+}
+
+/**
+ * Text that came from outside the app (a link, a program on a server) as a sheet may quote it:
+ * control characters, format characters (bidirectional overrides and zero-width marks, which would
+ * reorder or hide the sentence around it), line and paragraph separators, lone surrogates,
+ * unassigned and private-use characters are dropped, and it is cut to [max] characters with an ellipsis.
+ */
+fun quoteFromOutside(text: String, max: Int = LinkFingerprint.QUOTED_MAX): String {
+    val clean = text.filterNot {
+        it.isISOControl() || it.category == CharCategory.FORMAT || it.category == CharCategory.LINE_SEPARATOR ||
+            it.category == CharCategory.PARAGRAPH_SEPARATOR || it.category == CharCategory.SURROGATE ||
+            it.category == CharCategory.UNASSIGNED || it.category == CharCategory.PRIVATE_USE
+    }
+    return if (clean.length > max) clean.take(max) + "\u2026" else clean
 }
 
 /** Something the transport needs a human for. The UI shows exactly one at a time. */
@@ -174,11 +181,14 @@ sealed interface Prompt {
     /**
      * A Keystore key needs the user before it signs. The system prompt is up over this sheet, which
      * says which key and why; Cancel here withdraws the prompt and the connection fails plainly.
+     * [forwarded] is set when the signature is one a program on [host] asked the forwarded agent
+     * for, not the login itself: Cancel then refuses that one request and the host stays connected.
      */
     class UnlockKey(
         override val host: Host,
         val identityName: String,
         internal val cancelled: CompletableDeferred<Unit>,
+        val forwarded: Boolean = false,
     ) : Prompt {
         fun cancel() {
             cancelled.complete(Unit)
@@ -197,9 +207,29 @@ sealed interface Prompt {
         fun regenerate() = answer.complete(true)
         fun cancel() = answer.complete(false)
     }
+
+    /**
+     * A program on [host] asked the agent forwarded to it for a signature by the key [keyName], the
+     * one that signed in to [host]; [purpose] is what the data to sign reads as. The answer covers
+     * this request, or every request of the tab's connection from here on; taking the sheet down
+     * refuses this one and decides nothing more.
+     */
+    class AgentRequest(
+        override val host: Host,
+        val keyName: String,
+        val purpose: AgentSignPurpose,
+        internal val answer: CompletableDeferred<AgentAnswer>,
+    ) : Prompt {
+        fun allowOnce() = answer.complete(AgentAnswer.ALLOW_ONCE)
+        fun allowForSession() = answer.complete(AgentAnswer.ALLOW_FOR_SESSION)
+        fun deny() = answer.complete(AgentAnswer.DENY)
+    }
 }
 
 enum class HostKeyChangedDecision { DISCONNECT, TRUST_ONCE, REPLACE_SAVED }
+
+/** The user's answer to a forwarded agent's sign request ([Prompt.AgentRequest]). */
+enum class AgentAnswer { ALLOW_ONCE, ALLOW_FOR_SESSION, DENY }
 
 /**
  * Serialises prompts from any number of connecting sessions into one observable slot. Callers on
@@ -238,8 +268,8 @@ class PromptCenter @Inject constructor() {
         ask { Prompt.Passphrase(host, identityName, it) }
 
     /** Shows the unlock sheet for as long as [work] (the system prompt) runs; the sheet's Cancel reaches [work] through the prompt. */
-    suspend fun <T> unlockKey(host: Host, identityName: String, work: suspend (Prompt.UnlockKey) -> T): T = gate.withLock {
-        val prompt = Prompt.UnlockKey(host, identityName, CompletableDeferred())
+    suspend fun <T> unlockKey(host: Host, identityName: String, forwarded: Boolean = false, work: suspend (Prompt.UnlockKey) -> T): T = gate.withLock {
+        val prompt = Prompt.UnlockKey(host, identityName, CompletableDeferred(), forwarded)
         _current.value = prompt
         try {
             work(prompt)
@@ -251,4 +281,7 @@ class PromptCenter @Inject constructor() {
     /** True when the user chose to regenerate the key. */
     suspend fun keyInvalidated(host: Host, identity: Identity): Boolean =
         ask { Prompt.KeyInvalidated(host, identity, it) }
+
+    suspend fun agentRequest(host: Host, request: AgentSignRequest): AgentAnswer =
+        ask { Prompt.AgentRequest(host, request.key.name, request.purpose, it) }
 }

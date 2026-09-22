@@ -42,6 +42,7 @@ import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.LinkFingerprint
 import app.berth.android.session.Prompt
 import app.berth.android.session.PromptCenter
+import app.berth.android.session.quoteFromOutside
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
@@ -53,6 +54,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
+import app.berth.ssh.AgentSignPurpose
 import app.berth.ssh.FingerprintCheck
 import app.berth.ssh.Randomart
 import app.berth.ssh.SshKeys
@@ -87,6 +89,7 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
         )
         is Prompt.UnlockKey -> UnlockKeySheet(p)
         is Prompt.KeyInvalidated -> KeyInvalidatedSheet(p)
+        is Prompt.AgentRequest -> AgentRequestSheet(p)
     }
 }
 
@@ -180,19 +183,82 @@ private fun NameAndEndpoint(name: @Composable () -> Unit, separator: @Composable
 /**
  * The connect flow paused on the key: the system prompt is up over this sheet, which names the key
  * and the server and offers the one way out. Nothing to type here; the answer is the fingerprint.
+ * For a signature a program on the host asked the forwarded agent for, the sheet says that, and
+ * that cancelling refuses the one request while the host stays connected.
  */
 @Composable
 private fun UnlockKeySheet(p: Prompt.UnlockKey) {
     val c = Berth.colors
     PromptSheet(onDismiss = p::cancel) {
-        SheetTitle(KeyUnlocker.promptTitle(p.host), KeyUnlocker.promptSubtitle(p.identityName))
+        SheetTitle(if (p.forwarded) KeyUnlocker.forwardedPromptTitle(p.host) else KeyUnlocker.promptTitle(p.host), KeyUnlocker.promptSubtitle(p.identityName))
         HostLine(p)
-        Text("Confirm with your fingerprint, face or screen lock when the system asks. Cancelling leaves ${p.host.name} unconnected.", style = BerthType.body, color = c.text2)
+        Text(
+            if (p.forwarded) {
+                "A program on ${p.host.name} asked for this signature. Confirm with your fingerprint, face or screen lock when the system asks; cancelling refuses it, and ${p.host.name} stays connected."
+            } else {
+                "Confirm with your fingerprint, face or screen lock when the system asks. Cancelling leaves ${p.host.name} unconnected."
+            },
+            style = BerthType.body,
+            color = c.text2,
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Spacer(Modifier.weight(1f))
             BerthButton("Cancel", onClick = p::cancel, kind = ButtonKind.TEXT)
         }
     }
+}
+
+/**
+ * A program on the host asked the forwarded agent for a signature by the key that signed in to it.
+ * The sheet names the host, the key and what the signature is for, as far as the data says: a login
+ * onward (with that server's key when the client bound the request to it), an `ssh-keygen -Y`
+ * signature in its namespace, or data in no form Berth reads. The remote caused it, so there is no
+ * primary: Deny rests first, the two allows are plain, and taking the sheet down refuses this
+ * request and decides nothing more. What the remote sent is quoted cleaned and cut ([quoteFromOutside]).
+ */
+@Composable
+private fun AgentRequestSheet(p: Prompt.AgentRequest) {
+    val c = Berth.colors
+    PromptSheet(onDismiss = p::deny) {
+        SheetTitle("Signature request", "A program on ${p.host.name} asked to sign with the key \u201C${p.keyName}\u201D.")
+        HostLine(p)
+        val meaning = when (val purpose = p.purpose) {
+            is AgentSignPurpose.Login -> {
+                RequestRow("Login as", quoteFromOutside(purpose.user))
+                val type = purpose.serverKeyType
+                val fingerprint = purpose.serverFingerprint
+                if (type != null && fingerprint != null) {
+                    Fingerprint(quoteFromOutside(type), fingerprint, label = "Server")
+                    "It is logging in to the server whose key is above."
+                } else {
+                    "It is logging in to another server; the request does not say which."
+                }
+            }
+            is AgentSignPurpose.SshSig -> {
+                RequestRow("Namespace", quoteFromOutside(purpose.namespace))
+                if (purpose.namespace == "git") "It is signing for git, as a signed commit or tag does." else "It is signing a file, as ssh-keygen -Y sign does."
+            }
+            is AgentSignPurpose.Unknown -> "It sent ${"%,d".format(purpose.size)} bytes in no form Berth reads, so what they are for cannot be said."
+        }
+        Text(meaning, style = BerthType.body, color = c.text2)
+        Text(
+            "Allow only what you started: the key stays on this phone, but the signature lets ${p.host.name} act as you. For this session answers its later requests too, until the tab disconnects.",
+            style = BerthType.body,
+            color = c.text2,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            BerthButton("Deny", onClick = p::deny, kind = ButtonKind.SECONDARY, modifier = Modifier.fillMaxWidth())
+            BerthButton("Allow once", onClick = p::allowOnce, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
+            BerthButton("Allow for this session", onClick = p::allowForSession, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/** A fact a request carries, as a labelled row the size of a fingerprint's: `LOGIN AS` over `git` in Mono. */
+@Composable
+private fun RequestRow(label: String, value: String) {
+    val caption = buildAnnotatedString { withStyle(SpanStyle(color = Berth.colors.text2)) { append(label.uppercase()) } }
+    FingerprintRow(caption, value)
 }
 
 /** Android destroyed the key after a biometric change; the fix is a new pair, and the server has to learn it. */
