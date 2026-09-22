@@ -1,5 +1,6 @@
 package app.berth.android.ui.hosts
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,10 +51,12 @@ import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
+import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
+import app.berth.android.ui.prompts.PromptSheet
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.settings.hostKeepaliveLabel
@@ -90,6 +93,11 @@ import java.util.UUID
  * Either way the link's forwards are pending rows in the Tunnels panel, each with a switch, and
  * nothing is saved or started until Save, which keeps the ones switched on and connects the way the
  * link asked ([AppViewModel.saveHostFromLink]).
+ *
+ * Leaving with unsaved changes asks once (spec C10): Back, or the header's back, with any field
+ * other than it stood when the screen opened raises [DiscardChangesSheet], Discard or Keep editing;
+ * with nothing changed, it leaves at once. The Tunnels panel's rows are not the editor's to hold,
+ * since a saved host's tunnels are written as they are made.
  */
 @Composable
 fun HostEditorScreen(
@@ -145,6 +153,15 @@ fun HostEditorScreen(
     var environment by remember { mutableStateOf("") }
     var muteBell by remember { mutableStateOf(false) }
     var colorPicker by remember { mutableStateOf(false) }
+    var discardPrompt by remember { mutableStateOf(false) }
+
+    fun draft() = HostDraft(
+        name, monogramEdited, monogram, color, address, port, user, auth, password, keepalive, reconnectMinutes, tmux, tmuxPrefix,
+        themeId, fontFamily, fontSize, startupCommand, terminalType, compression, addressFamily, remoteClipboard, jumpHostIds,
+        tunnelsOnly, altKey, tags, environment, muteBell, leftOut,
+    )
+    // The fields as the screen opened with them, once loaded: what Back compares against.
+    var opened by remember { mutableStateOf<HostDraft?>(null) }
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
@@ -181,9 +198,16 @@ fun HostEditorScreen(
                 muteBell = h.muteBell
             }
         }
+        opened = draft()
         loaded = true
     }
     if (!loaded) return
+
+    val edited = draft() != opened
+    fun leave() {
+        if (edited) discardPrompt = true else onDone()
+    }
+    BackHandler(enabled = edited && !discardPrompt) { discardPrompt = true }
 
     val portValue = port.toIntOrNull()
     val portError = port.isNotBlank() && (portValue == null || portValue !in 1..65535)
@@ -254,7 +278,7 @@ fun HostEditorScreen(
     ) {
         ScreenHeader(
             title = if (original == null) "New host" else original!!.name,
-            onBack = onDone,
+            onBack = ::leave,
             actions = {
                 BerthButton(
                     when {
@@ -448,6 +472,62 @@ fun HostEditorScreen(
                 Spacer(Modifier.height(8.dp))
                 BerthButton("Delete host", onClick = { vm.deleteHost(original!!.id); onDone() }, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
             }
+        }
+    }
+
+    if (discardPrompt) {
+        DiscardChangesSheet(
+            hostName = original?.name,
+            onDiscard = { discardPrompt = false; onDone() },
+            onKeepEditing = { discardPrompt = false },
+        )
+    }
+}
+
+/** Every field the editor holds, as one value, so the fields as opened and as they stand compare in one step. */
+private data class HostDraft(
+    val name: String,
+    val monogramEdited: Boolean,
+    val monogram: String,
+    val color: SwatchColor,
+    val address: String,
+    val port: String,
+    val user: String,
+    val auth: AuthMethod,
+    val password: String,
+    val keepalive: Int?,
+    val reconnectMinutes: Int?,
+    val tmux: TmuxMode,
+    val tmuxPrefix: String,
+    val themeId: String?,
+    val fontFamily: String?,
+    val fontSize: Int?,
+    val startupCommand: String,
+    val terminalType: String,
+    val compression: Boolean,
+    val addressFamily: AddressFamily,
+    val remoteClipboard: RemoteClipboardPolicy,
+    val jumpHostIds: List<String>,
+    val tunnelsOnly: Boolean,
+    val altKey: AltKeyMode?,
+    val tags: String,
+    val environment: String,
+    val muteBell: Boolean,
+    val leftOut: Set<SshConfigForward>,
+)
+
+/**
+ * Back with unsaved edits (spec C10, "asks once"): the prompt sheet's shape, the question and what
+ * stands to be lost, then the two answers stacked full width, Discard in the danger tint over Keep
+ * editing. A swipe or a tap on the scrim keeps editing, as the sheet's own way out.
+ */
+@Composable
+internal fun DiscardChangesSheet(hostName: String?, onDiscard: () -> Unit, onKeepEditing: () -> Unit) {
+    PromptSheet(onDismiss = onKeepEditing) {
+        SheetTitle("Discard changes?", if (hostName == null) "This new host is not saved yet." else "The edits to $hostName are not saved yet.")
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            BerthButton("Discard", onClick = onDiscard, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            BerthButton("Keep editing", onClick = onKeepEditing, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
         }
     }
 }
