@@ -89,6 +89,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayInputStream
@@ -149,6 +150,7 @@ class FilesScreenshotTest {
     fun tearDown() {
         scope.cancel()
         TimeZone.setDefault(zone)
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -234,6 +236,18 @@ class FilesScreenshotTest {
         compose.onNodeWithText("Hidden 4").performClick()
         waitForText(".bashrc")
         capture("files-browser-hidden")
+    }
+
+    @Test
+    fun `browser at the 1,3 cap`() {
+        // The interface's font cap (#15): the rows' captions, the mode span in mono among them, hold at 1.3× with nothing cut.
+        RuntimeEnvironment.setFontScale(2f)
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        themed { Pane(b) }
+        waitForText("deploy.sh")
+        capture("files-browser-font-scale-2x")
+        compose.assertNoTextCut("the files browser at the interface's font cap")
     }
 
     @Test
