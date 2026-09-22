@@ -338,13 +338,13 @@ class EditorScreenshotTest {
     /**
      * Settings and the Interface editor list one set of accents (spec A2), so a preset picked in
      * Settings is that preset in the editor rather than Custom, and a hex typed in the editor is
-     * Custom back in Settings.
+     * Custom back in Settings. Drawn in the theme the shell draws, so each frame wears the pick.
      */
     private fun accentAcrossScreens(suffix: String) {
         var editor by mutableStateOf(false)
-        themed { if (editor) AppearanceScreen(graph.viewModel, onBack = {}) else SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        shellThemed { if (editor) AppearanceScreen(graph.viewModel, onBack = {}) else SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         compose.onNodeWithText("Rose").performScrollTo().performClick()
-        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        awaitOnMain("the shell to draw in Rose") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
         compose.onNodeWithText("Material You").assertIsNotSelected()
         capture("settings-accent$suffix")
 
@@ -353,7 +353,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Custom").assertIsNotSelected()
         compose.onNodeWithText("Custom").performClick()
         compose.onNode(hasSetTextAction()).performTextReplacement("#4FA3D9")
-        awaitOnMain("the write to reach the view model") { graph.viewModel.interfaceTheme.value.accent == 0x4FA3D9 }
+        awaitOnMain("the shell to draw in #4FA3D9") { graph.viewModel.shownInterfaceTheme.value.accent == 0x4FA3D9 }
         compose.onNodeWithText("Rose").assertIsNotSelected()
         capture("appearance-accent-custom$suffix")
 
