@@ -31,14 +31,20 @@ class TerminalFrameCostTest {
         assertEquals("bytes a capture", 0L, bytes)
     }
 
-    /** Bytes the calling thread allocates for one run of [block], averaged over many after a warm-up. */
+    /**
+     * Bytes the calling thread allocates for one run of [block], after a warm-up: the least of
+     * several windows of many runs. What the block allocates each run shows in every window; the
+     * runtime's own one-off (about 2 KB, once, when the JIT recompiles the loop) shows in one.
+     */
     private fun perFrame(block: () -> Unit): Long {
         val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
         val id = Thread.currentThread().id
         repeat(WARMUP) { block() }
-        val before = threads.getThreadAllocatedBytes(id)
-        repeat(RUNS) { block() }
-        return (threads.getThreadAllocatedBytes(id) - before) / RUNS
+        return (0 until WINDOWS).minOf {
+            val before = threads.getThreadAllocatedBytes(id)
+            repeat(RUNS) { block() }
+            threads.getThreadAllocatedBytes(id) - before
+        } / RUNS
     }
 
     private fun screen(row: (Int) -> String): TerminalEmulator {
@@ -56,5 +62,6 @@ class TerminalFrameCostTest {
         const val ROWS = 40
         const val WARMUP = 200
         const val RUNS = 1000
+        const val WINDOWS = 5
     }
 }
