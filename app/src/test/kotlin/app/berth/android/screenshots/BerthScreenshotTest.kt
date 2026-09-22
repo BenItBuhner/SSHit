@@ -32,6 +32,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
@@ -257,6 +258,7 @@ class BerthScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
         capture("tunnel-editor")
         compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+        assertTunnelPortRowAligned()
     }
 
     @Test
@@ -274,6 +276,7 @@ class BerthScreenshotTest {
         capture("tunnel-editor-font-scale-2x")
         compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
         compose.assertNoTextCut("the tunnel editor at the interface's font cap", within = isDialog())
+        assertTunnelPortRowAligned()
     }
 
     /**
@@ -300,6 +303,24 @@ class BerthScreenshotTest {
         capture("tunnel-editor-compact-height-font-scale-2x")
         compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
         compose.assertNoTextCut("the tunnel editor in a compact-height window at the interface's font cap", within = isDialog())
+        assertTunnelPortRowAligned()
+    }
+
+    /**
+     * The editor's port row keeps its three fields on one line and each label on its own field,
+     * whatever the labels wrap to (#22 nit 14: DESTINATION HOST's second line at the cap pushed its
+     * field under the other two). Positions are unclipped, so a row at the fold is read whole.
+     */
+    private fun assertTunnelPortRowAligned() {
+        val inSheet = hasAnyAncestor(isDialog())
+        val fieldTops = compose.onAllNodes(hasSetTextAction() and inSheet).fetchSemanticsNodes().map { it.positionInRoot.y }
+        assertEquals("the port row's three fields", 3, fieldTops.size)
+        assertTrue("the fields stand on one line, tops at $fieldTops px", fieldTops.max() - fieldTops.min() < 1f)
+        val labelBottoms = listOf("LOCAL PORT", "DESTINATION HOST", "PORT").map { label ->
+            val node = compose.onNode(hasText(label) and inSheet, useUnmergedTree = true).fetchSemanticsNode()
+            node.positionInRoot.y + node.size.height
+        }
+        assertTrue("each label sits on its field, bottoms at $labelBottoms px", labelBottoms.max() - labelBottoms.min() < 1f)
     }
 
     // ---- snippets -----------------------------------------------------------------------------

@@ -395,7 +395,9 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
                     modifier = Modifier.padding(horizontal = 4.dp),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Bottom-aligned, so a label that wraps at a large font (DESTINATION HOST at the 1.3 cap)
+            // grows upward: the three fields stay on one line and each label sits on its own field.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 BerthField(
                     bindPort,
                     { bindPort = it.filter(Char::isDigit).take(5) },
