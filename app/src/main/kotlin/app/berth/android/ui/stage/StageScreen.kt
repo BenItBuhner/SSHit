@@ -926,11 +926,13 @@ private fun EdgeSwipeZone(onSwipe: (forward: Boolean) -> Unit, modifier: Modifie
 /**
  * The return-to-bottom action (C2): accent text so the pill reads as tappable, 40 dp target, one
  * surface step when pressed. The label names the state; the description names the action. Reads
- * the viewport itself, so a scroll through history recomposes this and nothing around it.
+ * only whether the viewport is scrolled, so a scroll through history recomposes this when the pill
+ * comes or goes and nothing around it.
  */
 @Composable
 private fun ScrolledPill(viewport: TerminalViewport, modifier: Modifier = Modifier) {
-    if (viewport.scrollOffset <= 0) return
+    val scrolled by remember(viewport) { derivedStateOf { viewport.scrollOffset > 0 } }
+    if (!scrolled) return
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()

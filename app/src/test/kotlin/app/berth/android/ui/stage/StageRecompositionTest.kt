@@ -139,7 +139,7 @@ class StageRecompositionTest {
     }
 
     @Test
-    fun `a scroll through history re-runs nothing of the body`() {
+    fun `a scroll through history re-runs nothing of the body and the scrolled pill once, when it appears`() {
         val tools = StageTools()
         val live = stageHomelab(tools = tools, before = { s -> repeat(HISTORY) { i -> write(s, "line $i\r\n") } })
         repeat(SCROLLS) {
@@ -152,6 +152,7 @@ class StageRecompositionTest {
         assertEquals("StageBody", 0, runs[STAGE_BODY])
         assertEquals("TerminalCanvas", 0, runs[TERMINAL_CANVAS])
         assertEquals("Deck", 0, runs[DECK])
+        assertEquals("ScrolledPill", 1, runs[SCROLLED_PILL])
     }
 
     @Test
