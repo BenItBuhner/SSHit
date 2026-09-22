@@ -208,6 +208,12 @@ roborazzi {
     outputDir.set(layout.buildDirectory.dir("outputs/roborazzi"))
 }
 
+// Classes from modules the Compose compiler does not compile, which it would otherwise take as unstable and
+// compare by instance: listed there only when they are immutable all the way down.
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
+}
+
 // The Compose compiler's reports, on request (-Pberth.composeReports): per composable whether it is restartable
 // and skippable and each parameter's stability (*-composables.txt), each class's inferred stability
 // (*-classes.txt) and the module's counts (*-module.json), in build/compose-reports. Off by default so an

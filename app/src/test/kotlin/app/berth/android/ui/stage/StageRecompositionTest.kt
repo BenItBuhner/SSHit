@@ -108,6 +108,23 @@ class StageRecompositionTest {
     }
 
     @Test
+    fun `an edit to another host re-runs the Stage body but not the terminal`() {
+        stageHomelab()
+        repeat(EDITS) { i ->
+            runBlocking {
+                val other = graph.hosts.get("pi-hole")!!
+                graph.hosts.upsert(other.copy(lastConnectedAt = (other.lastConnectedAt ?: 0L) + i + 1))
+            }
+            compose.waitUntil(5_000) { graph.viewModel.hosts.value.first { it.id == "pi-hole" }.lastConnectedAt == runBlocking { graph.hosts.get("pi-hole")!!.lastConnectedAt } }
+            compose.waitForIdle()
+        }
+        report("other host x$EDITS")
+        assertEquals("the body looked at every edit", EDITS, runs[STAGE_BODY])
+        assertEquals("TerminalCanvas", 0, runs[TERMINAL_CANVAS])
+        assertEquals("Deck", 0, runs[DECK])
+    }
+
+    @Test
     fun `a scroll through history re-runs nothing of the body`() {
         val tools = StageTools()
         val live = stageHomelab(tools = tools, before = { s -> repeat(HISTORY) { i -> write(s, "line $i\r\n") } })
@@ -246,6 +263,7 @@ class StageRecompositionTest {
         const val SCROLLS = 20
         const val DRAGS = 20
         const val SWITCHES = 10
+        const val EDITS = 5
 
         const val STAGE_SCREEN = "app.berth.android.ui.stage.StageScreen"
         const val STAGE_BODY = "app.berth.android.ui.stage.StageBody"
