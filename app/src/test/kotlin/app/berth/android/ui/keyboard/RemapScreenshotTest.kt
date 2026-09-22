@@ -63,6 +63,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
+import app.berth.android.screenshots.assertSheetAtContentHeight
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
@@ -179,6 +180,8 @@ class RemapScreenshotTest {
         // The focus stays on the row it bound, so a keyboard's user is where they were.
         awaitFocused(hasContentDescription("Find in scrollback", substring = true), "the rebound row")
         capture("shortcut-sheet-remapped-row")
+        // A9: the sheet stands at the window's top, the rebound row whole in it and the Stage group's last rows one scroll away.
+        compose.assertSheetAtContentHeight("Find in scrollback", "Pass-through to the shell")
 
         // Ctrl+C is the shell's interrupt: refused, and Use stays off; Ctrl+Shift+V is Paste's already.
         row("Copy the selection").performScrollTo().performClick()
@@ -449,6 +452,7 @@ class RemapScreenshotTest {
         compose.waitForIdle()
         text("Default Leader F \u00B7 takes readline\u2019s forward-char from the shell").assertExists()
         capture("shortcut-sheet-remapped-row-font-scale-2x")
+        compose.assertSheetAtContentHeight("Find in scrollback", "Pass-through to the shell")
         // The sheet's column is composed whole, so the check reads every row of it, scrolled to or not.
         compose.assertNoTextCut("the shortcut sheet at the interface's font cap, a row rebound")
     }
