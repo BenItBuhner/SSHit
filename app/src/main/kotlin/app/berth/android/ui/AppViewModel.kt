@@ -1026,8 +1026,26 @@ class AppViewModel @Inject constructor(
             }
         }
 
+    /** Held across a forget and its Undo, so an Undo tapped the moment a row goes writes after the delete and not before it. */
+    private val knownHostEdits = Mutex()
+
     fun forgetKnownHost(id: String) {
-        viewModelScope.launch { knownHostRepository.delete(id) }
+        viewModelScope.launch { knownHostEdits.withLock { knownHostRepository.delete(id) } }
+    }
+
+    /**
+     * Undo for [forgetKnownHost]: each key back as it was, id, dates and pin, unless this phone has
+     * trusted the very same key for its endpoint again since, which would make it a second row.
+     */
+    fun restoreKnownHosts(keys: List<KnownHostKey>) {
+        viewModelScope.launch {
+            knownHostEdits.withLock {
+                for (key in keys) {
+                    val here = knownHostRepository.find(key.host, key.port)
+                    if (here.none { it.keyType == key.keyType && it.publicKeyBase64 == key.publicKeyBase64 }) knownHostRepository.upsert(key)
+                }
+            }
+        }
     }
 
     fun setKnownHostPinned(id: String, pinned: Boolean) {

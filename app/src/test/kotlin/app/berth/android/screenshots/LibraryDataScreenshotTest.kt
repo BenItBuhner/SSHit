@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -34,6 +36,8 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -44,12 +48,14 @@ import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.keys.KeysScreen
 import app.berth.android.ui.settings.HOSTS_EXPORT_NOTE
 import app.berth.android.ui.settings.ImportBundleSheet
+import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.PickedFile
 import app.berth.android.ui.settings.hardwareNote
 import app.berth.android.ui.settings.keysLine
 import app.berth.android.ui.settings.leftBehindNote
 import app.berth.android.ui.settings.namedKeyLine
 import app.berth.android.ui.settings.recreateNote
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.bundle.BundleCodec
@@ -86,9 +92,10 @@ import java.util.concurrent.TimeUnit
  * The library's data surfaces of wave four (spec C9, C10, C12, C13) through Robolectric's native
  * graphics, each at the system's 1× and at 2×, where interface text stops at its 1.3× cap (A11):
  * the host editor's question when Back would drop edits and its Advanced › Scrollback and
- * Ciphers rows, Rename and Change protection on the Keys screen, and the Hosts screen's Export
- * hosts and the `+` long-press to Quick connect, with a hosts-only file's import. Every capture
- * is the accessibility audit too, and no text on these surfaces is cut at either size.
+ * Ciphers rows, Rename and Change protection on the Keys screen, the Hosts screen's Export hosts
+ * and the `+` long-press to Quick connect, with a hosts-only file's import, and Known hosts' swipe
+ * to forget with Undo. Every capture is the accessibility audit too, and no text on these
+ * surfaces is cut at either size.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -676,6 +683,140 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         assertEquals("hunter2", runBlocking { graph.secrets.get("host-password:h-nas") }!!.toString(Charsets.UTF_8))
         assertEquals("no key was written", keysBefore, graph.identities.items.value)
         assertEquals(7, hosts.size)
+    }
+
+    // ---- Known hosts: swipe to forget, with Undo (C13) ------------------------------------------------
+
+    private fun knownHostsScreen() = themed { KnownHostsScreen(graph.viewModel, onBack = {}) }
+
+    private fun knownRow(title: String, algorithm: String = "ED25519") =
+        compose.onNode(hasText(title) and hasText("$algorithm \u00B7", substring = true) and hasClickAction())
+
+    /**
+     * A swipe to the left over a row shows Forget behind it, quiet until letting go would forget
+     * and filled with danger after; let go past that, the key is forgotten, and the foot says so
+     * for six seconds with Undo, which puts the key back as it was, its pin and its dates.
+     */
+    @Test
+    fun `a swipe to the left forgets a known host, and Undo puts it back as it was`() {
+        seedLibrary()
+        runBlocking { graph.knownHosts.setPinned("kh-lab", true) }
+        val before = graph.knownHosts.items.value.single { it.id == "kh-lab" }
+        knownHostsScreen()
+        val lab = "192.168.1.20  \u00B7  homelab"
+        waitForText(lab)
+        val row = knownRow(lab)
+        val width = row.fetchSemanticsNode().size.width.toFloat()
+        row.performTouchInput {
+            down(Offset(width - 24f, centerY))
+            repeat(10) { moveBy(Offset(-width * 0.03f, 0f)) }
+        }
+        waitForText("Forget")
+        capture("known-hosts-swipe")
+        row.performTouchInput { repeat(10) { moveBy(Offset(-width * 0.03f, 0f)) } }
+        compose.waitForIdle()
+        capture("known-hosts-swipe-armed")
+        row.performTouchInput { up() }
+
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.none { it.id == "kh-lab" } }
+        waitForText("Forgot the key for 192.168.1.20")
+        waitForNoText(lab)
+        compose.onNodeWithText("Undo").assertExists()
+        capture("known-hosts-forgot-undo")
+        assertNoTextCut("Known hosts with a key just forgotten")
+
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.any { it.id == "kh-lab" } }
+        assertEquals("the key is back as it was, pinned, with its own dates", before, graph.knownHosts.items.value.single { it.id == "kh-lab" })
+        waitForText(lab)
+        waitForNoText("Forgot the key for 192.168.1.20")
+        knownRow(lab).assert(hasText("pinned", substring = true))
+        hasNoText("Forget")
+        assertEquals(3, graph.knownHosts.items.value.size)
+    }
+
+    /** A swipe that stops short and comes back slowly, and one to the right, forget nothing: the row settles, and a tap still opens it. */
+    @Test
+    fun `a short swipe or one to the right forgets nothing`() {
+        seedLibrary()
+        knownHostsScreen()
+        val build = "build.internal  \u00B7  build box"
+        waitForText(build)
+        val row = knownRow(build)
+        row.performTouchInput { swipeLeft(startX = right - 24f, endX = right - 24f - width * 0.25f, durationMillis = 2_000) }
+        compose.waitForIdle()
+        row.performTouchInput { swipeRight(startX = left + 24f, endX = right - 24f, durationMillis = 300) }
+        compose.waitForIdle()
+        assertEquals(3, graph.knownHosts.items.value.size)
+        hasNoText("Forget")
+        compose.onAllNodes(hasText("Forgot", substring = true)).assertCountEquals(0)
+        row.performClick()
+        waitForText("Pin this key")
+    }
+
+    /**
+     * Each key forgotten while the notice is up counts into it and restarts its six seconds, and
+     * Undo puts every one of them back; left alone, the notice goes and the key stays forgotten.
+     */
+    @Test
+    fun `keys forgotten while the notice is up count into it and come back together, and left alone the forget stands`() {
+        seedLibrary()
+        val before = graph.knownHosts.items.value.toSet()
+        knownHostsScreen()
+        for (title in listOf("203.0.113.10  \u00B7  prod-api", "build.internal  \u00B7  build box")) {
+            waitForText(title)
+            knownRow(title).performTouchInput { swipeLeft() }
+            waitForNoText(title)
+        }
+        waitForText("Forgot 2 keys")
+        assertEquals(listOf("kh-lab"), graph.knownHosts.items.value.map { it.id })
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.size == 3 }
+        assertEquals(before, graph.knownHosts.items.value.toSet())
+
+        val lab = "192.168.1.20  \u00B7  homelab"
+        waitForText(lab)
+        knownRow(lab).performTouchInput { swipeLeft() }
+        waitForText("Forgot the key for 192.168.1.20")
+        compose.mainClock.advanceTimeBy(NOTICE_BAR_MS + 100)
+        waitForNoText("Forgot the key for 192.168.1.20")
+        assertEquals(before.filter { it.id != "kh-lab" }.toSet(), graph.knownHosts.items.value.toSet())
+    }
+
+    /**
+     * A screen reader cannot swipe: the row offers Forget as an action, and it forgets with the
+     * same Undo. So does the detail sheet's Forget, whose notice names the algorithm when the
+     * endpoint keeps another key on the list.
+     */
+    @Test
+    fun `a screen reader forgets through the row's action, and the detail sheet's Forget offers the same Undo`() {
+        seedLibrary()
+        val other = SshKeys.generate(KeyAlgorithm.ECDSA_P256).public
+        runBlocking {
+            graph.knownHosts.upsert(KnownHostKey("kh-build-ecdsa", "build.internal", 22, "ecdsa-sha2-nistp256", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), now, now))
+        }
+        knownHostsScreen()
+        val lab = "192.168.1.20  \u00B7  homelab"
+        waitForText(lab)
+        val forget = knownRow(lab).fetchSemanticsNode().config[SemanticsActions.CustomActions].single { it.label == "Forget" }
+        compose.runOnUiThread { forget.action() }
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.none { it.id == "kh-lab" } }
+        waitForText("Forgot the key for 192.168.1.20")
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.any { it.id == "kh-lab" } }
+        waitForText(lab)
+
+        val build = "build.internal  \u00B7  build box"
+        knownRow(build).performClick()
+        waitForText("Pin this key")
+        inSheet("Forget").performScrollTo().performClick()
+        waitForNoText("Pin this key")
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.none { it.id == "kh-build" } }
+        waitForText("Forgot the ED25519 key for build.internal")
+        knownRow(build, algorithm = "ECDSA P-256").assertExists()
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.any { it.id == "kh-build" } }
+        assertEquals(4, graph.knownHosts.items.value.size)
     }
 
     // ---- fixtures ---------------------------------------------------------------------------------
