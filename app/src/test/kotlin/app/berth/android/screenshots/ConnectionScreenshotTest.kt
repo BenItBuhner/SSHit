@@ -321,6 +321,8 @@ class ConnectionScreenshotTest {
         compose.onNodeWithText("Done").assertExists()
         capture("background-sheet-exempt-samsung")
         compose.assertNoTextCut("the Background sheet, exempt")
+        // A9 on this frame of the flipped sheet too: Done, its one button, whole in the window as the sheet opened.
+        compose.assertSheetAtContentHeight("Done")
     }
 
     // ---- Part B: Back's one line, once ---------------------------------------------------------------------
