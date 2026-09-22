@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.a11y.touchTarget
@@ -49,6 +50,11 @@ sealed interface AccentChoice {
 /** The interface theme's accent as the picker shows it; Material You only where the system has it. */
 val InterfaceTheme.accentChoice: AccentChoice
     get() = if (materialYou && MaterialYouAvailable) AccentChoice.MaterialYou else AccentChoice.Colour(accent)
+
+/** The colour the interface theme's accent draws in as 0xRRGGBB: the system's while Material You is on and there is one. */
+@Composable
+fun InterfaceTheme.shownAccentRgb(): Int =
+    (if (materialYou) materialYouAccent(Berth.colors.isDark) else null)?.let { it.toArgb() and 0xFFFFFF } ?: accent
 
 /** [choice] applied to the interface theme; a colour turns Material You off, Material You keeps the colour under it. */
 fun InterfaceTheme.withAccent(choice: AccentChoice): InterfaceTheme = when (choice) {

@@ -146,7 +146,7 @@ private fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabP
 
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
-    val theme by vm.interfaceTheme.collectAsState()
+    val theme by vm.shownInterfaceTheme.collectAsState()
     val hapticLevel by vm.hapticLevel.collectAsState()
     val lock by vm.security.lock.state.collectAsState()
     // Whether the keyboard's focus is anywhere in this window: the Stage keeps its own while a keyboard

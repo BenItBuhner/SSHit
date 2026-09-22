@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,7 +40,9 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.GroupEditorRequest
 import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabSheets
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.themes.AppearanceScreen
@@ -121,6 +124,16 @@ class EditorScreenshotTest {
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
+                Box(Modifier.fillMaxSize()) { content() }
+            }
+        }
+    }
+
+    /** Under the theme the shell draws with, the current group's accent over the app's, as AppRoot mounts it. */
+    private fun shellThemed(content: @Composable () -> Unit) {
+        compose.setContent {
+            val theme by graph.viewModel.shownInterfaceTheme.collectAsState()
+            BerthTheme(theme) {
                 Box(Modifier.fillMaxSize()) { content() }
             }
         }
@@ -263,6 +276,62 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Verdigris").performClick()
         compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == AccentPreset.VERDIGRIS.rgb }
         compose.onNodeWithText("Custom").assertIsNotSelected()
+    }
+
+    @Test
+    fun `a group's accent is the interface's while the group is current`() = groupAccent("")
+
+    @Test
+    fun `a group's accent is the interface's while the group is current at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        groupAccent("-font-scale-2x")
+    }
+
+    /**
+     * The group editor's Accent (spec C8): Inherit, drawn in the app's accent, until one of the
+     * app's list is picked; the pick is the interface's accent while the group is current (the
+     * active tab's), the Stage behind the sheet included, another group's does not reach it, and
+     * Inherit hands it back. The app's own accent, which the pickers show, is untouched throughout.
+     */
+    private fun groupAccent(suffix: String) {
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        val ui = TabUiState().apply { groupEditor = GroupEditorRequest.Edit(Workspace.DEFAULT_ID) }
+        fun home() = graph.workspaces.items.value.first { it.id == Workspace.DEFAULT_ID }
+        shellThemed {
+            Stage(session)
+            TabSheets(graph.viewModel, ui, remember { ShellTabActions(graph.viewModel, ui, onActivated = {}) }, onAddHost = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Edit group").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Inherit").performScrollTo().assertIsSelected()
+        capture("group-editor-accent$suffix")
+
+        // The sheet is its own window, whose taps land when the main looper idles; waitUntil alone does not idle it.
+        compose.onNodeWithText("Rose").performClick()
+        compose.waitForIdle()
+        compose.waitUntil(5_000) { home().accentRgb == AccentPreset.ROSE.rgb }
+        assertEquals(Workspace.DEFAULT_ID, graph.viewModel.currentWorkspaceId.value)
+        compose.waitUntil(5_000) { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        assertEquals("the app's own accent is untouched", AccentPreset.COPPER.rgb, graph.viewModel.interfaceTheme.value.accent)
+        compose.onNodeWithText("Inherit").assertIsNotSelected()
+        capture("group-editor-accent-rose$suffix")
+
+        graph.viewModel.setWorkspaceAccent("ws-work", AccentPreset.MOSS.rgb)
+        compose.waitUntil(5_000) { graph.workspaces.items.value.first { it.id == "ws-work" }.accentRgb == AccentPreset.MOSS.rgb }
+        assertEquals("Work is not current", AccentPreset.ROSE.rgb, graph.viewModel.shownInterfaceTheme.value.accent)
+
+        ui.groupEditor = null
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Edit group").fetchSemanticsNodes().isEmpty() }
+        capture("stage-group-accent-rose$suffix")
+
+        ui.groupEditor = GroupEditorRequest.Edit(Workspace.DEFAULT_ID)
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Edit group").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Rose").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("Inherit").performClick()
+        compose.waitForIdle()
+        compose.waitUntil(5_000) { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.COPPER.rgb }
+        assertEquals(null, home().accentRgb)
     }
 
     @Test
