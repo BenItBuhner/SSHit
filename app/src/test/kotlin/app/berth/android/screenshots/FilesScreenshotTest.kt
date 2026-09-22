@@ -877,11 +877,14 @@ class FilesScreenshotTest {
         assertEquals(session.id, filesTab.ride.value?.id)
         assertEquals(listOf(session.id, filesTab.id), graph.viewModel.tabs.value.map { it.id })
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 logs, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        // The strip scrolls the new tab into view and fades its edges as it goes; a frame taken mid-scroll has the tab's × under the fade.
+        compose.settle(500)
         capture("files-live-opened")
 
         compose.onNodeWithText("berth-files-demo").performClick()
         waitForText("README.txt", 15_000)
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth-files-demo, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(500)
         capture("files-live-folder")
 
         // The terminal is one tap away on the strip (its title is the shell's, so the tab is found by its slot) and the browser is where it was left on the way back.
