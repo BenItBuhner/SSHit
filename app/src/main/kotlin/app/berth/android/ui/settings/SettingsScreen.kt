@@ -34,7 +34,6 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSlider
-import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
@@ -54,7 +53,9 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.themes.AccentPicker
+import app.berth.android.ui.themes.accentChoice
+import app.berth.android.ui.themes.withAccent
 import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
@@ -158,20 +159,7 @@ fun SettingsScreen(
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
                 Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp))
-                // Each option is a 48 dp target around its 32 dp swatch, so the row's pitch is the target's.
-                Row {
-                    for ((name, accent) in ACCENTS) {
-                        ColorOption(
-                            color = accent.toColor(),
-                            name = name,
-                            selected = theme.accent == accent && !theme.materialYou,
-                            onClick = { vm.setInterfaceTheme(theme.copy(accent = accent, materialYou = false)) },
-                            size = 32.dp,
-                            inset = 5.dp,
-                        )
-                    }
-                }
-                ToggleRow("Material You accent", theme.materialYou, { vm.setInterfaceTheme(theme.copy(materialYou = it)) }, caption = "Follow the wallpaper colour on Android 12 and later")
+                AccentPicker(theme.accentChoice, onChoose = { vm.setInterfaceTheme(theme.withAccent(it)) }, customSeed = theme.accent)
                 ToggleRow("High contrast", theme.contrast == InterfaceContrast.HIGH, { vm.setInterfaceTheme(theme.copy(contrast = if (it) InterfaceContrast.HIGH else InterfaceContrast.STANDARD)) })
                 ToggleRow("System font", theme.useSystemFont, { vm.setInterfaceTheme(theme.copy(useSystemFont = it)) }, caption = "Use the device's interface font instead of Plex Sans")
                 ListRow("Interface editor", subtitle = "Presets, corner radius, density and a live preview", surface = Color.Transparent, minHeight = 44.dp, onClick = onAppearance, trailing = chevron)
@@ -294,16 +282,6 @@ fun SettingsScreen(
 
 /** How long a notice stands before it sinks on its own. */
 private const val NOTICE_MS = 3_500L
-
-/** The accent choices with the names a screen reader gives them; the colour alone never tells them apart. */
-private val ACCENTS = listOf(
-    "Copper" to 0xE0A458,
-    "Coral" to 0xD9776B,
-    "Aqua" to 0x7AD3C6,
-    "Moss" to 0x8FB573,
-    "Periwinkle" to 0x89A7E0,
-    "Lilac" to 0xC79BD8,
-)
 
 /** The cursor shapes as [TerminalFont.cursorShape] stores them and as the control names them (spec C20: block, underline, bar). */
 private val CURSOR_SHAPES = listOf("block" to "Block", "underline" to "Underline", "bar" to "Bar")

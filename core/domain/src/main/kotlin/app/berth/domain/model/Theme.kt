@@ -550,10 +550,15 @@ enum class InterfaceContrast { STANDARD, HIGH }
 
 enum class Density { COMFORTABLE, COMPACT }
 
-/** Accent presets from the design system, as 0xRRGGBB. */
-enum class AccentPreset(val rgb: Int) {
-    COPPER(0xE0A458), VERDIGRIS(0x5FB3A1), SLATE(0x7A9CD6), MOSS(0x8FB573),
-    ROSE(0xE27D8F), MAUVE(0xC387B8), BONE(0xC9C4BB),
+/** Accent presets from the design system (spec A2), as 0xRRGGBB, in the order every accent control lists them. */
+enum class AccentPreset(val rgb: Int, val title: String) {
+    COPPER(0xE0A458, "Copper"), VERDIGRIS(0x5FB3A1, "Verdigris"), SLATE(0x7A9CD6, "Slate"), MOSS(0x8FB573, "Moss"),
+    ROSE(0xE27D8F, "Rose"), MAUVE(0xC387B8, "Mauve"), BONE(0xC9C4BB, "Bone");
+
+    companion object {
+        /** The preset whose colour is [rgb], or null for a custom accent. */
+        fun of(rgb: Int): AccentPreset? = entries.firstOrNull { it.rgb == rgb and 0xFFFFFF }
+    }
 }
 
 /** Interface theme: tone, accent, contrast and density are independent of the terminal palette. */

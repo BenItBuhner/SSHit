@@ -205,13 +205,20 @@ fun berthColors(theme: InterfaceTheme, dark: Boolean, accent: Color = theme.acce
 @Composable
 fun rememberBerthColors(theme: InterfaceTheme, systemDark: Boolean = isSystemInDarkTheme()): BerthColors {
     val dark = theme.isDark(systemDark)
-    val context = LocalContext.current
-    val accent = if (theme.materialYou && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        (if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)).primary
-    } else {
-        theme.accent.toColor()
-    }
+    val system = materialYouAccent(dark)
+    val accent = if (theme.materialYou && system != null) system else theme.accent.toColor()
     return berthColors(theme, dark, accent)
+}
+
+/** Whether the system has a wallpaper accent to offer (Material You, Android 12 and later). */
+val MaterialYouAvailable: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+/** The system's Material You accent for a [dark] or light interface, or null before Android 12. */
+@Composable
+fun materialYouAccent(dark: Boolean): Color? {
+    if (!MaterialYouAvailable) return null
+    val context = LocalContext.current
+    return (if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)).primary
 }
 
 val LocalBerthColors = staticCompositionLocalOf { WarmDark }

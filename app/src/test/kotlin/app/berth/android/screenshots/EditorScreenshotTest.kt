@@ -14,6 +14,8 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -44,6 +46,7 @@ import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.android.ui.themes.TerminalThemeEditorScreen
 import app.berth.android.ui.themes.ThemeScope
 import app.berth.android.ui.themes.ThemesScreen
+import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKeyCode
@@ -221,6 +224,45 @@ class EditorScreenshotTest {
         themed { AppearanceScreen(graph.viewModel, onBack = {}) }
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Interface preview").fetchSemanticsNodes().isNotEmpty() }
         capture("appearance")
+    }
+
+    @Test
+    fun `an accent picked in Settings is the same chip in the Interface editor`() = accentAcrossScreens("")
+
+    @Test
+    fun `an accent picked in Settings is the same chip in the Interface editor at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        accentAcrossScreens("-font-scale-2x")
+    }
+
+    /**
+     * Settings and the Interface editor list one set of accents (spec A2), so a preset picked in
+     * Settings is that preset in the editor rather than Custom, and a hex typed in the editor is
+     * Custom back in Settings.
+     */
+    private fun accentAcrossScreens(suffix: String) {
+        var editor by mutableStateOf(false)
+        themed { if (editor) AppearanceScreen(graph.viewModel, onBack = {}) else SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Rose").performScrollTo().performClick()
+        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        compose.onNodeWithText("Material You").assertIsNotSelected()
+        capture("settings-accent$suffix")
+
+        editor = true
+        compose.onNodeWithText("Rose").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("Custom").assertIsNotSelected()
+        compose.onNodeWithText("Custom").performClick()
+        compose.onNode(hasSetTextAction()).performTextReplacement("#4FA3D9")
+        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == 0x4FA3D9 }
+        compose.onNodeWithText("Rose").assertIsNotSelected()
+        capture("appearance-accent-custom$suffix")
+
+        editor = false
+        compose.onNodeWithText("Custom").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("Rose").assertIsNotSelected()
+        compose.onNodeWithText("Verdigris").performClick()
+        compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.accent == AccentPreset.VERDIGRIS.rgb }
+        compose.onNodeWithText("Custom").assertIsNotSelected()
     }
 
     @Test

@@ -1,5 +1,6 @@
 package app.berth.domain
 
+import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.ColorMath
 import app.berth.domain.model.DECK_MAX_KEYS_PER_LAYER
 import app.berth.domain.model.DeckAction
@@ -88,6 +89,19 @@ class EditorDomainTest {
         assertTrue(TerminalTheme.BERTH_DARK.isDark)
         assertFalse(TerminalTheme.BERTH_LIGHT.isDark)
         assertTrue(TerminalTheme.SOLARIZED_DARK.isDark)
+    }
+
+    @Test
+    fun `the accent presets are the spec's seven and a colour finds its preset`() {
+        assertEquals(
+            listOf("Copper" to 0xE0A458, "Verdigris" to 0x5FB3A1, "Slate" to 0x7A9CD6, "Moss" to 0x8FB573, "Rose" to 0xE27D8F, "Mauve" to 0xC387B8, "Bone" to 0xC9C4BB),
+            AccentPreset.entries.map { it.title to it.rgb },
+        )
+        assertEquals(AccentPreset.ROSE, AccentPreset.of(0xE27D8F))
+        assertEquals(AccentPreset.COPPER, AccentPreset.of(0xFFE0A458.toInt()))
+        assertNull(AccentPreset.of(0xD9776B))
+        assertEquals(AccentPreset.COPPER, AccentPreset.of(InterfaceTheme.DEFAULT.accent))
+        for ((_, preset) in InterfaceTheme.presets) assertNotNull(AccentPreset.of(preset.accent))
     }
 
     @Test
