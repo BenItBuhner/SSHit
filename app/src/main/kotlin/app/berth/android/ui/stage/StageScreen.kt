@@ -772,6 +772,7 @@ private fun StageBody(
                 horizontalDragArrows = terminalSettings.horizontalDragArrows,
                 // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
                 onLinkTap = { tools.pendingLink = it },
+                onSecondaryClick = if (terminalSettings.rightClickPaste) ({ clipboard.getText()?.text?.let(paste) }) else null,
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },

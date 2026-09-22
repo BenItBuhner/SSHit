@@ -36,8 +36,9 @@ class FrameOverlay {
     var currentFg: Int = 0
 
     /**
-     * The OSC 8 link a finger is down on, by id, underlined in [linkColor] (the theme's `links`)
-     * for as long as it is held (spec A60; links are underlined on hover or press only). 0 for none.
+     * The OSC 8 link a finger is down on or a mouse is over, by id, underlined in [linkColor] (the
+     * theme's `links`) for as long as it is (spec A60; links are underlined on hover or press only).
+     * 0 for none.
      */
     var pressedLink: Int = 0
     var linkColor: Int = 0

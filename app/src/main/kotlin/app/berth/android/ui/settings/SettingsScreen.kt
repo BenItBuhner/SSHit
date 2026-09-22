@@ -211,6 +211,7 @@ fun SettingsScreen(
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
                 // Spec D1's optional drag: off, a sideways drag on the terminal does nothing, as it always has.
                 ToggleRow("Drag for arrow keys", terminal.horizontalDragArrows, { on -> vm.updateTerminalSettings { it.copy(horizontalDragArrows = on) } }, caption = "A one-finger sideways drag on the terminal sends Left and Right, one per cell")
+                ToggleRow("Right-click pastes", terminal.rightClickPaste, { on -> vm.updateTerminalSettings { it.copy(rightClickPaste = on) } }, caption = "With a mouse or trackpad, unless the program has the mouse")
                 // The Deck's hand (spec D2): the swipe down is off by default, the swipe across on.
                 ToggleRow(
                     "Swipe down on a Deck key",

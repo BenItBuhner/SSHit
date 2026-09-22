@@ -969,7 +969,11 @@ class TerminalSession(
      */
     private val writer = Dispatchers.IO.limitedParallelism(1)
 
+    /** Handed every write [send] is given, before the shell is; how a test reads what a gesture or a key sent. */
+    internal var sendObserver: ((ByteArray) -> Unit)? = null
+
     fun send(bytes: ByteArray) {
+        sendObserver?.invoke(bytes)
         val sh = shell
         if (sh == null) {
             // A detached tab does not eat what is typed into it: the first key reconnects, as the pill

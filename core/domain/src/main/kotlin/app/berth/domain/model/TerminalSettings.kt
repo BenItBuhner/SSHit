@@ -12,6 +12,8 @@ data class TerminalSettings(
     val scrollbackLines: Int = DEFAULT_SCROLLBACK,
     /** A one-finger horizontal drag on the terminal sends Left and Right arrows, one per cell of travel (spec D1); off by default. */
     val horizontalDragArrows: Boolean = false,
+    /** A mouse's or trackpad's right click on the terminal pastes, as the two-finger tap does, unless the program has the mouse. */
+    val rightClickPaste: Boolean = true,
 ) {
     companion object {
         const val DEFAULT_SCROLLBACK = 10_000

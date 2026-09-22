@@ -306,6 +306,17 @@ class TerminalSurfaceScreenshotTest {
         compose.onNodeWithText("Drag for arrow keys").performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.horizontalDragArrows }
         assertEquals("the other terminal settings stand", 20_000, graph.viewModel.terminalSettings.value.scrollbackLines)
+
+        // A mouse's right click pastes unless it is turned off here; the program's mouse mode takes it either way.
+        compose.onNodeWithText("Right-click pastes").performScrollTo()
+        compose.waitForIdle()
+        assertTrue(graph.viewModel.terminalSettings.value.rightClickPaste)
+        settle(200)
+        capture("settings-gestures-right-click-paste$suffix")
+        compose.assertNoTextCut("the Settings screen's Gestures rows${if (cap) " at the interface's font cap" else ""}")
+        compose.onNodeWithText("Right-click pastes").performClick()
+        compose.waitUntil(5_000) { !graph.viewModel.terminalSettings.value.rightClickPaste }
+        assertTrue("the other gestures stand", graph.viewModel.terminalSettings.value.horizontalDragArrows)
     }
 
     @Test

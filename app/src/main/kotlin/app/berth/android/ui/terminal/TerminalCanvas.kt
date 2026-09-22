@@ -30,7 +30,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -191,7 +194,7 @@ data class LinkTap(val url: String, val text: String)
  * offers to open it), long-press selects a word and places handles, double-tap selects a word,
  * double-tap and drag selects lines, a two-finger tap pastes, a two-finger double-tap resets the
  * font size, a three-finger tap toggles the Deck, and a horizontal drag sends arrows when Settings
- * asks for it (spec A60, C18, D1).
+ * asks for it (spec A60, C18, D1). A mouse or a trackpad is [terminalMouse]'s.
  *
  * Output never recomposes the canvas: frames are captured on a worker as the screen version
  * changes and a tick state read in the draw scope alone invalidates the drawing.
@@ -234,6 +237,8 @@ fun TerminalCanvas(
      * a long-press selection's bar offers Open link then.
      */
     onLinkTap: ((LinkTap) -> Unit)? = null,
+    /** A mouse's right click, when the application does not have the mouse; null leaves it doing nothing. */
+    onSecondaryClick: (() -> Unit)? = null,
     selection: TerminalSelection? = null,
     search: TerminalSearch? = null,
     onSelectionStarted: () -> Unit = {},
@@ -340,6 +345,8 @@ fun TerminalCanvas(
     val currentThreeFingerTap by rememberUpdatedState(onThreeFingerTap)
     val currentDragArrows by rememberUpdatedState(horizontalDragArrows)
     val currentLinkTap by rememberUpdatedState(onLinkTap)
+    val currentSecondaryClick by rememberUpdatedState(onSecondaryClick)
+    var mouseIcon by remember { mutableStateOf(PointerIcon.Text) }
     // Runs the two-finger tap's paste once the double-tap window has passed without a second tap.
     val scope = rememberCoroutineScope()
     val currentSelectionStarted by rememberUpdatedState(onSelectionStarted)
@@ -355,6 +362,25 @@ fun TerminalCanvas(
             .focusRequester(focusRequester)
             .focusable(interactionSource = interaction)
             .onPreviewKeyEvent { handleComposeKeyEvent(it, currentSink) }
+            .pointerHoverIcon(mouseIcon)
+            .pointerInput(session.id) {
+                val hooks = MouseHooks(
+                    selection = { currentSelection },
+                    onSelectionStarted = { currentSelectionStarted() },
+                    onClick = {
+                        currentOnTap()
+                        focusRequester.requestFocus()
+                        keyboard?.show()
+                    },
+                    onLinkClick = { currentLinkTap },
+                    onSecondaryClick = { currentSecondaryClick },
+                    onHover = { link, icon ->
+                        pressedLink = link
+                        mouseIcon = icon
+                    },
+                )
+                terminalMouse(session, viewport, frames, { paintsState.value }, hooks)
+            }
             // Keyed on the session alone: a pinch changes the paints a dozen times and the gesture
             // must not restart under the fingers.
             .pointerInput(session.id) {
@@ -365,6 +391,7 @@ fun TerminalCanvas(
                 var pendingTwoTap: Job? = null
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)
+                    if (down.type == PointerType.Mouse) return@awaitEachGesture
                     val p = paintsState.value
                     val sel = currentSelection
                     val slop = viewConfiguration.touchSlop
@@ -664,7 +691,7 @@ private const val SEARCH_SETTLE_MS = 150L
 private const val TAP_MS = 300L
 
 /** While a selection drag holds the finger past an edge, history scrolls one line per this. */
-private const val AUTOSCROLL_MS = 60L
+internal const val AUTOSCROLL_MS = 60L
 
 /** The disc of a selection handle; its square shoulder is the same size. The touch target is [HANDLE_REACH] around the centre. */
 val HANDLE_RADIUS = 9.dp
@@ -767,13 +794,19 @@ private fun drawHandles(nc: android.graphics.Canvas, view: CellRange, frame: Ter
     e?.let { teardrop(it, start = false) }
 }
 
-/** Scrolls history when there is any; otherwise gives full-screen applications wheel or arrow events. */
-private fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines: Int, col: Int, row: Int) {
+/**
+ * Scrolls history when there is any; otherwise gives full-screen applications wheel or arrow
+ * events. Wheel events only while [report]: a wheel the application's mode does not take, or one
+ * Shift keeps the terminal's, scrolls here instead.
+ */
+internal fun scrollBy(session: TerminalSession, viewport: TerminalViewport, lines: Int, col: Int, row: Int, report: Boolean = true) {
     val em = session.emulator
-    if (em.mouseTracking != MouseTracking.NONE) {
-        val button = if (lines > 0) MouseButton.WHEEL_UP else MouseButton.WHEEL_DOWN
-        repeat(abs(lines)) { em.encodeMouse(button, col, row)?.let(session::send) }
-        return
+    if (report && em.mouseTracking != MouseTracking.NONE) {
+        val bytes = em.encodeMouse(if (lines > 0) MouseButton.WHEEL_UP else MouseButton.WHEEL_DOWN, col, row)
+        if (bytes != null) {
+            repeat(abs(lines)) { session.send(bytes) }
+            return
+        }
     }
     if (em.isAlternateScreen) {
         val key = if (lines > 0) TerminalKey.UP else TerminalKey.DOWN
