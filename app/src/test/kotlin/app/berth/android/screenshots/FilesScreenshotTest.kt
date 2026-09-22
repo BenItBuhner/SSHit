@@ -34,6 +34,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -877,7 +878,14 @@ class FilesScreenshotTest {
         assertEquals(session.id, filesTab.ride.value?.id)
         assertEquals(listOf(session.id, filesTab.id), graph.viewModel.tabs.value.map { it.id })
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 logs, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
-        // The strip scrolls the new tab into view and fades its edges as it goes; a frame taken mid-scroll has the tab's × under the fade.
+        // The tab is born named for its host ("Files · Berth test box") and renamed for the folder when the listing
+        // lands, and the strip decides once, off its first layout of the new tab, whether to scroll it into view: under
+        // the host's name the tab runs past the strip's end and the strip scrolls to its own end, where the rename then
+        // leaves it with the terminal's tab cut behind the leading fade; under the folder's name it fits and the strip
+        // stays at its start. Which of the two the frame gets is the sshd's timing, so the strip is put at its start,
+        // the rest it has when the rename lands first, before the picture; a no-op when it never scrolled. (Both
+        // rests are the strip's own: it never scrolls back when a renamed tab makes room, and is not asked to here.)
+        compose.onNode(hasContentDescription("Tabs, 2 open")).performScrollToIndex(0)
         compose.settle(500)
         capture("files-live-opened")
 
