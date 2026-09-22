@@ -71,6 +71,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -204,6 +205,7 @@ fun StageScreen(
     // Pass-through (spec C22, A46) is the Stage's across its tabs, until its chord or its pill ends it.
     var passThroughMode by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val haptics = rememberDeckHaptics()
     // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
     val panes = LocalPaneActions.current
@@ -349,6 +351,7 @@ fun StageScreen(
                         extra = if (tab is FilesTab) lentRows else null,
                         onFind = { tools.openSearch() },
                         onHistory = { tools.historyOpen = true },
+                        onShareScreen = { (tab as? TerminalSession)?.let { tools.shareScreen(context, it) } },
                         onSplit = onSplit,
                         onUnsplit = onUnsplit,
                         onGroups = onGroups,
@@ -503,8 +506,8 @@ private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
 typealias OverflowRows = @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
 
 /**
- * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Groups
- * (the overview, spec C8), Library, Close. A Files tab has no Deck and no connection of its own, so
+ * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Find, History, Share screen text,
+ * Session, Host settings, Tabs, Groups (the overview, spec C8), Library, Close. A Files tab has no Deck and no connection of its own, so
  * it offers Connect (no terminal on the host) or Reconnect (its terminal is down) and Terminal in
  * their place, and its body lends the folder rows as a leading section over an 8 dp break,
  * [extra]. Without a tab it offers New tab, Groups and Library.
@@ -521,6 +524,7 @@ private fun StageOverflow(
     extra: OverflowRows? = null,
     onFind: () -> Unit = {},
     onHistory: () -> Unit = {},
+    onShareScreen: () -> Unit = {},
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
     onGroups: () -> Unit = {},
@@ -563,6 +567,7 @@ private fun StageOverflow(
                         item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
                         item("Find", action = onFind)
                         item("History", action = onHistory)
+                        item("Share screen text", action = onShareScreen)
                     }
                 }
                 // Split (spec C3 overflow, landscape and larger): a second tab on this host beside this one; Unsplit while two are up.

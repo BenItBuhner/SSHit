@@ -31,9 +31,11 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onAllNodesWithText
@@ -803,4 +805,81 @@ class TerminalSurfaceScreenshotTest {
 
     @Test
     fun `nerd font icons on the stage and About at the 1,3 cap`() = nerdGlyphs(cap = true)
+
+    // ---- Overflow › Share screen text (spec C3) ---------------------------------------------------------------------
+
+    /** The text the share sheet was handed by the last Share, the chooser's own intent read open. */
+    private fun sharedText(): String {
+        compose.waitUntil(5_000) { shadowOf(application).peekNextStartedActivity() != null }
+        val chooser = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
+        val send = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("text/plain", send.type)
+        return send.getStringExtra(Intent.EXTRA_TEXT)!!
+    }
+
+    private fun shareFromOverflow() {
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Share screen text")
+        compose.onNodeWithText("Share screen text").performClick()
+        waitForNoText("Share screen text")
+    }
+
+    /**
+     * Share screen text in a terminal tab's Overflow, after History: the rows in view go to the
+     * system's share sheet as they read, with no selection made first; scrolled back, the history in
+     * view does; and over a blank screen the notice says there is nothing to share and no sheet opens.
+     */
+    private fun shareScreenText(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        val (session, tools) = stageLiveHomelab()
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Share screen text")
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals(
+            listOf("Detach", "Hide Deck", "Find", "History", "Share screen text", "Session", "Host settings", "Tabs", "Groups", "Library", "Close"),
+            rows,
+        )
+        settle(200)
+        capture("stage-overflow-share-screen-text$suffix")
+        compose.assertNoTextCut("the Stage's Overflow${if (cap) " at the interface's font cap" else ""}", within = isPopup())
+        compose.onNodeWithText("Share screen text").performClick()
+        val shown = sharedText()
+        assertEquals(tools.screenText(session.emulator), shown)
+        assertTrue(shown, shown.startsWith("ben@homelab:~/srv$ docker compose ps\n"))
+        assertTrue(shown, shown.lines().any { it == "gitea       gitea/gitea:1.22    Up 3 days     3000/tcp" })
+        assertEquals("the prompt's trailing blank is not shared", "ben@homelab:~/srv$", shown.lines().last())
+
+        // Output pushes the listing into history: the share is what is in view, and scrolled back to the top it is the listing again.
+        val screen = session.emulator.rows
+        session.emulator.write("\r\n" + (1..screen + 4).joinToString("\r\n") { "output $it" })
+        compose.waitUntil(5_000) { session.emulator.screenText().any { it == "output ${screen + 4}" } }
+        shareFromOverflow()
+        val now = sharedText()
+        assertEquals((5..screen + 4).joinToString("\n") { "output $it" }, now)
+        tools.viewport.scrollOffset = session.emulator.scrollbackSize
+        settle(200)
+        shareFromOverflow()
+        assertTrue(sharedText().startsWith("ben@homelab:~/srv$ docker compose ps\n"))
+
+        // A blank screen with no history: the notice, and no sheet.
+        tools.viewport.scrollOffset = 0
+        session.emulator.write("\u001b[3J\u001b[H\u001b[2J")
+        compose.waitUntil(5_000) { session.emulator.screenText().all { it.isBlank() } }
+        shareFromOverflow()
+        waitForText(StageTools.NOTHING_ON_SCREEN)
+        assertNull("nothing to share opens nothing", shadowOf(application).nextStartedActivity)
+        settle(100)
+        capture("stage-share-screen-text-nothing$suffix")
+        // The strip cuts its tab titles at the cap on purpose; the notice is whole at either size.
+        val cut = compose.cutTexts()
+        assertFalse("the notice is cut${if (cap) " at the interface's font cap" else ""}: $cut", StageTools.NOTHING_ON_SCREEN in cut)
+    }
+
+    @Test
+    fun `share screen text from the overflow hands the rows in view to the share sheet`() = shareScreenText(cap = false)
+
+    @Test
+    fun `share screen text from the overflow at the 1,3 cap`() = shareScreenText(cap = true)
 }
