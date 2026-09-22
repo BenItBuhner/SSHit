@@ -101,10 +101,13 @@ class ShiftedClock(start: Long) : () -> Long {
 /**
  * The app and device line of a report in a capture, the shape [CrashReporter.describeInstall]
  * gives it on a phone, fixed so the same frame comes out of the debug and the release variant
- * (the real one names the variant and its debuggability) and off this machine's JVM.
+ * (the real one names the variant and its debuggability) and off this machine's JVM. The version
+ * here is the fixture's, not the app's: it is not read from `gradle.properties`, and a release
+ * does not move it; it is kept at the version the frames were last read against (0.2.0, the
+ * wave-three handoff's) so a reader of a crash-sheet frame is not misled by a stale number.
  */
 val FIXED_INSTALL: String = """
-    App       Berth 0.1.0 (10000) · app.berth.android · release build
+    App       Berth 0.2.0 (20000) · app.berth.android · release build
     Mapping   none needed; the frames name their source file and line
     Device    Google Pixel 8a (akita) · Android 15 (API 35) · build AP4A.250105.002
     Hardware  arm64-v8a, armeabi-v7a, armeabi
