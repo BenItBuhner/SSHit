@@ -47,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -139,6 +140,8 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.ChordTable
 import app.berth.domain.model.DeckAppAction
+import app.berth.domain.model.Host
+import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
@@ -608,7 +611,11 @@ private fun StageBody(
     focusRequester: FocusRequester? = null,
 ) {
     val c = Berth.colors
-    val record by session.record.collectAsState()
+    // Only what the body shows of the record. The title, directory and command the shell reports are
+    // the strip's and the sheet's to show, and each lands as a new record; read whole, every one
+    // re-ran this body and, through it, every parameter the canvas and the Deck are handed.
+    val fullRecord = session.record.collectAsState()
+    val record by remember(fullRecord) { derivedStateOf { StageRecord(fullRecord.value) } }
     val failure by session.failure.collectAsState()
     val swipeGesture by vm.tabSwipeGesture.collectAsState()
     // The window's fit of the saved layout (spec C23, C4): a phone on its side gives the Deck one 40 dp row, a tablet its second row.
@@ -875,6 +882,11 @@ private fun StageBody(
     tools.pendingPaste?.let { p -> PastePreviewSheet(p, session, patterns, onDismiss = { tools.pendingPaste = null }) }
     tools.pendingLink?.let { l -> LinkOpenSheet(l, session, tools, patterns, onDismiss = { tools.pendingLink = null }) }
     if (tools.historyOpen) CommandHistorySheet(vm, session, onDismiss = { tools.historyOpen = false }, onNotice = { tools.notice = it })
+}
+
+/** The fields of a [SessionRecord] the Stage body reads. */
+private data class StageRecord(val state: SessionState, val hostId: String?, val hostSnapshot: Host, val workspaceId: String, val lastLiveAt: Long?) {
+    constructor(record: SessionRecord) : this(record.state, record.hostId, record.hostSnapshot, record.workspaceId, record.lastLiveAt)
 }
 
 /**

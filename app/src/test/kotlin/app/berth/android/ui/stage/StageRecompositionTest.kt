@@ -108,6 +108,20 @@ class StageRecompositionTest {
     }
 
     @Test
+    fun `a title the shell sets re-runs neither the Stage body, the terminal nor the Deck`() {
+        val live = stageHomelab()
+        repeat(TITLES) { i ->
+            write(live, "\u001b]2;homelab: step $i\u0007")
+            compose.waitForIdle()
+        }
+        assertEquals("the record took every title", "homelab: step ${TITLES - 1}", live.record.value.title)
+        report("stage title x$TITLES")
+        assertEquals("StageBody", 0, runs[STAGE_BODY])
+        assertEquals("TerminalCanvas", 0, runs[TERMINAL_CANVAS])
+        assertEquals("Deck", 0, runs[DECK])
+    }
+
+    @Test
     fun `an edit to another host re-runs the Stage body but not the terminal`() {
         stageHomelab()
         repeat(EDITS) { i ->
