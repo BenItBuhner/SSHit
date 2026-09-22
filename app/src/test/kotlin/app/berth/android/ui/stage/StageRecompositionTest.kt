@@ -194,16 +194,19 @@ class StageRecompositionTest {
         compose.waitForIdle()
         val emulators = a.emulator to b.emulator
         val grids = (a.emulator.cols to a.emulator.rows) to (b.emulator.cols to b.emulator.rows)
+        val versions = a.screenVersion.value to b.screenVersion.value
         runs.reset()
         repeat(SWITCHES) {
             tab = if (tab === a) b else a
             compose.waitForIdle()
         }
         report("switch x$SWITCHES")
+        println("RECOMPOSE switch x$SWITCHES: screen versions ${versions.first}/${versions.second} -> ${a.screenVersion.value}/${b.screenVersion.value}")
         assertEquals("one canvas composed a switch", SWITCHES, runs[TERMINAL_CANVAS])
         assertSame(emulators.first, a.emulator)
         assertSame(emulators.second, b.emulator)
         assertEquals("the grids stood: no resize, no reflow", grids, (a.emulator.cols to a.emulator.rows) to (b.emulator.cols to b.emulator.rows))
+        assertEquals("no screen change was forced on either emulator", versions, a.screenVersion.value to b.screenVersion.value)
     }
 
     /**
