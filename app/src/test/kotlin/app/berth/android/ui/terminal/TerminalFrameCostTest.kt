@@ -2,6 +2,8 @@ package app.berth.android.ui.terminal
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.remember
@@ -36,8 +38,9 @@ import java.lang.management.ManagementFactory
 
 /**
  * What a frame costs between the read loop and the pixels, measured rather than read off the code:
- * the bytes the JVM allocates to capture a screen, and how many captures a burst of output makes
- * when its chunks land between two frames.
+ * the bytes the JVM allocates to capture a screen and to draw it (a plain `ls` screen, and a screen
+ * of box drawing, block elements and a braille graph, which the renderer draws a cell at a time),
+ * and how many captures a burst of output makes when its chunks land between two frames.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -70,6 +73,24 @@ class TerminalFrameCostTest {
         val bytes = perFrame { frame.capture(emulator, 0) }
         println("FRAMECOST capture ${COLS}x$ROWS: $bytes B a capture")
         assertEquals("bytes a capture", 0L, bytes)
+    }
+
+    @Test
+    fun `drawing a screen of plain text or of box drawing allocates no more than a run buffer`() {
+        val paints = TerminalPaints(context, TerminalFont(), density = 2.625f, fontScale = 1f)
+        val plain = TerminalFrame().also { it.capture(screen(::plainRow), 0) }
+        val boxes = TerminalFrame().also { it.capture(screen(::boxRow), 0) }
+        val canvas = NullCanvas()
+        val w = COLS * paints.cellWidth
+        val h = ROWS * paints.cellHeight
+        fun draw(frame: TerminalFrame) = TerminalRenderer.draw(canvas, frame, paints, theme, boldAsBright = false, w, h)
+        val plainBytes = perFrame { draw(plain) }
+        val plainTexts = canvas.textsOf { draw(plain) }
+        val boxBytes = perFrame { draw(boxes) }
+        val boxTexts = canvas.textsOf { draw(boxes) }
+        println("FRAMECOST draw ${COLS}x$ROWS: plain $plainBytes B a frame ($plainTexts drawText), box drawing $boxBytes B a frame ($boxTexts drawText)")
+        assertTrue("plain: $plainBytes B a frame", plainBytes <= RUN_BUFFER_BYTES)
+        assertTrue("box drawing: $boxBytes B a frame", boxBytes <= RUN_BUFFER_BYTES)
     }
 
     @Test
@@ -137,6 +158,14 @@ class TerminalFrameCostTest {
     /** An `ls --color` line: directories bold blue, scripts green, the rest plain. */
     private fun plainRow(i: Int): String = "\u001b[01;34mdir-$i\u001b[0m  file-$i.txt  \u001b[32mscript-$i.sh\u001b[0m  notes-$i.md  \u001b[01;34mbuild-$i\u001b[0m  Makefile"
 
+    /** A tmux pane border between a `tree` listing and a meter of blocks, over a line of braille graph. */
+    private fun boxRow(i: Int): String {
+        val tree = (if (i % 5 == 4) "\u2502   \u2514\u2500\u2500 " else "\u2502   \u251C\u2500\u2500 ") + "file-$i.kt"
+        val fill = i % 20
+        val meter = "cpu [" + "\u2588".repeat(fill) + "\u2591".repeat(20 - fill) + "] " + "\u28C0\u28E4\u28F6\u28FF".repeat(4)
+        return "\u001b[32m" + tree.padEnd(39) + "\u001b[0m\u2502 \u001b[36m" + meter + "\u001b[0m"
+    }
+
     /** Every resumption queued on the test scheduler run, and a capture on the worker given time to come back. */
     private fun settle() {
         repeat(SETTLE_ROUNDS) {
@@ -185,6 +214,37 @@ class TerminalFrameCostTest {
         override fun onKey(key: TerminalKey, modifiers: Int) = Unit
     }
 
+    /** A canvas that counts the glyph runs it is handed and draws none of them, so the bytes measured are the renderer's own. */
+    private class NullCanvas : Canvas() {
+        private var texts = 0
+
+        fun textsOf(block: () -> Unit): Int {
+            texts = 0
+            block()
+            return texts
+        }
+
+        override fun drawRect(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) = Unit
+
+        override fun drawLine(startX: Float, startY: Float, stopX: Float, stopY: Float, paint: Paint) = Unit
+
+        override fun drawText(text: String, x: Float, y: Float, paint: Paint) {
+            texts++
+        }
+
+        override fun drawText(text: String, start: Int, end: Int, x: Float, y: Float, paint: Paint) {
+            texts++
+        }
+
+        override fun drawText(text: CharSequence, start: Int, end: Int, x: Float, y: Float, paint: Paint) {
+            texts++
+        }
+
+        override fun drawText(text: CharArray, index: Int, count: Int, x: Float, y: Float, paint: Paint) {
+            texts++
+        }
+    }
+
     private companion object {
         const val COLS = 80
         const val ROWS = 40
@@ -196,5 +256,8 @@ class TerminalFrameCostTest {
         const val SETTLE_SLEEP_MS = 5L
         const val QUIESCE_FRAMES = 50
         const val WORKER_TIMEOUT_NS = 5_000_000_000L
+
+        /** The draw's run buffer, grown to a row's width, and its glyph buffer: what a frame may allocate. */
+        const val RUN_BUFFER_BYTES = 1024L
     }
 }
