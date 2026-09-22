@@ -9,6 +9,7 @@ import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -53,6 +54,7 @@ import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.a11y.TerminalTag
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.LockWindow
@@ -99,6 +101,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -112,6 +115,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -139,7 +143,15 @@ class TerminalToolsScreenshotTest {
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
     private val context: Context get() = ApplicationProvider.getApplicationContext()
-    private val now = System.currentTimeMillis()
+    /**
+     * The seeded history's clock and the interface's, pinned: the History sheet prints each row's
+     * time and groups the rows by day against the wall clock, so commands seeded minutes before
+     * the run's own moment carried that run's minutes into every `terminal-history` frame, and the
+     * ones seeded twenty-six hours back sat under `Yesterday` or a date with the hour the run began.
+     */
+    private val now = FIXED_NOW
+    /** The zone the rows' times are formatted in, pinned with the clock so the digits are the same on every machine. */
+    private val zone = TimeZone.getDefault()
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
@@ -151,17 +163,25 @@ class TerminalToolsScreenshotTest {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(context)
+    }
+
+    @After
+    fun tearDown() {
+        TimeZone.setDefault(zone)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
     }
@@ -885,14 +905,16 @@ class TerminalToolsScreenshotTest {
         graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
         val tools = StageTools()
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) {
-                    val lock by graph.appLock.state.collectAsState()
-                    if (lock != LockState.UNKNOWN) Stage(session, tools)
-                    if (lock == LockState.LOCKED) LockCover()
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) {
+                        val lock by graph.appLock.state.collectAsState()
+                        if (lock != LockState.UNKNOWN) Stage(session, tools)
+                        if (lock == LockState.LOCKED) LockCover()
+                    }
                 }
+                LockWindow(graph.security, InterfaceTheme.DEFAULT)
             }
-            LockWindow(graph.security, InterfaceTheme.DEFAULT)
         }
         compose.waitUntil(5_000) { graph.appLock.state.value == LockState.UNLOCKED }
         awaitGrid(session)
@@ -970,7 +992,7 @@ class TerminalToolsScreenshotTest {
             graph.secrets.put(AuthResolver.passwordSecretId(box.id), sshPassword.toByteArray())
             graph.hosts.upsert(box)
         }
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("New tab")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("New tab").performClick()
         waitForText("Berth test box")
