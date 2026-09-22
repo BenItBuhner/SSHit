@@ -3,13 +3,20 @@ package app.berth.android.ui.stage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The bundled Public Suffix List private section behind the link sheet's parent-claim rule: that
  * it loads whole from the resource, and how a host finds the platform it stands under, the
  * host itself, a `*.` entry's extra label, the section's Unicode names by their punycode, the
- * path-hosted Google names beside the section, and the hosts the list does not know.
+ * path-hosted Google names beside the section, and the hosts the list does not know. Under
+ * Robolectric for the framework's `android.icu`, which [LinkLook.asciiHost] folds the section's
+ * Unicode names through.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class UserContentHostsTest {
     @Test
     fun `the bundled section loads whole`() {

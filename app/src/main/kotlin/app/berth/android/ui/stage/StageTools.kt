@@ -2,6 +2,7 @@ package app.berth.android.ui.stage
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.icu.text.IDNA
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -107,8 +108,6 @@ import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.ScrollbackSearch
 import kotlinx.coroutines.delay
-import java.net.IDN
-
 /**
  * The Stage's text tools for one terminal tab (spec C16, C17, C18): its selection, its search,
  * its viewport, the paste waiting for a look in the preview sheet, the passing notice pill and
@@ -799,22 +798,31 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
         fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.let(::asciiHost)
 
         /**
+         * The UTS #46 processor the browsers name a host by: non-transitional, so `ß` and a final
+         * `ς` stand and are encoded where IDNA2003 (`java.net.IDN`) mapped them to `ss` and `σ`,
+         * with the checks a resolver makes (bidi, the joiners' context, STD3's character set).
+         * Built once, on the first host outside ASCII; the instance is immutable.
+         */
+        private val UTS46: IDNA by lazy {
+            IDNA.getUTS46Instance(IDNA.NONTRANSITIONAL_TO_ASCII or IDNA.CHECK_BIDI or IDNA.CHECK_CONTEXTJ or IDNA.USE_STD3_RULES)
+        }
+
+        /**
          * [host] as the resolver reads it: lowercased, and a label outside ASCII as its punycode
-         * (`IDN.toASCII`), the way a browser writes a confusable host in its address bar, so
-         * `аpple.com` with a Cyrillic а is xn--pple-43d.com wherever the caption names it and a
-         * claim of `apple.com` over it is measured against that. A bracketed IPv6 literal is ASCII
-         * already; a host IDN refuses (a label too long, an empty one) stands as it is, lowercased.
-         * Java's IDN is IDNA2003, so `ß` maps to `ss` where a browser would keep it; the host still
-         * reads as ASCII, which is what the caption is for.
+         * under UTS #46, non-transitional ([UTS46]), the way the browser that opens the link writes
+         * a confusable host in its address bar, so `аpple.com` with a Cyrillic а is xn--pple-43d.com
+         * wherever the caption names it and a claim of `apple.com` over it is measured against that,
+         * and `straße.de` is xn--strae-oqa.de, the name the tap resolves, rather than strasse.de
+         * (IDNA2003's reading, and a name another registrant may hold). A bracketed IPv6 literal is
+         * ASCII already; a host UTS #46 refuses (a label too long, an empty one, a character no host
+         * may carry) stands as it is, lowercased.
          */
         fun asciiHost(host: String): String {
             val lower = host.lowercase()
             if (lower.all { it.code < 0x80 }) return lower
-            return try {
-                IDN.toASCII(lower, IDN.ALLOW_UNASSIGNED).lowercase()
-            } catch (e: IllegalArgumentException) {
-                lower
-            }
+            val info = IDNA.Info()
+            val ascii = UTS46.nameToASCII(lower, StringBuilder(), info)
+            return if (info.hasErrors()) lower else ascii.toString().lowercase()
         }
 
         /**

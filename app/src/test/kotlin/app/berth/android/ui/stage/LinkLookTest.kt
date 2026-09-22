@@ -6,6 +6,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The rule behind the link sheet (spec A60), pinned as a table: which scheme takes which posture
@@ -17,8 +20,11 @@ import org.junit.Test
  * are the site's and those that are a platform's over a stranger's page (the Public Suffix List's
  * private section, bundled); the punycode every host outside ASCII is named by, so a homograph
  * reads as itself; and the path a `file://` link hands to Copy path and Paste path, decoded and
- * quoted for the shell.
+ * quoted for the shell. Under Robolectric for the framework's `android.icu`, the UTS #46 processor
+ * the punycode comes from; the rule itself touches nothing else of Android's.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class LinkLookTest {
     private fun look(url: String, text: String) = LinkLook.of(LinkTap(url, text))
 
@@ -188,13 +194,19 @@ class LinkLookTest {
         assertWarns("https://evil.example/", "\u0430pple.com", "Shown as \u201C\u0430pple.com\u201D, but goes to evil.example")
         assertEquals("xn--pple-43d.com", LinkLook.hostClaim("\u0430pple.com", "https://evil.example/"))
         assertPlain("https://xn--mnchen-3ya.de/", "m\u00FCnchen.de", "Shown as \u201Cm\u00FCnchen.de\u201D, goes to xn--mnchen-3ya.de")
+        // UTS #46, non-transitional, as the browser that opens the tap reads it: ß stands and is encoded, so the
+        // caption names the host the tap resolves; IDNA2003 mapped it to ss and would have named strasse.de, a
+        // registrable name of its own, and read the two as one host.
+        assertEquals("xn--strae-oqa.de", LinkLook.asciiHost("stra\u00DFe.de"))
+        assertPlain("https://stra\u00DFe.de/", "stra\u00DFe.de", "Goes to xn--strae-oqa.de")
+        assertWarns("https://stra\u00DFe.de/", "strasse.de", "Shown as \u201Cstrasse.de\u201D, but goes to xn--strae-oqa.de")
         // The other postures name their hosts the same way.
         assertPlain("ssh://root@\u0430pple.com:2222/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: root@xn--pple-43d.com:2222", LinkLook.Posture.BERTH)
         assertPlain("ssh://root@[::1]:2222/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: root@[::1]:2222", LinkLook.Posture.BERTH)
         assertEquals("A file on xn--mnchen-3ya: /etc/hosts", look("file://m\u00FCnchen/etc/hosts", "hosts").caption)
         assertPlain("mailto:ben@\u0430pple.com", "ben@\u0430pple.com", "Mails ben@xn--pple-43d.com")
         assertWarns("mailto:ben@\u0430pple.com", "ben@apple.com", "Shown as \u201Cben@apple.com\u201D, but mails ben@xn--pple-43d.com")
-        // ASCII is only lowercased; a bracketed literal is left alone; a name IDN refuses stands as it is, lowercased.
+        // ASCII is only lowercased; a bracketed literal is left alone; a name UTS #46 refuses stands as it is, lowercased.
         assertEquals("github.com", LinkLook.asciiHost("GitHub.com"))
         assertEquals("[2001:db8::1]", LinkLook.asciiHost("[2001:DB8::1]"))
         val tooLong = "\u00C4".repeat(60) + ".com"
