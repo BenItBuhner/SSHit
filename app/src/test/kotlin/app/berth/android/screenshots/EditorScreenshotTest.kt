@@ -22,6 +22,7 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -34,6 +35,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -75,6 +77,7 @@ import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -91,7 +94,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The customisation screens, in Berth Dark on a Pixel-class phone, on in-memory storage: the
- * theme gallery, the terminal theme editor with its colour sheet and apply panel, the interface
+ * theme gallery with a pasted base16 import, Settings' About licences, the terminal theme editor
+ * with its colour sheet, apply panel and accent offer, the interface
  * editor, the Deck editor with the action catalogue, the presets sheet, the layout panel, a two-row
  * left-reach layout and a Termux import, plus the Stage picking up a workspace theme. Written to
  * `build/outputs/roborazzi`.
@@ -209,6 +213,55 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         capture("themes-font-scale-2x")
         compose.onNodeWithContentDescription("Back").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a pasted base16 scheme lands at the gallery's foot under its own name`() = pastedImport("")
+
+    @Test
+    fun `a pasted base16 scheme lands at the gallery's foot at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        pastedImport("-font-scale-2x")
+    }
+
+    /** The paste sheet names the formats it reads; a base16 scheme carries its name, which the note and the new last tile take. */
+    private fun pastedImport(suffix: String) {
+        themed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Paste theme text"))
+        compose.onNodeWithText("Paste theme text").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Berth JSON, iTerm2, Ghostty, Windows Terminal, base16 or Termux colours").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasSetTextAction()).performTextInput(TomorrowNightBase16)
+        compose.waitForIdle()
+        capture("themes-paste-sheet$suffix")
+
+        compose.onNodeWithText("Import").performClick()
+        awaitOnMain("the import to reach the view model") { graph.viewModel.terminalThemes.value.lastOrNull()?.name == "Tomorrow Night" }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Imported Tomorrow Night."))
+        scrollToEnd()
+        capture("themes-imported$suffix")
+        compose.onNode(hasContentDescription("Theme Tomorrow Night", substring = true)).assertIsDisplayed()
+        val imported = graph.viewModel.terminalThemes.value.last()
+        assertEquals(0x1D1F21, imported.background)
+        assertFalse(imported.builtIn)
+    }
+
+    @Test
+    fun `Settings About names the palettes' licences`() = aboutPanel("")
+
+    @Test
+    fun `Settings About names the palettes' licences at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        aboutPanel("-font-scale-2x")
+    }
+
+    private fun aboutPanel(suffix: String) {
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Terminal palettes:", substring = true).performScrollTo()
+        scrollToEnd()
+        capture("settings-about$suffix")
+        compose.onNodeWithText("Tokyo Night (folke) under Apache 2.0", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -715,3 +768,25 @@ class EditorScreenshotTest {
 }
 
 private const val AccentOffer = "Use this theme's accent for the interface"
+
+/** Chris Kempson's Tomorrow Night as the tinted-theming base16 repository ships it. */
+private val TomorrowNightBase16 = """
+    scheme: "Tomorrow Night"
+    author: "Chris Kempson (http://chriskempson.com)"
+    base00: "1d1f21"
+    base01: "282a2e"
+    base02: "373b41"
+    base03: "969896"
+    base04: "b4b7b4"
+    base05: "c5c8c6"
+    base06: "e0e0e0"
+    base07: "ffffff"
+    base08: "cc6666"
+    base09: "de935f"
+    base0A: "f0c674"
+    base0B: "b5bd68"
+    base0C: "8abeb7"
+    base0D: "81a2be"
+    base0E: "b294bb"
+    base0F: "a3685a"
+""".trimIndent()
