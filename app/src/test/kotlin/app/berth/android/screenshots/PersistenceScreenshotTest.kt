@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -37,6 +38,7 @@ import app.berth.android.session.AuthResolver
 import app.berth.android.ui.keys.GenerateKeySheet
 import app.berth.android.ui.keys.NewKeyPrefill
 import app.berth.android.ui.prompts.formatDate
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.settings.ExportBundleSheet
 import app.berth.android.ui.settings.IMPORT_DISCLOSURE
 import app.berth.android.ui.settings.ImportBundleSheet
@@ -82,6 +84,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -103,13 +106,23 @@ class PersistenceScreenshotTest {
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
-    private val now = System.currentTimeMillis()
+    /**
+     * The records' clock and the interface's, pinned: the History sheet groups its rows by day
+     * against the wall clock, and commands seeded fifty minutes before a run that crossed midnight
+     * straddled today and yesterday, an extra day label pushing the seventh row past the lazy
+     * list's fold (the gate on this branch, at 00:40 UTC). At 14:07 every seeded row falls where the
+     * frame expects it on every run.
+     */
+    private val now = FIXED_NOW
+    /** The zone the rows' times are formatted in, pinned with the clock so the digits are the same on every machine. */
+    private val zone = TimeZone.getDefault()
 
     @Before
     fun setUp() {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(ApplicationProvider.getApplicationContext())
@@ -119,14 +132,17 @@ class PersistenceScreenshotTest {
     fun tearDown() {
         graph.close()
         RuntimeEnvironment.setFontScale(1f)
+        TimeZone.setDefault(zone)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
     }
@@ -154,7 +170,7 @@ class PersistenceScreenshotTest {
      * is lazy, so at the cap only the newest rows are composed and the oldest is reached by scrolling.
      */
     private fun historyAcrossHosts(name: String, cap: Boolean) {
-        StageFixture.seed(graph)
+        StageFixture.seed(graph, now)
         runBlocking {
             val homelab = graph.hosts.get("homelab")!!
             val pihole = graph.hosts.get("pi-hole")!!
