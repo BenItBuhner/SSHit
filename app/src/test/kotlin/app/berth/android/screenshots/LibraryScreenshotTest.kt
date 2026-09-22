@@ -544,7 +544,6 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         compose.onNode(hasSetTextAction() and hasText("LANG=C.UTF-8")).assertExists()
         compose.onNodeWithText("One NAME=value per line; the server's AcceptEnv decides which arrive.").assertExists()
         compose.onNodeWithText("No buzz when the shell rings; off stage the tab still lights.").assertExists()
-        hasNoText("Agent forwarding")
         capture("host-editor-advanced")
         assertNoTextCut("the host editor's Advanced panel")
         // The helper keeps a field's gap to the label under it (nit 2): in the panel a field's text
@@ -583,7 +582,7 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertEquals(listOf("lab", "dns", "Home"), saved.tags)
         assertEquals(mapOf("LANG" to "C.UTF-8", "TERM_PROGRAM" to "berth"), saved.environment)
         assertTrue(saved.muteBell)
-        assertFalse("no agent-forwarding toggle: the protocol is deferred", saved.agentForwarding)
+        assertFalse("agent forwarding stays off unless it is switched on", saved.agentForwarding)
     }
 
     // ---- save as host (C11) -----------------------------------------------------------------------
