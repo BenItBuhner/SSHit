@@ -208,6 +208,17 @@ roborazzi {
     outputDir.set(layout.buildDirectory.dir("outputs/roborazzi"))
 }
 
+// The Compose compiler's reports, on request (-Pberth.composeReports): per composable whether it is restartable
+// and skippable and each parameter's stability (*-composables.txt), each class's inferred stability
+// (*-classes.txt) and the module's counts (*-module.json), in build/compose-reports. Off by default so an
+// ordinary build's compile tasks, and their cache keys, are the same as without it.
+if (providers.gradleProperty("berth.composeReports").isPresent) {
+    composeCompiler {
+        reportsDestination.set(layout.buildDirectory.dir("compose-reports"))
+        metricsDestination.set(layout.buildDirectory.dir("compose-reports"))
+    }
+}
+
 // verifyReleaseKeepRules: what the release APK itself says about the names the code reaches at runtime. The
 // Robolectric suite cannot run over the APK's DEX, so for the app module the proof of the rules in
 // proguard-rules.pro is the DEX's own class table (a class kept by name is defined there under it), R8's seeds
