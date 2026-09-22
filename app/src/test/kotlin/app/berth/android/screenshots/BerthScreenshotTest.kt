@@ -36,6 +36,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -118,6 +119,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -167,6 +169,7 @@ class BerthScreenshotTest {
     @After
     fun tearDown() {
         TimeZone.setDefault(zone)
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -251,6 +254,24 @@ class BerthScreenshotTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
         capture("tunnel-editor")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+    }
+
+    @Test
+    fun `tunnel editor at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the type, the host, the ports and Save, Cancel and Delete, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        seedTunnels()
+        val tunnel = graph.tunnels.items.value.first { it.id == "tn-web" }
+        themed {
+            TunnelsScreen(graph.viewModel, hostId = "prod-api", onBack = {})
+            TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tunnel-editor-font-scale-2x")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+        compose.assertNoTextCut("the tunnel editor at the interface's font cap", within = isDialog())
     }
 
     // ---- snippets -----------------------------------------------------------------------------
@@ -312,6 +333,23 @@ class BerthScreenshotTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Forget")).fetchSemanticsNodes().isNotEmpty() }
         capture("known-host-detail")
+        compose.assertSheetAtContentHeight("Copy public key", "Forget")
+    }
+
+    @Test
+    fun `known host detail at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the key's lines and Copy public key and Forget, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        val key = graph.knownHosts.items.value.first { it.id == "kh-3" }
+        themed {
+            KnownHostsScreen(graph.viewModel, onBack = {})
+            KnownHostSheet(graph.viewModel, key, hostNames = listOf("build box"), onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Forget")).fetchSemanticsNodes().isNotEmpty() }
+        capture("known-host-detail-font-scale-2x")
+        compose.assertSheetAtContentHeight("Copy public key", "Forget")
+        compose.assertNoTextCut("the known host sheet at the interface's font cap", within = isDialog())
     }
 
     @Test

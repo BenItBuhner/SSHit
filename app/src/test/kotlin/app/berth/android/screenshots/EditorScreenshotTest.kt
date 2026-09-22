@@ -58,12 +58,14 @@ import app.berth.domain.model.ThemeSlot
 import app.berth.domain.model.Workspace
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -101,6 +103,11 @@ class EditorScreenshotTest {
         outDir.mkdirs()
         graph = TestGraph(ApplicationProvider.getApplicationContext())
         seed()
+    }
+
+    @After
+    fun tearDown() {
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -222,6 +229,7 @@ class EditorScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim", substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.settle(500)
         capture("deck-editor-presets")
+        compose.assertSheetAtContentHeight("Preset Default", "Preset Vim", "Preset tmux", "Preset Minimal")
         dismissSheet()
 
         // The layout panel and the import, export and preset actions at the end of the page.
@@ -255,6 +263,19 @@ class EditorScreenshotTest {
         assertEquals(listOf("Row 1", "Row 2"), imported.layers.map { it.name })
         assertEquals(DeckAction.Key(DeckKeyCode.ESC), imported.layers[0].keys[0].tap)
         assertEquals(DeckAction.Modifier(DeckModifier.CTRL), imported.layers[1].keys[1].tap)
+    }
+
+    @Test
+    fun `presets sheet at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the four presets, each a Deck drawn whole, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        themed { DeckEditorScreen(graph.viewModel, onBack = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Slot 3").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Presets").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Preset Vim", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(500)
+        capture("deck-editor-presets-font-scale-2x")
+        compose.assertSheetAtContentHeight("Preset Default", "Preset Vim", "Preset tmux", "Preset Minimal")
     }
 
     /**

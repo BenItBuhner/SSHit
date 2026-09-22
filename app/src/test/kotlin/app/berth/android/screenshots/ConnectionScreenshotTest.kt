@@ -279,6 +279,7 @@ class ConnectionScreenshotTest {
         assertTrue("stock Android has no extra step", compose.onAllNodes(oemSectionLabel()).fetchSemanticsNodes().isEmpty())
         capture(name)
         compose.assertNoTextCut("the Background sheet")
+        compose.assertSheetAtContentHeight("Allow", "Battery settings")
 
         compose.onNodeWithText("Allow").performClick()
         val started = shadowOf(app).nextStartedActivity

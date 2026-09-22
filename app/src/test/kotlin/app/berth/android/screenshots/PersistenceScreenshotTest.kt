@@ -272,6 +272,7 @@ class PersistenceScreenshotTest {
         compose.onNodeWithText("Export").assertIsNotEnabled()
         capture(name)
         compose.assertNoTextCut("the export sheet")
+        compose.assertSheetAtContentHeight("Export")
 
         // Matching passphrases arm the button.
         fields[1].performTextClearance()

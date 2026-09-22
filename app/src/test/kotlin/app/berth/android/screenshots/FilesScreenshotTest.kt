@@ -21,6 +21,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.longClick
@@ -267,12 +268,29 @@ class FilesScreenshotTest {
         compose.onNodeWithContentDescription("Edit path").performClick()
         waitForText("Go to folder")
         capture("files-path-editor")
+        compose.assertSheetAtContentHeight("Go", "Cancel")
 
         compose.onNode(hasSetTextAction()).performTextReplacement("/var/log")
         compose.onNodeWithText("Go").performClick()
         compose.waitUntil(10_000) { b.state.value.path == "/var/log" && !b.state.value.loading }
         waitForText("Empty folder.")
         capture("files-empty-folder")
+    }
+
+    @Test
+    fun `path editor at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): open at its content's height, Go and Cancel whole in the window.
+        RuntimeEnvironment.setFontScale(2f)
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo/projects")
+        themed { Pane(b) }
+        waitForText("berth")
+        compose.onNodeWithContentDescription("Edit path").performClick()
+        waitForText("Go to folder")
+        compose.settle(300)
+        capture("files-path-editor-font-scale-2x")
+        compose.assertSheetAtContentHeight("Go", "Cancel")
+        compose.assertNoTextCut("the path editor at the interface's font cap", within = isDialog())
     }
 
     @Test
@@ -308,6 +326,7 @@ class FilesScreenshotTest {
         // Two files at 644 and a folder at 755 do not agree, so the field waits for an explicit mode.
         waitForText("modes differ", substring = true)
         capture("files-chmod")
+        compose.assertSheetAtContentHeight("Apply", "Cancel")
         compose.onNodeWithText("Cancel").performClick()
         waitForNoText("Permissions")
 
@@ -336,6 +355,27 @@ class FilesScreenshotTest {
         waitForNoText("deploy.sh")
         capture("files-deleted-notice")
         assertTrue("/home/demo/deploy.sh" !in fs.nodes)
+    }
+
+    @Test
+    fun `permissions sheet at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the mode field, the nine bits and Apply and Cancel, whole in the window.
+        RuntimeEnvironment.setFontScale(2f)
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        themed { Pane(b) }
+        waitForText("deploy.sh")
+        compose.onNodeWithContentDescription("Select deploy.sh").performClick()
+        compose.onNodeWithContentDescription("Select notes.txt").performClick()
+        compose.onNodeWithContentDescription("Select backups").performClick()
+        waitForText("3 selected")
+        compose.onNodeWithText("Mode").performClick()
+        waitForText("Permissions")
+        waitForText("modes differ", substring = true)
+        compose.settle(300)
+        capture("files-chmod-font-scale-2x")
+        compose.assertSheetAtContentHeight("Apply", "Cancel")
+        compose.assertNoTextCut("the permissions sheet at the interface's font cap", within = isDialog())
     }
 
     @Test
@@ -404,18 +444,22 @@ class FilesScreenshotTest {
         compose.onNodeWithContentDescription("Edit path").assertExists()
     }
 
-    @Test
-    fun `transfers strip and sheet`() {
-        val fs = FakeSftpFileSystem.demoTree(now)
-        val b = browser(fs, "/home/demo")
+    /** One of each state: a download running, an upload queued, a download done a minute ago and an upload the server refused. */
+    private fun fourTransfers(): List<Transfer> {
         val mb = 1024L * 1024
-        val transfers = listOf(
+        return listOf(
             Transfer("t1", "s-demo", "prod-web", TransferKind.DOWNLOAD, "site-backup-2026-09-18.tar.gz", "/home/demo/site-backup-2026-09-18.tar.gz", total = 348 * mb, bytes = 131 * mb, bytesPerSecond = 4.2 * mb, state = TransferState.RUNNING, startedAt = now - 31_000),
             Transfer("t2", "s-demo", "prod-web", TransferKind.UPLOAD, "berth-arm64.apk", "/home/demo/berth-arm64.apk", total = 48 * mb, state = TransferState.QUEUED),
             Transfer("t3", "s-demo", "prod-web", TransferKind.DOWNLOAD, "notes.txt", "/home/demo/notes.txt", total = 120, bytes = 120, state = TransferState.DONE, startedAt = now - 61_000, finishedAt = now - 60_000),
             Transfer("t4", "s-demo", "build box", TransferKind.UPLOAD, "config.yaml", "/etc/app/config.yaml", total = 2048, bytes = 0, state = TransferState.FAILED, error = "The server refused access to /etc/app/config.yaml.", startedAt = now - 120_000, finishedAt = now - 119_000),
         )
-        themed { Pane(b, transfers = transfers) }
+    }
+
+    @Test
+    fun `transfers strip and sheet`() {
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        themed { Pane(b, transfers = fourTransfers()) }
         waitForText("deploy.sh")
         waitForText("131 MB of 348 MB \u00B7 4.2 MB/s \u00B7 1 more")
         capture("files-transfer-strip")
@@ -423,6 +467,24 @@ class FilesScreenshotTest {
         waitForText("Clear finished")
         waitForText("1 failed", substring = true)
         capture("files-transfers-sheet")
+        compose.assertSheetAtContentHeight("Clear finished")
+    }
+
+    @Test
+    fun `transfers sheet at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): four transfers' rows and Clear finished, whole in the window.
+        RuntimeEnvironment.setFontScale(2f)
+        val fs = FakeSftpFileSystem.demoTree(now)
+        val b = browser(fs, "/home/demo")
+        themed { Pane(b, transfers = fourTransfers()) }
+        waitForText("deploy.sh")
+        compose.onNodeWithContentDescription("Transfers, 2 running").performClick()
+        waitForText("Clear finished")
+        waitForText("1 failed", substring = true)
+        compose.settle(300)
+        capture("files-transfers-sheet-font-scale-2x")
+        compose.assertSheetAtContentHeight("Clear finished")
+        compose.assertNoTextCut("the transfers sheet at the interface's font cap", within = isDialog())
     }
 
     @Test

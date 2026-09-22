@@ -70,6 +70,7 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.components.linesAtFontScale
 import app.berth.android.ui.stage.MonoBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -512,7 +513,9 @@ fun TransferSheet(
 
 /**
  * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
- * one Caption line naming the host, then bytes and speed. The glyph carries the direction. A folder
+ * one Caption line naming the host, then bytes and speed; the name's line and the Caption's are the
+ * design's at 1× and grow with the interface's font scale ([linesAtFontScale]), so a name or a
+ * speed that fits at 1× is not cut at the cap. The glyph carries the direction. A folder
  * carries the aggregate on that line, given two like a failure's reason, and a chevron; [expanded]
  * it adds the file moving now with its own line, the last few failures while it runs, and once over
  * everything that failed with Retry failed. A folder that copied most of itself and lost a few
@@ -554,7 +557,7 @@ fun TransferRow(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = linesAtFontScale(1), overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
                     Text(transferTrailing(t), style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text2)
                     if (folder != null) {
@@ -572,7 +575,7 @@ fun TransferRow(
                     transferCaptionStyled(t),
                     style = BerthType.caption,
                     color = if (failed) c.danger else c.text3,
-                    maxLines = if (failed || folder != null || t.note != null) 2 else 1,
+                    maxLines = linesAtFontScale(if (failed || folder != null || t.note != null) 2 else 1),
                     overflow = TextOverflow.Ellipsis,
                 )
             }

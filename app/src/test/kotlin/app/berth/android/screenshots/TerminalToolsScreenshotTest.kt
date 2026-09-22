@@ -31,6 +31,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -108,6 +109,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -172,6 +174,7 @@ class TerminalToolsScreenshotTest {
     @After
     fun tearDown() {
         TimeZone.setDefault(zone)
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -847,6 +850,7 @@ class TerminalToolsScreenshotTest {
         waitForText("docker compose ps")
         settle(300)
         capture("terminal-history")
+        compose.assertSheetAtContentHeight("All hosts", "Command docker compose ps")
 
         // A long-press on a detached tab's entry: Copy, Save as snippet and Delete; Run and Paste need the session Live.
         compose.onNode(hasContentDescription("Command docker compose ps")).performSemanticsAction(SemanticsActions.OnLongClick)
@@ -881,6 +885,32 @@ class TerminalToolsScreenshotTest {
         compose.onAllNodes(hasSetTextAction() and hasText(command)).assertCountEquals(2)
         settle(300)
         capture("terminal-history-snippet")
+    }
+
+    @Test
+    fun `history sheet at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the title, the scope chip, the filter and the rows, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedHomelab(withHistory = true)
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        val tools = StageTools()
+        themed { Stage(session, tools) }
+        // The terminal's size is its own at the system's 2× (its font does not follow the scale), so the grid is
+        // not held against paints at that scale as awaitGrid does; the canvas up with its columns is what the sheet needs.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TerminalTag)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { session.emulator.cols >= 2 }
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.size == HISTORY.size }
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("History").performClick()
+        compose.waitUntil(5_000) { tools.historyOpen }
+        waitForText("${HISTORY.size} commands", substring = true)
+        waitForText("docker compose ps")
+        settle(300)
+        capture("terminal-history-font-scale-2x")
+        compose.assertSheetAtContentHeight("All hosts", "Command docker compose ps")
+        compose.assertNoTextCut("the History sheet at the interface's font cap", within = isDialog())
     }
 
     // ---- the app lock over the tools (spec C20) -------------------------------------------------------------
