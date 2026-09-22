@@ -111,6 +111,21 @@ object TerminalFonts {
 
     fun bundled(name: String): BundledFamily? = bundled.firstOrNull { it.name == name }
 
+    /**
+     * Opens [font]'s faces into [TypefaceCache] and measures once with each, off the UI thread, so
+     * the first terminal drawn after a launch builds its paints from faces already read rather
+     * than reading them inside a frame.
+     */
+    fun warm(context: Context, font: TerminalFont): List<Typeface> {
+        val faces = TypefaceCache.forFamily(context, font.resolvedFamily(context), font.nerdFontFallback)
+        val paint = Paint()
+        faces.forEach {
+            paint.typeface = it
+            paint.measureText("M")
+        }
+        return faces
+    }
+
     fun importedDir(context: Context): File = File(context.filesDir, "fonts")
 
     /**

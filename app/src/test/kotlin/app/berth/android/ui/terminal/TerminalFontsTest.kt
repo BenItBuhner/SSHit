@@ -17,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +26,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.nio.ByteBuffer
+import kotlin.concurrent.thread
 
 /**
  * The font families (spec C20, Fonts): each bundled family loads as its own faces, not the system's
@@ -114,6 +116,15 @@ class TerminalFontsTest {
         assertNotEquals("Hack's italic is synthesised from its regular", ink(hack[0]), ink(hack[2]))
         assertTrue(hack[2].isItalic)
         assertTrue(hack[3].isBold && hack[3].isItalic)
+    }
+
+    @Test
+    fun `a font warmed on another thread is the one the canvas's paints are built from`() {
+        val font = TerminalFont(family = "Fira Code", nerdFontFallback = false)
+        var warmed: List<Typeface>? = null
+        thread { warmed = TerminalFonts.warm(context, font) }.join()
+        assertSame(warmed, TypefaceCache.forFamily(context, "Fira Code", nerdFallback = false))
+        assertSame(warmed!![0], TerminalPaints(context, font, 2.625f, 1f).regular.typeface)
     }
 
     @Test
