@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Switch
@@ -355,10 +357,13 @@ fun TunnelEditorSheet(vm: AppViewModel, hostId: String?, existing: Tunnel?, onDi
     val canSave = touched && problem == null
 
     BerthSheet(onDismiss = onDismiss) {
+        // The keyboard's padding outside the scroll, so the field in focus is what the keyboard pushes up and the
+        // column scrolls in what the keyboard leaves (A9: six fields and three buttons stand taller than that).
         Column(
             Modifier
                 .fillMaxWidth()
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

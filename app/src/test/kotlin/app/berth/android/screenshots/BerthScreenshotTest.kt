@@ -274,6 +274,32 @@ class BerthScreenshotTest {
         compose.assertNoTextCut("the tunnel editor at the interface's font cap", within = isDialog())
     }
 
+    /**
+     * The sheet in a window shorter than its content, which is a phone's with the keyboard up (this
+     * device's 914 dp less a keyboard's 300 is 614, which the sheet at the cap overruns; a 720 dp
+     * phone at 1× overruns what its keyboard leaves by 120): a compact-height window in the layout's
+     * terms, compact in width still, so the sheet is the bottom sheet a phone gets. The sheet stands
+     * at the window's top and its column scrolls, so Save, Cancel and Delete are one scroll away
+     * and nothing is measured to no height: the case BerthSheet's KDoc states for every control
+     * sheet's column, and the one the half stop and a plain column both failed (#22 nit 1).
+     */
+    @Test
+    @Config(qualifiers = "w411dp-h460dp-420dpi")
+    fun `tunnel editor in a compact-height window at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        seedTunnels()
+        val tunnel = graph.tunnels.items.value.first { it.id == "tn-web" }
+        themed {
+            TunnelsScreen(graph.viewModel, hostId = "prod-api", onBack = {})
+            TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tunnel-editor-compact-height-font-scale-2x")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+        compose.assertNoTextCut("the tunnel editor in a compact-height window at the interface's font cap", within = isDialog())
+    }
+
     // ---- snippets -----------------------------------------------------------------------------
 
     @Test
