@@ -104,6 +104,18 @@ data class TerminalTheme(
         const val GRUVBOX_DARK_ID = "gruvbox-dark"
         const val NORD_ID = "nord"
         const val SOLARIZED_DARK_ID = "solarized-dark"
+        const val CATPPUCCIN_LATTE_ID = "catppuccin-latte"
+        const val GRUVBOX_LIGHT_ID = "gruvbox-light"
+        const val SOLARIZED_LIGHT_ID = "solarized-light"
+        const val ROSE_PINE_ID = "rose-pine"
+        const val TOKYO_NIGHT_ID = "tokyo-night"
+        const val KANAGAWA_ID = "kanagawa"
+        const val EVERFOREST_ID = "everforest"
+        const val DRACULA_ID = "dracula"
+        const val ONE_DARK_ID = "one-dark"
+        const val AYU_ID = "ayu"
+        const val MODUS_VIVENDI_ID = "modus-vivendi"
+        const val MODUS_OPERANDI_ID = "modus-operandi"
 
         val BERTH_DARK = TerminalTheme(
             id = BERTH_DARK_ID,
@@ -207,8 +219,223 @@ data class TerminalTheme(
             builtIn = true,
         )
 
-        /** Stock themes: Berth's own pair plus a small curated set. They cannot be deleted, only duplicated. */
-        val builtIns: List<TerminalTheme> = listOf(BERTH_DARK, BERTH_LIGHT, CATPPUCCIN_MOCHA, GRUVBOX_DARK, NORD, SOLARIZED_DARK)
+        // The palettes below are each project's own terminal mapping. Where upstream swaps the text colour
+        // under a selection, the selection is the project's editor selection instead, since Berth keeps the
+        // glyph's own colour there.
+
+        val CATPPUCCIN_LATTE = TerminalTheme(
+            id = CATPPUCCIN_LATTE_ID,
+            name = "Catppuccin Latte",
+            ansi = listOf(
+                0x5C5F77, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xACB0BE,
+                0x6C6F85, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xBCC0CC,
+            ),
+            background = 0xEFF1F5,
+            foreground = 0x4C4F69,
+            cursor = 0xDC8A78,
+            cursorText = 0xEFF1F5,
+            selection = 0xD8DAE1,
+            links = 0x1E66F5,
+            suggestedAccent = 0x8839EF,
+            builtIn = true,
+        )
+
+        val GRUVBOX_LIGHT = TerminalTheme(
+            id = GRUVBOX_LIGHT_ID,
+            name = "Gruvbox Light",
+            ansi = listOf(
+                0xFBF1C7, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0x7C6F64,
+                0x928374, 0x9D0006, 0x79740E, 0xB57614, 0x076678, 0x8F3F71, 0x427B58, 0x3C3836,
+            ),
+            background = 0xFBF1C7,
+            foreground = 0x3C3836,
+            cursor = 0x3C3836,
+            cursorText = 0xFBF1C7,
+            selection = 0xD5C4A1,
+            links = 0x076678,
+            suggestedAccent = 0xD65D0E,
+            builtIn = true,
+        )
+
+        val SOLARIZED_LIGHT = TerminalTheme(
+            id = SOLARIZED_LIGHT_ID,
+            name = "Solarized Light",
+            ansi = SOLARIZED_DARK.ansi,
+            background = 0xFDF6E3,
+            foreground = 0x657B83,
+            cursor = 0x657B83,
+            cursorText = 0xFDF6E3,
+            selection = 0xEEE8D5,
+            links = 0x268BD2,
+            suggestedAccent = 0xB58900,
+            builtIn = true,
+        )
+
+        val ROSE_PINE = TerminalTheme(
+            id = ROSE_PINE_ID,
+            name = "Ros\u00E9 Pine",
+            ansi = listOf(
+                0x26233A, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+                0x6E6A86, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+            ),
+            background = 0x191724,
+            foreground = 0xE0DEF4,
+            cursor = 0xE0DEF4,
+            cursorText = 0x191724,
+            selection = 0x403D52,
+            links = 0x9CCFD8,
+            suggestedAccent = 0xEBBCBA,
+            builtIn = true,
+        )
+
+        val TOKYO_NIGHT = TerminalTheme(
+            id = TOKYO_NIGHT_ID,
+            name = "Tokyo Night",
+            ansi = listOf(
+                0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
+                0x414868, 0xFF899D, 0x9FE044, 0xFABA4A, 0x8DB0FF, 0xC7A9FF, 0xA4DAFF, 0xC0CAF5,
+            ),
+            background = 0x1A1B26,
+            foreground = 0xC0CAF5,
+            cursor = 0xC0CAF5,
+            cursorText = 0x1A1B26,
+            selection = 0x283457,
+            links = 0x7AA2F7,
+            suggestedAccent = 0x7AA2F7,
+            builtIn = true,
+        )
+
+        val KANAGAWA = TerminalTheme(
+            id = KANAGAWA_ID,
+            name = "Kanagawa",
+            ansi = listOf(
+                0x16161D, 0xC34043, 0x76946A, 0xC0A36E, 0x7E9CD8, 0x957FB8, 0x6A9589, 0xC8C093,
+                0x727169, 0xE82424, 0x98BB6C, 0xE6C384, 0x7FB4CA, 0x938AA9, 0x7AA89F, 0xDCD7BA,
+            ),
+            background = 0x1F1F28,
+            foreground = 0xDCD7BA,
+            cursor = 0xC8C093,
+            cursorText = 0x1F1F28,
+            selection = 0x2D4F67,
+            links = 0x7E9CD8,
+            suggestedAccent = 0x7E9CD8,
+            builtIn = true,
+        )
+
+        val EVERFOREST = TerminalTheme(
+            id = EVERFOREST_ID,
+            name = "Everforest",
+            ansi = listOf(
+                // Upstream repeats bg3 as bright black, which leaves autosuggestions and dimmed text at about 1.6:1
+                // on the background; bright black is its comment grey (grey1) instead.
+                0x475258, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+                0x859289, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+            ),
+            background = 0x2D353B,
+            foreground = 0xD3C6AA,
+            cursor = 0xD3C6AA,
+            cursorText = 0x2D353B,
+            selection = 0x543A48,
+            links = 0x7FBBB3,
+            suggestedAccent = 0xA7C080,
+            builtIn = true,
+        )
+
+        val DRACULA = TerminalTheme(
+            id = DRACULA_ID,
+            name = "Dracula",
+            ansi = listOf(
+                0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2,
+                0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF,
+            ),
+            background = 0x282A36,
+            foreground = 0xF8F8F2,
+            cursor = 0xF8F8F2,
+            cursorText = 0x282A36,
+            selection = 0x44475A,
+            links = 0x8BE9FD,
+            suggestedAccent = 0xBD93F9,
+            builtIn = true,
+        )
+
+        val ONE_DARK = TerminalTheme(
+            id = ONE_DARK_ID,
+            name = "One Dark",
+            ansi = listOf(
+                0x2C323C, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0x5C6370,
+                0x3E4452, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
+            ),
+            background = 0x282C34,
+            foreground = 0xABB2BF,
+            cursor = 0x61AFEF,
+            cursorText = 0x282C34,
+            selection = 0x3E4452,
+            links = 0x61AFEF,
+            suggestedAccent = 0x61AFEF,
+            builtIn = true,
+        )
+
+        val AYU = TerminalTheme(
+            id = AYU_ID,
+            name = "Ayu",
+            ansi = listOf(
+                0x11151C, 0xEA6C73, 0x7FD962, 0xF9AF4F, 0x53BDFA, 0xCDA1FA, 0x90E1C6, 0xC7C7C7,
+                0x686868, 0xF07178, 0xAAD94C, 0xFFB454, 0x59C2FF, 0xD2A6FF, 0x95E6CB, 0xFFFFFF,
+            ),
+            background = 0x0B0E14,
+            foreground = 0xBFBDB6,
+            cursor = 0xE6B450,
+            cursorText = 0x0B0E14,
+            selection = 0x152D4F,
+            links = 0x59C2FF,
+            suggestedAccent = 0xE6B450,
+            builtIn = true,
+        )
+
+        val MODUS_VIVENDI = TerminalTheme(
+            id = MODUS_VIVENDI_ID,
+            name = "Modus Vivendi",
+            ansi = listOf(
+                0x000000, 0xFF5F59, 0x44BC44, 0xD0BC00, 0x2FAFFF, 0xFEACD0, 0x00D3D0, 0xA6A6A6,
+                0x595959, 0xFF6B55, 0x00C06F, 0xFEC43F, 0x79A8FF, 0xB6A0FF, 0x6AE4B9, 0xFFFFFF,
+            ),
+            background = 0x000000,
+            foreground = 0xFFFFFF,
+            cursor = 0xFFFFFF,
+            cursorText = 0x000000,
+            selection = 0x5A5A5A,
+            links = 0x79A8FF,
+            suggestedAccent = 0x79A8FF,
+            builtIn = true,
+        )
+
+        val MODUS_OPERANDI = TerminalTheme(
+            id = MODUS_OPERANDI_ID,
+            name = "Modus Operandi",
+            ansi = listOf(
+                0x000000, 0xA60000, 0x006800, 0x6F5500, 0x0031A9, 0x721045, 0x005E8B, 0xA6A6A6,
+                0x595959, 0x972500, 0x00663F, 0x884900, 0x3548CF, 0x531AB6, 0x005F5F, 0xFFFFFF,
+            ),
+            background = 0xFFFFFF,
+            foreground = 0x000000,
+            cursor = 0x000000,
+            cursorText = 0xFFFFFF,
+            selection = 0xBDBDBD,
+            links = 0x3548CF,
+            suggestedAccent = 0x3548CF,
+            builtIn = true,
+        )
+
+        /** Stock themes, in the gallery's order (spec A10). They cannot be deleted, only duplicated. */
+        val builtIns: List<TerminalTheme> = listOf(
+            BERTH_DARK, BERTH_LIGHT,
+            CATPPUCCIN_MOCHA, CATPPUCCIN_LATTE,
+            GRUVBOX_DARK, GRUVBOX_LIGHT,
+            NORD,
+            SOLARIZED_DARK, SOLARIZED_LIGHT,
+            ROSE_PINE, TOKYO_NIGHT, KANAGAWA, EVERFOREST, DRACULA, ONE_DARK, AYU,
+            MODUS_VIVENDI, MODUS_OPERANDI,
+        )
     }
 }
 

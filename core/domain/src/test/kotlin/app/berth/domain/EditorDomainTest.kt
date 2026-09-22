@@ -91,6 +91,27 @@ class EditorDomainTest {
     }
 
     @Test
+    fun `the gallery ships the spec's eighteen stock themes in its order`() {
+        assertEquals(
+            listOf(
+                "Berth Dark", "Berth Light", "Catppuccin Mocha", "Catppuccin Latte", "Gruvbox Dark", "Gruvbox Light", "Nord",
+                "Solarized Dark", "Solarized Light", "Ros\u00E9 Pine", "Tokyo Night", "Kanagawa", "Everforest", "Dracula",
+                "One Dark", "Ayu", "Modus Vivendi", "Modus Operandi",
+            ),
+            TerminalTheme.builtIns.map { it.name },
+        )
+        val light = setOf(
+            TerminalTheme.BERTH_LIGHT_ID, TerminalTheme.CATPPUCCIN_LATTE_ID, TerminalTheme.GRUVBOX_LIGHT_ID,
+            TerminalTheme.SOLARIZED_LIGHT_ID, TerminalTheme.MODUS_OPERANDI_ID,
+        )
+        for (t in TerminalTheme.builtIns) {
+            assertEquals(t.id !in light, t.isDark, "${t.id} is ${if (t.id in light) "light" else "dark"}")
+            assertNotNull(t.suggestedAccent, "${t.id} suggests an accent")
+            assertTrue(t.selection != t.background, "${t.id} selection shows")
+        }
+    }
+
+    @Test
     fun `hsl round-trips within a channel step`() {
         for (rgb in listOf(0x000000, 0xFFFFFF, 0xE0A458, 0x121110, 0x7A9CD6, 0x8FB573, 0x0000FF, 0x123456)) {
             val hsl = ColorMath.toHsl(rgb)
