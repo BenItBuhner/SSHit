@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -35,6 +36,7 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -54,6 +56,7 @@ import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.importer.ImportHostsSheet
@@ -109,12 +112,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -123,6 +128,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.URL
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -154,17 +160,26 @@ class BerthScreenshotTest {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(ApplicationProvider.getApplicationContext())
+    }
+
+    @After
+    fun tearDown() {
+        TimeZone.setDefault(zone)
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
     }
@@ -239,6 +254,50 @@ class BerthScreenshotTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
         capture("tunnel-editor")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+    }
+
+    @Test
+    fun `tunnel editor at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the type, the host, the ports and Save, Cancel and Delete, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        seedTunnels()
+        val tunnel = graph.tunnels.items.value.first { it.id == "tn-web" }
+        themed {
+            TunnelsScreen(graph.viewModel, hostId = "prod-api", onBack = {})
+            TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tunnel-editor-font-scale-2x")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+        compose.assertNoTextCut("the tunnel editor at the interface's font cap", within = isDialog())
+    }
+
+    /**
+     * The sheet in a window shorter than its content, which is a phone's with the keyboard up (this
+     * device's 914 dp less a keyboard's 300 is 614, which the sheet at the cap overruns; a 720 dp
+     * phone at 1× overruns what its keyboard leaves by 120): a compact-height window in the layout's
+     * terms, compact in width still, so the sheet is the bottom sheet a phone gets. The sheet stands
+     * at the window's top and its column scrolls, so Save, Cancel and Delete are one scroll away
+     * and nothing is measured to no height: the case BerthSheet's KDoc states for every control
+     * sheet's column, and the one the half stop and a plain column both failed (#22 nit 1).
+     */
+    @Test
+    @Config(qualifiers = "w411dp-h460dp-420dpi")
+    fun `tunnel editor in a compact-height window at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        seedTunnels()
+        val tunnel = graph.tunnels.items.value.first { it.id == "tn-web" }
+        themed {
+            TunnelsScreen(graph.viewModel, hostId = "prod-api", onBack = {})
+            TunnelEditorSheet(graph.viewModel, hostId = "prod-api", existing = tunnel, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Edit tunnel")).fetchSemanticsNodes().isNotEmpty() }
+        capture("tunnel-editor-compact-height-font-scale-2x")
+        compose.assertSheetAtContentHeight("Save", "Cancel", "Delete")
+        compose.assertNoTextCut("the tunnel editor in a compact-height window at the interface's font cap", within = isDialog())
     }
 
     // ---- snippets -----------------------------------------------------------------------------
@@ -300,6 +359,23 @@ class BerthScreenshotTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Forget")).fetchSemanticsNodes().isNotEmpty() }
         capture("known-host-detail")
+        compose.assertSheetAtContentHeight("Copy public key", "Forget")
+    }
+
+    @Test
+    fun `known host detail at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the key's lines and Copy public key and Forget, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedLibrary()
+        val key = graph.knownHosts.items.value.first { it.id == "kh-3" }
+        themed {
+            KnownHostsScreen(graph.viewModel, onBack = {})
+            KnownHostSheet(graph.viewModel, key, hostNames = listOf("build box"), onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Forget")).fetchSemanticsNodes().isNotEmpty() }
+        capture("known-host-detail-font-scale-2x")
+        compose.assertSheetAtContentHeight("Copy public key", "Forget")
+        compose.assertNoTextCut("the known host sheet at the interface's font cap", within = isDialog())
     }
 
     @Test
@@ -598,7 +674,7 @@ class BerthScreenshotTest {
         (graph.prompts.current.value as Prompt.TrustHostKey).trust()
         compose.waitUntil(5_000) { graph.prompts.current.value == null }
 
-        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", request.publicKeyBase64, "SHA256:2b0dNsF7TTa7iNZbFqWlV1nSTR3a6i2E1p1bY8ahbVQ", System.currentTimeMillis() - TimeUnit.DAYS.toMillis(40), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
+        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", request.publicKeyBase64, "SHA256:2b0dNsF7TTa7iNZbFqWlV1nSTR3a6i2E1p1bY8ahbVQ", now - TimeUnit.DAYS.toMillis(40), now - TimeUnit.DAYS.toMillis(1))
         bg.launch { graph.prompts.hostKeyChanged(host, request, saved) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
         capture("prompt-host-key-changed")
@@ -687,7 +763,7 @@ class BerthScreenshotTest {
         compose.waitUntil(5_000) { graph.prompts.current.value == null }
 
         // The saved key changed and the link carried the offered key's fingerprint: said in the changed-key sheet, which stays as alarming as it is.
-        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(40), System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
+        val saved = KnownHostKey("k1", host.address, host.port, "ssh-ed25519", SshKeys.openSshPublic(other).split(" ")[1], SshKeys.fingerprintSha256(other), now - TimeUnit.DAYS.toMillis(40), now - TimeUnit.DAYS.toMillis(1))
         bg.launch { graph.prompts.hostKeyChanged(host, request, saved, link = LinkFingerprint.of(SshKeys.fingerprintSha256(key), key, saved)) }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.HostKeyChanged }
         compose.onNodeWithText("Host key changed").assertExists()
@@ -751,7 +827,7 @@ class BerthScreenshotTest {
             graph.settings.setLastActiveSessionId("s-homelab")
         }
 
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         // A cold start: the detached tabs come back onto the strip and the last active one is on stage with its
         // frozen frame before anything connects (spec C3, Persistence). A missing or stale id lands on the same
         // tab through the manager's fallback (SessionManagerTest); "No tabs" is only ever the zero-tab state.
@@ -892,7 +968,15 @@ class BerthScreenshotTest {
 
     // ---- fixtures -------------------------------------------------------------------------------
 
-    private val now = System.currentTimeMillis()
+    /**
+     * The fixtures' clock and the interface's, pinned: the Files tab on the Stage prints its
+     * listing's modified column against the wall clock, so a tree stamped off the run's own moment
+     * carried that run's minutes into every `stage-files` frame; the seeded ages (`detached 12 min
+     * ago`, a key first seen 40 days back) read the same on every run for the same reason.
+     */
+    private val now = FIXED_NOW
+    /** The zone the column's dates are formatted in, pinned with the clock so the digits are the same on every machine. */
+    private val zone = TimeZone.getDefault()
 
     private fun host(
         id: String,

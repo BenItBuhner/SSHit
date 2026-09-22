@@ -155,6 +155,14 @@ class RoomRepositoriesTest {
         repo.setPinned("k1", true)
         repo.setPinned("k3", false)
         assertEquals(listOf("k1"), repo.find("example.com", 22).filter { it.pinned }.map { it.id })
+
+        // The name is kept lowercase, OpenSSH's way, and read case-blind: the address as typed into the editor finds
+        // the row, and a key saved under another spelling of it is the same endpoint's, so one row stands for both.
+        repo.upsert(KnownHostKey("k4", "Prod-API.example.com", 22, "ssh-ed25519", "AAAA4", "SHA256:4", 1, 1))
+        assertEquals(listOf("prod-api.example.com"), repo.find("prod-api.example.com", 22).map { it.host })
+        assertEquals(listOf("k4"), repo.find("PROD-api.Example.COM", 22).map { it.id })
+        assertEquals(listOf("k1", "k3"), repo.find("EXAMPLE.COM", 22).map { it.id }.sorted())
+        assertEquals(emptyList(), repo.find("prod-api.example.com", 2222), "the port is still the port")
     }
 
     @Test

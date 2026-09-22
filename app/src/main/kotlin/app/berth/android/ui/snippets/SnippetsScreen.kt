@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -314,7 +313,6 @@ fun SnippetEditorSheet(vm: AppViewModel, existing: Snippet?, onDismiss: () -> Un
         onDismiss = onDismiss,
         // A form opens whole: half-open, its last rows and Save were cut at the screen's edge
         // (the audit saw a 31 dp Run on connect). It scrolls under the keyboard instead.
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(
             Modifier

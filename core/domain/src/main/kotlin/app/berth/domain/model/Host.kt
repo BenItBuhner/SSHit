@@ -129,7 +129,13 @@ data class Host(
     }
 }
 
-/** A host key the user has accepted. Multiple keys per host:port are allowed for rotation. */
+/**
+ * A host key the user has accepted. Multiple keys per host:port are allowed for rotation. [host]
+ * is kept the way OpenSSH keeps a `known_hosts` name, lowercased ([canonicalHost]): DNS reads a
+ * name case-blind, so `Prod-API.example.com` and `prod-api.example.com` are one endpoint to the
+ * trust check whichever way the address was typed into the editor. The store folds the name on
+ * write and matches it case-blind on read; a key made from a request or a file may spell it any way.
+ */
 @Serializable
 data class KnownHostKey(
     val id: String,
@@ -154,6 +160,16 @@ data class KnownHostKey(
     val algorithmLabel: String get() = algorithmLabelFor(keyType)
 
     companion object {
+        /**
+         * [host] as the store keys it: the ASCII letters lowercased, as `ssh` lowercases a name
+         * before it writes `known_hosts` and as SQLite's NOCASE compares one; the rest as typed (a
+         * literal, a punycode label, a letter outside ASCII, which neither of those folds either).
+         */
+        fun canonicalHost(host: String): String {
+            if (host.none { it in 'A'..'Z' }) return host
+            return buildString(host.length) { for (ch in host) append(if (ch in 'A'..'Z') ch.lowercaseChar() else ch) }
+        }
+
         fun algorithmLabelFor(keyType: String): String = when {
             keyType == "ssh-ed25519" -> "ED25519"
             keyType == "ssh-rsa" || keyType.startsWith("rsa-sha2") -> "RSA"

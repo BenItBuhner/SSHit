@@ -9,6 +9,7 @@ import app.berth.android.files.Transfer
 import app.berth.android.files.TransferState
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.JetBrainsMono
+import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.FilesPrefs
 import app.berth.domain.model.FilesSort
 import app.berth.sftp.FolderPhase
@@ -230,7 +231,11 @@ fun sortEntries(entries: List<SftpEntry>, prefs: FilesPrefs): List<SftpEntry> {
     return shown.sortedWith(compareBy<SftpEntry> { !it.isDirectory }.then(ordered))
 }
 
-/** The one Caption line under a name: kind or size, modified time, and the mode in Mono. */
+/**
+ * The one Caption line under a name: kind or size, modified time, and the mode in Mono with the
+ * font's ligatures off ([MonoFontFeatures]), so `rw-r--r--`'s dashes stay three dashes and never
+ * fuse into a dash of one width.
+ */
 @Composable
 fun entryCaption(entry: SftpEntry, now: Long): AnnotatedString {
     val c = Berth.colors
@@ -253,7 +258,7 @@ fun entryCaption(entry: SftpEntry, now: Long): AnnotatedString {
             append(modified)
         }
         append(" \u00B7 ")
-        withStyle(SpanStyle(fontFamily = JetBrainsMono, color = if (entry.linkTarget == null && entry.isSymlink) c.text3 else c.text2)) {
+        withStyle(SpanStyle(fontFamily = JetBrainsMono, fontFeatureSettings = MonoFontFeatures, color = if (entry.linkTarget == null && entry.isSymlink) c.text3 else c.text2)) {
             append(entry.permissionText)
         }
     }

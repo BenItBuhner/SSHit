@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -61,12 +65,17 @@ import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
+import app.berth.android.ui.keys.GenerateKeySheet
+import app.berth.android.ui.keys.NewKeyPrefill
+import app.berth.android.ui.settings.ImportBundleSheet
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.Host
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The Hosts screen's order (spec C9, Overflow › Sort). */
@@ -89,7 +98,16 @@ enum class HostSort(val label: String) {
  * Duplicate (a copy, opened in the editor), Share as `ssh://` link and Delete. Overflow holds
  * Sort, Quick connect, the two imports and Known hosts. [picker] mode titles the screen "New tab";
  * back returns to the Stage.
+ *
+ * With no host saved the screen is the empty state (spec C1): the stance, then Add host with
+ * Import a bundle beside it, since a new install's first screen is where a `.berth` file from the
+ * last phone is wanted and the import otherwise lives under Settings › Data; the button opens that
+ * import ([ImportBundleSheet]) as it is there, under its own title, the Make a key hand-off
+ * included, and the import's one-line summary shows at the foot of this screen as it does at
+ * Settings'. One act, one word across the tap: the button says import, as the sheet and C1's own
+ * line do. Quick connect and Import ssh config follow as text actions.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HostsScreen(
     vm: AppViewModel,
@@ -113,6 +131,19 @@ fun HostsScreen(
     var quickConnect by remember { mutableStateOf(false) }
     var importConfig by remember { mutableStateOf(false) }
     var importKnownHosts by remember { mutableStateOf(false) }
+    var importBundle by remember { mutableStateOf(false) }
+    // The New key sheet the bundle import's report opens, on the key it names to make again (spec C20).
+    var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
+    // One line at the foot for what the bundle import did; the text stays for the exit animation.
+    var notice by remember { mutableStateOf<String?>(null) }
+    val shownNotice = remember { mutableStateOf<String?>(null) }
+    if (notice != null) shownNotice.value = notice
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(NOTICE_MS)
+            notice = null
+        }
+    }
     var menu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var sort by rememberSaveable { mutableStateOf(HostSort.RECENT) }
@@ -125,10 +156,10 @@ fun HostsScreen(
     if (tag != null && tag !in tags) tag = null
     val shown = remember(hosts, query, tag) { hosts.matching(query, tag) }
 
+    Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(c.surface0)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -164,7 +195,12 @@ fun HostsScreen(
                 title = "Nothing here yet.",
                 body = "Hosts, keys and history stay on this device. No account. No telemetry.",
             ) {
-                BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
+                // The pair on one line where it fits (411 dp at the font cap does), the secondary wrapping under the
+                // primary where it will not (a narrower phone at the cap, a longer translation), never cut at the margin.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
+                    BerthButton("Import a bundle", onClick = { importBundle = true }, kind = ButtonKind.SECONDARY)
+                }
                 BerthButton("Quick connect", onClick = { quickConnect = true }, kind = ButtonKind.TEXT)
                 BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)
             }
@@ -248,6 +284,14 @@ fun HostsScreen(
             }
         }
     }
+    NoticeBar(
+        visible = notice != null,
+        text = shownNotice.value ?: "",
+        action = "OK",
+        onAction = { notice = null },
+        modifier = Modifier.align(Alignment.BottomCenter),
+    )
+    }
 
     if (quickConnect) {
         QuickConnectSheet(
@@ -263,7 +307,14 @@ fun HostsScreen(
     if (importKnownHosts) {
         ImportKnownHostsSheet(vm = vm, onDismiss = { importKnownHosts = false })
     }
+    if (importBundle) {
+        ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = { notice = it }, onMakeKey = { makeKey = it })
+    }
+    makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
 }
+
+/** How long the foot's notice stands before it sinks on its own; Settings' figure. */
+private const val NOTICE_MS = 3_500L
 
 /** Every tag any host carries, once each, in order of the alphabet. */
 internal fun List<Host>.allTags(): List<String> = flatMap { it.tags }.map { it.trim() }.filter { it.isNotEmpty() }.distinct().sortedBy { it.lowercase() }
@@ -399,6 +450,7 @@ fun QuickConnectSheet(
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

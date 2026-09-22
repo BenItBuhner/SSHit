@@ -28,8 +28,9 @@ class KnownHostsImportTest {
      * A host saved as `Prod-API.example.com` (the address as typed into the editor, which the live
      * path keys on) has its key in a `known_hosts` file as `prod-api.example.com` (OpenSSH lowercases
      * before it writes). The sheet judges the rotated key a conflict case-blind; the import judges it
-     * the same way at write time, so the saved key goes and the rotated one stands in its place —
-     * under the saved spelling, the one the live lookup reads — rather than a dead row beside it.
+     * the same way at write time, so the saved key goes and the rotated one stands in its place,
+     * under the name as the store keys it (lowercase, read case-blind, so the live lookup under the
+     * typed address finds it), rather than a dead row beside it.
      */
     @Test
     fun `a conflict against a capitalised saved address is replaced, not added beside`() = runBlocking {
@@ -41,15 +42,17 @@ class KnownHostsImportTest {
             firstSeenAt = 1_000L, lastSeenAt = 2_000L,
         )
         graph.knownHosts.upsert(trusted)
+        val held = graph.knownHosts.find("Prod-API.example.com", 22).single()
+        assertEquals("the store keys the name lowercase and finds it under the typed spelling", "prod-api.example.com", held.host)
 
         val read = graph.viewModel.parseKnownHosts("prod-api.example.com ${SshKeys.openSshPublic(rotated)}")
         val candidate = read.candidates.single()
-        assertEquals(KnownHostStanding.Conflicting(trusted), candidate.standing)
+        assertEquals(KnownHostStanding.Conflicting(held), candidate.standing)
         assertTrue(!candidate.tickedByDefault)
 
         assertEquals(KnownHostsImported(added = 0, replaced = 1), graph.viewModel.importKnownHosts(listOf(candidate.entry)))
         val key = graph.knownHosts.items.value.single()
-        assertEquals("Prod-API.example.com", key.host)
+        assertEquals("prod-api.example.com", key.host)
         assertEquals(22, key.port)
         assertEquals(SshKeys.fingerprintSha256(rotated), key.fingerprintSha256)
         assertTrue(!key.pinned)

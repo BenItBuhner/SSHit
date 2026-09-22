@@ -27,7 +27,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,6 +70,7 @@ import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.components.linesAtFontScale
 import app.berth.android.ui.stage.MonoBody
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -86,17 +86,15 @@ import app.berth.sftp.TextRead
 
 /**
  * The sheet chrome every Files sheet shares: surface.1, the sheet radius, the handle, 20 dp margins.
- * [expanded] sheets skip the half-open stop and is decided once, when the sheet opens; [fillHeight]
- * makes the column take 92 % of the screen for content that scrolls inside (the viewer's text) and
- * may drop later so the sheet shrinks to what is left.
+ * Every one opens at its content's height ([BerthSheet]'s default, spec A9); [fillHeight] makes the
+ * column take 92 % of the screen for content that scrolls inside (the viewer's text) and may drop
+ * later so the sheet shrinks to what is left.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FilesSheet(onDismiss: () -> Unit, expanded: Boolean = false, fillHeight: Boolean = expanded, content: @Composable ColumnScope.() -> Unit) {
+private fun FilesSheet(onDismiss: () -> Unit, fillHeight: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     val c = Berth.colors
-    val skipHalf = remember { expanded }
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = skipHalf)
-    BerthSheet(onDismiss = onDismiss, sheetState = state) {
+    BerthSheet(onDismiss = onDismiss) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -399,7 +397,7 @@ fun FileViewerSheet(
 ) {
     val c = Berth.colors
     val well = content is ViewerContent.Loading || content is ViewerContent.Text
-    FilesSheet(onDismiss, expanded = tall, fillHeight = tall && well) {
+    FilesSheet(onDismiss, fillHeight = tall && well) {
         SheetTitle(entry.name, "${formatSize(entry.size)} \u00B7 ${SftpPaths.parent(entry.path)}")
         when (content) {
             ViewerContent.Loading, is ViewerContent.Text -> Box(
@@ -452,10 +450,10 @@ private fun ViewerNote(text: String, danger: Boolean = false) {
 /**
  * Every transfer this process has run, newest first: per-file progress, speed, and Cancel while it
  * moves. The list is the one weighted child, measured after the title and Clear finished have their
- * height, so it scrolls inside what is left and the button never gets squeezed out. More than a
- * handful of rows opens the sheet fully expanded rather than at the half stop. A folder is one row
- * that opens on a tap to the file moving now and what has failed; one waiting for an answer goes to
- * its question through [onAnswer] instead.
+ * height, so it scrolls inside what is left and the button never gets squeezed out; the sheet opens
+ * at the height the rows take, the window's at most (spec A9). A folder is one row that opens on
+ * a tap to the file moving now and what has failed; one waiting for an answer goes to its question
+ * through [onAnswer] instead.
  */
 @Composable
 fun TransferSheet(
@@ -480,7 +478,7 @@ fun TransferSheet(
         if (cancelled > 0) add("$cancelled cancelled")
     }.joinToString(" \u00B7 ").ifEmpty { "Nothing moving" }
     var opened by remember { mutableStateOf(emptySet<String>()) }
-    FilesSheet(onDismiss, expanded = transfers.size > 4, fillHeight = false) {
+    FilesSheet(onDismiss) {
         SheetTitle("Transfers", caption)
         if (transfers.isEmpty()) {
             Text("Downloads and uploads show here while they run and after they finish.", style = BerthType.body, color = c.text2)
@@ -515,7 +513,9 @@ fun TransferSheet(
 
 /**
  * One transfer in the sheet: the name with its state word or percentage, a 2 dp progress line, and
- * one Caption line naming the host, then bytes and speed. The glyph carries the direction. A folder
+ * one Caption line naming the host, then bytes and speed; the name's line and the Caption's are the
+ * design's at 1× and grow with the interface's font scale ([linesAtFontScale]), so a name or a
+ * speed that fits at 1× is not cut at the cap. The glyph carries the direction. A folder
  * carries the aggregate on that line, given two like a failure's reason, and a chevron; [expanded]
  * it adds the file moving now with its own line, the last few failures while it runs, and once over
  * everything that failed with Retry failed. A folder that copied most of itself and lost a few
@@ -557,7 +557,7 @@ fun TransferRow(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(t.name, style = BerthType.bodyMedium, color = c.text1, maxLines = linesAtFontScale(1), overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp))
                     Text(transferTrailing(t), style = BerthType.caption, color = if (t.state == TransferState.FAILED) c.danger else c.text2)
                     if (folder != null) {
@@ -575,7 +575,7 @@ fun TransferRow(
                     transferCaptionStyled(t),
                     style = BerthType.caption,
                     color = if (failed) c.danger else c.text3,
-                    maxLines = if (failed || folder != null || t.note != null) 2 else 1,
+                    maxLines = linesAtFontScale(if (failed || folder != null || t.note != null) 2 else 1),
                     overflow = TextOverflow.Ellipsis,
                 )
             }

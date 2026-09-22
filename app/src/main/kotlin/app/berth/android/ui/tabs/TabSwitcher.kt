@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -100,7 +99,6 @@ fun TabSwitcher(
     val groups by vm.workspaces.collectAsState()
     val activeId by vm.activeTabId.collectAsState()
     val now = ageTicker()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val entries = remember(slots, groups, activeId) { buildEntries(slots, groups, activeId).filterNot { it is StripEntry.Plus } }
     var menuKey by remember { mutableStateOf<String?>(null) }
 
@@ -109,7 +107,7 @@ fun TabSwitcher(
 
     // As a sheet the grid fills the height, as it always has; as a dialog (spec C23) the panel is as
     // tall as its cards up to the dialog's cap, and wide enough for four columns of them.
-    BerthSheet(onDismiss = onDismiss, sheetState = sheetState, dialogMaxWidth = SwitcherDialogMaxWidth) {
+    BerthSheet(onDismiss = onDismiss, dialogMaxWidth = SwitcherDialogMaxWidth) {
         val fills = sheetFillsHeight()
         Column(Modifier.fillMaxWidth().then(if (fills) Modifier.fillMaxHeight() else Modifier)) {
             Row(

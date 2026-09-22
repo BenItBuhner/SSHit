@@ -96,6 +96,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
+import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckArrows
 import app.berth.domain.model.DeckKey
@@ -301,6 +302,14 @@ private fun TextStyle.keySized(): TextStyle = with(LocalDensity.current) {
         lineHeight = if (lineHeight.isSpecified) lineHeight.value.dp.toSp() else lineHeight,
     )
 }
+
+/**
+ * A key label's style in the mono face, the font's ligatures and contextual alternates off
+ * ([MonoFontFeatures]) the way every mono span of the interface has them: a hand-set `->`, `|=`
+ * or `--` on a key draws as the characters it sends, not the arrow or the long dash the font
+ * would fuse them into.
+ */
+private fun TextStyle.inMono(): TextStyle = copy(fontFamily = JetBrainsMono, fontFeatureSettings = MonoFontFeatures)
 
 /** Gap between Deck keys and between the keys and the strip's edges (A11). */
 private val DeckGap = 4.dp
@@ -894,7 +903,7 @@ fun DeckKeyView(
             }
             Text(
                 text = shown,
-                style = (if (shown.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
+                style = (if (shown.isSymbolLabel()) BerthType.label.inMono() else BerthType.label).keySized(),
                 color = labelColor,
                 maxLines = 1,
                 modifier = Modifier.align(Alignment.Center).padding(horizontal = labelPadding),
@@ -936,7 +945,7 @@ private class TouchInProgress {
 private fun AlternateHint(text: String, color: Color, modifier: Modifier) {
     Text(
         text = text,
-        style = (if (text.isSymbolLabel()) BerthType.caption.copy(fontFamily = JetBrainsMono, letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
+        style = (if (text.isSymbolLabel()) BerthType.caption.inMono().copy(letterSpacing = 0.sp) else BerthType.caption.copy(letterSpacing = 0.sp)).keySized(),
         color = color,
         maxLines = 1,
         modifier = modifier,
@@ -991,7 +1000,7 @@ private fun AlternatesPopover(chips: List<DeckAction>, hovered: Int?, onPlaced: 
                 ) {
                     Text(
                         text = label,
-                        style = (if (label.isSymbolLabel()) BerthType.label.copy(fontFamily = JetBrainsMono) else BerthType.label).keySized(),
+                        style = (if (label.isSymbolLabel()) BerthType.label.inMono() else BerthType.label).keySized(),
                         color = if (over) c.onAccent else c.text1,
                         maxLines = 1,
                     )

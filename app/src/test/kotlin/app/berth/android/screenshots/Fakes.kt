@@ -69,8 +69,50 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.createTempDirectory
+
+/**
+ * The moment the offline captures are taken at, 14:07 on Monday 21 September 2026 (UTC), so a clock
+ * the interface prints reads the same on every run and in both variants: the files browser's
+ * modified column and the `detached HH:MM` marker are stamped relative to it, `ageTicker` reads
+ * it through `LocalWallClock`, and a report is written at it. The demo tree's file names and log
+ * lines already speak of that week.
+ */
+val FIXED_NOW: Long = ZonedDateTime.of(2026, 9, 21, 14, 7, 0, 0, ZoneOffset.UTC).toInstant().toEpochMilli()
+
+/**
+ * A wall clock for a live session in a screenshot test: real time, so the durations the session
+ * measures against it (the OSC 133 threshold, the reconnect window, idle detach) are what they
+ * would be, but shifted to read [start] when it is made, and [set] to a chosen moment right before
+ * the session stamps something the frame shows, so a `detached 14:07` row reads the same on every
+ * run however long the test took to get there.
+ */
+class ShiftedClock(start: Long) : () -> Long {
+    @Volatile private var offset = start - System.currentTimeMillis()
+    override fun invoke(): Long = System.currentTimeMillis() + offset
+    fun set(at: Long) {
+        offset = at - System.currentTimeMillis()
+    }
+}
+
+/**
+ * The app and device line of a report in a capture, the shape [CrashReporter.describeInstall]
+ * gives it on a phone, fixed so the same frame comes out of the debug and the release variant
+ * (the real one names the variant and its debuggability) and off this machine's JVM. The version
+ * here is the fixture's, not the app's: it is not read from `gradle.properties`, and a release
+ * does not move it; it is kept at the version the frames were last read against (0.2.0, the
+ * wave-three handoff's) so a reader of a crash-sheet frame is not misled by a stale number.
+ */
+val FIXED_INSTALL: String = """
+    App       Berth 0.2.0 (20000) · app.berth.android · release build
+    Mapping   none needed; the frames name their source file and line
+    Device    Google Pixel 8a (akita) · Android 15 (API 35) · build AP4A.250105.002
+    Hardware  arm64-v8a, armeabi-v7a, armeabi
+    Locale    en_GB · Europe/London
+""".trimIndent()
 
 /** In-memory repositories so screens render against the real view model without Room or Keystore. */
 class InMemoryHosts : HostRepository {
@@ -107,11 +149,13 @@ class InMemoryIdentities(private val hosts: InMemoryHosts) : IdentityRepository 
         hosts.items.value.filter { (it.auth as? app.berth.domain.model.AuthMethod.Key)?.identityId == id }
 }
 
+/** The Room store's contract as the tests need it: the name kept lowercase ([KnownHostKey.canonicalHost]) and matched case-blind. */
 class InMemoryKnownHosts : KnownHostRepository {
     val items = MutableStateFlow<List<KnownHostKey>>(emptyList())
     override fun observeAll(): Flow<List<KnownHostKey>> = items
-    override suspend fun find(host: String, port: Int): List<KnownHostKey> = items.value.filter { it.host == host && it.port == port }
-    override suspend fun upsert(key: KnownHostKey) = items.update { list -> list.filter { it.id != key.id } + key }
+    override suspend fun find(host: String, port: Int): List<KnownHostKey> =
+        items.value.filter { KnownHostKey.canonicalHost(it.host) == KnownHostKey.canonicalHost(host) && it.port == port }
+    override suspend fun upsert(key: KnownHostKey) = items.update { list -> list.filter { it.id != key.id } + key.copy(host = KnownHostKey.canonicalHost(key.host)) }
     override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
     override suspend fun setPinned(id: String, pinned: Boolean) =
         items.update { list -> list.map { if (it.id == id) it.copy(pinned = pinned) else it } }
@@ -305,8 +349,18 @@ class FakeLifecycleOwner : LifecycleOwner {
  *
  * [storage] is what the phone keeps across processes; [relaunch] builds a second graph over the
  * same storage, the way a cold start after process death restores from what the last one wrote.
+ *
+ * [wallClock] stamps the reports this graph writes and [install] is their app and device line;
+ * a screenshot test of the report sheets pins both ([FIXED_NOW], [FIXED_INSTALL]) so the frame
+ * repeats, every other test takes the system's.
  */
-class TestGraph(private val context: Context, notificationsGranted: Boolean = true, private val storage: TestStorage = TestStorage()) {
+class TestGraph(
+    private val context: Context,
+    notificationsGranted: Boolean = true,
+    private val storage: TestStorage = TestStorage(),
+    private val wallClock: () -> Long = System::currentTimeMillis,
+    private val install: () -> String = { CrashReporter.describeInstall(context) },
+) {
     init {
         if (notificationsGranted) {
             shadowOf(context.applicationContext as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
@@ -341,7 +395,7 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
     val notifier = SessionNotifier(context)
     /** Reports in a directory of this graph's own, so no test sees another's crash; the ring is the process-wide one. */
     val reportsDir: File = createTempDirectory("berth-reports").toFile()
-    val reports = CrashReporter(reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
+    val reports = CrashReporter(reportsDir, install, BerthLog.ring, now = wallClock, zone = { ZoneOffset.UTC })
     private val manager = lazy {
         SessionManager(context, sessionRecords, workspaces, hosts, knownHosts, settings, authResolver, prompts, NetworkMonitor(context), tunnels, snippets, remoteClipboard, appLock, notifier, process.lifecycle, reports, commandHistory)
     }
@@ -366,7 +420,7 @@ class TestGraph(private val context: Context, notificationsGranted: Boolean = tr
      */
     fun relaunch(): TestGraph {
         if (manager.isInitialized()) manager.value.scope.cancel()
-        return TestGraph(context, storage = storage)
+        return TestGraph(context, storage = storage, wallClock = wallClock, install = install)
     }
 
     /**

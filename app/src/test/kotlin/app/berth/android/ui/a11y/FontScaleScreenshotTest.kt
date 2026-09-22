@@ -32,6 +32,9 @@ import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
+import app.berth.android.diagnostics.LogRing
+import app.berth.android.screenshots.FIXED_INSTALL
+import app.berth.android.screenshots.FIXED_NOW
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoBrokenWords
@@ -77,6 +80,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 
 /**
@@ -111,7 +115,8 @@ class FontScaleScreenshotTest {
         outDir.mkdirs()
         // The system's largest font size, set before the first composition reads the configuration.
         RuntimeEnvironment.setFontScale(2f)
-        graph = TestGraph(ApplicationProvider.getApplicationContext())
+        // The reports' clock and install line pinned, so the crash sheet's Written line is the same on every run.
+        graph = TestGraph(ApplicationProvider.getApplicationContext(), wallClock = { FIXED_NOW }, install = { FIXED_INSTALL })
     }
 
     @After
@@ -429,12 +434,16 @@ class FontScaleScreenshotTest {
         createdAt = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(30),
     )
 
-    /** The previous run's crash, through the handler's own path into this graph's store, re-read as the launch after would. */
+    /**
+     * The previous run's crash, through the handler's own path into this graph's store, re-read as
+     * the launch after would. Its log lines and the report are stamped on the fixture's clock, as
+     * [app.berth.android.screenshots.DiagnosticsScreenshotTest] stamps its own, so the report's
+     * Written line in the frame reads the same on every run (hardening 6).
+     */
     private fun crashPreviousRun() {
-        val context = ApplicationProvider.getApplicationContext<Application>()
-        BerthLog.i("App", "process started")
-        BerthLog.i("Session", "[homelab] detached \u2192 connecting")
-        val previousRun = CrashReporter(graph.reportsDir, { CrashReporter.describeInstall(context) }, BerthLog.ring)
+        BerthLog.ring.log(LogRing.Level.INFO, "App", "process started", at = FIXED_NOW - 2_000)
+        BerthLog.ring.log(LogRing.Level.INFO, "Session", "[homelab] detached \u2192 connecting", at = FIXED_NOW - 1_000)
+        val previousRun = CrashReporter(graph.reportsDir, { FIXED_INSTALL }, BerthLog.ring, now = { FIXED_NOW }, zone = { ZoneOffset.UTC })
         previousRun.onCrash(Thread("main"), IllegalStateException("Frame 1 of 1 has no cells for row 24", ArrayIndexOutOfBoundsException("Index 24 out of bounds for length 24")))
         graph.reports.reload()
     }

@@ -37,7 +37,6 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
@@ -57,7 +56,6 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyPress
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
@@ -65,6 +63,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
+import app.berth.android.screenshots.assertSheetAtContentHeight
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
@@ -156,7 +155,6 @@ class RemapScreenshotTest {
         waitForText("Keyboard shortcuts")
         // The sheet says what a tap on a row does, since it has the store to write to.
         waitForText("Tap one to rebind it")
-        expandSheet()
 
         // Tapped, Find in scrollback steps up, takes the focus and asks for the chord; its keys give way to the ellipsis.
         row("Find in scrollback").performScrollTo().performClick()
@@ -182,6 +180,8 @@ class RemapScreenshotTest {
         // The focus stays on the row it bound, so a keyboard's user is where they were.
         awaitFocused(hasContentDescription("Find in scrollback", substring = true), "the rebound row")
         capture("shortcut-sheet-remapped-row")
+        // A9: the sheet stands at the window's top, the rebound row whole in it and the Stage group's last rows one scroll away.
+        compose.assertSheetAtContentHeight("Find in scrollback", "Pass-through to the shell")
 
         // Ctrl+C is the shell's interrupt: refused, and Use stays off; Ctrl+Shift+V is Paste's already.
         row("Copy the selection").performScrollTo().performClick()
@@ -215,7 +215,6 @@ class RemapScreenshotTest {
         stageWithKeyboard()
         chord(KEYCODE_SLASH, META_CTRL_ON or META_SHIFT_ON)
         waitForText("Keyboard shortcuts")
-        expandSheet()
         row("Copy the selection").performScrollTo().performClick()
         awaitFocused(hasTestTag(ChordCaptureTag), "the listening row, Copy the selection")
 
@@ -393,7 +392,6 @@ class RemapScreenshotTest {
         row("This sheet, Leader /. Rebind").assertExists()
         // The Terminal group's note says the Leader is the one key that never reaches the shell.
         compose.onNode(hasText("The Leader, Right Ctrl, never does: it is the app\u2019s.", substring = true), useUnmergedTree = true).assertExists()
-        expandSheet()
         capture("shortcut-sheet-leader")
     }
 
@@ -450,11 +448,11 @@ class RemapScreenshotTest {
         // The sheet from the Settings row: the rebound row's two-line caption, and every row whole.
         compose.onNodeWithText("Keyboard shortcuts").performClick()
         waitForText("Tap one to rebind it")
-        expandSheet()
         row("Find in scrollback").performScrollTo()
         compose.waitForIdle()
         text("Default Leader F \u00B7 takes readline\u2019s forward-char from the shell").assertExists()
         capture("shortcut-sheet-remapped-row-font-scale-2x")
+        compose.assertSheetAtContentHeight("Find in scrollback", "Pass-through to the shell")
         // The sheet's column is composed whole, so the check reads every row of it, scrolled to or not.
         compose.assertNoTextCut("the shortcut sheet at the interface's font cap, a row rebound")
     }
@@ -534,16 +532,6 @@ class RemapScreenshotTest {
         val modes = LocalInputModeManager.current
         LaunchedEffect(modes) { modes.requestInputMode(InputMode.Keyboard) }
         content()
-    }
-
-    /**
-     * The half-open sheet to its full height, through the handle's own Expand action (what a
-     * reader would do), so a row the test scrolls to is on the screen and not in the sheet's
-     * lower half below it.
-     */
-    private fun expandSheet() {
-        compose.onNode(hasContentDescription("Drag handle")).performSemanticsAction(SemanticsActions.Expand)
-        compose.waitForIdle()
     }
 
     /** A row of the sheet by what a reader hears of it, whole or its opening words. */

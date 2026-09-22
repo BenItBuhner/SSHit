@@ -53,6 +53,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
+import app.berth.android.screenshots.assertSheetAtContentHeight
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PaneSide
@@ -208,6 +209,9 @@ class HardwareKeyboardScreenshotTest {
         waitForText("Next tab")
         assertShortcutTable()
         capture("shortcut-sheet")
+        // The tallest of the sheets A9's default moved: taller than the window, so it stands at the window's top
+        // with the Stage group's last rows one scroll away (Find in scrollback is whole in the window at 1×).
+        compose.assertSheetAtContentHeight("Find in scrollback", "Pass-through to the shell")
     }
 
     /**

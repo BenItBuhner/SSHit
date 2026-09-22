@@ -66,7 +66,13 @@ interface KnownHostDao {
     @Query("SELECT * FROM known_hosts ORDER BY host, port")
     fun observeAll(): Flow<List<KnownHostEntity>>
 
-    @Query("SELECT * FROM known_hosts WHERE host = :host AND port = :port")
+    /**
+     * The keys held for `host:port`, the name compared case-blind as OpenSSH matches a `known_hosts`
+     * name (NOCASE folds the ASCII letters, as `LOWER` did to every row at version 6 and the mapper
+     * does to every row written since): the address the live path keys on is the one typed into the
+     * editor, and `Prod-API.example.com` is the row saved as `prod-api.example.com`.
+     */
+    @Query("SELECT * FROM known_hosts WHERE host = :host COLLATE NOCASE AND port = :port")
     suspend fun find(host: String, port: Int): List<KnownHostEntity>
 
     @Upsert

@@ -67,6 +67,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowBuild
 import java.io.File
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -103,11 +104,15 @@ class ConnectionScreenshotTest {
         auth = AuthMethod.AskEachTime, createdAt = 1L,
     )
 
+    /** The zone the terminal's marker rows format their time in, pinned with the session clock so the digits are the same on every machine. */
+    private val zone = TimeZone.getDefault()
+
     @Before
     fun setUp() {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(app)
@@ -122,6 +127,7 @@ class ConnectionScreenshotTest {
         bg.cancel()
         graph.close()
         proxy?.close()
+        TimeZone.setDefault(zone)
         RuntimeEnvironment.setFontScale(1f)
     }
 
@@ -279,6 +285,7 @@ class ConnectionScreenshotTest {
         assertTrue("stock Android has no extra step", compose.onAllNodes(oemSectionLabel()).fetchSemanticsNodes().isEmpty())
         capture(name)
         compose.assertNoTextCut("the Background sheet")
+        compose.assertSheetAtContentHeight("Allow", "Battery settings")
 
         compose.onNodeWithText("Allow").performClick()
         val started = shadowOf(app).nextStartedActivity
@@ -314,6 +321,8 @@ class ConnectionScreenshotTest {
         compose.onNodeWithText("Done").assertExists()
         capture("background-sheet-exempt-samsung")
         compose.assertNoTextCut("the Background sheet, exempt")
+        // A9 on this frame of the flipped sheet too: Done, its one button, whole in the window as the sheet opened.
+        compose.assertSheetAtContentHeight("Done")
     }
 
     // ---- Part B: Back's one line, once ---------------------------------------------------------------------
@@ -394,9 +403,14 @@ class ConnectionScreenshotTest {
     @Test
     fun `the background sheet raises itself once after a connection lost while away`() {
         val session = liveOnStage()
+        // The terminal stamps its `connection lost` and `reconnected` rows off the sessions' clock; the frame shows both,
+        // so the clock is set to the fixture's moment before each, and the rows read 14:07 however long the run took.
+        val sessionClock = ShiftedClock(FIXED_NOW)
+        graph.sessions.clock = sessionClock
         graph.process.stop()
         proxy!!.cutAll()
         compose.waitUntil(10_000) { explainerFired() }
+        sessionClock.set(FIXED_NOW)
         graph.process.start()
         waitForText("How Berth stays connected when the screen is off")
         compose.waitUntil(5_000) { !graph.sessions.batteryExplainerDue.value && connectionSettings().batteryExplained }

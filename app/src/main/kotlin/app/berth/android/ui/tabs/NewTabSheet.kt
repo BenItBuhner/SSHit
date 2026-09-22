@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -111,7 +112,9 @@ fun NewTabSheet(
         }
     }
 
-    BerthSheet(onDismiss = onDismiss) {
+    // The one sheet over a list that opens at half height with drag up for the full list (spec A9's
+    // Sheet rule, C3): every other sheet opens at its content's height, BerthSheet's default.
+    BerthSheet(onDismiss = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)) {
         // As a sheet the list fills the height, room for the keyboard under the field; as a dialog
         // the panel is as tall as its rows (spec C23), so six hosts are not a panel that is mostly empty.
         LazyColumn(

@@ -431,12 +431,18 @@ class TerminalSurfaceScreenshotTest {
         val pr = "https://git.homelab.lan/berth/berth/pulls/12"
         val docs = "https://caddyserver.com/docs/"
         val dressed = "https://evil.example/login"
-        // A command at the restored prompt, with three links in its output: one whose text is a label,
-        // one that is its own address, and one dressed as another site's.
+        // A Cyrillic а (U+0430) in what reads as apple.com, and a customer's page on a platform under the platform's own name.
+        val homograph = "https://\u0430pple.com/id"
+        val platform = "https://sites.google.com/view/homelab-status"
+        // A command at the restored prompt, with five links in its output: one whose text is a label,
+        // one that is its own address, one dressed as another site's, one whose host is a homograph of
+        // the text it wears, and one wearing a platform's name over a page any customer of it can put there.
         session.emulator.write("\u001b[A\u001b[20Gcat NOTES.md\r\n")
         session.emulator.write("${link(pr, "PR #12")} is ready for review\r\n")
         session.emulator.write("docs at ${link(docs, docs)}\r\n")
         session.emulator.write("release notes: ${link(dressed, "https://github.com/berth/releases")}\r\n")
+        session.emulator.write("account: ${link(homograph, "apple.com")} to confirm\r\n")
+        session.emulator.write("status page: ${link(platform, "google.com")}\r\n")
         session.emulator.write("ben@homelab:~/srv$ ")
         compose.waitUntil(5_000) { session.emulator.screenText().any { it.startsWith("release notes") } }
         settle(400)
@@ -502,6 +508,44 @@ class TerminalSurfaceScreenshotTest {
         compose.onNodeWithText("Open anyway").performClick()
         compose.waitUntil(5_000) { tools.pendingLink == null }
         assertEquals(dressed, shadowOf(application).nextStartedActivity?.dataString)
+
+        // A host that is a homograph of the text it wears: the caption names the host as its punycode, and
+        // the panel draws it the same way, so the sheet's largest text cannot read as Apple's over a caption
+        // that says otherwise (#16's Public Suffix List note, hardening 4; #22 nit 5).
+        val (homographRow, homographCol) = cellOf(session, "apple.com")
+        canvas.performTouchInput { click(cellCenter(homographRow, homographCol + 3)) }
+        waitForText("Shown as \u201Capple.com\u201D, but goes to xn--pple-43d.com")
+        compose.onNodeWithContentDescription("Link address, https://xn--pple-43d.com/id").assertIsDisplayed()
+        compose.onNodeWithText("Open anyway").assertIsDisplayed()
+        compose.onAllNodesWithText("Open").assertCountEquals(0)
+        settle(300)
+        capture("terminal-link-open-sheet-homograph$suffix")
+        compose.assertNoTextCut("the link sheet for a homograph host${if (cap) " at the interface's font cap" else ""}", within = isDialog())
+        assertSheetButtonsInside()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(5_000) { tools.pendingLink == null }
+        assertNull("Cancel opens nothing", shadowOf(application).nextStartedActivity)
+        // Open anyway opens the address the link carries, its Cyrillic а and all, not the ASCII the panel drew.
+        canvas.performTouchInput { click(cellCenter(homographRow, homographCol + 3)) }
+        waitForText("Open anyway")
+        compose.onNodeWithText("Open anyway").performClick()
+        compose.waitUntil(5_000) { tools.pendingLink == null }
+        assertEquals(homograph, shadowOf(application).nextStartedActivity?.dataString)
+
+        // The platform's own name over a page any customer of it can put there warns, where github.com
+        // over gist.github.com does not: sites.google.com is a registrable boundary to the caption.
+        val (platformRow, platformCol) = cellOf(session, "google.com")
+        canvas.performTouchInput { click(cellCenter(platformRow, platformCol + 3)) }
+        waitForText("Shown as \u201Cgoogle.com\u201D, but goes to sites.google.com")
+        compose.onNodeWithContentDescription("Link address, $platform").assertIsDisplayed()
+        compose.onNodeWithText("Open anyway").assertIsDisplayed()
+        settle(300)
+        capture("terminal-link-open-sheet-platform$suffix")
+        compose.assertNoTextCut("the link sheet for a platform's name over a customer's page${if (cap) " at the interface's font cap" else ""}", within = isDialog())
+        assertSheetButtonsInside()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(5_000) { tools.pendingLink == null }
+        assertNull("Cancel opens nothing", shadowOf(application).nextStartedActivity)
 
         // A tap beside a link is the tap it always was: nothing to look at.
         canvas.performTouchInput { click(cellCenter(row, col + 20)) }

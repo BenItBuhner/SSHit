@@ -9,6 +9,7 @@ import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -30,6 +31,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -53,6 +55,7 @@ import app.berth.android.session.SessionEnvironment
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.a11y.TerminalTag
+import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.security.LockCover
 import app.berth.android.ui.security.LockWindow
@@ -99,12 +102,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -112,6 +117,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
@@ -139,7 +145,15 @@ class TerminalToolsScreenshotTest {
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
     private lateinit var graph: TestGraph
     private val context: Context get() = ApplicationProvider.getApplicationContext()
-    private val now = System.currentTimeMillis()
+    /**
+     * The seeded history's clock and the interface's, pinned: the History sheet prints each row's
+     * time and groups the rows by day against the wall clock, so commands seeded minutes before
+     * the run's own moment carried that run's minutes into every `terminal-history` frame, and the
+     * ones seeded twenty-six hours back sat under `Yesterday` or a date with the hour the run began.
+     */
+    private val now = FIXED_NOW
+    /** The zone the rows' times are formatted in, pinned with the clock so the digits are the same on every machine. */
+    private val zone = TimeZone.getDefault()
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
@@ -151,17 +165,26 @@ class TerminalToolsScreenshotTest {
         if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
             System.setProperty("roborazzi.test.record", "true")
         }
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         SshSecurity.ensureProviders()
         outDir.mkdirs()
         graph = TestGraph(context)
+    }
+
+    @After
+    fun tearDown() {
+        TimeZone.setDefault(zone)
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
 
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { content() }
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) { content() }
+                }
             }
         }
     }
@@ -827,6 +850,7 @@ class TerminalToolsScreenshotTest {
         waitForText("docker compose ps")
         settle(300)
         capture("terminal-history")
+        compose.assertSheetAtContentHeight("All hosts", "Command docker compose ps")
 
         // A long-press on a detached tab's entry: Copy, Save as snippet and Delete; Run and Paste need the session Live.
         compose.onNode(hasContentDescription("Command docker compose ps")).performSemanticsAction(SemanticsActions.OnLongClick)
@@ -863,6 +887,32 @@ class TerminalToolsScreenshotTest {
         capture("terminal-history-snippet")
     }
 
+    @Test
+    fun `history sheet at the 1,3 cap`() {
+        // The sheet at the interface's font cap (A9): the title, the scope chip, the filter and the rows, open at the content's height.
+        RuntimeEnvironment.setFontScale(2f)
+        seedHomelab(withHistory = true)
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        val tools = StageTools()
+        themed { Stage(session, tools) }
+        // The terminal's size is its own at the system's 2× (its font does not follow the scale), so the grid is
+        // not held against paints at that scale as awaitGrid does; the canvas up with its columns is what the sheet needs.
+        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TerminalTag)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { session.emulator.cols >= 2 }
+        compose.waitUntil(5_000) { graph.commandHistory.items.value.size == HISTORY.size }
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("History").performClick()
+        compose.waitUntil(5_000) { tools.historyOpen }
+        waitForText("${HISTORY.size} commands", substring = true)
+        waitForText("docker compose ps")
+        settle(300)
+        capture("terminal-history-font-scale-2x")
+        compose.assertSheetAtContentHeight("All hosts", "Command docker compose ps")
+        compose.assertNoTextCut("the History sheet at the interface's font cap", within = isDialog())
+    }
+
     // ---- the app lock over the tools (spec C20) -------------------------------------------------------------
 
     /**
@@ -885,14 +935,16 @@ class TerminalToolsScreenshotTest {
         graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
         val tools = StageTools()
         compose.setContent {
-            BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) {
-                    val lock by graph.appLock.state.collectAsState()
-                    if (lock != LockState.UNKNOWN) Stage(session, tools)
-                    if (lock == LockState.LOCKED) LockCover()
+            CompositionLocalProvider(LocalWallClock provides { now }) {
+                BerthTheme(InterfaceTheme.DEFAULT) {
+                    Box(Modifier.fillMaxSize()) {
+                        val lock by graph.appLock.state.collectAsState()
+                        if (lock != LockState.UNKNOWN) Stage(session, tools)
+                        if (lock == LockState.LOCKED) LockCover()
+                    }
                 }
+                LockWindow(graph.security, InterfaceTheme.DEFAULT)
             }
-            LockWindow(graph.security, InterfaceTheme.DEFAULT)
         }
         compose.waitUntil(5_000) { graph.appLock.state.value == LockState.UNLOCKED }
         awaitGrid(session)
@@ -970,7 +1022,7 @@ class TerminalToolsScreenshotTest {
             graph.secrets.put(AuthResolver.passwordSecretId(box.id), sshPassword.toByteArray())
             graph.hosts.upsert(box)
         }
-        compose.setContent { AppRoot(graph.viewModel) }
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("New tab")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("New tab").performClick()
         waitForText("Berth test box")

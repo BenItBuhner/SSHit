@@ -6,6 +6,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The rule behind the link sheet (spec A60), pinned as a table: which scheme takes which posture
@@ -13,9 +16,15 @@ import org.junit.Test
  * a file name nor a segment of the link's own path) and which do not (a directory listing's every
  * entry, a version tag, a decimal, `Node.js`, `PR #12`); the equivalences that make a text the
  * address itself; the dressed links the rule exists for, with their captions, the backslash a
- * browser reads as a slash and the host after the last `@` among them; and the path a `file://`
- * link hands to Copy path and Paste path, decoded and quoted for the shell.
+ * browser reads as a slash and the host after the last `@` among them; the parent claims that
+ * are the site's and those that are a platform's over a stranger's page (the Public Suffix List's
+ * private section, bundled); the punycode every host outside ASCII is named by, so a homograph
+ * reads as itself; and the path a `file://` link hands to Copy path and Paste path, decoded and
+ * quoted for the shell. Under Robolectric for the framework's `android.icu`, the UTS #46 processor
+ * the punycode comes from; the rule itself touches nothing else of Android's.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class LinkLookTest {
     private fun look(url: String, text: String) = LinkLook.of(LinkTap(url, text))
 
@@ -146,6 +155,83 @@ class LinkLookTest {
         // `www.` shorn from a claim must leave a domain: www.com is no parent of every .com host, www.google.com of google's is.
         assertWarns("https://evil.com/", "www.com", "Shown as \u201Cwww.com\u201D, but goes to evil.com")
         assertPlain("https://mail.google.com/", "www.google.com", "Shown as \u201Cwww.google.com\u201D, goes to mail.google.com")
+    }
+
+    @Test
+    fun `a claim of a platform over a page any customer of it can put there warns, and one below the platform is the site`() {
+        // The Public Suffix List's private section, bundled (UserContentHosts): the label under github.io is a stranger's.
+        assertWarns("https://evil.github.io/login", "github.io", "Shown as \u201Cgithub.io\u201D, but goes to evil.github.io")
+        assertWarns("https://www.evil.github.io/login", "github.io", "Shown as \u201Cgithub.io\u201D, but goes to www.evil.github.io")
+        assertPlain("https://evil.github.io/login", "evil.github.io", "Shown as \u201Cevil.github.io\u201D, goes to evil.github.io")
+        assertPlain("https://docs.evil.github.io/x", "evil.github.io", "Shown as \u201Cevil.github.io\u201D, goes to docs.evil.github.io")
+        assertWarns("https://evil.web.app/", "web.app", "Shown as \u201Cweb.app\u201D, but goes to evil.web.app")
+        // The platform's own name and every name above it are the platform's: the bucket is the customer's label.
+        assertWarns("https://evil-bucket.s3.amazonaws.com/login.html", "amazonaws.com", "Shown as \u201Camazonaws.com\u201D, but goes to evil-bucket.s3.amazonaws.com")
+        assertWarns("https://evil-bucket.s3.amazonaws.com/login.html", "s3.amazonaws.com", "Shown as \u201Cs3.amazonaws.com\u201D, but goes to evil-bucket.s3.amazonaws.com")
+        assertPlain("https://evil-bucket.s3.amazonaws.com/login.html", "evil-bucket.s3.amazonaws.com", "Shown as \u201Cevil-bucket.s3.amazonaws.com\u201D, goes to evil-bucket.s3.amazonaws.com")
+        // A `*.` entry (*.compute.amazonaws.com) makes the region the platform's too.
+        assertWarns("https://i-0abc.eu-west-1.compute.amazonaws.com/", "amazonaws.com", "Shown as \u201Camazonaws.com\u201D, but goes to i-0abc.eu-west-1.compute.amazonaws.com")
+        assertWarns("https://i-0abc.eu-west-1.compute.amazonaws.com/", "eu-west-1.compute.amazonaws.com", "Shown as \u201Ceu-west-1.compute.amazonaws.com\u201D, but goes to i-0abc.eu-west-1.compute.amazonaws.com")
+        // Pages under a path on Google's own hosts, which the section has no line for and the list carries beside it.
+        assertWarns("https://sites.google.com/view/paypal-login", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to sites.google.com")
+        assertWarns("https://docs.google.com/forms/d/e/1FAI/viewform", "google.com", "Shown as \u201Cgoogle.com\u201D, but goes to docs.google.com")
+        // A parent that is no platform keeps the rule: gist.github.com and mail.google.com are their owners' pages.
+        assertPlain("https://mail.google.com/", "google.com", "Shown as \u201Cgoogle.com\u201D, goes to mail.google.com")
+        assertPlain("https://gist.github.com/x", "github.com", "Shown as \u201Cgithub.com\u201D, goes to gist.github.com")
+        // A Unicode entry of the section is matched by its punycode, the form the host is read in.
+        assertWarns("https://evil.h\u00E4kkinen.fi/", "h\u00E4kkinen.fi", "Shown as \u201Ch\u00E4kkinen.fi\u201D, but goes to evil.xn--hkkinen-5wa.fi")
+    }
+
+    @Test
+    fun `a host outside ASCII is named by its punycode, so a homograph reads as what it is`() {
+        // Cyrillic а: two strings the eye cannot tell apart, until the caption names the host as the resolver reads it.
+        assertWarns("https://\u0430pple.com/", "apple.com", "Shown as \u201Capple.com\u201D, but goes to xn--pple-43d.com")
+        assertPlain("https://\u0430pple.com/", "https://\u0430pple.com/", "Goes to xn--pple-43d.com")
+        assertPlain("https://\u0430pple.com/", "\u0430pple.com", "Goes to xn--pple-43d.com")
+        assertEquals("xn--pple-43d.com", LinkLook.hostOf("https://\u0430pple.com/"))
+        assertEquals("www.xn--pple-43d.com", LinkLook.hostOf("HTTPS://WWW.\u0410pple.com/"))
+        // The text in another script claims a host all the same, and is measured against where the link goes.
+        assertWarns("https://evil.example/", "\u0430pple.com", "Shown as \u201C\u0430pple.com\u201D, but goes to evil.example")
+        assertEquals("xn--pple-43d.com", LinkLook.hostClaim("\u0430pple.com", "https://evil.example/"))
+        assertPlain("https://xn--mnchen-3ya.de/", "m\u00FCnchen.de", "Shown as \u201Cm\u00FCnchen.de\u201D, goes to xn--mnchen-3ya.de")
+        // UTS #46, non-transitional, as the browser that opens the tap reads it: ß stands and is encoded, so the
+        // caption names the host the tap resolves; IDNA2003 mapped it to ss and would have named strasse.de, a
+        // registrable name of its own, and read the two as one host.
+        assertEquals("xn--strae-oqa.de", LinkLook.asciiHost("stra\u00DFe.de"))
+        assertPlain("https://stra\u00DFe.de/", "stra\u00DFe.de", "Goes to xn--strae-oqa.de")
+        assertWarns("https://stra\u00DFe.de/", "strasse.de", "Shown as \u201Cstrasse.de\u201D, but goes to xn--strae-oqa.de")
+        // The other postures name their hosts the same way.
+        assertPlain("ssh://root@\u0430pple.com:2222/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: root@xn--pple-43d.com:2222", LinkLook.Posture.BERTH)
+        assertPlain("ssh://root@[::1]:2222/", "the box", "Shown as \u201Cthe box\u201D, opens in Berth: root@[::1]:2222", LinkLook.Posture.BERTH)
+        assertEquals("A file on xn--mnchen-3ya: /etc/hosts", look("file://m\u00FCnchen/etc/hosts", "hosts").caption)
+        assertPlain("mailto:ben@\u0430pple.com", "ben@\u0430pple.com", "Mails ben@xn--pple-43d.com")
+        assertWarns("mailto:ben@\u0430pple.com", "ben@apple.com", "Shown as \u201Cben@apple.com\u201D, but mails ben@xn--pple-43d.com")
+        // ASCII is only lowercased; a bracketed literal is left alone; a name UTS #46 refuses stands as it is, lowercased.
+        assertEquals("github.com", LinkLook.asciiHost("GitHub.com"))
+        assertEquals("[2001:db8::1]", LinkLook.asciiHost("[2001:DB8::1]"))
+        val tooLong = "\u00C4".repeat(60) + ".com"
+        assertEquals(tooLong.lowercase(), LinkLook.asciiHost(tooLong))
+    }
+
+    @Test
+    fun `the panel's address is the link's as it came, its host in ASCII once the caption says but`() {
+        // The sheet's largest text and its warning agree: a Cyrillic а cannot read as apple's over a caption naming xn--pple-43d.com.
+        assertEquals("https://xn--pple-43d.com/id", look("https://\u0430pple.com/id", "apple.com").address)
+        assertEquals("mailto:ben@xn--pple-43d.com", look("mailto:ben@\u0430pple.com", "ben@apple.com").address)
+        // A host the text names truly, or claims nothing over, stands as written, since that is what is opened.
+        assertEquals("https://\u0430pple.com/id", look("https://\u0430pple.com/id", "\u0430pple.com").address)
+        assertEquals("https://\u0430pple.com/id", look("https://\u0430pple.com/id", "click here").address)
+        assertEquals("https://m\u00FCnchen.de/", look("https://m\u00FCnchen.de/", "m\u00FCnchen.de").address)
+        // An ASCII host is drawn as it is whether the caption warns or not.
+        assertEquals("https://evil.example/login", look("https://evil.example/login", "https://github.com/berth/releases").address)
+        // Only the host is redrawn: the scheme's case, the path and a query outside ASCII stand, the host is the one after the last @,
+        // a mailbox's domain is its host, and a host UTS #46 refuses is left as it came.
+        assertEquals("HTTPS://xn--pple-43d.com/Id?q=\u0430", LinkLook.withAsciiHost("HTTPS://\u0410pple.com/Id?q=\u0430"))
+        assertEquals("https://user@xn--pple-43d.com/", LinkLook.withAsciiHost("https://user@\u0430pple.com/"))
+        assertEquals("mailto:ben@xn--pple-43d.com?subject=hi", LinkLook.withAsciiHost("mailto:ben@\u0430pple.com?subject=hi"))
+        val tooLong = "https://" + "\u00C4".repeat(60) + ".com/"
+        assertEquals(tooLong, LinkLook.withAsciiHost(tooLong))
+        assertEquals("a bare word", LinkLook.withAsciiHost("a bare word"))
     }
 
     @Test

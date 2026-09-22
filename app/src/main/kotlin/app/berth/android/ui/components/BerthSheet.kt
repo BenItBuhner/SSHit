@@ -82,6 +82,14 @@ fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresent
  * about what is under it (the Look sheet, spec C6, over the Stage it previews) asks for no scrim in
  * either form, through [scrimColor] and [dialogScrimColor]; the two default to each form's own.
  *
+ * The sheet opens at its content's height, the window's at most (spec A9's Sheet rule): a sheet
+ * whose content is a fixed set of controls shows the whole set, its buttons included, and its
+ * column scrolls when the window is shorter than the content (each control sheet's column carries
+ * `verticalScroll`). The half-open stop is not a default any sheet gets by omission, because a
+ * sheet taller than half the window that opened at half showed its buttons cut with nothing to say
+ * to drag (#15's B8, #19's blocker 4); it is for a sheet over a list that fills the height, the New
+ * tab sheet (C3), which asks for it with its own [sheetState] of `skipPartiallyExpanded = false`.
+ *
  * Either way the sheet is a window of its own, whose Compose view provides the density afresh from
  * its Context; the theme's interface cap (A11, 1.3×) is applied again inside it through
  * [CappedFontScale], so a sheet's text at the system's larger sizes stops where the screen's does.
@@ -91,7 +99,7 @@ fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresent
 fun BerthSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
-    sheetState: SheetState = rememberModalBottomSheetState(),
+    sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     scrimColor: Color = BottomSheetDefaults.ScrimColor,
     dialogMaxWidth: Dp = SheetDialogMaxWidth,
     dialogScrimColor: Color = Berth.colors.scrim,

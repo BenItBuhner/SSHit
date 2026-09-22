@@ -821,12 +821,12 @@ class AppViewModel @Inject constructor(
     /**
      * Saves [entries] as trusted keys, first seen now. One already held for its address is left as
      * it is; one that differs from the saved key of its type replaces it, the way Replace on the
-     * changed-key sheet does (the saved key deleted, the new one saved in its place, under the
-     * address as the saved key spelt it, which is the spelling the live lookup reads), since a
+     * changed-key sheet does (the saved key deleted, the new one saved in its place), since a
      * ticked conflict is that decision. A pinned endpoint takes nothing; the sheet does not offer
      * those rows, and the import holds the line if one arrives. Each entry is judged as the sheet
      * judged it ([forEndpoint], the name case-blind), read afresh so a key this import has just
-     * written is seen. Returns how many keys were added and how many replaced.
+     * written is seen; the store keys the name lowercase and reads it case-blind, so the file's
+     * spelling and the saved key's land on one row. Returns how many keys were added and how many replaced.
      */
     suspend fun importKnownHosts(entries: List<KnownHostsFile.Entry>): KnownHostsImported {
         var added = 0
@@ -834,22 +834,18 @@ class AppViewModel @Inject constructor(
         val now = System.currentTimeMillis()
         for (entry in entries) {
             val here = knownHostRepository.observeAll().first().forEndpoint(entry.host, entry.port)
-            val host = when (val standing = standingOf(entry, here)) {
+            when (val standing = standingOf(entry, here)) {
                 KnownHostStanding.EXISTING, is KnownHostStanding.Pinned -> continue
                 is KnownHostStanding.Conflicting -> {
                     knownHostRepository.delete(standing.saved.id)
                     replaced++
-                    standing.saved.host
                 }
-                KnownHostStanding.NEW -> {
-                    added++
-                    entry.host
-                }
+                KnownHostStanding.NEW -> added++
             }
             knownHostRepository.upsert(
                 KnownHostKey(
                     id = UUID.randomUUID().toString(),
-                    host = host,
+                    host = entry.host,
                     port = entry.port,
                     keyType = entry.keyType,
                     publicKeyBase64 = entry.publicKeyBase64,
@@ -863,13 +859,13 @@ class AppViewModel @Inject constructor(
     }
 
     /**
-     * The keys held for `host:port`, the name compared case-blind as DNS reads it: OpenSSH writes
-     * a `known_hosts` name in lowercase, and a host saved as `Prod-API.example.com` is the same
-     * endpoint. The parse and the import judge by this one reading, so what the sheet showed as a
-     * conflict is what the write replaces.
+     * The keys held for `host:port`, the name compared case-blind as DNS reads it and as the store
+     * does ([KnownHostKey.canonicalHost]): OpenSSH writes a `known_hosts` name in lowercase, and a
+     * host saved as `Prod-API.example.com` is the same endpoint. The parse and the import judge by
+     * this one reading, so what the sheet showed as a conflict is what the write replaces.
      */
     private fun List<KnownHostKey>.forEndpoint(host: String, port: Int): List<KnownHostKey> =
-        filter { it.port == port && it.host.equals(host, ignoreCase = true) }
+        filter { it.port == port && KnownHostKey.canonicalHost(it.host) == KnownHostKey.canonicalHost(host) }
 
     /**
      * Where [entry] stands against the keys Berth holds for its endpoint ([here]): the one rule the
