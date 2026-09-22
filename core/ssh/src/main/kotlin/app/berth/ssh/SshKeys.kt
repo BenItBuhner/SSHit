@@ -41,19 +41,21 @@ import javax.crypto.spec.SecretKeySpec
 object SshKeys {
     private val random = SecureRandom()
 
-    fun generate(algorithm: KeyAlgorithm): KeyPair = when (algorithm) {
-        KeyAlgorithm.ED25519 -> {
-            SshSecurity.ensureProviders()
-            val gen = Ed25519KeyPairGenerator().apply { init(Ed25519KeyGenerationParameters(random)) }
-            val pair = gen.generateKeyPair()
-            val priv = (pair.private as Ed25519PrivateKeyParameters).encoded
-            val pub = (pair.public as Ed25519PublicKeyParameters).encoded
-            KeyPair(Ed25519KeyFactory.getPublicKey(pub), Ed25519KeyFactory.getPrivateKey(priv))
+    fun generate(algorithm: KeyAlgorithm): KeyPair {
+        SshSecurity.ensureProviders()
+        return when (algorithm) {
+            KeyAlgorithm.ED25519 -> {
+                val gen = Ed25519KeyPairGenerator().apply { init(Ed25519KeyGenerationParameters(random)) }
+                val pair = gen.generateKeyPair()
+                val priv = (pair.private as Ed25519PrivateKeyParameters).encoded
+                val pub = (pair.public as Ed25519PublicKeyParameters).encoded
+                KeyPair(Ed25519KeyFactory.getPublicKey(pub), Ed25519KeyFactory.getPrivateKey(priv))
+            }
+            KeyAlgorithm.ECDSA_P256 -> ecPair("secp256r1")
+            KeyAlgorithm.ECDSA_P384 -> ecPair("secp384r1")
+            KeyAlgorithm.RSA_3072 -> rsaPair(3072)
+            KeyAlgorithm.RSA_4096 -> rsaPair(4096)
         }
-        KeyAlgorithm.ECDSA_P256 -> ecPair("secp256r1")
-        KeyAlgorithm.ECDSA_P384 -> ecPair("secp384r1")
-        KeyAlgorithm.RSA_3072 -> rsaPair(3072)
-        KeyAlgorithm.RSA_4096 -> rsaPair(4096)
     }
 
     private fun ecPair(curve: String): KeyPair =
@@ -151,10 +153,14 @@ object SshKeys {
         val parts = line.trim().split(Regex("\\s+"))
         require(parts.size >= 2) { "not an OpenSSH public key" }
         val blob = Base64.getDecoder().decode(parts[1])
+        SshSecurity.ensureProviders()
         return Buffer.PlainBuffer(blob).readPublicKey()
     }
 
-    fun parsePublicKeyBlob(base64: String): PublicKey = Buffer.PlainBuffer(Base64.getDecoder().decode(base64)).readPublicKey()
+    fun parsePublicKeyBlob(base64: String): PublicKey {
+        SshSecurity.ensureProviders()
+        return Buffer.PlainBuffer(Base64.getDecoder().decode(base64)).readPublicKey()
+    }
 
     /**
      * Serializes a key pair as an `openssh-key-v1` private key file. With a [passphrase] the private
