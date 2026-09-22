@@ -861,9 +861,13 @@ class FilesScreenshotTest {
         // The shell reports its directory over OSC 7 so the Files screen can jump to it.
         session.sendText("PROMPT_COMMAND='printf \"\\e]7;file://%s%s\\e\\\\\\\\\" \"\$HOSTNAME\" \"\$PWD\"' && cd $dir/logs && clear\n")
         compose.waitUntil(10_000) { session.cwd == "$dir/logs" }
-        // bash retitles the tab with the prompt that follows the OSC 7; the strip has that title before the Files tab
-        // opens beside it, or the retitle lands mid-scroll and leaves the strip wherever the scroll had got to.
-        compose.waitUntil(10_000) { session.record.value.displayTitle.endsWith("/logs") }
+        // Where the account's .bashrc titles an xterm (this workstation's does, "berth@cursor: ~/…/logs"), bash retitles
+        // the tab from the prompt that follows the OSC 7, and the strip has that title before the Files tab opens beside
+        // it, or the retitle lands mid-scroll and leaves the strip wherever the scroll had got to. The title is the
+        // shell's to set: the CI runner's skeleton sets none, the tab keeps the automatic title a fresh one starts with
+        // (the host's name), and there is nothing to wait for. A shell that titles did so from its login prompt, long
+        // before this, so a tab still under its automatic title here is one no prompt will retitle.
+        if (session.record.value.title != box.name) compose.waitUntil(10_000) { session.record.value.displayTitle.endsWith("/logs") }
 
         // The Session sheet sits behind the Stage overflow; its Files button, beside Detach, opens the host's Files tab riding this terminal.
         compose.onNodeWithContentDescription("More").performClick()
