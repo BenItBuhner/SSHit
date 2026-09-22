@@ -242,7 +242,7 @@ private fun AgentRequestSheet(p: Prompt.AgentRequest) {
         }
         Text(meaning, style = BerthType.body, color = c.text2)
         Text(
-            "Allow only what you started: the key stays on this phone, but the signature lets ${p.host.name} act as you. For this session answers its later requests too, until the tab disconnects.",
+            "Allow only what you started: the key stays on this phone, but the signature lets ${p.host.name} act as you. Allow for this session also answers its later requests, until the tab disconnects.",
             style = BerthType.body,
             color = c.text2,
         )

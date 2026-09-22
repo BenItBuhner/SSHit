@@ -15,8 +15,10 @@ import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SwatchColor
+import app.berth.ssh.AgentKey
 import app.berth.ssh.SshAuth
 import app.berth.ssh.SshKeys
+import com.hierynomus.sshj.signature.SignatureEdDSA
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -293,5 +295,152 @@ class KeyUnlockerTest {
         keystore.model = KeyAuthModel.NONE
         val auth = authFor()
         assertFalse(signs(auth, FakeKeystore.newP256().public))
+    }
+
+    // ---- the same key held by a forwarded agent ---------------------------------------------------
+
+    private val requestData = "a login onward, as the remote's ssh builds it".toByteArray()
+
+    /** Whether [blob], a sign response's `string algorithm, string signature`, verifies over [requestData]. */
+    private fun agentSigns(blob: ByteArray, public: PublicKey = keystore.pair.public): Boolean =
+        SignatureECDSA.Factory256().create().run {
+            initVerify(public)
+            update(requestData)
+            verify(blob)
+        }
+
+    private class AgentAttempt {
+        var result: ByteArray? = null
+        var error: Throwable? = null
+        val done get() = result != null || error != null
+    }
+
+    private fun agentAttempt(key: AgentKey): AgentAttempt {
+        val attempt = AgentAttempt()
+        scope.launch {
+            try {
+                attempt.result = key.sign(requestData, 0)
+            } catch (e: Throwable) {
+                attempt.error = e
+            }
+        }
+        return attempt
+    }
+
+    @Test
+    fun `the agent holds the Keystore key under its comment, and a key that needs nobody signs each request unprompted`() {
+        keystore.model = KeyAuthModel.NONE
+        val key = graph.keyUnlocker.agentKey(host, identity)
+        assertEquals("berth@pixel", key.comment)
+        assertEquals("this phone", key.name)
+        assertEquals("ecdsa-sha2-nistp256", key.keyType)
+        assertTrue(key.blob.contentEquals(SshKeys.publicKeyBlob(keystore.pair.public)))
+        assertEquals("nothing is unlocked before a program asks", 0, keystore.beginSignCalls)
+
+        assertTrue(agentSigns(runBlocking { key.sign(requestData, 0) }))
+        assertTrue(agentSigns(runBlocking { key.sign(requestData, 0) }))
+        assertEquals(2, keystore.beginSignCalls)
+        assertTrue(graph.authenticator.requests.isEmpty())
+        assertFalse(agentSigns(runBlocking { key.sign(requestData, 0) }, FakeKeystore.newP256().public))
+    }
+
+    @Test
+    fun `a per-use key held by the agent prompts for every signature, titled for the request`() {
+        val key = graph.keyUnlocker.agentKey(host, identity)
+        repeat(2) { n ->
+            val attempt = agentAttempt(key)
+            assertFalse(attempt.done)
+            val prompt = graph.prompts.current.value as Prompt.UnlockKey
+            assertTrue("the sheet says a program asked", prompt.forwarded)
+            assertEquals("this phone", prompt.identityName)
+            val request = graph.authenticator.requests[n]
+            assertEquals("Sign for pi-hole", request.title)
+            assertEquals("Confirm to sign with the key \u201Cthis phone\u201D", request.subtitle)
+            assertNotNull("the CryptoObject", request.signature)
+            graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
+            assertNull(graph.prompts.current.value)
+            assertTrue(agentSigns(attempt.result!!))
+        }
+        assertEquals("one prompt per signature, never a window", 2, graph.authenticator.requests.size)
+    }
+
+    @Test
+    fun `cancelling a forwarded unlock refuses that request and the next one asks again`() {
+        val key = graph.keyUnlocker.agentKey(host, identity)
+        val first = agentAttempt(key)
+        (graph.prompts.current.value as Prompt.UnlockKey).cancel()
+        assertTrue(first.error is IllegalStateException)
+        assertFalse(graph.authenticator.pending)
+        assertNull(graph.prompts.current.value)
+
+        val second = agentAttempt(key)
+        assertTrue(graph.prompts.current.value is Prompt.UnlockKey)
+        graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
+        assertTrue(agentSigns(second.result!!))
+    }
+
+    @Test
+    fun `a timed-window key held by the agent reopens its window with one prompt`() {
+        keystore.model = KeyAuthModel.TIMED_WINDOW
+        val key = graph.keyUnlocker.agentKey(host, identity)
+        assertTrue(agentSigns(runBlocking { key.sign(requestData, 0) }))
+        assertTrue(graph.authenticator.requests.isEmpty())
+
+        keystore.failures += UserNotAuthenticatedException()
+        val attempt = agentAttempt(key)
+        assertEquals("Sign for pi-hole", graph.authenticator.requests.single().title)
+        graph.authenticator.answer(FakeAuthenticator.SUCCEEDED)
+        assertTrue(agentSigns(attempt.result!!))
+    }
+
+    @Test
+    fun `an invalidated key refuses the agent's request without offering to regenerate`() {
+        val key = graph.keyUnlocker.agentKey(host, identity)
+        keystore.failures += KeyPermanentlyInvalidatedException()
+        val attempt = agentAttempt(key)
+        assertEquals("The key \u201Cthis phone\u201D can no longer sign: this device's fingerprints or face changed since the key was made.", attempt.error?.message)
+        assertNull("no sheet: regenerating is the next login's business", graph.prompts.current.value)
+        assertTrue(graph.authenticator.requests.isEmpty())
+        assertTrue(keystore.regenerated.isEmpty())
+    }
+
+    @Test
+    fun `the resolver gives the agent the Keystore key only when the host forwards it`() {
+        keystore.model = KeyAuthModel.NONE
+        val plain = runBlocking { graph.authResolver.resolve(host) }[0] as SshAuth.PublicKey
+        assertNull(plain.agentKey)
+
+        val forwarding = runBlocking { graph.authResolver.resolve(host.copy(agentForwarding = true)) }[0] as SshAuth.PublicKey
+        assertTrue(signs(forwarding))
+        val agentKey = forwarding.agentKey!!
+        assertEquals("this phone", agentKey.name)
+        assertTrue(agentKey.blob.contentEquals(SshKeys.publicKeyBlob(keystore.pair.public)))
+        assertTrue(agentSigns(runBlocking { agentKey.sign(requestData, 0) }))
+    }
+
+    @Test
+    fun `the resolver gives the agent a software key only when the host forwards it`() {
+        val pair = SshKeys.generate(KeyAlgorithm.ED25519)
+        val software = Identity(
+            "id-laptop", "laptop", KeyAlgorithm.ED25519, KeyStorage.SOFTWARE_ENCRYPTED, KeyProtection.NONE,
+            SshKeys.openSshPublic(pair.public, ""), SshKeys.fingerprintSha256(pair.public), "",
+            createdAt = 0L,
+        )
+        runBlocking { graph.identities.insert(software, SshKeys.openSshPrivate(pair).toByteArray()) }
+        val onLaptop = host.copy(auth = AuthMethod.Key("id-laptop"))
+
+        assertNull((runBlocking { graph.authResolver.resolve(onLaptop) }[0] as SshAuth.PublicKey).agentKey)
+        val agentKey = (runBlocking { graph.authResolver.resolve(onLaptop.copy(agentForwarding = true)) }[0] as SshAuth.PublicKey).agentKey!!
+        assertEquals("a key with no comment goes by its name", "laptop", agentKey.comment)
+        assertEquals("ssh-ed25519", agentKey.keyType)
+        assertTrue(agentKey.blob.contentEquals(SshKeys.publicKeyBlob(pair.public)))
+        val blob = runBlocking { agentKey.sign(requestData, 0) }
+        val verifies = SignatureEdDSA.Factory().create().run {
+            initVerify(pair.public)
+            update(requestData)
+            verify(blob)
+        }
+        assertTrue(verifies)
+        assertTrue(graph.authenticator.requests.isEmpty())
     }
 }
