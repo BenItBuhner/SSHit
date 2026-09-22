@@ -357,7 +357,7 @@ fun HostEditorScreen(
                 }
                 ToggleRow("Agent forwarding", agentForwarding, { agentForwarding = it }, caption = "Programs on the host may ask to sign")
                 if (agentForwarding) {
-                    CyclePicker("Signatures", listOf(false, true), agentSilent, { if (it) "Allow without asking" else "Ask each time" }) { agentSilent = it }
+                    CyclePicker("Signatures", listOf(false, true), agentSilent, { if (it) "Always allow" else "Ask each time" }) { agentSilent = it }
                     PanelNote(agentForwardingNote(identities.firstOrNull { it.id == (auth as? AuthMethod.Key)?.identityId }?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly))
                 }
             }
@@ -467,7 +467,7 @@ fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> Str
 fun agentForwardingNote(keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean): String = when {
     tunnelsOnly -> "With Tunnels only on, Connect opens no shell, so no agent is forwarded."
     !keyAuth -> "Only the key that signs in to this host is offered, and this host signs in without one, so the agent has nothing to offer."
-    silent -> "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone. Without asking, anything on the host, root included, can sign as you while a tab is connected."
+    silent -> "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone. Always allow lets anything on the host, root included, sign as you while a tab is connected."
     else -> "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone. Each request asks you first, naming the host and what it is for."
 }
 

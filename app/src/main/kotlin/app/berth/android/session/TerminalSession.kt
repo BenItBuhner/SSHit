@@ -114,7 +114,7 @@ interface SessionEnvironment {
 
     /**
      * Whether the agent forwarded to [host] signs without asking (the host editor's Signatures,
-     * Allow without asking); read at each request, so a change reaches a tab already connected.
+     * Always allow); read at each request, so a change reaches a tab already connected.
      * A stand-in asks.
      */
     suspend fun agentSignsSilently(host: Host): Boolean = false
