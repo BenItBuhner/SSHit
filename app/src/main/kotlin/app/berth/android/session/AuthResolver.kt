@@ -6,6 +6,7 @@ import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.repository.IdentityRepository
 import app.berth.domain.repository.SecretStore
+import app.berth.ssh.AgentKey
 import app.berth.ssh.SshAuth
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.runBlocking
@@ -33,7 +34,7 @@ class AuthResolver @Inject constructor(
         return when (val auth = host.auth) {
             is AuthMethod.Key -> {
                 val identity = identities.get(auth.identityId) ?: throw IllegalStateException("The key for ${host.name} no longer exists")
-                val key = if (identity.isHardwareBacked) keys.authFor(host, identity) else SshAuth.PublicKey(softwareKey(host, identity))
+                val key = if (identity.isHardwareBacked) hardwareKey(host, identity) else softwareKey(host, identity)
                 listOf(key, interactive, askPassword(host))
             }
             is AuthMethod.Password -> {
@@ -45,15 +46,26 @@ class AuthResolver @Inject constructor(
         }
     }
 
-    private suspend fun softwareKey(host: Host, identity: Identity) = run {
+    /**
+     * A host that forwards an agent gets the key as the agent would hold it beside the login's own
+     * method ([SshAuth.PublicKey.agentKey]); the agent holds it only if this key is what logged in.
+     */
+    private suspend fun hardwareKey(host: Host, identity: Identity): SshAuth.PublicKey {
+        val login = keys.authFor(host, identity)
+        return if (host.agentForwarding) SshAuth.PublicKey(login.keyProvider, login.signer, keys.agentKey(host, identity)) else login
+    }
+
+    private suspend fun softwareKey(host: Host, identity: Identity): SshAuth.PublicKey {
         val pem = identities.privateKey(identity.id)?.toString(Charsets.UTF_8)
             ?: throw IllegalStateException("Private key for ${identity.name} is missing")
-        if (SshKeys.isEncrypted(pem)) {
+        val provider = if (SshKeys.isEncrypted(pem)) {
             val passphrase = prompts.passphrase(host, identity.name) ?: throw IllegalStateException("Passphrase entry cancelled")
             SshKeys.load(pem, passphrase = passphrase)
         } else {
             SshKeys.load(pem)
         }
+        val agentKey = if (host.agentForwarding) AgentKey.software(provider, KeyUnlocker.agentComment(identity), identity.name) else null
+        return SshAuth.PublicKey(provider, agentKey = agentKey)
     }
 
     private fun askPassword(host: Host) = SshAuth.Password { runBlocking { prompts.password(host) } }
