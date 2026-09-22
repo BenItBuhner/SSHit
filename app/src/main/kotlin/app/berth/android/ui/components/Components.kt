@@ -1229,14 +1229,17 @@ fun EmptyState(
  * Screen header: title at the leading edge, actions trailing; 56 tall with the screen margin. The
  * leading slot is the back action when [onBack] is given, or [navigation] when a screen has another
  * way out of a mode (a selection header's close), so every header state shares one geometry.
+ * [actions] stays the last parameter, so a caller's trailing lambda is its actions: when
+ * [navigation] arrived after it, four screens' trailing lambdas quietly became their navigation
+ * slot, and their actions stood at the leading edge in place of the back action.
  */
 @Composable
 fun ScreenHeader(
     title: String,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
-    actions: @Composable RowScope.() -> Unit = {},
     navigation: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     // The icon actions are 48 dp targets around 44 dp circles, so they sit flush (the 2 dp of target
     // either side of each circle is the 4 dp gap there was) and the margin gives back the 2 dp.

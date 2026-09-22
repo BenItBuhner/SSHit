@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -141,6 +142,39 @@ class EditorScreenshotTest {
         themed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         capture("themes")
+    }
+
+    /**
+     * The four editors' headers at the interface's font cap: the back action leading, the title,
+     * the actions trailing (the Deck editor's is in its presets frame at the cap). Their trailing
+     * lambdas are their actions again, which they stopped being when ScreenHeader's navigation
+     * slot arrived after the actions parameter.
+     */
+    @Test
+    fun `theme gallery at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        themed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        capture("themes-font-scale-2x")
+        compose.onNodeWithContentDescription("Back").assertIsDisplayed()
+    }
+
+    @Test
+    fun `terminal theme editor at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.BERTH_DARK_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Berth Dark")).fetchSemanticsNodes().isNotEmpty() }
+        capture("terminal-theme-editor-font-scale-2x")
+        compose.onNodeWithContentDescription("Back").assertIsDisplayed()
+    }
+
+    @Test
+    fun `interface editor at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        themed { AppearanceScreen(graph.viewModel, onBack = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Interface preview").fetchSemanticsNodes().isNotEmpty() }
+        capture("appearance-font-scale-2x")
+        compose.onNodeWithContentDescription("Back").assertIsDisplayed()
     }
 
     @Test
