@@ -58,6 +58,7 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.Density
 import app.berth.domain.model.InterfaceContrast
@@ -221,7 +222,7 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
             .semantics { contentDescription = "Interface preview" },
     ) {
         Row(
-            Modifier.fillMaxWidth().height(40.dp).background(c.surface1).padding(horizontal = 4.dp),
+            Modifier.fillMaxWidth().height(DensityTokens.Comfortable.header).background(c.surface1).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The ribbon's IconActions are 44 dp wide inside the 40 dp strip.

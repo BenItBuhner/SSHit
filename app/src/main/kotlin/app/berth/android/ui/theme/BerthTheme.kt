@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.a11y.LocalReducedMotion
 import app.berth.android.ui.a11y.rememberReducedMotion
+import app.berth.domain.model.Density
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
@@ -89,7 +90,34 @@ object BerthRadius {
     val indicator: Dp @Composable get() = 4.dp * LocalRadiusScale.current
 }
 
-/** Spacing scale (A4). */
+/**
+ * The metrics density sets (A12): rows 56 → 48, fields 44 → 40, panel padding 16 → 12, the Stage
+ * header 40 → 28 and Deck keys 44 → 40 under Compact. A row loses its 8 dp from its vertical
+ * padding ([rowPadding], 10 → 6) as well as its floor, so a row with a caption, which stands above
+ * the floor, shrinks as much as one without. [BerthTheme] provides the interface theme's as
+ * [Berth.density]. The Stage header and the Deck still draw at [Comfortable]'s until the Stage
+ * chrome reads the current tokens; each place that does so names [Comfortable] outright.
+ */
+@Immutable
+data class DensityTokens(
+    val row: Dp,
+    val rowPadding: Dp,
+    val field: Dp,
+    val panelPadding: Dp,
+    val header: Dp,
+    val deckKey: Dp,
+) {
+    companion object {
+        val Comfortable = DensityTokens(row = 56.dp, rowPadding = 10.dp, field = 44.dp, panelPadding = 16.dp, header = 40.dp, deckKey = 44.dp)
+        val Compact = DensityTokens(row = 48.dp, rowPadding = 6.dp, field = 40.dp, panelPadding = 12.dp, header = 28.dp, deckKey = 40.dp)
+
+        fun of(density: Density): DensityTokens = if (density == Density.COMPACT) Compact else Comfortable
+    }
+}
+
+val LocalDensityTokens = staticCompositionLocalOf { DensityTokens.Comfortable }
+
+/** Spacing scale (A4). A panel's padding is density's ([DensityTokens.panelPadding]); [panelPadding] is Comfortable's. */
 object BerthSpace {
     val screenMargin: Dp = 20.dp
     val panelPadding: Dp = 16.dp
@@ -223,10 +251,13 @@ fun materialYouAccent(dark: Boolean): Color? {
 
 val LocalBerthColors = staticCompositionLocalOf { WarmDark }
 
-/** Shortcut for the current tokens: `Berth.colors.surface2`. */
+/** Shortcut for the current tokens: `Berth.colors.surface2`, `Berth.density.row`. */
 object Berth {
     val colors: BerthColors
         @Composable get() = LocalBerthColors.current
+
+    val density: DensityTokens
+        @Composable get() = LocalDensityTokens.current
 }
 
 private fun BerthColors.toMaterial(): ColorScheme {
@@ -295,6 +326,7 @@ fun BerthTheme(
     CompositionLocalProvider(
         LocalBerthColors provides colors,
         LocalRadiusScale provides theme.radiusScale.coerceIn(InterfaceTheme.MIN_RADIUS_SCALE, InterfaceTheme.MAX_RADIUS_SCALE),
+        LocalDensityTokens provides DensityTokens.of(theme.density),
         LocalReducedMotion provides reducedMotion,
     ) {
         CappedFontScale {

@@ -92,7 +92,7 @@ fun ShortcutSheet(
     BerthSheet(onDismiss = onDismiss) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             // A row's content: the sheet's width less its margin, the panel's padding and the row's own.
-            val contentWidth = maxWidth - BerthSpace.screenMargin * 2 - BerthSpace.panelPadding * 2 - ROW_PADDING * 2
+            val contentWidth = maxWidth - BerthSpace.screenMargin * 2 - Berth.density.panelPadding * 2 - ROW_PADDING * 2
             val measurer = rememberTextMeasurer(cacheSize = 64)
             Column(
                 Modifier
