@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -105,6 +107,7 @@ enum class HostSort(val label: String) {
  * Settings'. One act, one word across the tap: the button says import, as the sheet and C1's own
  * line do. Quick connect and Import ssh config follow as text actions.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HostsScreen(
     vm: AppViewModel,
@@ -192,7 +195,9 @@ fun HostsScreen(
                 title = "Nothing here yet.",
                 body = "Hosts, keys and history stay on this device. No account. No telemetry.",
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                // The pair on one line where it fits (411 dp at the font cap does), the secondary wrapping under the
+                // primary where it will not (a narrower phone at the cap, a longer translation), never cut at the margin.
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
                     BerthButton("Import a bundle", onClick = { importBundle = true }, kind = ButtonKind.SECONDARY)
                 }

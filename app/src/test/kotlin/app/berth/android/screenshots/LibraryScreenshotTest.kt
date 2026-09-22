@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -49,6 +50,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -323,6 +325,33 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         assertSheetButtonsReachable("Choose file", "Open", "Cancel")
         capture("hosts-empty-restore-sheet")
         assertNoTextCut("the bundle import opened from the empty Hosts library")
+    }
+
+    /**
+     * The pair keeps to the margin where the line is short for it: on a 300 dp window (a phone
+     * narrower than this fixture's, or a longer translation) Add host and Import a bundle share the
+     * line at 1×, and at the font cap, where the two run past the margin, the secondary wraps under
+     * the primary flush with it, 8 dp below, in place of being cut at the edge; the text actions
+     * keep their lines under the pair either way. Geometry, not a frame.
+     */
+    @Test
+    fun `the empty Hosts library's pair wraps under itself on a narrow window rather than past the margin`() {
+        themed { Box(Modifier.width(300.dp)) { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) } }
+        waitForText("Nothing here yet.")
+        val density = compose.density.density
+        val add = compose.onNodeWithText("Add host").fetchSemanticsNode()
+        val import = compose.onNodeWithText("Import a bundle").fetchSemanticsNode()
+        assertTrue("the secondary is whole within the 300 dp", import.positionInRoot.x + import.size.width <= 300 * density + 0.5f)
+        if (systemFontScale > 1f) {
+            assertEquals("wrapped flush with the primary", add.positionInRoot.x, import.positionInRoot.x, 1f)
+            assertTrue("wrapped under the primary, 8 dp below it", import.positionInRoot.y >= add.positionInRoot.y + add.size.height + 8 * density - 1f)
+        } else {
+            assertEquals("on the primary's line", add.positionInRoot.y, import.positionInRoot.y, 1f)
+            assertTrue("beside the primary, after it", import.positionInRoot.x >= add.positionInRoot.x + add.size.width)
+        }
+        val quick = compose.onNodeWithText("Quick connect").fetchSemanticsNode()
+        assertTrue("the text actions take their lines under the pair", quick.positionInRoot.y >= import.positionInRoot.y + import.size.height - 1f)
+        assertNoTextCut("the empty Hosts library on a 300 dp window")
     }
 
     @Test
