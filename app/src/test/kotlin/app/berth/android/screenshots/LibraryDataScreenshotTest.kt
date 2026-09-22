@@ -10,9 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -21,6 +23,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -37,8 +40,20 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.security.FakeKeystore
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.hosts.HostEditorScreen
+import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.keys.KeysScreen
+import app.berth.android.ui.settings.HOSTS_EXPORT_NOTE
+import app.berth.android.ui.settings.ImportBundleSheet
+import app.berth.android.ui.settings.PickedFile
+import app.berth.android.ui.settings.hardwareNote
+import app.berth.android.ui.settings.keysLine
+import app.berth.android.ui.settings.leftBehindNote
+import app.berth.android.ui.settings.namedKeyLine
+import app.berth.android.ui.settings.recreateNote
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.data.bundle.BerthBundles
+import app.berth.data.bundle.BundleCodec
+import app.berth.data.bundle.BundleKdf
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
@@ -71,8 +86,9 @@ import java.util.concurrent.TimeUnit
  * The library's data surfaces of wave four (spec C9, C10, C12, C13) through Robolectric's native
  * graphics, each at the system's 1× and at 2×, where interface text stops at its 1.3× cap (A11):
  * the host editor's question when Back would drop edits and its Advanced › Scrollback and
- * Ciphers rows, and Rename and Change protection on the Keys screen. Every capture is the accessibility audit
- * too, and no text on these surfaces is cut at either size.
+ * Ciphers rows, Rename and Change protection on the Keys screen, and the Hosts screen's Export
+ * hosts and the `+` long-press to Quick connect, with a hosts-only file's import. Every capture
+ * is the accessibility audit too, and no text on these surfaces is cut at either size.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -82,6 +98,8 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "system font scale {0}")
         fun scales(): List<Array<Any>> = listOf(arrayOf(1f), arrayOf(2f))
+
+        private const val OTHER_PASSPHRASE = "moving day 2026"
     }
 
     @get:Rule(order = 0)
@@ -523,6 +541,143 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         assertEquals("the hardware key is as it was", before, graph.identities.items.value.first { it.id == "id-phone" })
     }
 
+    // ---- Hosts › Export and the header's + (C9) --------------------------------------------------
+
+    private fun hostsScreen(onAddHost: () -> Unit = {}) = themed {
+        HostsScreen(graph.viewModel, onConnect = {}, onAddHost = onAddHost, onEditHost = {}, onBack = null, onOpenDrawer = null, onKnownHosts = {})
+    }
+
+    /**
+     * The overflow has Export hosts after the imports and before Known hosts, as C9 orders it, and
+     * its sheet is the bundle export's: the contents line counts the hosts and their saved
+     * passwords, the line under it says the keys stay and what a key-login host does on the other
+     * phone, no hardware key is named as staying since every key does, and Export waits on two
+     * matching passphrases of length.
+     */
+    @Test
+    fun `the Hosts overflow has Export hosts, whose sheet seals the hosts alone`() {
+        seedLibrary()
+        hostsScreen()
+        waitForText("prod-api")
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Export hosts")
+        val tops = listOf("Import known_hosts", "Export hosts", "Known hosts").map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
+        assertEquals("C9's order: the imports, Export, Known hosts", tops.sorted(), tops)
+        capture("hosts-overflow-export")
+        assertNoTextCut("the Hosts overflow", within = isPopup())
+
+        compose.onNodeWithText("Export hosts").performClick()
+        waitForText("The host list alone, in one .berth file")
+        inSheet("Export hosts").assertExists()
+        waitForText("3 hosts \u00B7 1 saved password")
+        waitForText(HOSTS_EXPORT_NOTE)
+        compose.onAllNodes(hasText("is hardware-backed and stays on this phone", substring = true)).assertCountEquals(0)
+        inSheet("Export").assertIsNotEnabled()
+        sheetFieldUnder("Passphrase").performTextInput("moving day 2026")
+        sheetFieldUnder("Once more").performTextInput("moving day 2026")
+        inSheet("Export").assertIsEnabled()
+        capture("hosts-export-sheet")
+        assertNoTextCut("the Export hosts sheet")
+        compose.assertSheetAtContentHeight("Export")
+    }
+
+    /** With no host there is nothing to export: the overflow leaves the row out rather than open a sheet for none. */
+    @Test
+    fun `with no host saved the overflow offers no Export hosts`() {
+        hostsScreen()
+        waitForText("Nothing here yet.")
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Known hosts")
+        hasNoText("Export hosts")
+    }
+
+    /** The header's `+` (C9): a tap adds a host, a long-press opens Quick connect over the library and adds nothing. */
+    @Test
+    fun `the header's plus adds a host on a tap and opens Quick connect on a long-press`() {
+        seedLibrary()
+        var added = 0
+        hostsScreen(onAddHost = { added++ })
+        waitForText("prod-api")
+        val plus = compose.onNodeWithContentDescription("Add host")
+        plus.performClick()
+        compose.waitForIdle()
+        assertEquals(1, added)
+        hasNoText("user@host:port")
+
+        plus.performTouchInput { longClick() }
+        waitForText("user@host:port")
+        inSheet("Quick connect").assertExists()
+        assertEquals("the long-press added no host", 1, added)
+        capture("hosts-plus-long-press-quick-connect")
+        assertNoTextCut("Quick connect from the header's plus")
+    }
+
+    /** A screen reader cannot guess a long-press: the `+` names it, and the action opens Quick connect as the finger does. */
+    @Test
+    fun `a screen reader is offered the plus's long-press as Quick connect`() {
+        seedLibrary()
+        var added = 0
+        hostsScreen(onAddHost = { added++ })
+        waitForText("prod-api")
+        val plus = compose.onNodeWithContentDescription("Add host")
+        plus.assert(SemanticsMatcher("a long-press named Quick connect") { it.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Quick connect" })
+        plus.performSemanticsAction(SemanticsActions.OnLongClick)
+        waitForText("user@host:port")
+        inSheet("Quick connect").assertExists()
+        assertEquals(0, added)
+    }
+
+    /**
+     * Another phone's hosts-only file, opened here: this phone holds one of its software keys (the
+     * same laptop key, under its own name) and not the other, and none of the other phone's
+     * hardware key. The panel counts the hosts, names the hardware key to make again, and gives
+     * each key the file names without carrying a row saying whether this phone has it and so what
+     * its host does; the import points the host on the laptop key at this phone's copy, leaves the
+     * other two asking each time, writes no key, and ends on the two lists, the software key's
+     * saying where it can come from.
+     */
+    @Test
+    fun `a hosts-only bundle's import says which of its keys this phone has, and what the hosts on the rest do`() {
+        seedLibrary()
+        val blob = runBlocking { hostsOnlyFromAnotherPhone() }
+        val keysBefore = graph.identities.items.value
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = null, onKnownHosts = {})
+            ImportBundleSheet(graph.viewModel, onDismiss = {}, onNotice = {}, initialFile = PickedFile("berth-hosts-2026-09-21.berth", blob), onMakeKey = {})
+        }
+        waitForTextContaining("berth-hosts-2026-09-21.berth \u00B7 ")
+        sheetFieldUnder("Passphrase").performTextInput(OTHER_PASSPHRASE)
+        inSheet("Open").performClick()
+        waitForText("IN THIS BUNDLE")
+        waitForText("4 hosts")
+        waitForText(keysLine(carried = 0, hardware = 1))
+        waitForText("old laptop")
+        waitForText(namedKeyLine("old laptop", KeyAlgorithm.ED25519.displayName, hereAs = "laptop ed25519", hosts = listOf("prod-web")))
+        waitForText(namedKeyLine("deploy bot", KeyAlgorithm.ED25519.displayName, hereAs = null, hosts = listOf("ci-runner")))
+        waitForText(recreateNote(listOf("Phone key"), listOf("db-primary")))
+        capture("hosts-bundle-import-contents")
+        assertNoTextCut("a hosts-only bundle, opened")
+
+        inSheet("Import").performScrollTo().performClick()
+        waitForText("Imported 4 hosts.")
+        waitForText("MAKE AGAIN IN KEYS")
+        waitForText("NOT ON THIS PHONE")
+        waitForText(hardwareNote(1))
+        waitForText(leftBehindNote(1))
+        waitForTextContaining("ci-runner asks each time until you pick a key")
+        capture("hosts-bundle-import-report")
+        assertNoTextCut("a hosts-only bundle's report")
+
+        val hosts = graph.hosts.items.value.associateBy { it.id }
+        assertEquals("the host on the laptop key logs in with this phone's copy", AuthMethod.Key("id-laptop"), hosts.getValue("h-web").auth)
+        assertEquals(AuthMethod.AskEachTime, hosts.getValue("h-ci").auth)
+        assertEquals(AuthMethod.AskEachTime, hosts.getValue("h-db").auth)
+        assertEquals(AuthMethod.Password("host-password:h-nas"), hosts.getValue("h-nas").auth)
+        assertEquals("hunter2", runBlocking { graph.secrets.get("host-password:h-nas") }!!.toString(Charsets.UTF_8))
+        assertEquals("no key was written", keysBefore, graph.identities.items.value)
+        assertEquals(7, hosts.size)
+    }
+
     // ---- fixtures ---------------------------------------------------------------------------------
 
     private val now = System.currentTimeMillis()
@@ -569,5 +724,33 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         graph.knownHosts.upsert(known("kh-api", "203.0.113.10", 22, 90))
         graph.knownHosts.upsert(known("kh-lab", "192.168.1.20", 22, 30))
         graph.knownHosts.upsert(known("kh-build", "build.internal", 22, 5))
+    }
+
+    /**
+     * Another phone's Hosts › Export: four hosts, on this phone's laptop key held there under
+     * another id and name, on a software key this phone does not have, on a hardware key, and on a
+     * saved password. A light key derivation keeps the test quick; the container is the same.
+     */
+    private suspend fun hostsOnlyFromAnotherPhone(): ByteArray {
+        val other = TestStorage()
+        val laptop = graph.identities.items.value.first { it.id == "id-laptop" }
+        other.identities.insert(laptop.copy(id = "id-laptop-other", name = "old laptop"), graph.identities.privateKey("id-laptop"))
+        val bot = SshKeys.generate(KeyAlgorithm.ED25519)
+        other.identities.insert(
+            Identity("id-bot", "deploy bot", KeyAlgorithm.ED25519, KeyStorage.SOFTWARE_ENCRYPTED, KeyProtection.NONE, SshKeys.openSshPublic(bot.public, "bot@ci"), SshKeys.fingerprintSha256(bot.public), "bot@ci", createdAt = 1),
+            SshKeys.openSshPrivate(bot, "bot@ci").toByteArray(),
+        )
+        val phone = FakeKeystore.newP256()
+        other.identities.insert(
+            Identity("id-phone-other", "Phone key", KeyAlgorithm.ECDSA_P256, KeyStorage.ANDROID_KEYSTORE, KeyProtection.BIOMETRIC, SshKeys.openSshPublic(phone.public, "berth@old-phone"), SshKeys.fingerprintSha256(phone.public), "berth@old-phone", keystoreAlias = "berth-id-phone-other", createdAt = 2),
+            null,
+        )
+        other.hosts.upsert(host("h-web", "prod-web", "203.0.113.20", "deploy", SwatchColor.TEAL, AuthMethod.Key("id-laptop-other")))
+        other.hosts.upsert(host("h-ci", "ci-runner", "ci.internal", "ci", SwatchColor.OCHRE, AuthMethod.Key("id-bot")))
+        other.hosts.upsert(host("h-db", "db-primary", "db.internal", "postgres", SwatchColor.SLATE, AuthMethod.Key("id-phone-other")))
+        other.hosts.upsert(host("h-nas", "nas", "10.0.0.5", "admin", SwatchColor.MOSS, AuthMethod.Password("host-password:h-nas")))
+        other.secrets.put("host-password:h-nas", "hunter2".toByteArray())
+        val bundles = BerthBundles(other.hosts, other.identities, other.workspaces, other.snippets, other.tunnels, other.knownHosts, other.settings, other.secrets, BundleCodec())
+        return bundles.exportHosts(OTHER_PASSPHRASE.toCharArray(), exportedAt = now - TimeUnit.DAYS.toMillis(1), appVersion = "0.2.0", cost = BundleKdf(memoryKiB = 1024, iterations = 1, parallelism = 1))
     }
 }

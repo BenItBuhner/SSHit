@@ -1191,6 +1191,11 @@ class AppViewModel @Inject constructor(
         bundles.export(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
     }
 
+    /** Hosts › Export: the hosts alone ([BerthBundles.collectHosts]), sealed under [passphrase] as [exportBundle] seals everything. */
+    suspend fun exportHosts(passphrase: CharArray, appVersion: String): ByteArray = withContext(Dispatchers.Default) {
+        bundles.exportHosts(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
+    }
+
     /** The document [blob] seals, read with [passphrase]; throws [app.berth.data.bundle.BundleException] or [app.berth.domain.model.BundleFormatException]. */
     suspend fun openBundle(blob: ByteArray, passphrase: CharArray): BerthBundle = withContext(Dispatchers.Default) {
         bundles.open(blob, passphrase)

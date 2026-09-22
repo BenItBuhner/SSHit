@@ -54,6 +54,7 @@ import app.berth.domain.model.BundleFormatException
 import app.berth.domain.model.BundleImportOptions
 import app.berth.domain.model.BundleImportPlan
 import app.berth.domain.model.BundleImportReport
+import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
@@ -76,10 +77,14 @@ const val MIN_BUNDLE_PASSPHRASE = 8
  * passphrase twice, seals the bundle off the main thread and then asks where to put the file, so
  * a cancelled picker costs nothing but the seal. A hardware-backed key is named here, before the
  * export, since it stays on this phone by construction and the other phone will ask for a new one.
+ *
+ * [hostsOnly] is Hosts › Export (spec C9): the same sheet and the same file, holding the hosts
+ * and their saved passwords alone ([app.berth.data.bundle.BerthBundles.collectHosts]), every
+ * key staying here; the sheet says what a key-login host does on the other phone.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String) -> Unit) {
+fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String) -> Unit, hostsOnly: Boolean = false) {
     val c = Berth.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -120,7 +125,8 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
         }
     }
 
-    val contents = remember(hosts, identities, workspaces, snippets, tunnels, knownHosts, themes) {
+    val contents = remember(hosts, identities, workspaces, snippets, tunnels, knownHosts, themes, hostsOnly) {
+        if (hostsOnly) return@remember hostsExportContents(hosts)
         buildList {
             add(BundleImportReport.count(hosts.size, "host"))
             add(BundleImportReport.count(identities.size, "key"))
@@ -141,7 +147,7 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
         busy = true
         failure = null
         scope.launch {
-            val bytes = runCatching { vm.exportBundle(passphrase.toCharArray(), version) }
+            val bytes = runCatching { if (hostsOnly) vm.exportHosts(passphrase.toCharArray(), version) else vm.exportBundle(passphrase.toCharArray(), version) }
                 .onFailure { failure = it.message ?: "Couldn't seal the bundle." }
                 .getOrNull()
             if (bytes == null) {
@@ -149,7 +155,7 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                 return@launch
             }
             sealed = bytes
-            runCatching { saver.launch("berth-${LocalDate.now()}.${BerthBundle.EXTENSION}") }
+            runCatching { saver.launch((if (hostsOnly) "berth-hosts-" else "berth-") + "${LocalDate.now()}.${BerthBundle.EXTENSION}") }
                 .onFailure { sealed = null; busy = false; failure = "No app on this phone can save a file." }
         }
     }
@@ -164,15 +170,15 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SheetTitle("Export encrypted bundle", "One .berth file for another phone, or for keeping")
+            if (hostsOnly) SheetTitle("Export hosts", "The host list alone, in one .berth file") else SheetTitle("Export encrypted bundle", "One .berth file for another phone, or for keeping")
             Text(contents, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
             Text(
-                "Saved passwords and software keys go in, sealed. The file opens only with this passphrase; there is no other way in, so keep it somewhere that is not this phone.",
+                if (hostsOnly) HOSTS_EXPORT_NOTE else "Saved passwords and software keys go in, sealed. The file opens only with this passphrase; there is no other way in, so keep it somewhere that is not this phone.",
                 style = BerthType.caption,
                 color = c.text3,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
-            if (hardware.isNotEmpty()) Text(hardwareStaysNote(hardware), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
+            if (hardware.isNotEmpty() && !hostsOnly) Text(hardwareStaysNote(hardware), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
             BerthField(
                 passphrase,
                 { passphrase = it; failure = null },
@@ -366,7 +372,9 @@ fun ImportBundleSheet(
  * phone's one copy, the default terminal theme, the Deck and the interface theme, are switches,
  * the first only where the bundle's would change what new terminals open in ([defaultThemeHere]
  * names what they open in now); a tunnel that would listen on every interface has its own row
- * under the tunnels, saying it comes in switched off. The known hosts take the `known_hosts`
+ * under the tunnels, saying it comes in switched off. A key a hosts-only bundle names without
+ * carrying it has a row of its own, saying whether this phone has it ([BundleImportPlan.identitiesHere])
+ * and so whether its hosts log in with it or ask each time. The known hosts take the `known_hosts`
  * import's shape (spec A16, C13) once [plan] has been read: one count row for the keys that need
  * no decision, a bundle being a restore and a new key routine; then the decisions, a row each, a
  * key that differs from one this phone trusts for its endpoint as an unticked [TickRow], its line
@@ -384,7 +392,8 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         return
     }
     val hardware = bundle.hardwareIdentities
-    val software = bundle.identities.size - hardware.size
+    val leftBehind = bundle.leftBehindIdentities
+    val carried = bundle.identities.size - hardware.size - leftBehind.size
     Panel(label = "In this bundle") {
         @Composable
         fun row(title: String, subtitle: String) {
@@ -399,10 +408,22 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
             if (count > 0) row(BundleImportReport.count(count, noun), names)
         }
         row(bundle.hosts.size, "host", bundle.hosts.map { it.name })
-        if (bundle.identities.isNotEmpty()) {
-            row(
-                BundleImportReport.count(software, "key") + if (hardware.isNotEmpty()) " and ${BundleImportReport.count(hardware.size, "hardware key")} to make again" else "",
-                bundle.identities.map { it.identity.name },
+        if (carried + hardware.size > 0) {
+            row(keysLine(carried, hardware.size), bundle.identities.map { it.identity }.filter { it !in leftBehind }.map { it.name })
+        }
+        // A hosts-only bundle's keys, named and not carried: a row each, saying whether this phone has the key and so what its hosts do.
+        for (identity in leftBehind) {
+            ListRow(
+                identity.name,
+                subtitle = namedKeyLine(
+                    identity.name,
+                    identity.algorithm.displayName,
+                    hereAs = plan?.identitiesHere?.get(identity.id),
+                    hosts = bundle.hosts.filter { (it.auth as? AuthMethod.Key)?.identityId == identity.id }.map { it.name },
+                ),
+                subtitleMaxLines = 3,
+                surface = Color.Transparent,
+                minHeight = 52.dp,
             )
         }
         row(bundle.workspaces.size, "workspace", bundle.workspaces.map { it.name })
@@ -546,11 +567,35 @@ internal fun tunnelsHeldOffLine(n: Int): String = if (n == 1) "1 tunnel comes in
 internal fun tunnelsHeldOffCaption(specs: List<String>): String =
     namesLine(specs) + " \u00B7 " + if (specs.size == 1) "it listens on every interface; it stays off until you turn it on" else "they listen on every interface; they stay off until you turn them on"
 
-/** After the import: each key to make again and the hosts waiting on it, one row a key, in one panel. */
+/**
+ * After the import: each key this phone lacks and the hosts waiting on it, one row a key, a panel
+ * for the hardware-backed keys to make again and one for the software keys a hosts-only export
+ * left on the other phone, each with what to do about them.
+ */
 @Composable
 private fun RecreateList(notices: List<RecreateNotice>) {
+    val (hardware, leftBehind) = notices.partition { it.hardware }
+    if (hardware.isNotEmpty()) RecreatePanel("Make again in Keys", hardware, hardwareNote(hardware.size))
+    if (leftBehind.isNotEmpty()) RecreatePanel("Not on this phone", leftBehind, leftBehindNote(leftBehind.size))
+}
+
+/** The report's line for the [n] hardware-backed keys the bundle named. */
+internal fun hardwareNote(n: Int): String =
+    (if (n == 1) "This key was" else "These were") +
+        " hardware-backed on the phone that made the bundle, and a hardware key never leaves its phone. Make a new key here, install it on each host, then pick it in the host's settings."
+
+/** The report's line for the [n] software keys the file named and did not carry. */
+internal fun leftBehindNote(n: Int): String =
+    if (n == 1) {
+        "This key stayed on the phone that made the file. Bring it here with Keys \u203A Import key, or make a new key and install it on each host, then pick it in the host's settings."
+    } else {
+        "These keys stayed on the phone that made the file. Bring each here with Keys \u203A Import key, or make a new key and install it on each host, then pick it in the host's settings."
+    }
+
+@Composable
+private fun RecreatePanel(label: String, notices: List<RecreateNotice>, note: String) {
     val c = Berth.colors
-    Panel(label = "Make again in Keys") {
+    Panel(label = label) {
         for (notice in notices) {
             ListRow(
                 notice.identityName,
@@ -564,12 +609,43 @@ private fun RecreateList(notices: List<RecreateNotice>) {
             )
         }
     }
-    Text(
-        "These were hardware-backed on the phone that made the bundle, and a hardware key never leaves its phone. Make a new key here, install it on each host, then pick it in the host's settings.",
-        style = BerthType.caption,
-        color = c.text3,
-        modifier = Modifier.padding(horizontal = 4.dp),
-    )
+    Text(note, style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
+}
+
+/** The export sheet's contents line in its hosts-only mode: the hosts, and the saved passwords they log in with. */
+internal fun hostsExportContents(hosts: List<Host>): String {
+    val passwords = hosts.mapNotNull { (it.auth as? AuthMethod.Password)?.secretId }.distinct().size
+    return BundleImportReport.count(hosts.size, "host") + if (passwords > 0) " \u00B7 " + BundleImportReport.count(passwords, "saved password") else ""
+}
+
+/** The export sheet's line in its hosts-only mode: what goes in, what stays, and what a key-login host does on the other phone. */
+internal const val HOSTS_EXPORT_NOTE =
+    "Saved passwords go in, sealed. Keys stay on this phone: the file names each host's key by its public half, and a phone that has the same key logs in with it. The file opens only with this passphrase; there is no other way in."
+
+/** The contents row for the keys a bundle carries: `2 keys`, `1 key and 1 hardware key to make again`, or the hardware keys alone. */
+internal fun keysLine(carried: Int, hardware: Int): String {
+    val toMake = "${BundleImportReport.count(hardware, "hardware key")} to make again"
+    return when {
+        hardware == 0 -> BundleImportReport.count(carried, "key")
+        carried == 0 -> toMake
+        else -> BundleImportReport.count(carried, "key") + " and " + toMake
+    }
+}
+
+/**
+ * The row of a key a hosts-only bundle names without carrying it: its [algorithm], that it is not
+ * in the file, and where it stands here, [hereAs] the name of the key this phone holds for it or
+ * null when it holds none, and so what the [hosts] on it do after the import.
+ */
+internal fun namedKeyLine(name: String, algorithm: String, hereAs: String?, hosts: List<String>): String {
+    val many = hosts.size > 1
+    val who = hosts.joinToString(", ")
+    return "$algorithm, not in the file \u00B7 " + when {
+        hereAs != null -> (if (hereAs == name) "this phone has it" else "this phone has it as $hereAs") +
+            if (hosts.isEmpty()) "" else ", so $who log${if (many) "" else "s"} in with it"
+        else -> "this phone does not have it" +
+            if (hosts.isEmpty()) "" else ", so $who ask${if (many) "" else "s"} each time until you pick a key"
+    }
 }
 
 /** The export sheet's line for keys that stay: names, then what the other phone will do. */

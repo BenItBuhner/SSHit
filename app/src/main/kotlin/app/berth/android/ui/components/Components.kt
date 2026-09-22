@@ -95,6 +95,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -1281,8 +1282,10 @@ fun ScreenHeader(
  * 48 dp square centred on the row instead of squashing, and the circle stays a circle. [reach] is
  * extra target above the circle for a header that lends its status-bar inset (the ribbon's
  * [app.berth.android.ui.tabs.TabStripStyle.topReach]): the target grows upward by it and the circle
- * stays centred on the row beneath, the way the tabs beside it do.
+ * stays centred on the row beneath, the way the tabs beside it do. [onLongClick], when given, is a
+ * second action on the same target, named to a screen reader by [longClickLabel].
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun IconAction(
     onClick: () -> Unit,
@@ -1290,6 +1293,8 @@ fun IconAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     reach: Dp = LocalTargetReach.current,
+    onLongClick: (() -> Unit)? = null,
+    longClickLabel: String? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -1298,12 +1303,19 @@ fun IconAction(
     Box(
         modifier
             .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
-            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onLongClick = onLongClick, onClick = onClick)
+                } else {
+                    Modifier.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+                },
+            )
             // The glyph is decoration; screen readers get the action's name, not the character.
             .clearAndSetSemantics {
                 contentDescription = description
                 role = Role.Button
                 if (!enabled) disabled()
+                if (onLongClick != null && enabled) this.onLongClick(label = longClickLabel) { onLongClick(); true }
             }
             .padding(top = reach),
         contentAlignment = Alignment.Center,

@@ -46,6 +46,7 @@ import app.berth.android.ui.settings.MIN_BUNDLE_PASSPHRASE
 import app.berth.android.ui.settings.PickedFile
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.settings.defaultTerminalThemeCaption
+import app.berth.android.ui.settings.hardwareNote
 import app.berth.android.ui.settings.importDisclosure
 import app.berth.android.ui.settings.tunnelsHeldOffLine
 import app.berth.android.ui.stage.CommandHistorySheet
@@ -396,6 +397,7 @@ class PersistenceScreenshotTest {
         // Two known hosts in the line, the replaced one said so; the pinned endpoint's key and the unticked RSA key were not taken and are not counted.
         waitForText("Imported 3 hosts, 1 key, 1 workspace, 2 snippets, 3 tunnels, 1 theme, 2 known hosts (1 replaced), the Deck, the interface theme and the default terminal theme.")
         waitForText("db-primary asks each time until you pick a key", substring = true)
+        waitForText(hardwareNote(1))
         compose.onNodeWithText("Done").assertExists()
         capture("$name-recreate")
         compose.assertNoTextCut("the import's report")

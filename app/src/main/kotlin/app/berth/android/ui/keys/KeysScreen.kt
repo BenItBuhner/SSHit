@@ -225,13 +225,13 @@ private enum class KeyKind(val label: String) { ED25519("Ed25519"), HARDWARE("EC
 
 /**
  * What the New key sheet opens set to when another surface asks for a key it can name: the
- * bundle import's Make a key (spec C20), for a hardware-backed key that stayed on the phone the
- * bundle came from, opens on that key's [name] and its type, [hardware] on this phone too, since
+ * bundle import's Make a key (spec C20), for a key that stayed on the phone the bundle came from,
+ * opens on that key's [name] and its type, [hardware] on this phone too when it was there, since
  * that is the key it stands in for. Everything else on the sheet is the user's to choose.
  */
 data class NewKeyPrefill(val name: String, val algorithm: KeyAlgorithm, val hardware: Boolean) {
     /** The bundle import's recreate notice as a prefill: the key's name, hardware-backed as the one it replaces was. */
-    constructor(notice: RecreateNotice) : this(notice.identityName, notice.algorithm, hardware = true)
+    constructor(notice: RecreateNotice) : this(notice.identityName, notice.algorithm, hardware = notice.hardware)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
