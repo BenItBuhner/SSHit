@@ -990,9 +990,14 @@ class TerminalSession(
         scope.launch(writer) { runCatching { sh.write(bytes) } }
     }
 
-    fun sendText(text: String, modifiers: Int = 0) {
+    /**
+     * [modifiers] may hold Shift with the glyph already shifted: it is the chord's for a program that
+     * asked for CSI u, and nothing to the legacy encoding. [base] is the key's unshifted character
+     * where [text] is the one character a hardware key typed, else 0.
+     */
+    fun sendText(text: String, modifiers: Int = 0, base: Int = 0) {
         noteActivity()
-        trackTyped(text, modifiers)
+        trackTyped(text, modifiers and Mod.SHIFT.inv())
         if (modifiers == 0) {
             send(text.toByteArray(Charsets.UTF_8))
             return
@@ -1002,7 +1007,8 @@ class TerminalSession(
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
-            out.write(emulator.encodeText(cp, modifiers, altSendsMeta))
+            val key = if (Character.charCount(cp) == text.length) base else 0
+            out.write(emulator.encodeText(cp, modifiers, altSendsMeta, key))
             i += Character.charCount(cp)
         }
         send(out.toByteArray())
