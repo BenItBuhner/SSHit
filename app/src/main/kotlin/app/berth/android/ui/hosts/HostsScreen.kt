@@ -98,11 +98,12 @@ enum class HostSort(val label: String) {
  * back returns to the Stage.
  *
  * With no host saved the screen is the empty state (spec C1): the stance, then Add host with
- * Restore a bundle beside it, since a new install's first screen is where a `.berth` file from the
+ * Import a bundle beside it, since a new install's first screen is where a `.berth` file from the
  * last phone is wanted and the import otherwise lives under Settings › Data; the button opens that
- * import ([ImportBundleSheet]) as it is there, the Make a key hand-off included, and the import's
- * one-line summary shows at the foot of this screen as it does at Settings'. Quick connect and
- * Import ssh config follow as text actions.
+ * import ([ImportBundleSheet]) as it is there, under its own title, the Make a key hand-off
+ * included, and the import's one-line summary shows at the foot of this screen as it does at
+ * Settings'. One act, one word across the tap: the button says import, as the sheet and C1's own
+ * line do. Quick connect and Import ssh config follow as text actions.
  */
 @Composable
 fun HostsScreen(
@@ -193,7 +194,7 @@ fun HostsScreen(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     BerthButton("Add host", onClick = onAddHost, kind = ButtonKind.PRIMARY)
-                    BerthButton("Restore a bundle", onClick = { importBundle = true }, kind = ButtonKind.SECONDARY)
+                    BerthButton("Import a bundle", onClick = { importBundle = true }, kind = ButtonKind.SECONDARY)
                 }
                 BerthButton("Quick connect", onClick = { quickConnect = true }, kind = ButtonKind.TEXT)
                 BerthButton("Import ssh config", onClick = { importConfig = true }, kind = ButtonKind.TEXT)

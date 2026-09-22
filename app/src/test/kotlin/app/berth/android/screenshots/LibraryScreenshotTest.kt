@@ -297,26 +297,26 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     // ---- hosts (C9) -------------------------------------------------------------------------------
 
     /**
-     * With no host saved, the empty state (spec C1) offers Add host with Restore a bundle beside it
+     * With no host saved, the empty state (spec C1) offers Add host with Import a bundle beside it
      * on one line, Quick connect and Import ssh config under them a line each, and the second
-     * opens Settings › Data's bundle import (spec C20) as it is there, its buttons whole in the
-     * window as the sheet opens.
+     * opens Settings › Data's bundle import (spec C20) as it is there, under the one title, its
+     * buttons whole in the window as the sheet opens.
      */
     @Test
-    fun `the empty Hosts library offers a bundle restore that opens the import`() {
+    fun `the empty Hosts library offers a bundle import that opens the import sheet`() {
         themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
         waitForText("Nothing here yet.")
         val add = compose.onNodeWithText("Add host").fetchSemanticsNode()
-        val restore = compose.onNodeWithText("Restore a bundle").fetchSemanticsNode()
-        assertEquals("the secondary stands on the primary's line", add.positionInRoot.y, restore.positionInRoot.y, 1f)
-        assertTrue("the secondary stands beside the primary, after it", restore.positionInRoot.x >= add.positionInRoot.x + add.size.width)
+        val import = compose.onNodeWithText("Import a bundle").fetchSemanticsNode()
+        assertEquals("the secondary stands on the primary's line", add.positionInRoot.y, import.positionInRoot.y, 1f)
+        assertTrue("the secondary stands beside the primary, after it", import.positionInRoot.x >= add.positionInRoot.x + add.size.width)
         val quick = compose.onNodeWithText("Quick connect").fetchSemanticsNode()
         assertTrue("the text actions take their own lines under the pair", quick.positionInRoot.y >= add.positionInRoot.y + add.size.height - 1)
         assertTrue(compose.onNodeWithText("Import ssh config").fetchSemanticsNode().positionInRoot.y > quick.positionInRoot.y)
         capture("hosts-empty-restore")
         assertNoTextCut("the empty Hosts library")
 
-        compose.onNodeWithText("Restore a bundle").performClick()
+        compose.onNodeWithText("Import a bundle").performClick()
         waitForText("Import bundle")
         compose.onNodeWithText("A .berth file Berth exported, here or on another phone").assertExists()
         compose.onNodeWithText("Open").assertIsNotEnabled()
