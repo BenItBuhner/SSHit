@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -191,6 +193,27 @@ class EditorScreenshotTest {
         // The end of the page: which scope the theme applies to, the primary action and export.
         compose.onNodeWithText("Export").performScrollTo()
         capture("terminal-theme-editor-apply")
+    }
+
+    @Test
+    fun `terminal theme export sheet`() = exportSheet("terminal-theme-export")
+
+    @Test
+    fun `terminal theme export sheet at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        exportSheet("terminal-theme-export-font-scale-2x")
+    }
+
+    /** Dracula's links are its purple, not its blue, and Ghostty has no link colour: that row is off and says so. */
+    private fun exportSheet(name: String) {
+        themed { TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.DRACULA_ID, scope = ThemeScope.AppDefault, onDone = {}, onOpenTheme = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Export").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Export").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Export Dracula").fetchSemanticsNodes().isNotEmpty() }
+        capture(name)
+        compose.onNode(hasText("Berth JSON")).assertIsEnabled()
+        compose.onNode(hasText("iTerm2") and hasText("Dracula.itermcolors")).assertIsEnabled()
+        compose.onNode(hasText("Ghostty") and hasText("Would lose links")).assertIsNotEnabled()
     }
 
     @Test

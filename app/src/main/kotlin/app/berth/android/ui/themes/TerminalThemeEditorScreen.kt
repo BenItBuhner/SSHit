@@ -36,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,7 +61,6 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.io.rememberSaveTextFile
-import app.berth.android.ui.io.shareText
 import app.berth.android.ui.terminal.PreviewScript
 import app.berth.android.ui.terminal.TerminalPreview
 import app.berth.android.ui.theme.Berth
@@ -101,7 +99,6 @@ fun TerminalThemeEditorScreen(
     modifier: Modifier = Modifier,
 ) {
     val c = Berth.colors
-    val context = LocalContext.current
     val themes by vm.terminalThemes.collectAsState()
     val default by vm.defaultTerminalTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
@@ -126,6 +123,7 @@ fun TerminalThemeEditorScreen(
     var scopeMenu by remember { mutableStateOf(false) }
     var applyTo by remember(scope) { mutableStateOf(scope) }
     var note by remember { mutableStateOf<String?>(null) }
+    var exporting by remember { mutableStateOf(false) }
     val saver = rememberSaveTextFile()
     val dirty = draft != stored
 
@@ -178,8 +176,6 @@ fun TerminalThemeEditorScreen(
                     }
                     MenuItem("Rename") { menu = false; renaming = true }
                     if (default.id != stored.id) MenuItem("Set as app default") { menu = false; applyTo = ThemeScope.AppDefault; apply() }
-                    MenuItem("Share JSON") { menu = false; shareText(context, "${draft.name}.json", draft.toJson()) }
-                    MenuItem("Save to file") { menu = false; saver.save("${draft.id}.json", draft.toJson()) }
                     if (!stored.builtIn) MenuItem("Delete", destructive = true) { menu = false; vm.deleteTerminalTheme(stored.id); onDone() }
                 }
             }
@@ -302,7 +298,7 @@ fun TerminalThemeEditorScreen(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     BerthButton("Apply to ${scopeLabel(applyTo).lowercase().let { if (applyTo == ThemeScope.AppDefault) "app default" else it }}", onClick = ::apply, kind = ButtonKind.PRIMARY, modifier = Modifier.weight(1f))
-                    BerthButton("Export", onClick = { shareText(context, "${draft.name}.json", draft.toJson()) })
+                    BerthButton("Export", onClick = { exporting = true })
                 }
                 val n = note
                 if (n != null) Text(n, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
@@ -326,6 +322,7 @@ fun TerminalThemeEditorScreen(
             renaming = false
         }
     }
+    if (exporting) ThemeExportSheet(draft, saver, onDismiss = { exporting = false })
 }
 
 /**

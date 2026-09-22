@@ -48,7 +48,8 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetTitle
-import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.rememberOpenNamedTextFile
+import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
 import app.berth.android.ui.terminal.PreviewScript
 import app.berth.android.ui.terminal.TerminalPreview
@@ -80,9 +81,12 @@ fun ThemesScreen(
     var menu by remember { mutableStateOf(false) }
     var pasteSheet by remember { mutableStateOf(false) }
     var importNote by remember { mutableStateOf<String?>(null) }
+    var exporting by remember { mutableStateOf<TerminalTheme?>(null) }
+    val saver = rememberSaveTextFile()
 
-    fun importText(text: String) {
-        val imported = TerminalThemes.importAll(text)
+    // iTerm2, Ghostty and Termux files carry no name of their own; the file's name stands in.
+    fun importText(text: String, fileName: String? = null) {
+        val imported = TerminalThemes.importAll(text, TerminalThemes.nameFromFile(fileName))
         importNote = when {
             imported.isEmpty() -> "That text is not a terminal theme Berth can read."
             else -> {
@@ -95,7 +99,7 @@ fun ThemesScreen(
             }
         }
     }
-    val openFile = rememberOpenTextFile(::importText)
+    val openFile = rememberOpenNamedTextFile(onFile = ::importText)
 
     fun newTheme() {
         val id = AppViewModel.newThemeId()
@@ -146,7 +150,7 @@ fun ThemesScreen(
                         vm.saveTerminalTheme(theme.duplicate(id))
                         onOpen(id)
                     },
-                    onExport = { shareText(context, "${theme.name}.json", theme.toJson()) },
+                    onExport = { exporting = theme },
                     onDelete = if (theme.builtIn) null else ({ vm.deleteTerminalTheme(theme.id) }),
                 )
             }
@@ -166,8 +170,9 @@ fun ThemesScreen(
     if (pasteSheet) {
         PasteTextSheet(
             title = "Paste theme text",
-            caption = "Berth theme JSON, a Windows Terminal scheme, or a Gogh export",
+            caption = "Berth JSON, iTerm2, Ghostty, Windows Terminal, base16 or Termux colours",
             action = "Import",
+            placeholder = null,
             onDismiss = { pasteSheet = false },
             onSubmit = { text ->
                 importText(text)
@@ -175,6 +180,7 @@ fun ThemesScreen(
             },
         )
     }
+    exporting?.let { theme -> ThemeExportSheet(theme, saver, onDismiss = { exporting = null }) }
 }
 
 /**
@@ -254,6 +260,7 @@ internal fun PasteTextSheet(
     onSubmit: (String) -> Unit,
     error: String? = null,
     secondary: Pair<String, () -> Unit>? = null,
+    placeholder: String? = "{ ... }",
 ) {
     val c = Berth.colors
     var text by remember { mutableStateOf("") }
@@ -266,7 +273,7 @@ internal fun PasteTextSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SheetTitle(title, caption)
-            BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = "{ ... }", helper = error, isError = error != null)
+            BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = placeholder, helper = error, isError = error != null)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton(action, onClick = { onSubmit(text) }, kind = ButtonKind.PRIMARY, enabled = text.isNotBlank())
                 if (secondary != null) BerthButton(secondary.first, onClick = secondary.second)
