@@ -758,7 +758,8 @@ class FilesScreenshotTest {
             graph.hosts.upsert(box)
         }
 
-        compose.setContent { AppRoot(graph.viewModel) }
+        // The whole app over the fixture's clock, so the live listing's column dates what the flows make against 14:07 too.
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         compose.waitUntil(10_000) { graph.viewModel.workspaces.value.isNotEmpty() }
         // A cold start with no tabs is the empty Stage; the plus tab's sheet lists the host.
         compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
@@ -950,7 +951,8 @@ class FilesScreenshotTest {
             graph.hosts.upsert(box)
         }
 
-        compose.setContent { AppRoot(graph.viewModel) }
+        // The whole app over the fixture's clock, so the live listing's column dates what the flows make against 14:07 too.
+        compose.setContent { CompositionLocalProvider(LocalWallClock provides { now }) { AppRoot(graph.viewModel) } }
         compose.waitUntil(10_000) { graph.viewModel.workspaces.value.isNotEmpty() }
         compose.onAllNodesWithContentDescription("New tab").onFirst().performClick()
         waitForText("Berth test box", 5_000)
