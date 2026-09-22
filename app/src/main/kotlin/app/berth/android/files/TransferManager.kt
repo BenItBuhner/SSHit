@@ -129,6 +129,14 @@ class TransferManager(
      */
     internal var nanoTime: () -> Long = System::nanoTime
 
+    /**
+     * The clock a transfer's start and finish are stamped from ([Transfer.startedAt],
+     * [Transfer.finishedAt]), so its duration on the strip and its place in the sheet's order; a
+     * screenshot test that holds a live copy for its frames stamps off the fixture's moment instead,
+     * so the seconds the row reads are not the captures'.
+     */
+    internal var wallClock: () -> Long = System::currentTimeMillis
+
     /** How links inside a folder are treated; see [LinkPolicy]. */
     var linkPolicy: LinkPolicy = LinkPolicy.FOLLOW_FILE_LINKS
 
@@ -525,7 +533,7 @@ class TransferManager(
         val previous: Deferred<Unit> = synchronized(lanes) { lanes.put(session.id, turn) ?: CompletableDeferred(Unit) }
         val job = scope.launch {
             previous.await()
-            patch(id) { it.copy(state = TransferState.RUNNING, startedAt = System.currentTimeMillis()) }
+            patch(id) { it.copy(state = TransferState.RUNNING, startedAt = wallClock()) }
             val meter = SpeedMeter()
             var lastPublish = 0L
             val bytes: (Long, Long) -> Unit = { copied, size ->
@@ -552,29 +560,29 @@ class TransferManager(
                 patch(id) { t ->
                     val f = t.folder
                     when {
-                        f == null -> t.copy(state = TransferState.DONE, bytes = if (t.total > 0) t.total else t.bytes, finishedAt = System.currentTimeMillis())
-                        f.filesFailed > 0 -> t.copy(state = TransferState.FAILED, error = folderOutcome(f), finishedAt = System.currentTimeMillis())
-                        else -> t.copy(state = TransferState.DONE, finishedAt = System.currentTimeMillis())
+                        f == null -> t.copy(state = TransferState.DONE, bytes = if (t.total > 0) t.total else t.bytes, finishedAt = wallClock())
+                        f.filesFailed > 0 -> t.copy(state = TransferState.FAILED, error = folderOutcome(f), finishedAt = wallClock())
+                        else -> t.copy(state = TransferState.DONE, finishedAt = wallClock())
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Skipped) {
-                patch(id) { it.copy(state = TransferState.SKIPPED, note = e.note, finishedAt = System.currentTimeMillis()) }
+                patch(id) { it.copy(state = TransferState.SKIPPED, note = e.note, finishedAt = wallClock()) }
             } catch (e: Throwable) {
                 val reason = when (e) {
                     is SftpError -> e.message ?: "The transfer failed."
                     is IOException -> e.message ?: "The transfer failed."
                     else -> e.message ?: e.javaClass.simpleName
                 }
-                patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = System.currentTimeMillis()) }
+                patch(id) { it.copy(state = TransferState.FAILED, error = reason, finishedAt = wallClock()) }
             }
         }
         // Runs however the job ends, including a cancel before it was ever dispatched, so the lane is
         // always handed on and a transfer cancelled while still queued ends as cancelled rather than queued.
         job.invokeOnCompletion { cause ->
             if (cause is CancellationException) {
-                patch(id) { if (it.state.isActive) it.copy(state = TransferState.CANCELLED, finishedAt = System.currentTimeMillis()) else it }
+                patch(id) { if (it.state.isActive) it.copy(state = TransferState.CANCELLED, finishedAt = wallClock()) else it }
             }
             synchronized(jobs) { jobs.remove(id) }
             synchronized(conflicts) { answers.remove(id) }

@@ -922,6 +922,11 @@ class FilesScreenshotTest {
         val clock = AtomicLong(TimeUnit.SECONDS.toNanos(1))
         var channel: MeteredChannel? = null
         queue.nanoTime = clock::get
+        // A done row's seconds are the wall clock between the transfer's start and its finish, and the copy is held
+        // for its frame, so they were the capture's own (1 s, and 2 s the run the audit ran long); the stamps come
+        // off the fixture's moment instead, a millisecond on per stamp so done rows keep their order in the sheet.
+        val wall = AtomicLong(now)
+        queue.wallClock = wall::getAndIncrement
         queue.channelFor = { s -> MeteredChannel(s.openSftp(), clock, holdAt = 12 * MIB).also { channel = it } }
         val id = queue.download(session, entry, Uri.fromFile(out))
         fun transfer() = queue.transfers.value.first { it.id == id }
@@ -1084,6 +1089,9 @@ class FilesScreenshotTest {
         var holdAt = 11 * MIB
         var channel: MeteredChannel? = null
         queue.nanoTime = clock::get
+        // The stamps off the fixture's moment, as in the live flow above: the end summary's seconds are otherwise the captures'.
+        val wall = AtomicLong(now)
+        queue.wallClock = wall::getAndIncrement
         queue.channelFor = { s -> MeteredChannel(s.openSftp(), clock, holdAt).also { channel = it } }
         val dest = createTempDirectory("berth-folder-down").toFile()
         val entry = runBlocking { session.openSftp().use { it.stat(dir) } }
