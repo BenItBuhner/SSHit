@@ -394,6 +394,7 @@ fun SnippetRunSheet(vm: AppViewModel, session: TerminalSession, pending: Pending
             Modifier
                 .fillMaxWidth()
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -447,6 +448,7 @@ fun SnippetPickerSheet(vm: AppViewModel, session: TerminalSession, onDismiss: ()
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

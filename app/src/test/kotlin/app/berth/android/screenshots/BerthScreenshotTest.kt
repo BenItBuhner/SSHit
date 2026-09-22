@@ -54,6 +54,7 @@ import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.LinkFingerprint
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
+import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.components.LocalWallClock
@@ -69,6 +70,7 @@ import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetEditorSheet
+import app.berth.android.ui.snippets.SnippetPickerSheet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.snippets.SnippetsScreen
 import app.berth.android.ui.stage.StageScreen
@@ -338,6 +340,78 @@ class BerthScreenshotTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("tail app log")).fetchSemanticsNodes().isNotEmpty() }
         capture("snippet-run")
+    }
+
+    @Test
+    fun `snippet picker with a dozen snippets`() = snippetPicker("snippet-picker-dozen")
+
+    @Test
+    fun `snippet picker with a dozen snippets at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        snippetPicker("snippet-picker-dozen-font-scale-2x")
+    }
+
+    /**
+     * The session sheet's Snippets over homelab's tab with more snippets than the window holds (A9;
+     * #22 nit 13): the sheet stands at the window's top and its column scrolls, so the last row and
+     * New snippet under it are one scroll away rather than cut, and every row is measured to a size.
+     */
+    private fun snippetPicker(name: String) {
+        val session = homelabOnStage()
+        themed {
+            Stage(session)
+            SnippetPickerSheet(graph.viewModel, session, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("New snippet for homelab")).fetchSemanticsNodes().isNotEmpty() }
+        capture(name)
+        compose.assertSheetAtContentHeight("compose logs", "update packages", "New snippet for homelab")
+        compose.assertNoTextCut("the snippet picker", within = isDialog())
+    }
+
+    @Test
+    fun `snippet run sheet with four placeholders`() = snippetRun("snippet-run-placeholders")
+
+    @Test
+    fun `snippet run sheet with four placeholders at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        snippetRun("snippet-run-placeholders-font-scale-2x")
+    }
+
+    /**
+     * The run sheet in a window shorter than its content, which is a phone's with the keyboard up
+     * over the field being filled: the tunnel editor's compact-height window (#22 nit 1). The sheet
+     * stands at the window's top and its column scrolls, so Run, Paste and Cancel are one scroll away.
+     */
+    @Test
+    @Config(qualifiers = "w411dp-h460dp-420dpi")
+    fun `snippet run sheet in a compact-height window at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        snippetRun("snippet-run-compact-height-font-scale-2x")
+    }
+
+    /** A snippet from the dozen with four placeholders, two of them without a default: a field each, the command it will send, and Run held until they are filled. */
+    private fun snippetRun(name: String) {
+        val session = homelabOnStage()
+        val snippet = graph.snippets.items.value.first { it.id == "dz-rsync" }
+        themed {
+            Stage(session)
+            SnippetRunSheet(graph.viewModel, session, PendingSnippet(snippet, SnippetAction.RUN), onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("rsync backup")).fetchSemanticsNodes().isNotEmpty() }
+        capture(name)
+        compose.assertSheetAtContentHeight("Run", "Paste", "Cancel")
+        compose.assertNoTextCut("the snippet run sheet", within = isDialog())
+    }
+
+    /** Homelab's detached tab on stage, with [seedDozenSnippets] for it to pick from. */
+    private fun homelabOnStage(): TerminalSession {
+        seedLibrary()
+        seedDozenSnippets()
+        seedDetachedSessions()
+        runBlocking { graph.sessions.restore() }
+        val session = graph.sessions.get("s-homelab")!!
+        graph.sessions.setActive(session.id)
+        return session
     }
 
     // ---- known hosts --------------------------------------------------------------------------
@@ -1064,6 +1138,22 @@ class BerthScreenshotTest {
         graph.snippets.upsert(Snippet("sn-dc", "compose up", "docker compose up -d {{service}}", hostId = "homelab", workspaceId = "ws-lab", defaultAction = SnippetAction.PASTE))
         graph.snippets.upsert(Snippet("sn-gradle", "gradle build", "./gradlew assembleDebug --console=plain", workspaceId = "ws-work", tags = listOf("ci")))
         graph.snippets.upsert(Snippet("sn-motd", "show motd", "cat /etc/motd", hostId = "pi-hole", runOnConnect = true))
+    }
+
+    /** Twelve snippets a homelab's tab sees, global and its own: more than the picker's window holds at 1× on this phone. */
+    private fun seedDozenSnippets() = runBlocking {
+        graph.snippets.upsert(Snippet("dz-restart", "restart nginx", "sudo systemctl restart nginx", pinnedToDeck = true))
+        graph.snippets.upsert(Snippet("dz-df", "df -h", "df -h", pinnedToDeck = true))
+        graph.snippets.upsert(Snippet("dz-tail", "tail app log", "tail -n {{lines:200}} -f app.log", hostId = "homelab"))
+        graph.snippets.upsert(Snippet("dz-up", "compose up", "docker compose up -d {{service}}", hostId = "homelab", defaultAction = SnippetAction.PASTE))
+        graph.snippets.upsert(Snippet("dz-ps", "compose ps", "docker compose ps", hostId = "homelab"))
+        graph.snippets.upsert(Snippet("dz-logs", "compose logs", "docker compose logs -f {{service}}", hostId = "homelab"))
+        graph.snippets.upsert(Snippet("dz-free", "free memory", "free -h"))
+        graph.snippets.upsert(Snippet("dz-top", "top by memory", "ps aux --sort=-%mem | head"))
+        graph.snippets.upsert(Snippet("dz-journal", "journal since boot", "journalctl -b -p warning"))
+        graph.snippets.upsert(Snippet("dz-ports", "open ports", "ss -tulpn"))
+        graph.snippets.upsert(Snippet("dz-rsync", "rsync backup", "rsync -avh {{source:~/srv}}/ {{user}}@{{host}}:{{dest:/backup}}", hostId = "homelab"))
+        graph.snippets.upsert(Snippet("dz-update", "update packages", "sudo apt update && sudo apt upgrade"))
     }
 
     companion object {
