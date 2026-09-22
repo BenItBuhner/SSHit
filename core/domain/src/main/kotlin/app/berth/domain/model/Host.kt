@@ -34,19 +34,46 @@ enum class Transport { SSH }
 
 enum class AddressFamily { AUTO, IPV4, IPV6 }
 
-/** Session persistence knobs (L1 in-app reconnect and L2 tmux helper). */
+/**
+ * Session persistence knobs (L1 in-app reconnect and L2 tmux helper). Keepalive and Reconnect are
+ * the host's own only when set: null inherits Settings › Connection's defaults (spec C20,
+ * [ConnectionSettings]), read when the login uses them, so a change there reaches every host that
+ * set neither.
+ */
 @Serializable
 data class PersistencePolicy(
-    val keepaliveSeconds: Int = 15,
+    /** Seconds between keepalives; 0 is off. */
+    val keepaliveSeconds: Int? = null,
     /** Total time to keep retrying before giving up; 0 means forever. */
-    val reconnectMinutes: Int = 15,
+    val reconnectMinutes: Int? = null,
     val tmux: TmuxMode = TmuxMode.OFF,
     /** Defaults to `berth-<host name>` when null. */
     val tmuxSessionName: String? = null,
     /** tmux prefix in tmux notation, drives the Deck's tmux layer. */
     val tmuxPrefix: String = "C-b",
     val transport: Transport = Transport.SSH,
-)
+) {
+    fun effectiveKeepaliveSeconds(defaults: ConnectionSettings): Int = keepaliveSeconds ?: defaults.keepaliveSeconds
+
+    fun effectiveReconnectMinutes(defaults: ConnectionSettings): Int = reconnectMinutes ?: defaults.reconnectMinutes
+
+    /**
+     * This policy as written before hosts could inherit: every build until then stored the host
+     * editor's starting values (15 s, 15 min) on a host that never changed them, so those read
+     * as inherit, and anything else as the host's own. The database's version 7 and a format 1
+     * bundle both come through here; Settings › Connection starts at the same values, so the
+     * host behaves as it did until the defaults move.
+     */
+    fun foldLegacyDefaults(): PersistencePolicy = copy(
+        keepaliveSeconds = keepaliveSeconds.takeUnless { it == LEGACY_KEEPALIVE_SECONDS },
+        reconnectMinutes = reconnectMinutes.takeUnless { it == LEGACY_RECONNECT_MINUTES },
+    )
+
+    companion object {
+        const val LEGACY_KEEPALIVE_SECONDS = 15
+        const val LEGACY_RECONNECT_MINUTES = 15
+    }
+}
 
 /** Per-host appearance overrides; null fields inherit the app default. */
 @Serializable

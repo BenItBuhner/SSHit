@@ -100,7 +100,7 @@ object ReconnectBackoff {
 
     fun delaySeconds(attempt: Int): Int = if (attempt < STEPS_SECONDS.size) STEPS_SECONDS[attempt] else 60
 
-    /** Whether another attempt is allowed given elapsed time and the host's policy (0 = forever). */
-    fun shouldRetry(elapsedMillis: Long, policy: PersistencePolicy): Boolean =
-        policy.reconnectMinutes <= 0 || elapsedMillis < policy.reconnectMinutes * 60_000L
+    /** Whether another attempt is allowed given elapsed time and the host's effective window in minutes (0 = forever). */
+    fun shouldRetry(elapsedMillis: Long, reconnectMinutes: Int): Boolean =
+        reconnectMinutes <= 0 || elapsedMillis < reconnectMinutes * 60_000L
 }

@@ -8,6 +8,11 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.AutoMigrationSpec
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 
 @Database(
     entities = [
@@ -23,7 +28,7 @@ import androidx.sqlite.execSQL
         PreferenceEntity::class,
         CommandHistoryEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -31,6 +36,7 @@ import androidx.sqlite.execSQL
         AutoMigration(from = 3, to = 4),
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6, spec = KnownHostsCaseBlind::class),
+        AutoMigration(from = 6, to = 7, spec = PersistenceInherits::class),
     ],
 )
 abstract class BerthDatabase : RoomDatabase() {
@@ -87,5 +93,68 @@ class KnownHostsCaseBlind : AutoMigrationSpec {
             """.trimIndent(),
         )
         connection.execSQL("UPDATE known_hosts SET host = LOWER(host) WHERE host != LOWER(host)")
+    }
+}
+
+/**
+ * Version 7: a host's Keepalive and Reconnect inherit Settings › Connection's defaults unless the
+ * host sets its own (spec C20). The tables are as they were, since the policy is a JSON column
+ * whose fields may now be null; the rows change. Every build before this wrote the host editor's
+ * starting values (15 s, 15 min) on a host that never changed them, so a 15 in either field becomes
+ * null, inherit, and any other value stays the host's own, field by field
+ * ([PersistencePolicy.foldLegacyDefaults][app.berth.domain.model.PersistencePolicy.foldLegacyDefaults]'s rule).
+ * The defaults start at the same values, so every host connects as it did until they move. A tab's
+ * host snapshot carries a policy too and is folded the same way, so a restored tab and its saved
+ * host agree; a snapshot stored without one (a quick connect's) already reads as inherit.
+ *
+ * The rule runs on the JSON as stored rather than through the model, so a later change to the
+ * model cannot change what this step did.
+ */
+class PersistenceInherits : AutoMigrationSpec {
+    override fun onPostMigrate(connection: SQLiteConnection) {
+        connection.rewriteJson("hosts", "persistenceJson") { it.foldPolicy() }
+        connection.rewriteJson("sessions", "hostSnapshotJson") { host ->
+            val policy = host["persistence"] as? JsonObject ?: return@rewriteJson host
+            val folded = policy.foldPolicy()
+            if (folded == policy) host else JsonObject(host + ("persistence" to folded))
+        }
+    }
+
+    private fun JsonObject.foldPolicy(): JsonObject {
+        val keep = mapValues { (field, value) ->
+            val legacy = when (field) {
+                "keepaliveSeconds" -> LEGACY_KEEPALIVE_SECONDS
+                "reconnectMinutes" -> LEGACY_RECONNECT_MINUTES
+                else -> return@mapValues value
+            }
+            if (value is JsonPrimitive && !value.isString && value.intOrNull == legacy) JsonNull else value
+        }
+        return if (keep == this) this else JsonObject(keep)
+    }
+
+    /** [column] of every row of [table] through [change], written back where it changed; a value that is not a JSON object is left alone. */
+    private fun SQLiteConnection.rewriteJson(table: String, column: String, change: (JsonObject) -> JsonObject) {
+        val changed = ArrayList<Pair<String, String>>()
+        prepare("SELECT id, $column FROM $table").use { rows ->
+            while (rows.step()) {
+                if (rows.isNull(1)) continue
+                val stored = rows.getText(1)
+                val json = runCatching { Json.parseToJsonElement(stored) }.getOrNull() as? JsonObject ?: continue
+                val folded = change(json)
+                if (folded != json) changed += rows.getText(0) to folded.toString()
+            }
+        }
+        for ((id, value) in changed) {
+            prepare("UPDATE $table SET $column = ? WHERE id = ?").use { update ->
+                update.bindText(1, value)
+                update.bindText(2, id)
+                update.step()
+            }
+        }
+    }
+
+    private companion object {
+        const val LEGACY_KEEPALIVE_SECONDS = 15
+        const val LEGACY_RECONNECT_MINUTES = 15
     }
 }
