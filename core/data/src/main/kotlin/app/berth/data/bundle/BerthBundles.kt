@@ -146,9 +146,9 @@ class BerthBundles(
      * is. Read against this phone once, so the write judges every key as the sheet showed it.
      */
     private suspend fun standings(bundled: List<KnownHostKey>): List<BundledKnownHost> {
-        val here = knownHosts.observeAll().first().groupBy { it.host.lowercase() to it.port }
+        val here = knownHosts.observeAll().first().groupBy { KnownHostKey.canonicalHost(it.host) to it.port }
         return bundled.map { key ->
-            val held = here[key.host.lowercase() to key.port].orEmpty()
+            val held = here[KnownHostKey.canonicalHost(key.host) to key.port].orEmpty()
             val standing = KnownHostStanding.of(key, held)
             BundledKnownHost(key, if (standing == KnownHostStanding.NEW && held.isNotEmpty()) KnownHostStanding.Conflicting(held.first()) else standing)
         }
@@ -246,15 +246,16 @@ class BerthBundles(
                 KnownHostStanding.EXISTING -> Unit
                 // Ticked. A key of a type this phone holds: the changed-key sheet's Replace, the saved key goes and the
                 // bundle's is written in its place. One of a type it holds none of: added beside the saved key, which
-                // stays, as an accept on the live first-connection sheet saves it. Either way under the address as the
-                // saved key spelt it, which is the spelling the live lookup reads. Two ticked keys for one endpoint both
-                // stand: the saved key goes once, on the tick that replaces it, and each is written.
+                // stays, as an accept on the live first-connection sheet saves it. The store keys the name lowercase
+                // and reads it case-blind, so the bundle's spelling and the saved key's land on one row either way.
+                // Two ticked keys for one endpoint both stand: the saved key goes once, on the tick that replaces it,
+                // and each is written.
                 is KnownHostStanding.Conflicting -> if (bundled.id in options.replaceKnownHosts) {
                     if (!bundled.addsBeside) {
                         knownHosts.delete(standing.saved.id)
                         knownHostsReplaced++
                     }
-                    knownHosts.upsert(bundled.key.copy(host = standing.saved.host))
+                    knownHosts.upsert(bundled.key)
                     knownHostsWritten++
                 } else {
                     knownHostsKept++

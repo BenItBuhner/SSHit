@@ -146,11 +146,13 @@ class InMemoryIdentities(private val hosts: InMemoryHosts) : IdentityRepository 
         hosts.items.value.filter { (it.auth as? app.berth.domain.model.AuthMethod.Key)?.identityId == id }
 }
 
+/** The Room store's contract as the tests need it: the name kept lowercase ([KnownHostKey.canonicalHost]) and matched case-blind. */
 class InMemoryKnownHosts : KnownHostRepository {
     val items = MutableStateFlow<List<KnownHostKey>>(emptyList())
     override fun observeAll(): Flow<List<KnownHostKey>> = items
-    override suspend fun find(host: String, port: Int): List<KnownHostKey> = items.value.filter { it.host == host && it.port == port }
-    override suspend fun upsert(key: KnownHostKey) = items.update { list -> list.filter { it.id != key.id } + key }
+    override suspend fun find(host: String, port: Int): List<KnownHostKey> =
+        items.value.filter { KnownHostKey.canonicalHost(it.host) == KnownHostKey.canonicalHost(host) && it.port == port }
+    override suspend fun upsert(key: KnownHostKey) = items.update { list -> list.filter { it.id != key.id } + key.copy(host = KnownHostKey.canonicalHost(key.host)) }
     override suspend fun delete(id: String) = items.update { list -> list.filter { it.id != id } }
     override suspend fun setPinned(id: String, pinned: Boolean) =
         items.update { list -> list.map { if (it.id == id) it.copy(pinned = pinned) else it } }

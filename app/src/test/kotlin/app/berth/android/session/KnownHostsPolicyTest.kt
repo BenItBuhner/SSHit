@@ -130,6 +130,41 @@ class KnownHostsPolicyTest {
         assertNull(prompts.current.value)
     }
 
+    /**
+     * The address as typed into the editor is what the live path keys on, and the store reads it
+     * case-blind, OpenSSH's way: a key saved under `Prod-API.example.com` is the trusted key for
+     * `prod-api.example.com`. So the same key passes and refreshes the one row, and a different key
+     * of its type raises the changed-key sheet against it, as both would under the saved spelling;
+     * Replace leaves one row, under the store's lowercase name.
+     */
+    @Test
+    fun `a key saved under one spelling of the address is the trusted key under any other`() {
+        val typed = host.copy(address = "Prod-API.example.com")
+        val policy = KnownHostsPolicy(typed, repo, prompts, now = { 1_000L })
+        val first = request().copy(host = typed.address)
+        runBlocking { repo.upsert(saved(first, pinned = false)) }
+        val lower = "prod-api.example.com"
+
+        // What sshj's verifier consults first: the saved key is trusted under the other spelling.
+        assertEquals(listOf(first.fingerprintSha256), policy.trustedKeys(lower, typed.port).map { it.fingerprintSha256 })
+
+        policy.onKnownHostSeen(first.copy(host = lower))
+        val seen = runBlocking { repo.find(typed.address, typed.port) }.single()
+        assertEquals(1_000L, seen.lastSeenAt)
+        assertEquals(lower, seen.host)
+
+        val changed = request().copy(host = lower)
+        val answer = onTransport { policy.onChangedHostKey(changed, listOf(TrustedHostKey(first.keyType, first.publicKeyBase64, first.fingerprintSha256))) }
+        val prompt = awaitPrompt<Prompt.HostKeyChanged>()
+        assertEquals(first.fingerprintSha256, prompt.saved.fingerprintSha256)
+        prompt.decide(HostKeyChangedDecision.REPLACE_SAVED)
+        assertTrue(answer.get())
+        val stored = runBlocking { repo.find(typed.address, typed.port) }.single()
+        assertEquals(changed.fingerprintSha256, stored.fingerprintSha256)
+        assertEquals(lower, stored.host)
+        assertEquals(1, repo.items.value.size)
+    }
+
     @Test
     fun `seeing a known key only refreshes its timestamp`() {
         val req = request()

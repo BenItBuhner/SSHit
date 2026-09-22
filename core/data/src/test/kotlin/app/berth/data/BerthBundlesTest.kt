@@ -319,9 +319,10 @@ class BerthBundlesTest {
     /**
      * The tick on a conflicting row is the changed-key sheet's Replace (spec C13), as #19's
      * `known_hosts` import takes it: the saved key goes and the bundle's is written in its place,
-     * under the address as the saved key spelt it, which is the spelling the live lookup reads.
-     * A tick names one key; the other conflict for the same endpoint stays kept, and a pinned
-     * endpoint's key is never taken, ticked or not. Two ticks for one endpoint both stand.
+     * under the name as the store keys it (lowercase, read case-blind, so the live lookup under
+     * the address as typed finds it whichever spelling the saved key had). A tick names one key;
+     * the other conflict for the same endpoint stays kept, and a pinned endpoint's key is never
+     * taken, ticked or not. Two ticks for one endpoint both stand.
      */
     @Test
     fun `a conflicting known host ticked to replace takes the saved key's place under its spelling, and only that one`() = runTest {
@@ -342,8 +343,8 @@ class BerthBundlesTest {
         val report = new.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = setOf(theirs.id, plan.knownHostsPinned.single().id)))
 
         val here = new.knownHosts.observeAll().first()
-        assertEquals(listOf(dbBundled.copy(host = "DB.Internal")), here.filter { it.host.equals("db.internal", ignoreCase = true) }, "the bundle's key in the saved key's place, spelt as the saved key was; the RSA one, unticked, was not added beside it")
-        assertEquals(setOf(known, nasKey, dbBundled.copy(host = "DB.Internal")), here.toSet())
+        assertEquals(listOf(dbBundled), here.filter { it.host == "db.internal" }, "the bundle's key in the saved key's place, under the store's lowercase name; the RSA one, unticked, was not added beside it")
+        assertEquals(setOf(known, nasKey, dbBundled), here.toSet())
         assertEquals(2, report.knownHosts, "the new endpoint and the replaced key were written")
         assertEquals(1, report.knownHostsReplaced)
         assertEquals(2, report.knownHostsKept, "the pinned endpoint's and the unticked RSA key")
@@ -355,7 +356,7 @@ class BerthBundlesTest {
             other.knownHosts.upsert(dbHere)
             val both = other.bundles.plan(bundle).knownHostsConflicting.map { it.id }.toSet()
             val twice = other.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = both))
-            assertEquals(setOf(dbBundled.copy(host = "DB.Internal"), dbRsa.copy(host = "DB.Internal")), other.knownHosts.observeAll().first().filter { it.port == 2200 }.toSet())
+            assertEquals(setOf(dbBundled, dbRsa), other.knownHosts.observeAll().first().filter { it.port == 2200 }.toSet())
             assertEquals(1, twice.knownHostsReplaced, "the RSA key, of a type this phone held none of, was added and replaced nothing")
             assertEquals(4, twice.knownHosts, "rotatedWeb is new on this phone, which has no key for it, beside the nas key and the two")
             assertEquals("Imported 4 known hosts (1 replaced).", twice.summary)
@@ -368,8 +369,8 @@ class BerthBundlesTest {
      * A bundled key of a type this phone holds none of for the endpoint (review #18 nit 19): live,
      * that key reaches the first-connection sheet, and an accept saves it beside what is held (spec
      * C13's additional key); #19's `known_hosts` import writes it beside too. So its tick adds it
-     * and the held key stays, under the saved spelling, counted as written and not as replaced.
-     * The same-type case is unchanged: its tick deletes the saved key.
+     * and the held key stays, both under the store's lowercase name, counted as written and not as
+     * replaced. The same-type case is unchanged: its tick deletes the saved key.
      */
     @Test
     fun `a ticked key of a type this phone holds none of is added beside the saved key, which stays, and a ticked key of its type still takes its place`() = runTest {
@@ -383,9 +384,9 @@ class BerthBundlesTest {
         assertTrue(rsa.addsBeside)
         assertFalse(theirs.addsBeside)
 
-        // The RSA key ticked alone: both keys held for the endpoint, the RSA one spelt as the saved key spells the address.
+        // The RSA key ticked alone: both keys held for the endpoint, under the one name the store keys them by.
         val report = new.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = setOf(rsa.id)))
-        assertEquals(setOf(dbHere, dbRsa.copy(host = "DB.Internal")), new.knownHosts.observeAll().first().toSet(), "the ed25519 key stays and the RSA key stands beside it")
+        assertEquals(setOf(dbHere.copy(host = "db.internal"), dbRsa), new.knownHosts.observeAll().first().toSet(), "the ed25519 key stays and the RSA key stands beside it")
         assertEquals(1, report.knownHosts, "the added key is written")
         assertEquals(0, report.knownHostsReplaced, "and replaced nothing")
         assertEquals(1, report.knownHostsKept, "the unticked ed25519 conflict")
@@ -397,7 +398,7 @@ class BerthBundlesTest {
             other.knownHosts.upsert(dbHere)
             val plan = other.bundles.plan(bundle)
             val replaced = other.bundles.apply(bundle, BundleImportOptions(replaceKnownHosts = setOf(plan.knownHostsConflicting.first { !it.addsBeside }.id)))
-            assertEquals(setOf(dbBundled.copy(host = "DB.Internal")), other.knownHosts.observeAll().first().toSet(), "the saved key is gone, the bundle's ed25519 key alone in its place")
+            assertEquals(setOf(dbBundled), other.knownHosts.observeAll().first().toSet(), "the saved key is gone, the bundle's ed25519 key alone in its place")
             assertEquals(1, replaced.knownHostsReplaced)
             assertEquals(1, replaced.knownHostsKept)
             assertEquals("Imported 1 known host (1 replaced).", replaced.summary)

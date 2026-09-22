@@ -81,6 +81,13 @@ import kotlin.test.assertTrue
  * row, give the new columns their defaults, and hand the rows back through the repositories, which
  * is the path the app takes at launch. The two tab settings this build added are not in an older
  * settings document, so they read as their defaults until they are set.
+ *
+ * Version 6 is the one migration that changes rows rather than columns: the known hosts' names are
+ * lowercased and two rows that named one endpoint and key type in different spellings become one
+ * ([app.berth.data.db.KnownHostsCaseBlind]). The seed holds a capitalised name on its own, a pair that differ only
+ * in case where the more recently seen row is the one to keep, a pair where the older row is the
+ * pinned one (from version 2, which brought the pin) and so the one to keep, and two key types
+ * under one endpoint that both stand; and a row that reads back case-blind through the repository.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -102,6 +109,32 @@ class MigrationTest {
 
     @Test
     fun `a version 4 database migrates to the current version keeping every row`() = migrateAndCheck(from = 4)
+
+    @Test
+    fun `a version 5 database migrates to the current version keeping every row`() = migrateAndCheck(from = 5)
+
+    /**
+     * The app opens its database with no driver set ([BerthDatabase.create]), where Room runs a
+     * migration over the framework's connection, not the test helper's [AndroidSQLiteDriver]:
+     * the version 6 row changes have to run on that path too.
+     */
+    @Test
+    fun `a version 5 database opened the way the app opens it has its known hosts folded`() {
+        val file = File.createTempFile("berth-v5-app", ".db").also { it.delete(); it.deleteOnExit() }
+        val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), file, AndroidSQLiteDriver(), BerthDatabase::class, { BerthDatabase_Impl() }, emptyList())
+        helper.createDatabase(5).use { seed(it, 5) }
+
+        val db = Room.databaseBuilder(RuntimeEnvironment.getApplication(), BerthDatabase::class.java, file.absolutePath).allowMainThreadQueries().build()
+        try {
+            runTest {
+                val knownHosts = RoomKnownHostRepository(db)
+                assertEquals(listOf("example.com", "example.com", "nas.local", "prod-api.example.com", "web.example.net"), knownHosts.observeAll().first().map { it.host })
+                assertEquals(listOf("k5"), knownHosts.find("NAS.local", 22).map { it.id }, "the pinned row stands, found under the spelling it was saved in")
+            }
+        } finally {
+            db.close()
+        }
+    }
 
     private fun migrateAndCheck(from: Int) {
         val file = File.createTempFile("berth-v$from", ".db").also { it.delete(); it.deleteOnExit() }
@@ -237,6 +270,30 @@ class MigrationTest {
             "known_hosts",
             "id" to "k2", "host" to "web.example.net", "port" to 2200, "keyType" to "ssh-rsa", "publicKeyBase64" to "AAAA2", "fingerprintSha256" to "SHA256:2", "firstSeenAt" to 3, "lastSeenAt" to 4,
         )
+        // The names version 6 folds. k3 names k2's endpoint and type in capitals, saved later but seen less recently:
+        // k2 stays (and from version 2 is the pinned one besides). k4 stands alone under a capitalised name. k5 and k6
+        // are one server typed two ways and trusted twice: k6 is the more recently seen, k5 the pinned from version 2,
+        // so which stands turns on the version. k7 is a second key type under k1's endpoint; both stand.
+        insert(
+            "known_hosts",
+            "id" to "k3", "host" to "Web.Example.NET", "port" to 2200, "keyType" to "ssh-rsa", "publicKeyBase64" to "AAAA3", "fingerprintSha256" to "SHA256:3", "firstSeenAt" to 5, "lastSeenAt" to 3,
+        )
+        insert(
+            "known_hosts",
+            "id" to "k4", "host" to "Prod-API.example.com", "port" to 22, "keyType" to "ssh-ed25519", "publicKeyBase64" to "AAAA4", "fingerprintSha256" to "SHA256:4", "firstSeenAt" to 6, "lastSeenAt" to 7,
+        )
+        insert(
+            "known_hosts",
+            "id" to "k5", "host" to "NAS.local", "port" to 22, "keyType" to "ssh-ed25519", "publicKeyBase64" to "AAAA5", "fingerprintSha256" to "SHA256:5", "firstSeenAt" to 8, "lastSeenAt" to 10,
+        )
+        insert(
+            "known_hosts",
+            "id" to "k6", "host" to "nas.local", "port" to 22, "keyType" to "ssh-ed25519", "publicKeyBase64" to "AAAA6", "fingerprintSha256" to "SHA256:6", "firstSeenAt" to 9, "lastSeenAt" to 20,
+        )
+        insert(
+            "known_hosts",
+            "id" to "k7", "host" to "EXAMPLE.com", "port" to 22, "keyType" to "ssh-rsa", "publicKeyBase64" to "AAAA7", "fingerprintSha256" to "SHA256:7", "firstSeenAt" to 11, "lastSeenAt" to 12,
+        )
 
         insert(
             "workspaces",
@@ -302,7 +359,7 @@ class MigrationTest {
 
         if (version >= 2) {
             // Version 2's columns and the Files document, holding what a phone on that build could have set.
-            execSQL("UPDATE known_hosts SET pinned = 1 WHERE id = 'k2'")
+            execSQL("UPDATE known_hosts SET pinned = 1 WHERE id IN ('k2', 'k5')")
             execSQL("UPDATE workspaces SET terminalThemeId = 'berth-light' WHERE id = 'w2'")
             execSQL("UPDATE snippets SET workspaceId = 'w2' WHERE id = 'sn2'")
             insert(
@@ -329,12 +386,24 @@ class MigrationTest {
     private fun checkColumns(connection: SQLiteConnection, from: Int) = with(connection) {
         assertEquals(CURRENT_VERSION.toLong(), long("PRAGMA user_version"))
         val counts = mapOf(
-            "hosts" to 2, "identities" to 2, "secrets" to 1, "known_hosts" to 2, "workspaces" to 2, "sessions" to 2,
+            // Version 6 folds seven known hosts to five: k3 goes under k2, and one of k5 and k6 under the other.
+            "hosts" to 2, "identities" to 2, "secrets" to 1, "known_hosts" to 5, "workspaces" to 2, "sessions" to 2,
             "session_frames" to 1, "tunnels" to 2, "snippets" to 2, "preferences" to if (from >= 2) 8 else 7,
             // Version 5: the history table arrives empty; the commands an older build kept in each tab's frame reach it as the frames are restored.
             "command_history" to 0,
         )
         for ((table, rows) in counts) assertEquals(rows.toLong(), long("SELECT COUNT(*) FROM $table"), "$table keeps its rows")
+
+        // Version 6: every known host's name is lowercase, and one row stands per endpoint and key type. k3, seen less
+        // recently than k2 though saved later, went; k5 and k6 turn on the pin version 2 brought: with it, the pinned
+        // k5 stands over the more recently seen k6; without it, k6 does. k7 stands beside k1 as a second key type.
+        assertEquals(0L, long("SELECT COUNT(*) FROM known_hosts WHERE host != LOWER(host)"))
+        assertEquals(0L, long("SELECT COUNT(*) FROM known_hosts WHERE id = 'k3'"))
+        assertEquals("prod-api.example.com", text("SELECT host FROM known_hosts WHERE id = 'k4'"))
+        assertEquals(if (from >= 2) "k5" else "k6", text("SELECT id FROM known_hosts WHERE host = 'nas.local'"))
+        assertEquals(if (from >= 2) 1L else 0L, long("SELECT pinned FROM known_hosts WHERE host = 'nas.local'"))
+        assertEquals("k1,k7", text("SELECT GROUP_CONCAT(id) FROM (SELECT id FROM known_hosts WHERE host = 'example.com' AND port = 22 ORDER BY id)"))
+        assertEquals(1L, long("SELECT COUNT(*) FROM known_hosts WHERE host = 'example.com' AND port = 22 AND keyType = 'ssh-rsa'"))
 
         // Version 5: the table takes a row keyed by host and its index is there to be used.
         execSQL("INSERT INTO command_history (hostId, text, at) VALUES ('h1', 'ls', 7)")
@@ -378,8 +447,18 @@ class MigrationTest {
         assertEquals(listOf("h1"), identities.hostsUsing("id-1").map { it.id })
 
         val knownHosts = RoomKnownHostRepository(db)
-        assertEquals(listOf(KnownHostKey("k1", "example.com", 22, "ssh-ed25519", "AAAA1", "SHA256:1", 1, 2)), knownHosts.find("example.com", 22))
+        assertEquals(
+            listOf(KnownHostKey("k1", "example.com", 22, "ssh-ed25519", "AAAA1", "SHA256:1", 1, 2), KnownHostKey("k7", "example.com", 22, "ssh-rsa", "AAAA7", "SHA256:7", 11, 12)),
+            knownHosts.find("example.com", 22).sortedBy { it.id },
+        )
         assertEquals(listOf(KnownHostKey("k2", "web.example.net", 2200, "ssh-rsa", "AAAA2", "SHA256:2", 3, 4, pinned = from >= 2)), knownHosts.find("web.example.net", 2200))
+        // Version 6: the address as typed into the editor finds the row whatever its case, and the row reads back lowercase.
+        assertEquals(listOf(KnownHostKey("k2", "web.example.net", 2200, "ssh-rsa", "AAAA2", "SHA256:2", 3, 4, pinned = from >= 2)), knownHosts.find("Web.Example.NET", 2200))
+        assertEquals(listOf(KnownHostKey("k4", "prod-api.example.com", 22, "ssh-ed25519", "AAAA4", "SHA256:4", 6, 7)), knownHosts.find("Prod-API.example.com", 22))
+        assertEquals(
+            if (from >= 2) listOf(KnownHostKey("k5", "nas.local", 22, "ssh-ed25519", "AAAA5", "SHA256:5", 8, 10, pinned = true)) else listOf(KnownHostKey("k6", "nas.local", 22, "ssh-ed25519", "AAAA6", "SHA256:6", 9, 20)),
+            knownHosts.find("NAS.local", 22),
+        )
 
         val workspaces = RoomWorkspaceRepository(db)
         assertEquals(home, workspaces.ensureDefault(), "launch finds the existing default group instead of making another")
@@ -463,6 +542,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 5
+        const val CURRENT_VERSION = 6
     }
 }

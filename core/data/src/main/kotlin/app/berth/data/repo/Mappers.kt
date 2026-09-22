@@ -120,7 +120,8 @@ internal fun IdentityEntity.toDomain() = Identity(
     createdAt = createdAt,
 )
 
-internal fun KnownHostKey.toEntity() = KnownHostEntity(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
+/** The name folded as the store keys it ([KnownHostKey.canonicalHost]); a read hands it back as stored. */
+internal fun KnownHostKey.toEntity() = KnownHostEntity(id, KnownHostKey.canonicalHost(host), port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
 internal fun KnownHostEntity.toDomain() = KnownHostKey(id, host, port, keyType, publicKeyBase64, fingerprintSha256, firstSeenAt, lastSeenAt, pinned)
 
