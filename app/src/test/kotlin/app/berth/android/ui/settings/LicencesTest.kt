@@ -9,7 +9,8 @@ import java.io.File
  * Settings › Licences against what ships: every licence file under `assets/licenses/` is opened by
  * exactly one row and every row's file is there, so a text added or renamed cannot go unlisted;
  * and a file's hard wraps are joined while its headings, title block and rules keep their lines, and a
- * table's rows stand as paragraphs of their own.
+ * table's rows stand as paragraphs of their own. Of the shipped texts only the icon sets' table has any,
+ * so a text added later that the rule would split fails here first.
  */
 class LicencesTest {
     private val shipped = File("src/main/assets/licenses")
@@ -76,6 +77,14 @@ class LicencesTest {
             listOf("the brackets!)  The text should be enclosed in the appropriate comment syntax for the file format."),
             licenceParagraphs(sentences),
         )
+    }
+
+    @Test
+    fun `only the icon sets' text holds table rows, and it holds all fourteen`() {
+        val rows = shipped.listFiles().orEmpty()
+            .associate { file -> file.name to licenceParagraphs(file.readText()).count { TABLE_CELL_SEPARATOR in it } }
+            .filterValues { it > 0 }
+        assertEquals(mapOf("nerd-fonts-symbols-icon-sets.txt" to 14), rows)
     }
 
     @Test
