@@ -175,7 +175,7 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
             Text(
                 if (hostsOnly) HOSTS_EXPORT_NOTE else "Saved passwords and software keys go in, sealed. The file opens only with this passphrase; there is no other way in, so keep it somewhere that is not this phone.",
                 style = BerthType.caption,
-                color = c.text3,
+                color = c.text2,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
             if (hardware.isNotEmpty() && !hostsOnly) Text(hardwareStaysNote(hardware), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
@@ -609,7 +609,7 @@ private fun RecreatePanel(label: String, notices: List<RecreateNotice>, note: St
             )
         }
     }
-    Text(note, style = BerthType.caption, color = c.text3, modifier = Modifier.padding(horizontal = 4.dp))
+    Text(note, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
 }
 
 /** The export sheet's contents line in its hosts-only mode: the hosts, and the saved passwords they log in with. */

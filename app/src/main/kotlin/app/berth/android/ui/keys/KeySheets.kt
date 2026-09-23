@@ -232,7 +232,7 @@ private fun SoftwareProtectionSheet(vm: AppViewModel, identity: Identity, onDism
                 else -> "Signs in without asking. The key file is encrypted at rest under this phone's Keystore."
             },
             style = BerthType.caption,
-            color = c.text3,
+            color = c.text2,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
         if (passphrase) {
@@ -249,7 +249,7 @@ private fun SoftwareProtectionSheet(vm: AppViewModel, identity: Identity, onDism
         Text(
             "The key stays the same, so its fingerprint and the hosts that trust it do too.",
             style = BerthType.caption,
-            color = c.text3,
+            color = c.text2,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
         if (error != null) Text(error!!, style = BerthType.caption, color = c.danger)
