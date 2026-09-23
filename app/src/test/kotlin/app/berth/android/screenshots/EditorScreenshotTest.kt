@@ -317,7 +317,7 @@ class EditorScreenshotTest {
         capture(name)
         compose.onNode(hasText("Berth JSON")).assertIsEnabled()
         compose.onNode(hasText("iTerm2") and hasText("Dracula.itermcolors")).assertIsEnabled()
-        compose.onNode(hasText("Ghostty") and hasText("Would lose links")).assertIsNotEnabled()
+        compose.onNode(hasText("Ghostty") and hasText("Would lose the link colour")).assertIsNotEnabled()
     }
 
     @Test

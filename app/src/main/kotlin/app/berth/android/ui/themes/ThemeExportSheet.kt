@@ -93,8 +93,9 @@ private fun saveMime(format: ThemeFormat): String = if (format.isJson) "applicat
 
 private fun shareMime(format: ThemeFormat): String = if (format.isJson) "application/json" else "text/plain"
 
-/** "links", "cursor text and links", "cursor text, selection and links". */
+/** "the link colour", "the cursor text and link colours", "the cursor text, selection and link colours". */
 private fun slotList(slots: List<ThemeSlot>): String {
-    val names = slots.map { it.title.lowercase() }
-    return if (names.size <= 1) names.joinToString() else names.dropLast(1).joinToString(", ") + " and " + names.last()
+    val names = slots.map { if (it == ThemeSlot.Links) "link" else it.title.lowercase() }
+    val list = if (names.size <= 1) names.joinToString() else names.dropLast(1).joinToString(", ") + " and " + names.last()
+    return "the $list " + if (names.size == 1) "colour" else "colours"
 }
