@@ -212,7 +212,7 @@ private fun UnlockKeySheet(p: Prompt.UnlockKey) {
  * A program on the host asked the forwarded agent for a signature by the key that signed in to it.
  * The sheet names the host, the key and what the signature is for, as far as the data says: a login
  * onward (with that server's key when the client bound the request to it), an `ssh-keygen -Y`
- * signature in its namespace, or data in no form Berth reads. The remote caused it, so there is no
+ * signature in its namespace, or data Berth cannot read. The remote caused it, so there is no
  * primary: Deny rests first, the two allows are plain, and taking the sheet down refuses this
  * request and decides nothing more. What the remote sent is quoted cleaned and cut ([quoteFromOutside]).
  */
@@ -236,9 +236,9 @@ private fun AgentRequestSheet(p: Prompt.AgentRequest) {
             }
             is AgentSignPurpose.SshSig -> {
                 RequestRow("Namespace", quoteFromOutside(purpose.namespace))
-                if (purpose.namespace == "git") "It is signing for git, as a signed commit or tag does." else "It is signing a file, as ssh-keygen -Y sign does."
+                if (purpose.namespace == "git") "It is signing for git, as git does for a signed commit or tag." else "It is signing data under the namespace above, as ssh-keygen -Y sign does."
             }
-            is AgentSignPurpose.Unknown -> "It sent ${"%,d".format(purpose.size)} bytes in no form Berth reads, so what they are for cannot be said."
+            is AgentSignPurpose.Unknown -> "It sent ${"%,d".format(purpose.size)} bytes Berth cannot read, so it cannot say what they are for."
         }
         Text(meaning, style = BerthType.body, color = c.text2)
         Text(

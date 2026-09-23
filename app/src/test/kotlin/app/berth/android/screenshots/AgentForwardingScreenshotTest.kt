@@ -369,16 +369,23 @@ class AgentForwardingScreenshotTest {
 
         val sshSig = ask(AgentSignPurpose.SshSig("git"))
         compose.onNodeWithText("NAMESPACE").assertExists()
-        compose.onNodeWithText("It is signing for git, as a signed commit or tag does.").assertExists()
+        compose.onNodeWithText("It is signing for git, as git does for a signed commit or tag.").assertExists()
         compose.settle(400)
         capture("agent-request-sshsig$suffix")
         assertWhole("the signature request sheet for an SSHSIG")
         compose.onNodeWithText("Deny").performScrollTo().performClick()
         assertEquals(AgentAnswer.DENY, answered(sshSig))
 
+        // Any other namespace need not be a file: the line says only what the namespace row shows.
+        val otherSig = ask(AgentSignPurpose.SshSig("file"))
+        compose.onNodeWithText("It is signing data under the namespace above, as ssh-keygen -Y sign does.").assertExists()
+        assertWhole("the signature request sheet for an SSHSIG in another namespace")
+        compose.onNodeWithText("Deny").performScrollTo().performClick()
+        assertEquals(AgentAnswer.DENY, answered(otherSig))
+
         // Taken down without an answer: this request is refused, and nothing more is decided.
         val unknown = ask(AgentSignPurpose.Unknown(1234))
-        compose.onNodeWithText("It sent 1,234 bytes in no form Berth reads, so what they are for cannot be said.").assertExists()
+        compose.onNodeWithText("It sent 1,234 bytes Berth cannot read, so it cannot say what they are for.").assertExists()
         compose.settle(400)
         capture("agent-request-unknown$suffix")
         assertWhole("the signature request sheet for unread data")
