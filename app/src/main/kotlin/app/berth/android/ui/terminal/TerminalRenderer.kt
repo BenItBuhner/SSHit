@@ -110,6 +110,7 @@ object TerminalRenderer {
         paints.fill.color = opaque(screenBg)
         nc.drawRect(0f, 0f, width, height, paints.fill)
         val sb = StringBuilder()
+        val glyph = CellGlyph()
         for (y in 0 until rows) {
             val line = frame.line(y)
             val top = y * ch
@@ -182,9 +183,9 @@ object TerminalRenderer {
                     while (len > 0 && sb[len - 1] == ' ') len--
                     if (len > 0) nc.drawText(sb, 0, len, x * cw, top + paints.baseline, paint)
                 } else {
-                    val text = line.cellText(x)
+                    glyph.of(line, x)
                     val wide = attrs and Attr.WIDE != 0
-                    nc.drawText(text, x * cw, top + paints.baseline, paint)
+                    nc.drawText(glyph.chars, 0, glyph.length, x * cw, top + paints.baseline, paint)
                     end = x + if (wide) 2 else 1
                 }
                 if (attrs and Attr.UNDERLINE != 0) {
@@ -245,7 +246,8 @@ object TerminalRenderer {
                         if (cp != 0) {
                             val paint = paints.forAttrs(line.attrs[cx])
                             paint.color = opaque(theme.cursorText)
-                            nc.drawText(line.cellText(cx), left, top + paints.baseline, paint)
+                            glyph.of(line, cx)
+                            nc.drawText(glyph.chars, 0, glyph.length, left, top + paints.baseline, paint)
                         }
                     }
                     shape == CursorShape.UNDERLINE -> nc.drawRect(left, top + ch - paints.line.strokeWidth * 2, left + w, top + ch, paints.fill)
@@ -287,7 +289,7 @@ object TerminalRenderer {
     }
 
     private fun isSimple(cp: Int, line: TerminalLine, x: Int): Boolean =
-        cp in 0x20..0x7E || (cp in 0xA0..0x24FF && line.attrs[x] and Attr.WIDE == 0 && line.combining?.containsKey(x) != true)
+        line.combining?.containsKey(x) != true && (cp in 0x20..0x7E || (cp in 0xA0..0x24FF && line.attrs[x] and Attr.WIDE == 0))
 
     private fun opaque(rgb: Int): Int = 0xFF000000.toInt() or (rgb and 0xFFFFFF)
 
@@ -327,5 +329,34 @@ object TerminalRenderer {
     private fun mix(a: Int, b: Int, t: Float): Int {
         fun ch(shift: Int) = (((a shr shift) and 0xFF) * (1 - t) + ((b shr shift) and 0xFF) * t).roundToInt().coerceIn(0, 255)
         return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+}
+
+/**
+ * One cell's text as [TerminalLine.cellText] gives it (the code point and any combining marks),
+ * written into a buffer reused across the cells of a draw. Box drawing, block elements and braille
+ * are drawn a cell at a time; a screen of them made a string for every cell of every frame.
+ */
+private class CellGlyph {
+    var chars = CharArray(4)
+        private set
+    var length = 0
+        private set
+
+    fun of(line: TerminalLine, x: Int) {
+        val cp = line.chars[x]
+        if (cp == 0) {
+            chars[0] = ' '
+            length = 1
+            return
+        }
+        val marks = line.combining?.get(x)
+        val need = 2 + (marks?.length ?: 0)
+        if (chars.size < need) chars = CharArray(need)
+        length = Character.toChars(cp, chars, 0)
+        if (marks != null) {
+            marks.toCharArray(chars, length)
+            length += marks.length
+        }
     }
 }

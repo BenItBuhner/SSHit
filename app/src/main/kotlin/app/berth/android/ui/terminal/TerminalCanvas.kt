@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -290,9 +291,16 @@ fun TerminalCanvas(
     }
     val currentSelection by rememberUpdatedState(selection)
     // Frames: every change of the screen or of the view's offset is captured into the back buffer
-    // on a worker, then swapped in and the draw invalidated. Conflation folds a burst of output into
-    // as many captures as the UI thread can draw. A selection the buffer no longer holds (the grid
-    // changed width, the screen switched) ends here, so the bar never stands over nothing.
+    // on a worker, then swapped in and the draw invalidated. The first change after a quiet spell is
+    // captured at once; after each capture the loop waits for the next frame, and conflation folds
+    // whatever lands meanwhile into one capture, so a burst costs a capture a frame (and a frame's
+    // worth of the emulator's lock), not one per chunk read. Its end is drawn a frame after the
+    // burst: the frame after it draws the burst's first capture and starts the capture of the rest,
+    // and the frame after that draws the rest. Frames stop while the app is in the background, so
+    // the first frame back draws the capture made just after leaving and the next one the present.
+    // The draw never takes the emulator's lock, so the capture cannot move into the frame to close
+    // that gap. A selection the buffer no longer holds (the grid changed width, the screen
+    // switched) ends here, so the bar never stands over nothing.
     LaunchedEffect(session.id) {
         combine(session.screenVersion, snapshotFlow { viewport.scrollOffset }) { v, o -> v to o }
             .conflate()
@@ -303,6 +311,7 @@ fun TerminalCanvas(
                 if (used != wanted) viewport.scrollOffset = used
                 currentSelection?.dropIfStale(emulator)
                 frameTick++
+                withFrameNanos { }
             }
     }
     // A search follows the buffer: new output while the bar is open re-runs it, settled a little.

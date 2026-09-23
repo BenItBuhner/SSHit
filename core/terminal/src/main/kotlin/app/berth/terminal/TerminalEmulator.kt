@@ -265,12 +265,26 @@ class TerminalEmulator(
         MouseEncoder.encode(button, col.coerceIn(0, cols - 1), row.coerceIn(0, rows - 1), modifiers, release, motion, mouseSgrEncoding)
     }
 
-    /** Applies a terminal theme's 16 ANSI colors and default foreground/background. */
+    /**
+     * Applies a terminal theme's 16 ANSI colors and default foreground/background. The theme a
+     * screen already has changes nothing and reports no change: the canvas applies it on every tab
+     * switch, and a reported change costs a capture and a save of the frame at the next cadence.
+     */
     fun applyTheme(ansi: IntArray, foregroundRgb: Int, backgroundRgb: Int) {
         synchronized(lock) {
-            for (i in 0 until minOf(16, ansi.size)) palette[i] = ansi[i] and 0xFFFFFF
-            defaultForegroundRgb = foregroundRgb and 0xFFFFFF
-            defaultBackgroundRgb = backgroundRgb and 0xFFFFFF
+            val fg = foregroundRgb and 0xFFFFFF
+            val bg = backgroundRgb and 0xFFFFFF
+            var changed = fg != defaultForegroundRgb || bg != defaultBackgroundRgb
+            for (i in 0 until minOf(16, ansi.size)) {
+                val rgb = ansi[i] and 0xFFFFFF
+                if (palette[i] != rgb) {
+                    palette[i] = rgb
+                    changed = true
+                }
+            }
+            if (!changed) return
+            defaultForegroundRgb = fg
+            defaultBackgroundRgb = bg
             markDirty()
         }
         flushChanges()

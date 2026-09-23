@@ -22,6 +22,10 @@ import java.security.Security
  * private key can only sign inside the Keystore provider, and `Signature.getInstance(alg)` without
  * a provider defers the choice to `initSign`, where the Keystore provider is the one that accepts
  * the key. Everything else still lands on BouncyCastle, which we insert at the front.
+ *
+ * The app installs it on a background thread at launch, so every path that has sshj or the JCA
+ * build a key object (a connection, and [SshKeys] generating, loading or parsing a key) calls
+ * [ensureProviders] first; a caller that arrives mid-install waits for it on the lock.
  */
 object SshSecurity {
     @Volatile

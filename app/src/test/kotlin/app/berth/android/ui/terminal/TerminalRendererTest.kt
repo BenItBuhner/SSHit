@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import androidx.test.core.app.ApplicationProvider
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
@@ -24,7 +25,8 @@ import kotlin.math.abs
  * What the renderer puts in the pixels under a search's current match (spec C17): the accent,
  * opaque, with the glyphs in the theme's background, whatever colour the cell's own text had. A
  * bold green prompt under the accent at 60% was under 2:1; this pair is the one the accent was
- * chosen for. Plain matches and the selection keep the glyph's own colour, as before.
+ * chosen for. Plain matches and the selection keep the glyph's own colour, as before. And the text
+ * it hands the canvas for a cell that carries combining marks.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -103,5 +105,50 @@ class TerminalRendererTest {
         val px = cells(bitmap, paints, 0, 3)
         assertTrue("the fill is the selection colour", px.count { near(it, theme.selection) } > px.size / 3)
         assertTrue("the glyph stays green", px.any { greenish(it) })
+    }
+
+    @Test
+    fun `a letter with combining marks reaches the canvas with its marks, in the same draw as the letter`() {
+        val line = "cafe\u0301 na\u0308ive"
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val paints = TerminalPaints(context, TerminalFont(sizeSp = 16), density = 2f, fontScale = 1f)
+        val t = TerminalEmulator(12, 2, 0, TerminalListenerAdapter())
+        t.applyTheme(theme.ansi.toIntArray(), theme.foreground, theme.background)
+        t.write(line)
+        val frame = TerminalFrame()
+        frame.capture(t, 0)
+        val w = (12 * paints.cellWidth).toInt()
+        val h = (2 * paints.cellHeight).toInt()
+        val canvas = RecordingCanvas(Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888))
+        TerminalRenderer.draw(canvas, frame, paints, theme, boldAsBright = false, w.toFloat(), h.toFloat(), showCursor = false, focused = true)
+        assertEquals("the text handed to the canvas, in order", line, canvas.texts.joinToString(""))
+        // A mark in a draw of its own is not shaped onto the letter before it.
+        assertTrue("e and its acute in one draw: ${canvas.texts}", canvas.texts.any { "e\u0301" in it })
+        assertTrue("a and its diaeresis in one draw: ${canvas.texts}", canvas.texts.any { "a\u0308" in it })
+    }
+
+    /** A canvas over a bitmap that keeps the text of every draw it is handed, and draws it. */
+    private class RecordingCanvas(bitmap: Bitmap) : Canvas(bitmap) {
+        val texts = ArrayList<String>()
+
+        override fun drawText(text: String, x: Float, y: Float, paint: Paint) {
+            texts += text
+            super.drawText(text, x, y, paint)
+        }
+
+        override fun drawText(text: String, start: Int, end: Int, x: Float, y: Float, paint: Paint) {
+            texts += text.substring(start, end)
+            super.drawText(text, start, end, x, y, paint)
+        }
+
+        override fun drawText(text: CharSequence, start: Int, end: Int, x: Float, y: Float, paint: Paint) {
+            texts += text.subSequence(start, end).toString()
+            super.drawText(text, start, end, x, y, paint)
+        }
+
+        override fun drawText(text: CharArray, index: Int, count: Int, x: Float, y: Float, paint: Paint) {
+            texts += String(text, index, count)
+            super.drawText(text, index, count, x, y, paint)
+        }
     }
 }

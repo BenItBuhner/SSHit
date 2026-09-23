@@ -1,12 +1,14 @@
 package app.berth.ssh
 
 import app.berth.domain.model.KeyAlgorithm
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.PrivateKey
+import java.security.Security
 import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.RSAPrivateKey
 import java.util.concurrent.TimeUnit
@@ -39,6 +41,22 @@ class SshKeysTest {
             assertContentEquals(SshKeys.publicKeyBlob(pair.public), SshKeys.publicKeyBlob(provider.public), "loaded public for $algorithm")
             // Private key material must survive the round trip too, not just the public half.
             assertTrue(samePrivateKey(pair.private, provider.private), "loaded private for $algorithm")
+        }
+    }
+
+    @Test
+    fun `generating or parsing a key installs the provider itself, for a caller ahead of the launch install`() {
+        val line = SshKeys.openSshPublic(SshKeys.generate(KeyAlgorithm.ECDSA_P256).public)
+        val blob = line.split(" ")[1]
+        val calls: List<Pair<String, () -> Unit>> = listOf(
+            "generate" to { SshKeys.generate(KeyAlgorithm.ECDSA_P256) },
+            "parseOpenSshPublic" to { SshKeys.parseOpenSshPublic(line) },
+            "parsePublicKeyBlob" to { SshKeys.parsePublicKeyBlob(blob) },
+        )
+        for ((name, call) in calls) {
+            Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
+            call()
+            assertEquals(BouncyCastleProvider.PROVIDER_NAME, Security.getProviders().first().name, name)
         }
     }
 

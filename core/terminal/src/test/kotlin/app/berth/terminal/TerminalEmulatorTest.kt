@@ -412,6 +412,22 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `the theme a screen already has reports no change, a new one or a palette entry it restores does`() {
+        val (t, r) = term()
+        t.applyTheme(Palette.BERTH_DARK_ANSI, 0x112233, 0x445566)
+        assertEquals(1, r.screenChanges)
+        t.applyTheme(Palette.BERTH_DARK_ANSI, 0x112233, 0x445566)
+        assertEquals(1, r.screenChanges, "the same theme again")
+        t.applyTheme(Palette.BERTH_DARK_ANSI, 0x112233, 0x445577)
+        assertEquals(2, r.screenChanges, "a new background")
+        t.write("\u001b]4;1;rgb:ff/00/00\u0007")
+        val afterOsc = r.screenChanges
+        t.applyTheme(Palette.BERTH_DARK_ANSI, 0x112233, 0x445577)
+        assertEquals(afterOsc + 1, r.screenChanges, "the theme's red back over the one OSC 4 set")
+        assertEquals(Palette.BERTH_DARK_ANSI[1] and 0xFFFFFF, t.palette[1])
+    }
+
+    @Test
     fun `osc 4 changes and reports palette entries`() {
         val (t, r) = term()
         t.write("\u001b]4;1;rgb:ff/00/00\u0007")
