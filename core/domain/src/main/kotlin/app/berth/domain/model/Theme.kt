@@ -386,7 +386,7 @@ data class TerminalTheme(
             foreground = 0xBFBDB6,
             cursor = 0xE6B450,
             cursorText = 0x0B0E14,
-            selection = 0x152D4F,
+            selection = 0x1B3A5B,
             links = 0x59C2FF,
             suggestedAccent = 0xE6B450,
             builtIn = true,
