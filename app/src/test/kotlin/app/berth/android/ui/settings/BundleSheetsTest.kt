@@ -131,7 +131,7 @@ class BundleSheetsTest {
         // A key named and not carried: what it is, and so what its hosts do here.
         assertEquals("Ed25519, not in the file \u00B7 this phone has it, so prod-web logs in with it", namedKeyLine("laptop", "Ed25519", hereAs = "laptop", hosts = listOf("prod-web")))
         assertEquals(
-            "Ed25519, not in the file \u00B7 this phone has it as laptop ed25519, so prod-web, staging log in with it",
+            "Ed25519, not in the file \u00B7 this phone has it as the key \u201Claptop ed25519\u201D, so prod-web, staging log in with it",
             namedKeyLine("old laptop", "Ed25519", hereAs = "laptop ed25519", hosts = listOf("prod-web", "staging")),
         )
         assertEquals(

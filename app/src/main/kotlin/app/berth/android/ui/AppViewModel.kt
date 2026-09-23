@@ -998,7 +998,7 @@ class AppViewModel @Inject constructor(
             try {
                 if (identity.isHardwareBacked) return@withContext KeyChangeResult.Failed("A hardware key's protection is fixed when it is made.")
                 val pem = identityRepository.privateKey(identity.id)?.toString(Charsets.UTF_8)
-                    ?: return@withContext KeyChangeResult.Failed("The private key for ${identity.name} is missing.")
+                    ?: return@withContext KeyChangeResult.Failed("The key \u201C${identity.name}\u201D has no stored private key.")
                 val opened = try {
                     SshKeys.importPrivate(pem, current?.copyOf())
                 } catch (_: SshKeys.ImportError.PassphraseNeeded) {
@@ -1007,7 +1007,7 @@ class AppViewModel @Inject constructor(
                     return@withContext KeyChangeResult.WrongPassphrase
                 }
                 if (SshKeys.fingerprintSha256(opened.pair.public) != identity.fingerprintSha256) {
-                    return@withContext KeyChangeResult.Failed("The stored key file does not match ${identity.name}'s fingerprint, so it was left as it is.")
+                    return@withContext KeyChangeResult.Failed("The stored file for the key \u201C${identity.name}\u201D does not match its fingerprint, so it was left as it is.")
                 }
                 val passphrase = next?.takeIf { it.isNotEmpty() }
                 val reencoded = SshKeys.openSshPrivate(opened.pair, identity.comment, passphrase)

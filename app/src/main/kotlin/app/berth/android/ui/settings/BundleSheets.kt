@@ -652,7 +652,7 @@ internal fun namedKeyLine(name: String, algorithm: String, hereAs: String?, host
     val many = hosts.size > 1
     val who = hosts.joinToString(", ")
     return "$algorithm, not in the file \u00B7 " + when {
-        hereAs != null -> (if (hereAs == name) "this phone has it" else "this phone has it as $hereAs") +
+        hereAs != null -> (if (hereAs == name) "this phone has it" else "this phone has it as the key \u201C$hereAs\u201D") +
             if (hosts.isEmpty()) "" else ", so $who log${if (many) "" else "s"} in with it"
         else -> "this phone does not have it" +
             if (hosts.isEmpty()) "" else ", so $who ask${if (many) "" else "s"} each time until you pick a key"

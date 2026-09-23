@@ -46,6 +46,7 @@ import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.security.FakeKeystore
 import app.berth.android.session.AuthResolver
+import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.keys.KeysScreen
@@ -587,6 +588,36 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         assertTrue(runCatching { SshKeys.importPrivate(pem) }.exceptionOrNull() is SshKeys.ImportError.PassphraseNeeded)
         assertEquals(before.fingerprintSha256, SshKeys.fingerprintSha256(SshKeys.importPrivate(pem, "tr0ub4dor".toCharArray()).pair.public))
         waitForTextContaining("Passphrase \u00B7 asked for on each connection")
+    }
+
+    /**
+     * The two ways a software key cannot be written again name it as the key “name”: no stored file
+     * at all, and a stored file that is not the key the row describes, which the sheet shows under its
+     * notes and which changes nothing.
+     */
+    @Test
+    fun `a key that cannot be written again is named as the key in its reason`() {
+        seedLibrary()
+        val ci = graph.identities.items.value.first { it.id == "id-ci" }
+        assertEquals(
+            AppViewModel.KeyChangeResult.Failed("The key \u201Cwork\u201D has no stored private key."),
+            runBlocking { graph.viewModel.changeProtection(ci.copy(id = "id-gone", name = "work"), null, "tr0ub4dor".toCharArray()) },
+        )
+
+        val laptop = graph.identities.items.value.first { it.id == "id-laptop" }
+        val drifted = ci.copy(fingerprintSha256 = laptop.fingerprintSha256)
+        runBlocking { graph.identities.update(drifted) }
+        val pem = storedKey("id-ci")
+        themed { KeysScreen(graph.viewModel, onBack = {}) }
+        keyMenu("ci deploy", "Change protection")
+        inSheet("Passphrase").performClick()
+        sheetFieldUnder("New passphrase").performTextInput("tr0ub4dor")
+        sheetFieldUnder("Confirm new passphrase").performTextInput("tr0ub4dor")
+        inSheet("Save").assertIsEnabled().performClick()
+        waitForText("The stored file for the key \u201Cci deploy\u201D does not match its fingerprint, so it was left as it is.", timeout = 15_000)
+        assertNoTextCut("the Change protection sheet with a key file that is not the key")
+        assertEquals(drifted, graph.identities.items.value.first { it.id == "id-ci" })
+        assertEquals("the key file is left as it is", pem, storedKey("id-ci"))
     }
 
     /** A hardware key's protection is the secure hardware's: the sheet says so, changes nothing, and offers a new hardware key. */
