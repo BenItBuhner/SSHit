@@ -145,9 +145,10 @@ private enum class ShellNotice { REOPEN, LINK, BACK, LANDED }
  * of padding, so the terminal keeps the rows the row would have taken, and 16 dp of reach into the
  * status bar, so its targets stand the 48 dp the 40 dp row's do. Only the sizes change; the
  * style they change on is the one in force (the direction's skin, through [LocalTabStripStyle]),
- * so a phone turning does not turn the strip back to the default skin.
+ * so a phone turning does not turn the strip back to the default skin. Under Compact the Stage
+ * steps it down again, to the density's 28 ([app.berth.android.ui.tabs.within]).
  */
-private fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 16.dp, chipHeight = 20.dp)
+internal fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 16.dp, chipHeight = 20.dp)
 
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {

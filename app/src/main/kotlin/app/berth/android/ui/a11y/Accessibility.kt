@@ -28,9 +28,10 @@ val TouchTargetSize: Dp = 48.dp
 
 /**
  * Extra target a header lends the controls in its fixed slots above their visual, out of the
- * status-bar inset it owns (the ribbon's [app.berth.android.ui.tabs.TabStripStyle.topReach]), so a
- * 40 dp row answers a 48 dp target without the row growing. The header provides it; an icon
- * action or count tile placed in the header reads it as its default reach. Zero everywhere else.
+ * status-bar inset it owns or the band a shorter row keeps where there is none
+ * ([app.berth.android.ui.tabs.reachUnder]), so a 40 dp row answers a 48 dp target without the row
+ * growing. The header provides it; an icon action, count tile or bar action placed in the header
+ * reads it as its default reach. Zero everywhere else.
  */
 val LocalTargetReach = compositionLocalOf { 0.dp }
 

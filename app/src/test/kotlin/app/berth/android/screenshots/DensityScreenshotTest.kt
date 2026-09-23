@@ -1,13 +1,23 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.view.View
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasStateDescription
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -15,12 +25,22 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.session.PaneSide
+import app.berth.android.ui.AppRoot
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.stage.DeckKeyTag
+import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabActions
+import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.domain.model.AuthMethod
@@ -42,14 +62,17 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * Density (spec A12) on the surfaces its tokens reach, each at Comfortable and then Compact, at the
  * system's 1× and at 2×, where interface text stops at its 1.3× cap: the Interface editor, whose
- * Density control is the switch, Settings' panels and rows, the Hosts list and the host editor's
- * fields. The interface theme comes from the view model as the shell's does, so the pick in the
- * editor is the density every screen draws at. Written to `build/outputs/roborazzi` in pairs,
- * `density-<surface>-comfortable` and `density-<surface>-compact`.
+ * Density control is the switch, Settings' panels and rows, the Hosts list, the host editor's
+ * fields, and the Stage's chrome: its strip upright and on its side, the panes' headers on a
+ * tablet, and the Deck. The interface theme comes from the view model as the shell's does, so the
+ * pick in the editor is the density every screen draws at. Written to `build/outputs/roborazzi` in
+ * pairs, `density-<surface>-comfortable` and `density-<surface>-compact`, with the phone's strip
+ * under a status bar as a phone has one, and Compact's once more without.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -119,6 +142,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Interface preview").fetchSemanticsNodes().isNotEmpty() }
         capture("density-appearance-comfortable")
         val comfortable = bounds("Variant")
+        // Within a dp: the title's line and the row each round to whole pixels at 2.625 a dp.
+        assertEquals("the preview's ribbon is Comfortable's 40", 40f, mockRibbonDp(), 1f)
 
         compose.onNodeWithText("Compact").performScrollTo().performClick()
         awaitDensity(Density.COMPACT)
@@ -126,6 +151,211 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         compose.waitForIdle()
         capture("density-appearance-compact")
         assertEquals("the Look panel's padding is 12 dp, not 16", 4f, (comfortable.left - bounds("Variant").left).inDp(), 0.5f)
+        assertEquals("the preview's ribbon is Compact's 28, the Stage's own", 28f, mockRibbonDp(), 1f)
+    }
+
+    /** The ribbon of the editor's Stage in miniature, from the top of the preview to twice the centre of its title, which the row centres. */
+    private fun mockRibbonDp(): Float {
+        val preview = compose.onNodeWithContentDescription("Interface preview").fetchSemanticsNode().boundsInRoot
+        val title = compose.onNode(hasText("homelab") and hasAnyAncestor(hasContentDescription("Interface preview"))).fetchSemanticsNode().boundsInRoot
+        return ((title.center.y - preview.top) * 2).inDp()
+    }
+
+    // ---- the Stage's chrome ------------------------------------------------------------------------
+
+    /**
+     * The Stage header (spec A12, ribbon 40 → 28; C3): under a phone's status bar the strip's row
+     * steps from 40 to 28 with its tabs from 32 to 24, every title and chip label standing in a box
+     * as tall as its line at the cap too, and a tab still answers a 48 dp target, the reach taking
+     * the 12 dp the row gave up out of the inset. With no status bar to lend them the header keeps
+     * those 12 dp as its own band above the row, so a target never stands shorter than Comfortable's.
+     */
+    @Test
+    fun `stage header and strip`() {
+        mountShell()
+        statusBar(24)
+        capture("density-stage-comfortable")
+        assertEquals(40f, stripRowDp(), 1f)
+        assertEquals("the strip lends its targets 8 dp of the status bar", 48f, stripHeightDp(), 0.5f)
+        assertStripLinesWhole("the Comfortable strip")
+
+        setDensity(Density.COMPACT)
+        capture("density-stage-compact")
+        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals("and 20 dp to the 28 dp row", 48f, stripHeightDp(), 0.5f)
+        assertEquals("a tab is a 48 dp target on it", 48f, compose.onNode(hasContentDescription("homelab, detached", substring = true)).fetchSemanticsNode().size.height.toFloat().inDp(), 0.5f)
+        assertStripLinesWhole("the Compact strip")
+
+        statusBar(0)
+        capture("density-stage-compact-no-status-bar")
+        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals("with no status bar the header keeps the 12 dp as its own band", 40f, stripHeightDp(), 0.5f)
+        setDensity(Density.COMFORTABLE)
+        assertEquals("as tall as Comfortable's row there", 40f, stripHeightDp(), 0.5f)
+    }
+
+    /**
+     * A phone on its side (spec C23): under its status bar the strip's own 32 steps to Compact's 28
+     * as well, its lines whole, and with none it stands its own 32.
+     */
+    @Test
+    @Config(qualifiers = "w914dp-h411dp-land-420dpi")
+    fun `stage strip on a phone on its side`() {
+        mountShell()
+        statusBar(24)
+        capture("density-stage-landscape-comfortable")
+        assertEquals(32f, stripRowDp(), 1f)
+        assertEquals("its targets reach 16 dp into the status bar", 48f, stripHeightDp(), 0.5f)
+
+        setDensity(Density.COMPACT)
+        capture("density-stage-landscape-compact")
+        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals("and 20 dp from the 28 dp row, its own 16 and the 4 it gave up", 48f, stripHeightDp(), 0.5f)
+        assertStripLinesWhole("the Compact strip on its side")
+
+        statusBar(0)
+        assertEquals(32f, stripHeightDp(), 0.5f)
+    }
+
+    /**
+     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane): 40,
+     * then Compact's 28, or at the cap the title's own line where that is taller, and never cut. The
+     * window has no status bar, so the strip's 28 dp row keeps its 12 dp band and every target in
+     * the header stands 40 dp, which the audit of each frame holds it to.
+     */
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-land-320dpi")
+    fun `pane headers on a tablet`() {
+        mountShell()
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("pi-hole, right pane")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        capture("density-panes-comfortable")
+        assertEquals(40f, paneHeaderDp(), 0.5f)
+
+        setDensity(Density.COMPACT)
+        capture("density-panes-compact")
+        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals(40f, stripHeightDp(), 0.5f)
+        // Body's 22 sp line at the capped scale, rounded up to a whole pixel as the text's box is.
+        val line = kotlin.math.ceil(22f * minOf(systemFontScale, 1.3f) * compose.density.density) / compose.density.density
+        assertEquals(maxOf(28f, line), paneHeaderDp(), 0.5f)
+        assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
+    }
+
+    /** The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, and the strip above it Compact's 28 on the Stage itself. */
+    @Test
+    fun `the deck`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed { StageScreen(graph.viewModel, live, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}) }
+        awaitDeck()
+        capture("density-deck-comfortable")
+        assertEquals(44f, ctrlKeyDp(), 0.5f)
+
+        setDensity(Density.COMPACT)
+        capture("density-deck-compact")
+        assertEquals(40f, ctrlKeyDp(), 0.5f)
+        assertEquals(28f, stripRowDp(), 1f)
+    }
+
+    /** The shell as it mounts, on the Stage fixture's three detached tabs with homelab on stage. */
+    private fun mountShell() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        compose.setContent {
+            composeView = LocalView.current
+            AppRoot(graph.viewModel)
+        }
+        compose.waitUntil(10_000) { graph.viewModel.activeTabId.value == "s-homelab" }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("homelab, detached", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+    }
+
+    /** The compose view under test, for the insets Robolectric's window never sends it. */
+    private var composeView: View? = null
+
+    /** Gives the window a status bar [dp] tall, dispatched to the compose view as the window would. */
+    private fun statusBar(dp: Int) {
+        val view = checkNotNull(composeView) { "mountShell first" }
+        val px = (dp * compose.density.density).roundToInt()
+        val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, px, 0, 0)).build()
+        compose.runOnUiThread { ViewCompat.dispatchApplyWindowInsets(view, insets) }
+        compose.waitForIdle()
+    }
+
+    /** The strip's whole height: its row and the reach above it. */
+    private fun stripHeightDp(): Float = compose.onNode(onTheStrip).fetchSemanticsNode().size.height.toFloat().inDp()
+
+    /**
+     * The strip's row alone: the active tab's title centres on it, so the row is twice the title's
+     * centre's height over the strip's foot. Within a dp: the line and the row each round to whole pixels.
+     */
+    private fun stripRowDp(): Float {
+        val strip = compose.onNode(onTheStrip).fetchSemanticsNode()
+        val title = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(onTheStrip), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .first { it.textLayout()?.layoutInput?.text?.text == "homelab" }
+        val foot = strip.positionInRoot.y + strip.size.height
+        return ((foot - (title.positionInRoot.y + title.size.height / 2f)) * 2).inDp()
+    }
+
+    private val onTheStrip = hasContentDescription("Tabs, ", substring = true)
+
+    /**
+     * The focused pane's header: the × centres its target on the row, so the row is twice its
+     * centre's depth into the pane. Read unclipped: the pane's corners clip the target's top, and
+     * nothing its foot over the body.
+     */
+    private fun paneHeaderDp(): Float {
+        val close = compose.onNode(hasContentDescription("Close pane")).fetchSemanticsNode()
+        val pane = compose.onAllNodes(hasContentDescription(" pane", substring = true) and hasStateDescription("Focused")).onFirst().fetchSemanticsNode().boundsInRoot
+        return ((close.positionInRoot.y + close.size.height / 2f - pane.top) * 2).inDp()
+    }
+
+    private fun ctrlKeyDp(): Float = compose.onNode(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNode().size.height.toFloat().inDp()
+
+    private fun awaitDeck() {
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+    }
+
+    @Composable
+    private fun tabActions(): TabActions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+
+    /**
+     * The strip's titles and chip labels are whole ([assertLinesWhole]), and it has both to read;
+     * and each monogram stands inside its swatch with at least a dp to spare either side, where at
+     * the font cap two letters set for the 20 dp swatch would stand as wide as Compact's 16.
+     */
+    private fun assertStripLinesWhole(where: String) {
+        val read = assertLinesWhole(where, onTheStrip)
+        assertTrue("the strip's titles and chips read: $read", read.containsAll(listOf("homelab", "pi-hole", "HOME")))
+        val monograms = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(onTheStrip), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .mapNotNull { it.textLayout() }
+            .filter { it.layoutInput.text.text in listOf("HO", "PH") }
+        assertTrue("the strip's monograms read", monograms.size >= 2)
+        val spare = 2 * compose.density.density
+        val tight = monograms
+            .filter { it.layoutInput.constraints.maxWidth - it.multiParagraph.maxIntrinsicWidth < spare }
+            .map { "${it.layoutInput.text.text}, ${it.multiParagraph.maxIntrinsicWidth} px in ${it.layoutInput.constraints.maxWidth}" }
+        assertTrue("a monogram meeting its swatch's edges on $where: $tight", tight.isEmpty())
+    }
+
+    /**
+     * No text under [within] stands in a box shorter than its line, the cut that takes a descender's
+     * foot. Width is not read: a title too wide for its tab ends in the strip's own ellipsis.
+     * Returns what it read.
+     */
+    private fun assertLinesWhole(where: String, within: SemanticsMatcher): List<String> {
+        val texts = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(within), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .mapNotNull { it.textLayout() }
+        val short = texts.filter { it.size.height < it.multiParagraph.height }.map { "${it.layoutInput.text.text}, ${it.size.height} px of ${it.multiParagraph.height}" }
+        assertTrue("a line taller than its box on $where: $short", short.isEmpty())
+        return texts.map { it.layoutInput.text.text }
     }
 
     @Test

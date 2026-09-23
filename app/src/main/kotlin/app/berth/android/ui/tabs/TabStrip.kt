@@ -103,9 +103,11 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import app.berth.android.session.PaneSide
@@ -252,7 +254,9 @@ fun rememberTabStripState(): TabStripState {
  * gutter, then the fixed [trailing] slots (count tile, Overflow). Owns the status-bar inset and
  * the chrome chosen by the style: a flat toolbar on its [TabStripStyle.headerFill], or an island
  * inset from the edges. Over a flat toolbar the strip's items reach [TabStripStyle.topReach] into
- * the inset as touch target, so a 40 dp row answers a 44 dp target without moving anything.
+ * the inset as touch target, so a 40 dp row answers a 44 dp target without moving anything; a
+ * shorter row's kept reach ([TabStripStyle.keptReach]) goes into the inset too, or stands as a
+ * band of the header's fill above the row where there is none ([reachUnder]).
  */
 @Composable
 fun TabHeader(
@@ -268,8 +272,7 @@ fun TabHeader(
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    // The island's clip would cut a target that reached past its edge, so only the toolbar lends the inset.
-    val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
+    val reach = style.reachUnder(statusTop)
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
             TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, entry = entry)
@@ -282,7 +285,7 @@ fun TabHeader(
         }
     }
     when (style.chrome) {
-        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
+        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(resolved.headerFill).padding(top = (statusTop - reach).coerceAtLeast(0.dp)))
         StripChrome.ISLAND -> Box(
             modifier
                 .fillMaxWidth()
@@ -1044,6 +1047,20 @@ private fun CloseGlyph(onClick: () -> Unit) {
 }
 
 /**
+ * The monogram in a swatch [size] across: as set for the default swatch, or in proportion in a
+ * smaller one (Compact's 16 dp), where the two letters at the interface's font cap would otherwise
+ * stand as wide as the swatch and meet its edges.
+ */
+internal fun TextStyle.scaledTo(size: Dp): TextStyle {
+    val scale = size / TabStripStyle.Default.swatchSize
+    if (scale >= 1f) return this
+    return copy(
+        fontSize = if (fontSize.isSpecified) fontSize * scale else fontSize,
+        lineHeight = if (lineHeight.isSpecified) lineHeight * scale else lineHeight,
+    )
+}
+
+/**
  * The tab's swatch: colour fill with the monogram, radius concentric with the tab; the 6 dp state
  * dot at the bottom-right corner with a halo cut in [halo] so it reads on any swatch colour; the
  * 1.5 dp attention ring 2 dp outside, pulsing once when it lights (spec A7) and holding after.
@@ -1112,7 +1129,7 @@ internal fun TabSwatch(
     ) {
         Text(
             monogram.take(2),
-            style = style.monogramStyle,
+            style = style.monogramStyle.scaledTo(size),
             color = style.monogramColor,
             maxLines = 1,
         )
