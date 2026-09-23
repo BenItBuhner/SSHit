@@ -294,8 +294,13 @@ fun TerminalCanvas(
     // on a worker, then swapped in and the draw invalidated. The first change after a quiet spell is
     // captured at once; after each capture the loop waits for the next frame, and conflation folds
     // whatever lands meanwhile into one capture, so a burst costs a capture a frame (and a frame's
-    // worth of the emulator's lock), not one per chunk read. A selection the buffer no longer holds
-    // (the grid changed width, the screen switched) ends here, so the bar never stands over nothing.
+    // worth of the emulator's lock), not one per chunk read. Its end is drawn a frame after the
+    // burst: the frame after it draws the burst's first capture and starts the capture of the rest,
+    // and the frame after that draws the rest. Frames stop while the app is in the background, so
+    // the first frame back draws the capture made just after leaving and the next one the present.
+    // The draw never takes the emulator's lock, so the capture cannot move into the frame to close
+    // that gap. A selection the buffer no longer holds (the grid changed width, the screen
+    // switched) ends here, so the bar never stands over nothing.
     LaunchedEffect(session.id) {
         combine(session.screenVersion, snapshotFlow { viewport.scrollOffset }) { v, o -> v to o }
             .conflate()

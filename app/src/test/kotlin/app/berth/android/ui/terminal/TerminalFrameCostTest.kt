@@ -94,7 +94,7 @@ class TerminalFrameCostTest {
     }
 
     @Test
-    fun `a burst of output between two frames is captured once, and its last chunk at the next frame`() {
+    fun `a burst of output between two frames is captured once, and its last chunk captured at the next frame`() {
         // With a reader on, every capture is copied for it and bumps its version: a count of captures.
         shadowOf(context.getSystemService(AccessibilityManager::class.java)).setEnabled(true)
         val session = StageFixture.liveQuick().also { sessions += it }
@@ -124,7 +124,7 @@ class TerminalFrameCostTest {
         }
         val between = accessibility.version - start
         compose.mainClock.advanceTimeByFrame()
-        awaitWorker("the last chunk is on screen") { accessibility.screenText().contains("chunk ${CHUNKS - 1} of the burst") }
+        awaitWorker("the last chunk is in the front buffer") { accessibility.screenText().contains("chunk ${CHUNKS - 1} of the burst") }
         settle()
         val next = accessibility.version - start
         println("FRAMECOST burst: $CHUNKS chunks between two frames, $between captures; $next once the next frame came")
