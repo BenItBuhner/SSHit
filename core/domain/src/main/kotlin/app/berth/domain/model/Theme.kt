@@ -114,8 +114,8 @@ data class TerminalTheme(
         const val DRACULA_ID = "dracula"
         const val ONE_DARK_ID = "one-dark"
         const val AYU_ID = "ayu"
-        const val MODUS_VIVENDI_ID = "modus-vivendi"
-        const val MODUS_OPERANDI_ID = "modus-operandi"
+        const val GITHUB_DARK_HIGH_CONTRAST_ID = "github-dark-high-contrast"
+        const val GITHUB_LIGHT_HIGH_CONTRAST_ID = "github-light-high-contrast"
 
         val BERTH_DARK = TerminalTheme(
             id = BERTH_DARK_ID,
@@ -392,37 +392,41 @@ data class TerminalTheme(
             builtIn = true,
         )
 
-        val MODUS_VIVENDI = TerminalTheme(
-            id = MODUS_VIVENDI_ID,
-            name = "Modus Vivendi",
+        // GitHub's pair is Primer's high-contrast colours (@primer/primitives 7.10.0) in the slots GitHub's
+        // VS Code theme gives them, on the panel background its terminal draws on. Its high-contrast
+        // selection is an inverted block, so the selection is the accent at 20% its other variants use.
+
+        val GITHUB_DARK_HIGH_CONTRAST = TerminalTheme(
+            id = GITHUB_DARK_HIGH_CONTRAST_ID,
+            name = "GitHub Dark High Contrast",
             ansi = listOf(
-                0x000000, 0xFF5F59, 0x44BC44, 0xD0BC00, 0x2FAFFF, 0xFEACD0, 0x00D3D0, 0xA6A6A6,
-                0x595959, 0xFF6B55, 0x00C06F, 0xFEC43F, 0x79A8FF, 0xB6A0FF, 0x6AE4B9, 0xFFFFFF,
+                0x7A828E, 0xFF9492, 0x26CD4D, 0xF0B72F, 0x71B7FF, 0xCB9EFF, 0x39C5CF, 0xD9DEE3,
+                0x9EA7B3, 0xFFB1AF, 0x4AE168, 0xF7C843, 0x91CBFF, 0xDBB7FF, 0x56D4DD, 0xFFFFFF,
             ),
-            background = 0x000000,
-            foreground = 0xFFFFFF,
-            cursor = 0xFFFFFF,
-            cursorText = 0x000000,
-            selection = 0x5A5A5A,
-            links = 0x79A8FF,
-            suggestedAccent = 0x79A8FF,
+            background = 0x010409,
+            foreground = 0xF0F3F6,
+            cursor = 0x71B7FF,
+            cursorText = 0x010409,
+            selection = 0x17283A,
+            links = 0x71B7FF,
+            suggestedAccent = 0x71B7FF,
             builtIn = true,
         )
 
-        val MODUS_OPERANDI = TerminalTheme(
-            id = MODUS_OPERANDI_ID,
-            name = "Modus Operandi",
+        val GITHUB_LIGHT_HIGH_CONTRAST = TerminalTheme(
+            id = GITHUB_LIGHT_HIGH_CONTRAST_ID,
+            name = "GitHub Light High Contrast",
             ansi = listOf(
-                0x000000, 0xA60000, 0x006800, 0x6F5500, 0x0031A9, 0x721045, 0x005E8B, 0xA6A6A6,
-                0x595959, 0x972500, 0x00663F, 0x884900, 0x3548CF, 0x531AB6, 0x005F5F, 0xFFFFFF,
+                0x0E1116, 0xA0111F, 0x024C1A, 0x3F2200, 0x0349B4, 0x622CBC, 0x1B7C83, 0x66707B,
+                0x4B535D, 0x86061D, 0x055D20, 0x4E2C00, 0x1168E3, 0x844AE7, 0x3192AA, 0x88929D,
             ),
             background = 0xFFFFFF,
-            foreground = 0x000000,
-            cursor = 0x000000,
+            foreground = 0x0E1116,
+            cursor = 0x0349B4,
             cursorText = 0xFFFFFF,
-            selection = 0xBDBDBD,
-            links = 0x3548CF,
-            suggestedAccent = 0x3548CF,
+            selection = 0xCDDBF0,
+            links = 0x0349B4,
+            suggestedAccent = 0x0349B4,
             builtIn = true,
         )
 
@@ -434,7 +438,7 @@ data class TerminalTheme(
             NORD,
             SOLARIZED_DARK, SOLARIZED_LIGHT,
             ROSE_PINE, TOKYO_NIGHT, KANAGAWA, EVERFOREST, DRACULA, ONE_DARK, AYU,
-            MODUS_VIVENDI, MODUS_OPERANDI,
+            GITHUB_DARK_HIGH_CONTRAST, GITHUB_LIGHT_HIGH_CONTRAST,
         )
     }
 }

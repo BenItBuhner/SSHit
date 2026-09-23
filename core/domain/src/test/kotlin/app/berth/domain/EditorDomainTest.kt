@@ -110,18 +110,22 @@ class EditorDomainTest {
             listOf(
                 "Berth Dark", "Berth Light", "Catppuccin Mocha", "Catppuccin Latte", "Gruvbox Dark", "Gruvbox Light", "Nord",
                 "Solarized Dark", "Solarized Light", "Ros\u00E9 Pine", "Tokyo Night", "Kanagawa", "Everforest", "Dracula",
-                "One Dark", "Ayu", "Modus Vivendi", "Modus Operandi",
+                "One Dark", "Ayu", "GitHub Dark High Contrast", "GitHub Light High Contrast",
             ),
             TerminalTheme.builtIns.map { it.name },
         )
         val light = setOf(
             TerminalTheme.BERTH_LIGHT_ID, TerminalTheme.CATPPUCCIN_LATTE_ID, TerminalTheme.GRUVBOX_LIGHT_ID,
-            TerminalTheme.SOLARIZED_LIGHT_ID, TerminalTheme.MODUS_OPERANDI_ID,
+            TerminalTheme.SOLARIZED_LIGHT_ID, TerminalTheme.GITHUB_LIGHT_HIGH_CONTRAST_ID,
         )
         for (t in TerminalTheme.builtIns) {
             assertEquals(t.id !in light, t.isDark, "${t.id} is ${if (t.id in light) "light" else "dark"}")
             assertNotNull(t.suggestedAccent, "${t.id} suggests an accent")
             assertTrue(t.selection != t.background, "${t.id} selection shows")
+        }
+        for (t in listOf(TerminalTheme.GITHUB_DARK_HIGH_CONTRAST, TerminalTheme.GITHUB_LIGHT_HIGH_CONTRAST)) {
+            assertTrue(ColorMath.contrast(t.foreground, t.background) >= 7.0, "${t.id} text reads at AAA")
+            assertTrue(ColorMath.contrast(t.foreground, t.selection) >= 7.0, "${t.id} selected text reads at AAA")
         }
     }
 

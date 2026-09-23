@@ -255,7 +255,9 @@ private fun ThemeTile(
                 modifier = Modifier.clip(RoundedCornerShape(BerthRadius.swatchSmall)),
             )
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(theme.name, style = BerthType.label, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // The eighteen stock tiles fill whole rows and the two stock names that wrap share one; a
+                // custom name could wrap beside a one-line tile and unbalance its row.
+                Text(theme.name, style = BerthType.label, color = fg, maxLines = if (theme.builtIn) 2 else 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     when {
                         isDefault -> "App default"
