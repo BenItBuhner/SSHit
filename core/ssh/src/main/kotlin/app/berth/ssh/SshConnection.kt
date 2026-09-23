@@ -63,7 +63,7 @@ data class SshEndpoint(
     val connectTimeoutMillis: Int = 15_000,
     /** Preferred address family; null lets the resolver choose. */
     val preferIpv6: Boolean? = null,
-    /** The cipher names offered, most preferred first ([SshCiphers.select]); empty offers sshj's own list. */
+    /** The cipher names offered, most preferred first ([SshCiphers.select]); empty offers every cipher sshj has, the modern ones first. */
     val ciphers: List<String> = emptyList(),
 )
 

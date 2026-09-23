@@ -5,9 +5,10 @@ import net.schmizz.sshj.transport.cipher.Cipher
 
 /**
  * A host's cipher list (spec C10, Advanced › Ciphers): the SSH names offered to its server, most
- * preferred first; the server takes the first one it also speaks. An empty list offers sshj's own,
- * which leads with ChaCha20-Poly1305 and keeps AES-CBC, 3DES and the other older ciphers after it
- * for a server that knows nothing newer.
+ * preferred first; the server takes the first one it also speaks. An empty list offers every
+ * cipher this client has, the [MODERN] ones first in their own order and AES-CBC, 3DES and the
+ * other older ciphers only after them, so a server is met on an older cipher only when it knows
+ * nothing newer.
  */
 object SshCiphers {
     /**
@@ -25,13 +26,15 @@ object SshCiphers {
 
     /**
      * [available] narrowed to [names], in the order [names] gives; a name this client has no
-     * cipher for is passed over. With no names, or none it knows, [available] as it is: the host
-     * editor only ever saves names it knows, so an unknown one came from a bundle made elsewhere,
-     * and the full list is a better answer to that than a login that offers nothing.
+     * cipher for is passed over. With no names, or none it knows, all of [available] with the
+     * [MODERN] ones first: the host editor only ever saves names it knows, so an unknown one came
+     * from a bundle made elsewhere, and the full list is a better answer to that than a login that
+     * offers nothing.
      */
     fun select(available: List<Factory.Named<Cipher>>, names: List<String>): List<Factory.Named<Cipher>> {
-        if (names.isEmpty()) return available
         val byName = available.associateBy { it.name }
-        return names.distinct().mapNotNull { byName[it] }.ifEmpty { available }
+        val chosen = names.distinct().mapNotNull { byName[it] }
+        if (chosen.isNotEmpty()) return chosen
+        return MODERN.mapNotNull { byName[it] } + available.filter { it.name !in MODERN }
     }
 }

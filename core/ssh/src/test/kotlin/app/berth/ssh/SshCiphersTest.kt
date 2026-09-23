@@ -26,9 +26,14 @@ class SshCiphersTest {
     }
 
     @Test
-    fun `the default list leads with ChaCha20-Poly1305 and keeps the older ciphers for older servers`() {
-        assertEquals("chacha20-poly1305@openssh.com", available.first())
-        assertTrue("aes128-cbc" in available && "3des-cbc" in available, "$available")
+    fun `the default list offers every modern cipher before any older one, and keeps the older ones for older servers`() {
+        val default = offered(emptyList())
+        val lastModern = SshCiphers.MODERN.maxOf { default.indexOf(it) }
+        val firstOlder = default.indexOfFirst { it !in SshCiphers.MODERN }
+        assertTrue(lastModern < firstOlder, "an older cipher comes before a modern one in $default")
+        assertEquals(SshCiphers.MODERN, default.take(SshCiphers.MODERN.size))
+        assertEquals(available.filter { it !in SshCiphers.MODERN }, default.drop(SshCiphers.MODERN.size), "the older ones keep sshj's order")
+        assertTrue("aes128-cbc" in default && "3des-cbc" in default, "$default")
         assertTrue(SshCiphers.MODERN.none { it.endsWith("-cbc") || it.startsWith("3des") || it.startsWith("arcfour") || it.startsWith("blowfish") })
     }
 
@@ -39,7 +44,9 @@ class SshCiphersTest {
 
     @Test
     fun `no list, or none this client knows, offers the whole default list`() {
-        assertEquals(available, offered(emptyList()))
-        assertEquals(available, offered(listOf("no-such-cipher", "rot13@example.com")))
+        val default = SshCiphers.MODERN + available.filter { it !in SshCiphers.MODERN }
+        assertEquals(default, offered(emptyList()))
+        assertEquals(default, offered(listOf("no-such-cipher", "rot13@example.com")))
+        assertEquals(available.toSet(), default.toSet())
     }
 }
