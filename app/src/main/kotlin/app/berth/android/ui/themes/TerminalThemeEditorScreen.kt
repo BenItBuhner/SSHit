@@ -319,12 +319,12 @@ fun TerminalThemeEditorScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    BerthButton("Apply to ${scopeLabel(applyTo).lowercase().let { if (applyTo == ThemeScope.AppDefault) "app default" else it }}", onClick = ::apply, kind = ButtonKind.PRIMARY, modifier = Modifier.weight(1f))
+                    BerthButton("Apply to ${if (applyTo == ThemeScope.AppDefault) "app default" else scopeLabel(applyTo)}", onClick = ::apply, kind = ButtonKind.PRIMARY, modifier = Modifier.weight(1f))
                     BerthButton("Export", onClick = { exporting = true })
                 }
                 val done = appliedTo
                 if (done != null) {
-                    val where = if (done == ThemeScope.AppDefault) "the app default" else scopeLabel(done).lowercase()
+                    val where = if (done == ThemeScope.AppDefault) "the app default" else scopeLabel(done)
                     Text("Applied to $where.", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                 }
                 if (offerFor != null && suggested != null) {

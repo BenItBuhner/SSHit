@@ -439,10 +439,10 @@ class EditorScreenshotTest {
         shellThemed {
             TerminalThemeEditorScreen(graph.viewModel, themeId = TerminalTheme.DRACULA_ID, scope = ThemeScope.ForWorkspace("ws-work"), onDone = {}, onOpenTheme = { _, _ -> })
         }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Apply to work").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Apply to work").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Apply to Work").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Apply to Work").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText(AccentOffer).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Applied to work.").assertExists()
+        compose.onNodeWithText("Applied to Work.").assertExists()
         compose.onNodeWithText("#bd93f9, while Work is current").assertExists()
         scrollToEnd()
         capture("theme-editor-accent-offer-group$suffix")
