@@ -123,6 +123,8 @@ class SessionLifecycleTest {
         restore()
         val a = graph.sessions.get("s-a")!!
         await("the app's cap reached the tab over its restored history") { a.emulator.maxScrollback == 10_000 && a.emulator.scrollbackSize > 2_000 }
+        // The seeded frames would meet the wait below at once, and this trim's writes would land after the next clear.
+        graph.sessionRecords.frames.clear()
         graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
         await("both frames saved on the first trim") { graph.sessionRecords.frames.keys == setOf("s-a", "s-b") }
 
