@@ -323,7 +323,9 @@ object TerminalRenderer {
      * wide, most of two cells, and would cover the next glyph: its Powerline dividers are stretched
      * over the cell, one pixel past each side so a segment meets the next without a seam, and its
      * icons are scaled down about their centre to fit [room] cells, two when the next is a blank
-     * of the same background, as kitty lets them.
+     * of the same background, as kitty lets them, and the row's height, moved up or down no more
+     * than keeps them in it. Either is clipped to its row: the ink measured is whole pixels at the
+     * paint's size, and a glyph drawn scaled can reach a fraction of one past it into the next.
      */
     private fun drawPrivateUse(nc: Canvas, glyph: CellGlyph, cp: Int, left: Float, top: Float, cw: Float, ch: Float, room: Int, baseline: Float, paint: Paint) {
         val fit = fitOf(paint, cp, glyph)
@@ -334,16 +336,20 @@ object TerminalRenderer {
         }
         nc.save()
         if (cp in 0xE0B0..0xE0D7) {
+            nc.clipRect(left - 1f, top, left + cw + 1f, top + ch)
             val sx = (cw + 2f) / ink.width()
             val sy = ch / ink.height()
             nc.translate(left - 1f - ink.left * sx, top - ink.top * sy)
             nc.scale(sx, sy)
         } else {
             val avail = cw * room
-            val s = minOf(1f, avail / maxOf(fit.advance, ink.width().toFloat()))
+            nc.clipRect(left - 1f, top, left + avail + 1f, top + ch)
+            val s = minOf(1f, avail / maxOf(fit.advance, ink.width().toFloat()), ch / ink.height())
             val cx = ink.exactCenterX()
             val cy = ink.exactCenterY()
-            nc.translate(left + avail / 2f - s * cx, top + baseline + cy - s * cy)
+            val half = s * ink.height() / 2f
+            val y = (top + baseline + cy).coerceIn(top + half, top + ch - half)
+            nc.translate(left + avail / 2f - s * cx, y - s * cy)
             nc.scale(s, s)
         }
         nc.drawText(glyph.chars, 0, glyph.length, 0f, 0f, paint)

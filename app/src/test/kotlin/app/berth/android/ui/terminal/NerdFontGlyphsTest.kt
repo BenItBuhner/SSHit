@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.ui.a11y.MAX_INTERFACE_FONT_SCALE
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.TerminalEmulator
@@ -18,6 +19,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * The bundled Symbols Nerd Font Mono against what prompts and listings actually print: every
@@ -27,7 +30,7 @@ import org.robolectric.annotation.GraphicsMode
  * family, in IBM Plex Mono (which has none of them) and in the device's monospace. Every one of
  * those cells has ink, and none is the glyph the fallback has no entry for. The fallback's glyphs
  * are an em wide against a cell of 0.6 em, so the renderer fits them: icons into their cell, or
- * two when a blank follows, and Powerline dividers over the whole cell.
+ * two when a blank follows, and Powerline dividers over the whole cell, and neither leaves its row.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -113,6 +116,30 @@ class NerdFontGlyphsTest {
 
     private fun str(cp: Int): String = String(Character.toChars(cp))
 
+    /**
+     * [codePoints], each with a blank after it so an icon has its two cells of room and draws at its
+     * largest, [COLS] / 2 to a row on every other row of a frame at [fontScale]: its first and last
+     * rows and each row between two of glyphs are blank, and a frame drawn whole shows ink that leaves
+     * its row where a one-row bitmap would clip it.
+     */
+    private fun drawSpaced(font: TerminalFont, fontScale: Float, codePoints: List<Int>): Frame {
+        val paints = TerminalPaints(context, font, density = 2f, fontScale = fontScale)
+        val chunks = codePoints.chunked(COLS / 2)
+        val rows = chunks.size * 2 + 1
+        val t = TerminalEmulator(COLS, rows, 0, TerminalListenerAdapter())
+        t.applyTheme(theme.ansi.toIntArray(), theme.foreground, theme.background)
+        chunks.forEachIndexed { i, chunk ->
+            t.write("\u001b[${i * 2 + 2};1H" + chunk.joinToString("") { str(it) + " " })
+        }
+        val frame = TerminalFrame()
+        frame.capture(t, 0)
+        val w = (COLS * paints.cellWidth).toInt()
+        val h = (rows * paints.cellHeight).toInt()
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        TerminalRenderer.draw(Canvas(bitmap), frame, paints, theme, boldAsBright = false, w.toFloat(), h.toFloat(), showCursor = false, focused = true, overlay = null)
+        return Frame(bitmap, paints, COLS)
+    }
+
     @Test
     fun `a fallback icon shrinks into its own cell and leaves the digit printed hard against it whole`() {
         // powerlevel10k's segments print an icon against what follows it: its home outline, then a count.
@@ -155,6 +182,41 @@ class NerdFontGlyphsTest {
         }
         assertTrue("JetBrains Mono's own U+E0B0 is a cell wide", Paint().apply { typeface = jb.paints.regular.typeface; textSize = jb.paints.regular.textSize }.measureText(str(0xE0B0)) <= jb.paints.cellWidth * 1.05f)
         assertTrue("and draws as drawText draws it", expected.sameAs(jb.bitmap))
+    }
+
+    @Test
+    fun `every icon at its largest and every fallback Powerline divider keeps its ink in its row, at 1x and at the cap`() {
+        val plexFallback = Paint().apply { typeface = TypefaceCache.forFamily(context, "IBM Plex Mono", nerdFallback = true)[0] }
+        val dividers = (0xE0B0..0xE0D7).filter { plexFallback.hasGlyph(str(it)) }
+        assertTrue("the fallback has the Powerline dividers", dividers.size > 30)
+        val glyphs = (sources.flatMap { it.codePoints } + dividers).distinct()
+        val chunks = glyphs.chunked(COLS / 2)
+        val failures = ArrayList<String>()
+        for (family in listOf(TerminalFonts.DEFAULT, "IBM Plex Mono", TerminalFonts.SYSTEM)) {
+            for (lineHeight in listOf(1.0f, 1.2f)) {
+                for (scale in listOf(1f, MAX_INTERFACE_FONT_SCALE)) {
+                    val frame = drawSpaced(TerminalFont(family = family, sizeSp = 16, lineHeight = lineHeight), scale, glyphs)
+                    val cw = frame.paints.cellWidth
+                    val ch = frame.paints.cellHeight
+                    val leaks = sortedSetOf<String>()
+                    // Row 2i is the blank between chunk i - 1 and chunk i; only the pixels wholly inside it
+                    // count, and one in its upper half is ink from the row above, one in its lower half from below.
+                    for (i in 0..chunks.size) {
+                        val from = ceil(i * 2 * ch).toInt()
+                        val to = floor((i * 2 + 1) * ch).toInt().coerceAtMost(frame.bitmap.height)
+                        val middle = (i * 2 + 0.5f) * ch
+                        for (y in from until to) for (x in 0 until frame.bitmap.width) {
+                            if (frame.bitmap.getPixel(x, y) and 0xFFFFFF == theme.background and 0xFFFFFF) continue
+                            val pair = (x / cw).toInt() / 2
+                            if (y + 0.5f < middle) chunks.getOrNull(i - 1)?.getOrNull(pair)?.let { leaks += "U+%04X below its row".format(it) }
+                            else chunks.getOrNull(i)?.getOrNull(pair)?.let { leaks += "U+%04X above its row".format(it) }
+                        }
+                    }
+                    if (leaks.isNotEmpty()) failures += "$family at line height $lineHeight and ${scale}x: $leaks"
+                }
+            }
+        }
+        assertTrue("ink leaves its row in ${failures.joinToString("; ")}", failures.isEmpty())
     }
 
     @Test
