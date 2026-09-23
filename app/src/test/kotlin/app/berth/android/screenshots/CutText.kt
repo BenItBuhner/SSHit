@@ -2,11 +2,14 @@ package app.berth.android.screenshots
 
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.text.TextLayoutResult
+import app.berth.android.ui.stage.DeckKeyTag
 import org.junit.Assert.assertTrue
 
 /**
@@ -64,6 +67,43 @@ private fun TextLayoutResult.breaksAWord(): Boolean {
         if (text[end - 1].isLetterOrDigit() && text[end].isLetterOrDigit()) return true
     }
     return false
+}
+
+/**
+ * A Deck key's texts are sized from the key, not the system, so its swipe alternate at the top
+ * right never runs into the label under it: the hint's baseline stays above the label's tallest
+ * ink by at least a dp, at the interface's font cap as at 1×, and on a 40 dp key (Compact's, or
+ * the setting's least) as on a 44. The label's ink top is taken as 0.76 of its font size above its
+ * baseline, an ascender's height in Inter, Roboto and JetBrains Mono (a capital stops lower, at
+ * about 0.73). Each text's pixels come from the density its layout was made with, the interface's
+ * at its cap, not the system's.
+ */
+fun ComposeTestRule.assertDeckHintsClearOfLabels() {
+    val keys = onAllNodes(hasTestTag(DeckKeyTag), useUnmergedTree = true).fetchSemanticsNodes()
+    var checked = 0
+    for (key in keys) {
+        val texts = key.textDescendants().mapNotNull { node -> node.textLayout()?.let { node to it } }
+        if (texts.size < 2) continue
+        val (hintNode, hint) = texts.minBy { it.first.boundsInRoot.top }
+        val (labelNode, label) = texts.maxBy { it.first.boundsInRoot.top }
+        val hintBaseline = hintNode.boundsInRoot.top + hint.lastBaseline
+        val labelFontPx = with(label.layoutInput.density) { label.layoutInput.style.fontSize.toPx() }
+        val labelInkTop = labelNode.boundsInRoot.top + label.firstBaseline - 0.76f * labelFontPx
+        val gapDp = (labelInkTop - hintBaseline) / label.layoutInput.density.density
+        assertTrue(
+            "'${hint.layoutInput.text}' over '${label.layoutInput.text}': the hint's baseline is ${"%.1f".format(gapDp)} dp above the label's ink, less than the 1 dp it keeps",
+            gapDp >= 1f,
+        )
+        checked++
+    }
+    assertTrue("keys with a hint over a label were on the Deck", checked > 0)
+}
+
+private fun SemanticsNode.textDescendants(): List<SemanticsNode> = buildList {
+    for (child in children) {
+        if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)
+        addAll(child.textDescendants())
+    }
 }
 
 /** The layout a text node reports, or null for a node that is not a text. */

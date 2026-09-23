@@ -245,7 +245,11 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
     }
 
-    /** The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, and no status bar here, so the strip above it is the skin's 40. */
+    /**
+     * The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, each key's swipe hint
+     * clear of its label at either height, and no status bar here, so the strip above it is the
+     * skin's 40.
+     */
     @Test
     fun `the deck`() {
         StageFixture.seed(graph)
@@ -255,10 +259,12 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         awaitDeck()
         capture("density-deck-comfortable")
         assertEquals(44f, ctrlKeyDp(), 0.5f)
+        compose.assertDeckHintsClearOfLabels()
 
         setDensity(Density.COMPACT)
         capture("density-deck-compact")
         assertEquals(40f, ctrlKeyDp(), 0.5f)
+        compose.assertDeckHintsClearOfLabels()
         assertEquals(40f, stripRowDp(), 1f)
     }
 

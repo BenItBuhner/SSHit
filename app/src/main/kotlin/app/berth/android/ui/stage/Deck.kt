@@ -986,11 +986,11 @@ fun DeckKeyView(
             )
             if (secondary != null && !previewUp) {
                 // A8: text alternates in Caption, symbols in Mono; the swipe-up's at the top right in text.3.
-                AlternateHint(secondary, secondaryColor, Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp))
+                AlternateHint(secondary, secondaryColor, Modifier.align(Alignment.TopEnd).hintInset(top = true).padding(end = 6.dp))
             }
             if (tertiary != null && !previewDown) {
                 // The swipe-down's at the bottom right (spec D2), the way the swipe-up's sits at the top.
-                AlternateHint(tertiary, secondaryColor, Modifier.align(Alignment.BottomEnd).padding(bottom = 3.dp, end = 6.dp))
+                AlternateHint(tertiary, secondaryColor, Modifier.align(Alignment.BottomEnd).hintInset(top = false).padding(end = 6.dp))
             }
             popover?.let { chips -> AlternatesPopover(chips, hovered, onPlaced = { left, width -> touch.machine?.chipsAt(left, width) }) }
             if (latchState == LatchState.LOCKED) {
@@ -1010,6 +1010,24 @@ fun DeckKeyView(
 
 /** Label-centre to lock-bar-centre distance: half the 13 sp label's cap height plus the 3 dp gap plus half the bar. */
 private val LockBarOffset = 9.dp
+
+/** An alternate's inset from the key's top or bottom edge on a key [HintHeight] tall or taller. */
+private val HintInset = 3.dp
+private const val HintHeight = 44
+
+/**
+ * An alternate's inset from its edge of the key, the top ([top]) or the bottom: [HintInset] on a
+ * key [HintHeight] dp tall or taller, and on a shorter one less by as much as the centred label
+ * comes nearer that edge, so the hint keeps the distance from the label it has at 44. On a 40 dp
+ * key (Compact's, and the setting's least) that is 1 dp in; at 3 the `S-Tab` hint's baseline met
+ * the `Tab` label's ink (the design audit's S10). Read from the key's own height, whole dp.
+ */
+private fun Modifier.hintInset(top: Boolean): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0))
+    val keyDp = if (constraints.hasBoundedHeight) (constraints.maxHeight / density).roundToInt() else HintHeight
+    val inset = (HintInset - ((HintHeight - keyDp).coerceAtLeast(0) / 2f).dp).coerceAtLeast(0.dp).roundToPx()
+    layout(placeable.width, placeable.height + inset) { placeable.place(0, if (top) inset else 0) }
+}
 
 /** The [DeckKeyGesture] of the touch on a key while there is one; what the popover reports its chips to. */
 private class TouchInProgress {
