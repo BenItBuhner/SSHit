@@ -277,7 +277,7 @@ fun SettingsScreen(
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
                 Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
                 Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text3)
-                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack under the MIT licence; Symbols Nerd Font Mono from Nerd Fonts under the MIT licence, its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, Weather Icons and Pomicons SIL OFL, Font Logos the Unlicense, the rest MIT. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
+                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack under the MIT licence; Symbols Nerd Font Mono from Nerd Fonts under the MIT licence, its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
             }
         }
     }

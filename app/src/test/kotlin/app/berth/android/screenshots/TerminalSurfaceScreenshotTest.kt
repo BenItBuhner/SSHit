@@ -363,7 +363,7 @@ class TerminalSurfaceScreenshotTest {
             "Switch tabs" to "Two-finger swipe",
         )
         for ((title, value) in defaults) gestureRow(title).assertIsDisplayed().assert(hasText(value))
-        gestureRow("Tap").assert(hasText("And a click where the program has the mouse"))
+        gestureRow("Tap").assert(hasText("Also clicks where the program has the mouse"))
         val tops = defaults.map { (title, _) -> gestureRow(title).fetchSemanticsNode().boundsInRoot.top }
         assertEquals("the rows stand in D1's order", tops.sorted(), tops)
         assertEquals(TerminalSettings(), graph.viewModel.terminalSettings.value)
@@ -879,6 +879,7 @@ class TerminalSurfaceScreenshotTest {
         compose.assertNoTextCut("the Nerd Font fallback's caption${if (cap) " at the interface's font cap" else ""}")
         compose.onNodeWithText("Symbols Nerd Font Mono", substring = true).performScrollTo()
         compose.onNodeWithText("Font Logos the Unlicense", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Weather Icons and Pomicons under the SIL Open Font License,", substring = true).assertIsDisplayed()
         settle(200)
         capture("settings-about-fonts$suffix")
         compose.assertNoTextCut("Settings › About${if (cap) " at the interface's font cap" else ""}")
