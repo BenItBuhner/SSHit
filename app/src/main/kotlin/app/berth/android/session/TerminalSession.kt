@@ -777,7 +777,8 @@ class TerminalSession(
      * for the answer to the first and Allow for this session answers it too; that answer lasts as
      * long as the connection, and a reconnect asks again. While the question is up the tab is lit
      * off stage (the ring, and the shade while the app is away), and once answered it goes dark, or
-     * back to what lit it before (a bell the user has not seen yet).
+     * back to what lit it before (a bell the user has not seen yet). A request the remote gives up
+     * on, its channel closing under it, is withdrawn the same way, sheet and all.
      */
     private fun agentApprover(h: Host): AgentApprover {
         val turn = Mutex()
@@ -785,16 +786,19 @@ class TerminalSession(
         return AgentApprover { request ->
             turn.withLock {
                 if (allowedForSession || env.agentSignsSilently(h)) return@withLock true
-                val earlier = attentionOver(AGENT_REQUEST_REASON)
-                val answer = try {
-                    env.approveAgentRequest(h, request)
-                } finally {
-                    settle(AGENT_REQUEST_REASON, earlier)
-                }
                 val what = when (request.purpose) {
                     is AgentSignPurpose.Login -> "a login"
                     is AgentSignPurpose.SshSig -> "an SSHSIG"
                     is AgentSignPurpose.Unknown -> "unread data"
+                }
+                val earlier = attentionOver(AGENT_REQUEST_REASON)
+                val answer = try {
+                    env.approveAgentRequest(h, request)
+                } catch (e: CancellationException) {
+                    BerthLog.i(LOG_TAG, "[${h.name}] agent sign request for $what: withdrawn")
+                    throw e
+                } finally {
+                    settle(AGENT_REQUEST_REASON, earlier)
                 }
                 BerthLog.i(LOG_TAG, "[${h.name}] agent sign request for $what: ${answer.name.lowercase()}")
                 if (answer == AgentAnswer.ALLOW_FOR_SESSION) allowedForSession = true

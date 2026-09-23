@@ -18,6 +18,7 @@ import java.io.DataOutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.security.KeyPair
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -361,6 +362,72 @@ class SshAgentTest {
         assertFalse(served.isAlive)
         assertTrue(a.isClosed)
         assertFalse(a.tryOpenChannel(), "a closed agent takes no more channels")
+    }
+
+    @Test
+    fun `the remote closing its channel withdraws a request waiting on the user and signs nothing`() {
+        val waiting = CompletableDeferred<Unit>()
+        val withdrawn = CompletableDeferred<Unit>()
+        val approver = AgentApprover {
+            waiting.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                withdrawn.complete(Unit)
+            }
+        }
+        val soft = softwareKey(ed25519)
+        val signed = AtomicInteger()
+        val key = AgentKey(soft.publicKey, soft.comment) { data, flags ->
+            signed.incrementAndGet()
+            soft.sign(data, flags)
+        }
+        val a = agent(key, approver)
+        val pipe = Pipe()
+        val served = thread { a.serve(pipe.agentIn, pipe.agentOut) }
+        pipe.send(signRequest(key.blob, "x".toByteArray()))
+        runBlocking { withTimeout(5_000) { waiting.await() } }
+        pipe.toAgent.close()
+        runBlocking { withTimeout(5_000) { withdrawn.await() } }
+        served.join(5_000)
+        assertFalse(served.isAlive, "serve returns at the channel's end")
+        assertEquals(0, signed.get(), "nothing was signed")
+        assertEquals(0, pipe.fromAgent.available(), "nothing was answered")
+        assertFalse(a.isClosed, "the agent still serves the connection's other channels")
+
+        val other = Pipe()
+        val servedOther = thread { a.serve(other.agentIn, other.agentOut) }
+        other.send(message(SshAgent.REQUEST_IDENTITIES))
+        assertEquals(SshAgent.IDENTITIES_ANSWER, other.reply()[0].toInt())
+        other.toAgent.close()
+        servedOther.join(5_000)
+        assertFalse(servedOther.isAlive)
+    }
+
+    @Test
+    fun `a frame sent while a request waits is answered after it, in turn`() {
+        val release = CompletableDeferred<Unit>()
+        val approver = AgentApprover {
+            release.await()
+            true
+        }
+        val key = softwareKey(ed25519)
+        val a = agent(key, approver)
+        val pipe = Pipe()
+        val served = thread { a.serve(pipe.agentIn, pipe.agentOut) }
+        pipe.send(signRequest(key.blob, "x".toByteArray()))
+        pipe.send(message(SshAgent.REQUEST_IDENTITIES))
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (pipe.agentIn.available() > 0) {
+            assertTrue(System.nanoTime() < deadline, "the agent reads the second frame while the first waits")
+            Thread.sleep(5)
+        }
+        release.complete(Unit)
+        assertEquals(SshAgent.SIGN_RESPONSE, pipe.reply()[0].toInt())
+        assertEquals(SshAgent.IDENTITIES_ANSWER, pipe.reply()[0].toInt())
+        pipe.toAgent.close()
+        served.join(5_000)
+        assertFalse(served.isAlive)
     }
 
     @Test

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import net.schmizz.sshj.common.Buffer
 import net.schmizz.sshj.common.KeyType
@@ -18,7 +19,7 @@ import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
@@ -241,33 +242,45 @@ class SshAgent(val key: AgentKey?, private val approver: AgentApprover) : Closea
      * Answers the messages on one agent channel until the remote closes it, sends a frame no agent
      * message fits ([MAX_MESSAGE]), or the agent is [close]d. Blocks the calling thread; each
      * message is handled on the agent's scope, so a close withdraws a request waiting on the user.
+     *
+     * The next frame is read while a message is handled, so the channel ending under a request
+     * (the program on the remote gave up, or was killed) withdraws that request too, and a frame
+     * sent meanwhile is answered after it, in turn. A remote that only half-closes after asking
+     * reads the same as one that went away: an agent channel carries nothing after its EOF.
      */
     fun serve(input: InputStream, output: OutputStream) {
         val frames = DataInputStream(input)
-        while (!isClosed) {
-            val length = try {
-                frames.readInt()
-            } catch (_: EOFException) {
-                return
-            }
-            if (length <= 0 || length > MAX_MESSAGE) return
-            val message = ByteArray(length)
-            try {
-                frames.readFully(message)
-            } catch (_: EOFException) {
-                return
-            }
-            val reply = runBlocking {
+        runBlocking {
+            var next = scope.async { frames.nextFrame() }
+            while (!isClosed) {
+                val message = try {
+                    next.await()
+                } catch (_: CancellationException) {
+                    null
+                } ?: return@runBlocking
+                next = scope.async { frames.nextFrame() }
                 val work = scope.async { handle(message) }
-                try {
+                val ended = next
+                val watch = scope.launch { if (ended.await() == null) work.cancel() }
+                val reply = try {
                     work.await()
                 } catch (_: CancellationException) {
                     null
-                }
-            } ?: return
-            output.write(frame(reply))
-            output.flush()
+                } finally {
+                    watch.cancel()
+                } ?: return@runBlocking
+                output.write(frame(reply))
+                output.flush()
+            }
         }
+    }
+
+    /** The next framed message, or null at the channel's end, when it breaks, or at a length no agent message has. */
+    private fun DataInputStream.nextFrame(): ByteArray? = try {
+        val length = readInt()
+        if (length <= 0 || length > MAX_MESSAGE) null else ByteArray(length).also { readFully(it) }
+    } catch (_: IOException) {
+        null
     }
 
     override fun close() {

@@ -186,6 +186,34 @@ class AgentForwardingLifecycleTest {
     }
 
     /**
+     * The user gives up on the hop at the remote (Ctrl-C) while its request waits: ssh dies and
+     * closes its agent socket, and the request is withdrawn, the sheet with it, the ring and the
+     * shade dark, so the next hop's request is asked at once rather than queued behind a dead one.
+     */
+    @Test
+    fun `a request the remote gives up on is withdrawn, sheet ring and shade, and the next one asks at once`(): Unit = runBlocking {
+        val session = openLive(box)
+        val sh = remote(session)
+        sh.start(hop("not-run"))
+        val ask = awaitValue(20_000, "the sign request") { asked.firstOrNull() }
+        assertEquals(ask, graph.prompts.current.value)
+        await(5_000, "the shade carries it") { attentionPosted(session) }
+
+        session.sendText("\u0003")
+        await(10_000, "the sheet is withdrawn") { graph.prompts.current.value == null }
+        await(5_000, "the ring goes dark") { !session.record.value.needsAttention }
+        await(5_000, "and the shade") { !attentionPosted(session) }
+        assertTrue(BerthLog.ring.snapshot().any { it.contains("[agent-box] agent sign request for a login: withdrawn") })
+        assertEquals("the shell is back", 0, sh.run("true").second)
+
+        val next = sh.start(hop("hop-ok"))
+        awaitValue(10_000, "the next request") { asked.getOrNull(1) }.allowOnce()
+        val (said, status) = next.await()
+        assertEquals(said, 0, status)
+        assertTrue(said, said.contains("hop-ok on"))
+    }
+
+    /**
      * A request lights a tab already lit, by a bell nobody has seen yet: once answered, the bell is
      * back as it was, ring and shade, reason and time. A bell that rings while a request waits is
      * newer than the question and stays after it; a tab the user looked at meanwhile stays dark.
