@@ -268,8 +268,8 @@ fun SettingsScreen(
 
             Panel(label = "About") {
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
-                Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
-                Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text2)
+                Text("Berth $version".trim(), style = BerthType.body, color = c.text1, modifier = Modifier.padding(start = 12.dp))
+                PanelNote("No account. No telemetry. Everything stays on this device.")
                 ListRow("Licences", subtitle = "The fonts, libraries and terminal palettes Berth ships, and their terms", surface = Color.Transparent, minHeight = 44.dp, onClick = { licences = true }, trailing = chevron)
             }
         }

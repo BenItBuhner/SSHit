@@ -274,6 +274,13 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Licences").performScrollTo()
         scrollToEnd()
         capture("settings-about$suffix")
+        val app = RuntimeEnvironment.getApplication()
+        val version = "Berth ${app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: ""}".trim()
+        val rowInset = compose.onNodeWithText("Licences", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+        for (line in listOf(version, "No account. No telemetry. Everything stays on this device.")) {
+            val left = compose.onNodeWithText(line, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left
+            assertEquals("\"$line\" starts where the Licences row's title does", rowInset, left, 0.5f)
+        }
 
         compose.onNodeWithText("Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
