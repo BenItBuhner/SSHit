@@ -161,7 +161,7 @@ class DeckEditing(
  * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
  * [onPredictiveTextChange], where the Stage gives one, puts the tab's [predictiveText] in the
- * layer picker.
+ * layer picker; [echoOff] puts the grip's dot up while the shell is not echoing (spec C2).
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -174,6 +174,7 @@ fun Deck(
     enabled: Boolean = true,
     predictiveText: Boolean = false,
     onPredictiveTextChange: ((Boolean) -> Unit)? = null,
+    echoOff: Boolean = false,
     settings: DeckSettings = DeckSettings(),
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
@@ -243,7 +244,7 @@ fun Deck(
                 haptics = haptics,
                 height = rowHeight,
                 settings = settings,
-                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
+                grip = { Grip(accent = predictiveText, echoOff = echoOff, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
                 // A layer step leaves the F-strip where it is, in either row: the strip belongs to the
                 // key whose hold raised it and that hold closes it, and a strip that fell with the
                 // step would drop a row of Deck under the finger and reflow the terminal (#20 review).
@@ -658,10 +659,12 @@ private fun Modifier.editableSlot(
  * unread tab. The vertical gestures
  * are decided at release, from where the finger is then, so a finger can come back to a tap; a hold
  * that fires swallows the release, and a finger that has moved past the slop is a swipe in the
- * making, never a hold.
+ * making, never a hold. The pill is `accent` while the tab has predictive text on ([accent]), and
+ * a 4 dp dot stands over it while the shell is not echoing ([echoOff], spec C2: a password prompt,
+ * whose typing the command history leaves out); a reader hears both as the grip's state.
  */
 @Composable
-private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
+private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
@@ -717,6 +720,7 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
             // A button that opens the session sheet; the swipe and the hold are its actions.
             .semantics {
                 contentDescription = "Grip, opens the session sheet"
+                gripState(accent, echoOff)?.let { stateDescription = it }
                 role = Role.Button
                 onClick { onTap(); true }
                 customActions = listOf(
@@ -732,8 +736,25 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
                 .clip(CircleShape)
                 .background(color),
         )
+        if (echoOff) {
+            Box(
+                Modifier
+                    // Centred over the pill's top: half the pill, a 2 dp gap, half the dot.
+                    .offset(y = -(24 / 2 + 2 + 4 / 2).dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(c.text2),
+            )
+        }
     }
 }
+
+/** What the grip's marks say to a reader: the pill's predictive text and the dot's echo, or nothing when neither is up. */
+internal fun gripState(predictiveText: Boolean, echoOff: Boolean): String? =
+    listOfNotNull("predictive text on".takeIf { predictiveText }, "echo off, history paused".takeIf { echoOff })
+        .joinToString()
+        .ifEmpty { null }
+        ?.replaceFirstChar { it.uppercaseChar() }
 
 /** A swipe on a key or the grip is 24 dp of travel (spec C4, D2); the way across a key for the layer is twice that. */
 private val SwipeThreshold = 24.dp

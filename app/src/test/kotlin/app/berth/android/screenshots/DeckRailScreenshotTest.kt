@@ -66,6 +66,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.ssh.SshSecurity
+import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -444,6 +445,36 @@ class DeckRailScreenshotTest {
         compose.assertNoTextCut("the Session sheet over a live tab", within = isDialog())
         capture("session-sheet-expanded-live")
 
+        graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+    }
+
+    /**
+     * The grip's dot against the local sshd (spec C2): at `read -s` what is typed is not echoed,
+     * and the dot stands over the grip's pill, the grip saying so to a reader, until Enter.
+     */
+    @Test
+    fun `live, a password prompt puts the grip's dot up until Enter`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        seedTestBox()
+        compose.setContent { AppRoot(graph.viewModel) }
+        val session = connectTestBox()
+        settle(1_200)
+        session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear\n")
+        settle(1_000)
+        awaitDeck()
+        val grip = hasContentDescription("Grip", substring = true)
+        val paused = grip and hasStateDescription("Echo off, history paused")
+
+        session.sendText("read -rsp 'Password: ' pw; echo\r")
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.startsWith("Password:") } }
+        for (ch in "hunter2") session.sendText(ch.toString())
+        compose.waitUntil(5_000) { compose.onAllNodes(paused).fetchSemanticsNodes().isNotEmpty() }
+        settle(400)
+        capture("deck-grip-echo-off-live")
+
+        session.sendKey(TerminalKey.ENTER)
+        compose.waitUntil(5_000) { compose.onAllNodes(paused).fetchSemanticsNodes().isEmpty() }
+        compose.onNode(grip).assertIsDisplayed()
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
     }
 
