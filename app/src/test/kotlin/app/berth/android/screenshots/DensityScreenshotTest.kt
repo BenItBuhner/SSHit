@@ -41,10 +41,12 @@ import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.stage.deckKeyHeight
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Density
@@ -259,9 +261,10 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
     /**
      * The Deck (spec A12, Deck 44 → 40; lines 102 and 186, 40 × 44 as the target): its keys a step
-     * down under Compact and still 48 dp targets, the 4 dp gaps above and below a 40 dp key being
-     * the key's to a finger; each key's swipe hint clear of its label at either height; and no
-     * status bar here, so the strip above it is the skin's 40.
+     * down under Compact; each key's swipe hint clear of its label at either height; and no status
+     * bar here, so the strip above it is the skin's 40. At every height the setting offers (A9, 40
+     * to 52), Comfortable and Compact, the 4 dp gaps above and below a key's face are the key's to a
+     * finger, so a tap anywhere across the row lands on a key, and the face is drawn as it was.
      */
     @Test
     fun `the deck`() {
@@ -271,23 +274,46 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         themed { StageScreen(graph.viewModel, live, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}) }
         awaitDeck()
         capture("density-deck-comfortable")
-        assertEquals(44f, ctrlKeyDp(), 0.5f)
+        assertEquals(44f, ctrlFaceDp(), 0.5f)
         compose.assertDeckHintsClearOfLabels()
 
         setDensity(Density.COMPACT)
         capture("density-deck-compact")
-        assertEquals(40f, ctrlKeyDp(), 0.5f)
+        assertEquals(40f, ctrlFaceDp(), 0.5f)
         compose.assertDeckHintsClearOfLabels()
         assertEquals(40f, stripRowDp(), 1f)
 
+        for (density in listOf(Density.COMFORTABLE, Density.COMPACT)) {
+            setDensity(density)
+            for (setting in listOf(40, 44, 48, 52)) {
+                setKeyHeight(setting)
+                assertGapsAreTheKeys("$density at $setting", deckKeyHeight(setting, DensityTokens.of(density)).value)
+            }
+        }
+    }
+
+    private fun setKeyHeight(setting: Int) {
+        graph.viewModel.setDeckLayout(graph.viewModel.deckLayout.value.copy(heightDp = setting))
+        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.heightDp == setting }
+        compose.waitForIdle()
+    }
+
+    /**
+     * Ctrl's face is [face] dp and its touch the face and both gaps, a 48 dp target or more; a finger
+     * 3 dp into the gap above the face, 1 dp under the row's top, latches it one-shot, and 3 dp into
+     * the gap below it locked; the face's middle lets go.
+     */
+    private fun assertGapsAreTheKeys(where: String, face: Float) {
+        assertEquals("$where: Ctrl's face", face, ctrlFaceDp(), 0.5f)
         val ctrl = compose.onNode(ctrlKey)
-        assertTrue("a Compact key is a 48 dp target: ${ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp()} dp", ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp() >= 47.5f)
-        // A finger 3 dp into the gap above the key, then below it: one-shot, then locked; the key's middle lets go.
-        val gap = 3 * compose.density.density
-        ctrl.performTouchInput { down(Offset(centerX, -gap)); up() }
+        assertEquals("$where: Ctrl's touch takes the gaps above and below its face", face + 8f, ctrlKeyDp(), 0.5f)
+        assertTrue("$where: a 48 dp target", ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp() >= 47.5f)
+        val into = 3 * compose.density.density
+        val halfFace = face * compose.density.density / 2
+        ctrl.performTouchInput { down(Offset(centerX, centerY - halfFace - into)); up() }
         compose.waitForIdle()
         ctrl.assertContentDescriptionEquals("Ctrl, one-shot")
-        ctrl.performTouchInput { down(Offset(centerX, height + gap)); up() }
+        ctrl.performTouchInput { down(Offset(centerX, centerY + halfFace + into)); up() }
         compose.waitForIdle()
         ctrl.assertContentDescriptionEquals("Ctrl, locked")
         ctrl.performTouchInput { down(center); up() }
@@ -359,6 +385,13 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     private val ctrlKey = hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)
 
     private fun ctrlKeyDp(): Float = compose.onNode(ctrlKey).fetchSemanticsNode().size.height.toFloat().inDp()
+
+    /** Ctrl's face: its label is laid out in the whole of it. */
+    private fun ctrlFaceDp(): Float = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(ctrlKey), useUnmergedTree = true)
+        .fetchSemanticsNodes()
+        .mapNotNull { it.textLayout() }
+        .first { it.layoutInput.text.text == "Ctrl" }
+        .layoutInput.constraints.maxHeight.toFloat().inDp()
 
     private fun awaitDeck() {
         compose.waitUntil(10_000) { compose.onAllNodes(ctrlKey).fetchSemanticsNodes().isNotEmpty() }

@@ -198,7 +198,7 @@ fun Deck(
     val layer = layers[index]
     var strip by remember { mutableStateOf<List<DeckKeyCode>?>(null) }
     val haptics = LocalHapticFeedback.current
-    // Each row adds the 4 dp gap above and below the key.
+    // Each row adds the 4 dp gap above and below the key, and the key's touch takes both ([keyFace]).
     val keyHeight = deckKeyHeight(layout.heightDp, Berth.density)
     val rowHeight = keyHeight + DeckGap * 2
     // The second row keeps its own layer and starts on Nav/Fn when the layout has one (spec C4).
@@ -228,7 +228,7 @@ fun Deck(
                         .fillMaxWidth()
                         .height(rowHeight)
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = DeckEdge + GripWidth + DeckGap, vertical = DeckGap),
+                        .padding(horizontal = DeckEdge + GripWidth + DeckGap),
                     horizontalArrangement = Arrangement.spacedBy(DeckGap),
                 ) {
                     for (k in keys) {
@@ -367,6 +367,18 @@ private val DeckEdge = 8.dp
 private val GripWidth = 20.dp
 
 /**
+ * A key's face inside the slot that takes its touch: the slot is the row's full height, so the
+ * [DeckGap] above and below the face is the key's to a finger and to a reader at every key height,
+ * and only the face between the gaps is drawn. Goes after the modifiers that take the touch and
+ * name the key, and before what the key draws and hangs from it (a popover, a coach mark).
+ */
+internal fun Modifier.keyFace(): Modifier = padding(vertical = DeckGap)
+
+/** [keyFace] with the key's rounded fill. */
+@Composable
+internal fun Modifier.keyFace(fill: Color): Modifier = keyFace().clip(RoundedCornerShape(BerthRadius.key)).background(fill)
+
+/**
  * The most a key grows to on a wide row (#15 review, nit 8): on a phone seven keys divide the row
  * and each is 43 dp; on a tablet the same seven would be 170 and the five of the compact Deck
  * 290, `Ctrl` wider than the word `Paste` is tall. Past this the run stops growing and sits
@@ -413,7 +425,7 @@ private fun DeckRow(
         Modifier
             .fillMaxWidth()
             .height(height)
-            .padding(horizontal = DeckEdge, vertical = DeckGap),
+            .padding(horizontal = DeckEdge),
         horizontalArrangement = Arrangement.spacedBy(DeckGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -467,6 +479,7 @@ private fun DeckRow(
                         Box(
                             Modifier
                                 .align(Alignment.BottomCenter)
+                                .keyFace()
                                 .padding(bottom = 4.dp)
                                 .size(4.dp)
                                 .clip(CircleShape)
@@ -490,7 +503,9 @@ private fun DeckRow(
                     onPick = { picking = true },
                     onHold = onLayerHold,
                 )
-                LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
+                Box(Modifier.matchParentSize().keyFace()) {
+                    LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
+                }
             }
         } else {
             DeckEditorKey(
@@ -892,8 +907,6 @@ fun DeckKeyView(
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Box(
             modifier
-                .clip(RoundedCornerShape(BerthRadius.key))
-                .background(bg)
                 .testTag(DeckKeyTag)
                 // One node for the key: its label and alternates inside merge into it, so a reader
                 // hears the description once rather than the button and then its text.
@@ -965,7 +978,8 @@ fun DeckKeyView(
                             hovered = null
                         }
                     }
-                },
+                }
+                .keyFace(bg),
         ) {
             val secondary = key.secondaryLabel
             val tertiary = key.tertiaryLabel?.takeIf { swipeDown }
@@ -1133,85 +1147,89 @@ fun Nub(
     val currentOnArrow by rememberUpdatedState(onArrow)
     val interaction = remember { MutableInteractionSource() }
     val focused = interaction.showsFocus()
-    Box(modifier, contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .testTag(DeckKeyTag)
+            // Activation is the tap (Up); each arrow is an action, since a screen reader cannot drag it.
+            .semantics {
+                contentDescription = "Nub, the arrow keys"
+                role = Role.Button
+                if (enabled) {
+                    onClick { patterns.keyTap(); currentOnArrow(TerminalKey.UP); true }
+                    customActions = listOf(
+                        CustomAccessibilityAction("Up") { patterns.nubStep(); currentOnArrow(TerminalKey.UP); true },
+                        CustomAccessibilityAction("Down") { patterns.nubStep(); currentOnArrow(TerminalKey.DOWN); true },
+                        CustomAccessibilityAction("Left") { patterns.nubStep(); currentOnArrow(TerminalKey.LEFT); true },
+                        CustomAccessibilityAction("Right") { patterns.nubStep(); currentOnArrow(TerminalKey.RIGHT); true },
+                    )
+                } else {
+                    disabled()
+                }
+            }
+            // A keyboard's press is the tap, Up; its own arrows walk the Deck rather than drive the Nub.
+            .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnArrow(TerminalKey.UP) }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    pressed = true
+                    val dead = 8.dp.toPx()
+                    val ring1 = 28.dp.toPx()
+                    val ring2 = 56.dp.toPx()
+                    var direction: TerminalKey? = null
+                    var interval = 180L
+                    var everMoved = false
+                    try {
+                        while (true) {
+                            val event = withTimeoutOrNull(if (direction != null) interval else Long.MAX_VALUE) { awaitPointerEvent() }
+                            if (event == null) {
+                                direction?.let {
+                                    currentOnArrow(it)
+                                    patterns.nubStep()
+                                }
+                                continue
+                            }
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                if (!everMoved) {
+                                    patterns.keyTap()
+                                    currentOnArrow(TerminalKey.UP)
+                                }
+                                break
+                            }
+                            val d = change.position - down.position
+                            val dist = d.getDistance()
+                            val next = if (dist < dead) null else if (abs(d.x) > abs(d.y)) (if (d.x > 0) TerminalKey.RIGHT else TerminalKey.LEFT) else (if (d.y > 0) TerminalKey.DOWN else TerminalKey.UP)
+                            interval = when {
+                                dist < ring1 -> 180L
+                                dist < ring2 -> 90L
+                                else -> 45L
+                            }
+                            if (next != null) everMoved = true
+                            if (next != direction) {
+                                direction = next
+                                active = next
+                                if (next != null) {
+                                    currentOnArrow(next)
+                                    patterns.nubStep()
+                                }
+                            }
+                            change.consume()
+                        }
+                    } finally {
+                        pressed = false
+                        active = null
+                    }
+                }
+            }
+            .keyFace(),
+        contentAlignment = Alignment.Center,
+    ) {
         Canvas(
             Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(if (pressed) c.surface4 else if (selected || focused) c.surface3 else c.surface2)
-                .testTag(DeckKeyTag)
-                // Activation is the tap (Up); each arrow is an action, since a screen reader cannot drag it.
-                .semantics {
-                    contentDescription = "Nub, the arrow keys"
-                    role = Role.Button
-                    if (enabled) {
-                        onClick { patterns.keyTap(); currentOnArrow(TerminalKey.UP); true }
-                        customActions = listOf(
-                            CustomAccessibilityAction("Up") { patterns.nubStep(); currentOnArrow(TerminalKey.UP); true },
-                            CustomAccessibilityAction("Down") { patterns.nubStep(); currentOnArrow(TerminalKey.DOWN); true },
-                            CustomAccessibilityAction("Left") { patterns.nubStep(); currentOnArrow(TerminalKey.LEFT); true },
-                            CustomAccessibilityAction("Right") { patterns.nubStep(); currentOnArrow(TerminalKey.RIGHT); true },
-                        )
-                    } else {
-                        disabled()
-                    }
-                }
-                // A keyboard's press is the tap, Up; its own arrows walk the Deck rather than drive the Nub.
-                .keyPressable(enabled, interaction) { patterns.keyTap(); currentOnArrow(TerminalKey.UP) }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    awaitEachGesture {
-                        val down = awaitFirstDown()
-                        pressed = true
-                        val dead = 8.dp.toPx()
-                        val ring1 = 28.dp.toPx()
-                        val ring2 = 56.dp.toPx()
-                        var direction: TerminalKey? = null
-                        var interval = 180L
-                        var everMoved = false
-                        try {
-                            while (true) {
-                                val event = withTimeoutOrNull(if (direction != null) interval else Long.MAX_VALUE) { awaitPointerEvent() }
-                                if (event == null) {
-                                    direction?.let {
-                                        currentOnArrow(it)
-                                        patterns.nubStep()
-                                    }
-                                    continue
-                                }
-                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!change.pressed) {
-                                    if (!everMoved) {
-                                        patterns.keyTap()
-                                        currentOnArrow(TerminalKey.UP)
-                                    }
-                                    break
-                                }
-                                val d = change.position - down.position
-                                val dist = d.getDistance()
-                                val next = if (dist < dead) null else if (abs(d.x) > abs(d.y)) (if (d.x > 0) TerminalKey.RIGHT else TerminalKey.LEFT) else (if (d.y > 0) TerminalKey.DOWN else TerminalKey.UP)
-                                interval = when {
-                                    dist < ring1 -> 180L
-                                    dist < ring2 -> 90L
-                                    else -> 45L
-                                }
-                                if (next != null) everMoved = true
-                                if (next != direction) {
-                                    direction = next
-                                    active = next
-                                    if (next != null) {
-                                        currentOnArrow(next)
-                                        patterns.nubStep()
-                                    }
-                                }
-                                change.consume()
-                            }
-                        } finally {
-                            pressed = false
-                            active = null
-                        }
-                    }
-                },
+                .background(if (pressed) c.surface4 else if (selected || focused) c.surface3 else c.surface2),
         ) {
             val center = Offset(size.width / 2, size.height / 2)
             drawCircle(c.text2, radius = 3.dp.toPx(), center = center)
@@ -1275,8 +1293,6 @@ private fun LayerKey(
     val focused = interaction.showsFocus()
     Box(
         modifier
-            .clip(RoundedCornerShape(BerthRadius.key))
-            .background(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2)
             .testTag(DeckKeyTag)
             .semantics(mergeDescendants = true) {
                 contentDescription = "Layer"
@@ -1326,7 +1342,8 @@ private fun LayerKey(
                         pressed = false
                     }
                 }
-            },
+            }
+            .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2),
         contentAlignment = Alignment.Center,
     ) {
         BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
