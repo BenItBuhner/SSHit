@@ -32,7 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.AppViewModel.Companion.toTunnel
@@ -358,7 +361,14 @@ fun HostEditorScreen(
                 ToggleRow("Agent forwarding", agentForwarding, { agentForwarding = it }, caption = "Programs on the host may ask to sign")
                 if (agentForwarding) {
                     CyclePicker("Signatures", listOf(false, true), agentSilent, { if (it) "Always allow" else "Ask each time" }) { agentSilent = it }
-                    PanelNote(agentForwardingNote(identities.firstOrNull { it.id == (auth as? AuthMethod.Key)?.identityId }?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly))
+                    val key = identities.firstOrNull { it.id == (auth as? AuthMethod.Key)?.identityId }
+                    val note = agentForwardingNote(name.ifBlank { address }, key?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly)
+                    PanelNote(
+                        buildAnnotatedString {
+                            note.lead?.let { withStyle(SpanStyle(color = c.text1)) { append(it) }; append(" ") }
+                            append(note.rest)
+                        },
+                    )
                 }
             }
 
@@ -460,15 +470,27 @@ fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> Str
 }
 
 /**
- * What forwarding this host's agent means, under the switch: which key it offers, that only
+ * The note under Agent forwarding. [lead], when there is one, is the consequence the choice has,
+ * set first in the stronger tone; [rest] follows in the note's own.
+ */
+data class AgentForwardingNote(val lead: String?, val rest: String) {
+    val text: String get() = listOfNotNull(lead, rest).joinToString(" ")
+}
+
+/**
+ * What forwarding [hostName]'s agent means, under the switch: which key it offers, that only
  * signatures leave, and who can ask. The agent holds only the key that logged in, so a host that
  * logs in with a password has nothing to offer, and a Tunnels only host opens no shell to forward to.
+ * Always allow leads with who can then sign.
  */
-fun agentForwardingNote(keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean): String = when {
-    tunnelsOnly -> "With Tunnels only on, Connect opens no shell, so no agent is forwarded."
-    !keyAuth -> "Only the key that signs in to this host is offered, and this host signs in without one, so the agent has nothing to offer."
-    silent -> "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone. Always allow lets anything on the host, root included, sign as you while a tab is connected."
-    else -> "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone. Each request asks you first, naming the host and what it is for."
+fun agentForwardingNote(hostName: String, keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean): AgentForwardingNote {
+    val offered = "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone."
+    return when {
+        tunnelsOnly -> AgentForwardingNote(null, "With Tunnels only on, Connect opens no shell, so no agent is forwarded.")
+        !keyAuth -> AgentForwardingNote(null, "Only the key that signs in to this host is offered, and this host signs in without one, so the agent has nothing to offer.")
+        silent -> AgentForwardingNote("Anything on ${hostName.ifBlank { "this host" }}, root included, can sign as you without asking while a tab is connected.", offered)
+        else -> AgentForwardingNote(null, "$offered Each request asks you first, naming the host and what it is for.")
+    }
 }
 
 private fun keyPhrase(keyName: String?): String = keyName?.let { "the key \u201c$it\u201d" } ?: "the key that signs in"

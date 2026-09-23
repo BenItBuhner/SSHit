@@ -563,6 +563,12 @@ fun PanelNote(text: String, modifier: Modifier = Modifier) {
     Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 12.dp, top = 4.dp))
 }
 
+/** A [PanelNote] whose [text] carries its own runs, a stronger lead among them; the rest is text.2. */
+@Composable
+fun PanelNote(text: AnnotatedString, modifier: Modifier = Modifier) {
+    Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 12.dp, top = 4.dp))
+}
+
 // ---- Candidate rows -----------------------------------------------------------------------------------
 
 /**

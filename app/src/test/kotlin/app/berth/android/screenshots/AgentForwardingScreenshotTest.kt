@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.click
@@ -26,10 +27,13 @@ import app.berth.android.session.AgentAnswer
 import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.hosts.AgentForwardingNote
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.hosts.agentForwardingNote
 import app.berth.android.ui.prompts.PromptHost
+import app.berth.android.ui.theme.Berth
+import app.berth.android.ui.theme.BerthColors
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
@@ -137,9 +141,13 @@ class AgentForwardingScreenshotTest {
         compose.assertNoBrokenWords(where, within)
     }
 
+    /** The theme's tokens as the last composition read them. */
+    private lateinit var colors: BerthColors
+
     private fun themed(content: @Composable () -> Unit) {
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
+                colors = Berth.colors
                 Box(Modifier.fillMaxSize()) { content() }
             }
         }
@@ -195,12 +203,13 @@ class AgentForwardingScreenshotTest {
 
         compose.onNodeWithText("Agent forwarding").performClick()
         waitForText("Signatures")
-        val asking = agentForwardingNote("this phone", keyAuth = true, silent = false, tunnelsOnly = false)
+        val asking = agentForwardingNote("bastion", "this phone", keyAuth = true, silent = false, tunnelsOnly = false)
         assertEquals(
-            "Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone. Each request asks you first, naming the host and what it is for.",
+            AgentForwardingNote(null, "Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone. Each request asks you first, naming the host and what it is for."),
             asking,
         )
-        compose.onNodeWithText(asking).performScrollTo()
+        compose.onNodeWithText(asking.text).performScrollTo()
+        assertTrue("asking has no lead", noteRuns(asking).isEmpty())
         compose.onNodeWithText("Ask each time").assertExists()
         compose.settle(300)
         capture(name)
@@ -209,9 +218,14 @@ class AgentForwardingScreenshotTest {
         compose.onNodeWithText("Signatures").performClick()
         waitForText("Always allow")
         compose.onNodeWithText("Always allow").performClick()
-        val silent = agentForwardingNote("this phone", keyAuth = true, silent = true, tunnelsOnly = false)
-        waitForText(silent)
-        compose.onNodeWithText(silent).performScrollTo()
+        val silent = agentForwardingNote("bastion", "this phone", keyAuth = true, silent = true, tunnelsOnly = false)
+        assertEquals("Anything on bastion, root included, can sign as you without asking while a tab is connected.", silent.lead)
+        assertEquals("Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone.", silent.rest)
+        waitForText(silent.text)
+        compose.onNodeWithText(silent.text).performScrollTo()
+        val lead = noteRuns(silent).single()
+        assertEquals("the consequence comes first, and only it is set apart", 0 until silent.lead!!.length, lead.start until lead.end)
+        assertEquals("in text.1, not an attention colour", colors.text1, lead.item.color)
         compose.settle(300)
         capture("$name-silent")
         assertWhole("the Identity panel signing without asking")
@@ -245,10 +259,14 @@ class AgentForwardingScreenshotTest {
         themed { HostEditorScreen(graph.viewModel, hostId = homelab.id, onDone = {}) }
         waitForText("Agent forwarding")
         compose.onNodeWithText("Agent forwarding").performScrollTo().performClick()
-        val note = agentForwardingNote(null, keyAuth = false, silent = false, tunnelsOnly = false)
-        waitForText(note)
-        assertTrue(note, note.endsWith("so the agent has nothing to offer."))
+        val note = agentForwardingNote("homelab", null, keyAuth = false, silent = false, tunnelsOnly = false)
+        waitForText(note.text)
+        assertTrue(note.text, note.lead == null && note.rest.endsWith("so the agent has nothing to offer."))
     }
+
+    /** The colour runs of the note shown for [note]: its lead's, if it has one. */
+    private fun noteRuns(note: AgentForwardingNote) =
+        compose.onNodeWithText(note.text).fetchSemanticsNode().config[SemanticsProperties.Text].single().spanStyles
 
     // ---- the signature request sheet ----------------------------------------------------------------
 
