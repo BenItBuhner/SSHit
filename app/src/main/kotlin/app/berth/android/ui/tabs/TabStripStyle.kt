@@ -43,7 +43,8 @@ enum class StripChrome { FLAT, ISLAND }
 data class TabStripStyle(
     /**
      * Header row height; the terminal starts beneath it, so it must not grow past the ribbon it
-     * replaces. The skin's own is Comfortable's; the Stage steps it to the density's ([within]).
+     * replaces. The skin's own is Comfortable's; the Stage steps it to the density's where the
+     * status bar takes the step ([atDensity]).
      */
     val height: Dp = DensityTokens.Comfortable.header,
     val chrome: StripChrome = StripChrome.FLAT,
@@ -77,15 +78,9 @@ data class TabStripStyle(
      * How far a tab's touch target reaches up into the status-bar inset above a flat toolbar, so a
      * 40 dp row gives a 48 dp target (spec C3, Header row, at the accessibility pass's 48 dp floor
      * rather than the spec's 44); the visual does not move. The header's fixed slots reach with it.
+     * A strip stepped [within] a shorter header reaches the height it gave up further.
      */
     val topReach: Dp = 8.dp,
-    /**
-     * Reach the row keeps whatever the window: the height [within] took off it. The status bar's
-     * inset lends it along with [topReach] where it has the room, and where it has not (a window
-     * with no status bar at its top) the header stands a band of its own fill that tall above the
-     * row, so no target stands shorter than the skin's own row would ([reachUnder]).
-     */
-    val keptReach: Dp = 0.dp,
     val tabHeight: Dp = 32.dp,
     /** Null follows `BerthRadius.key` (10 dp at the default scale). */
     val tabRadius: Dp? = null,
@@ -149,8 +144,9 @@ data class TabStripStyle(
  * Compact). A style no taller is itself. A taller one steps down to it: tabs 4 dp under the header
  * in at most 4 dp of padding, the swatch as far in from a tab's top and bottom as from its start
  * (so its attention ring, 3.5 dp outside it, stays inside the tab), and the chip with 4 dp above
- * and below it. The height given up is kept as reach ([TabStripStyle.keptReach]), so a tab's
- * target stands as tall as it did. Only sizes change, so the skin holds.
+ * and below it. The height given up goes to [TabStripStyle.topReach], so a tab's target stands
+ * as tall as it did wherever the inset has that reach to lend ([atDensity]). Only sizes change,
+ * so the skin holds.
  */
 fun TabStripStyle.within(header: Dp): TabStripStyle {
     if (height <= header) return this
@@ -162,21 +158,32 @@ fun TabStripStyle.within(header: Dp): TabStripStyle {
         tabPadding = padding,
         swatchSize = minOf(swatchSize, tab - padding * 2),
         chipHeight = minOf(chipHeight, header - 8.dp),
-        keptReach = keptReach + (height - header),
+        topReach = topReach + (height - header),
     )
 }
 
 /**
+ * The strip at the density's [header] (spec A12, ribbon 40 → 28) under a status bar [statusTop]
+ * tall: stepped [within] it where a flat toolbar's inset holds the stepped strip's whole reach,
+ * the phone's own status bar upright or on its side, so every target stands as tall as the skin's
+ * does and the terminal has the rows. Anywhere else (the lower window of a split screen, a
+ * freeform or desktop window, a tablet's, an island's header, which lends nothing) the step
+ * would come out of the targets or stand as empty band, so the skin's own strip stands there whole.
+ */
+fun TabStripStyle.atDensity(header: Dp, statusTop: Dp): TabStripStyle {
+    val stepped = within(header)
+    return if (chrome == StripChrome.FLAT && statusTop >= stepped.topReach) stepped else this
+}
+
+/**
  * How far the header's row reaches above [TabStripStyle.height] under a status bar [statusTop]
- * tall: over a flat toolbar the inset lends [TabStripStyle.topReach] and
- * [TabStripStyle.keptReach] as far as it goes, and the kept part stands as the row's own band
- * where it does not. An island's clip would cut a target reaching past its edge, so an island
- * lends nothing and keeps its band inside it. Whatever of the inset the reach leaves stands
- * above the row.
+ * tall: over a flat toolbar the inset lends [TabStripStyle.topReach] as far as it goes, and
+ * whatever of the inset that leaves stands above the row. An island's clip would cut a target
+ * reaching past its edge, so an island lends nothing.
  */
 fun TabStripStyle.reachUnder(statusTop: Dp): Dp = when (chrome) {
-    StripChrome.FLAT -> maxOf(minOf(statusTop, topReach + keptReach), keptReach)
-    StripChrome.ISLAND -> keptReach
+    StripChrome.FLAT -> minOf(statusTop, topReach)
+    StripChrome.ISLAND -> 0.dp
 }
 
 /** The strip style in force; the Stage provides it once, so a direction change is a single edit. */

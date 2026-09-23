@@ -329,7 +329,7 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
     }
     CompositionLocalProvider(LocalTargetReach provides reach) {
         when (style.chrome) {
-            StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).padding(top = (statusTop - reach).coerceAtLeast(0.dp)))
+            StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
             StripChrome.ISLAND -> Box(
                 Modifier
                     .fillMaxWidth()

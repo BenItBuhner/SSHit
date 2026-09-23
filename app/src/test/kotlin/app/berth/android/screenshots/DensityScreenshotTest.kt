@@ -167,8 +167,9 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
      * The Stage header (spec A12, ribbon 40 → 28; C3): under a phone's status bar the strip's row
      * steps from 40 to 28 with its tabs from 32 to 24, every title and chip label standing in a box
      * as tall as its line at the cap too, and a tab still answers a 48 dp target, the reach taking
-     * the 12 dp the row gave up out of the inset. With no status bar to lend them the header keeps
-     * those 12 dp as its own band above the row, so a target never stands shorter than Comfortable's.
+     * the 12 dp the row gave up out of the inset. With no status bar to lend them the step would
+     * come out of the targets or stand as empty band, so the skin's strip stands there whole: a
+     * 40 dp row of 32 dp tabs with 20 dp swatches, Comfortable's own.
      */
     @Test
     fun `stage header and strip`() {
@@ -184,19 +185,20 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertEquals(28f, stripRowDp(), 1f)
         assertEquals("and 20 dp to the 28 dp row", 48f, stripHeightDp(), 0.5f)
         assertEquals("a tab is a 48 dp target on it", 48f, compose.onNode(hasContentDescription("homelab, detached", substring = true)).fetchSemanticsNode().size.height.toFloat().inDp(), 0.5f)
+        assertEquals("its swatch Compact's 16", 16f, swatchDp(), 0.5f)
         assertStripLinesWhole("the Compact strip")
 
         statusBar(0)
         capture("density-stage-compact-no-status-bar")
-        assertEquals(28f, stripRowDp(), 1f)
-        assertEquals("with no status bar the header keeps the 12 dp as its own band", 40f, stripHeightDp(), 0.5f)
-        setDensity(Density.COMFORTABLE)
-        assertEquals("as tall as Comfortable's row there", 40f, stripHeightDp(), 0.5f)
+        assertEquals("with no status bar the skin's 40 dp row stands", 40f, stripRowDp(), 1f)
+        assertEquals("and no band over it", 40f, stripHeightDp(), 0.5f)
+        assertEquals("its swatch the skin's 20, in a 32 dp tab", 20f, swatchDp(), 0.5f)
+        assertStripLinesWhole("the skin's strip under Compact")
     }
 
     /**
      * A phone on its side (spec C23): under its status bar the strip's own 32 steps to Compact's 28
-     * as well, its lines whole, and with none it stands its own 32.
+     * as well, its lines whole, and with none it stands its own 32, row and all.
      */
     @Test
     @Config(qualifiers = "w914dp-h411dp-land-420dpi")
@@ -214,14 +216,15 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertStripLinesWhole("the Compact strip on its side")
 
         statusBar(0)
+        assertEquals(32f, stripRowDp(), 1f)
         assertEquals(32f, stripHeightDp(), 0.5f)
     }
 
     /**
-     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane): 40,
-     * then Compact's 28, or at the cap the title's own line where that is taller, and never cut. The
-     * window has no status bar, so the strip's 28 dp row keeps its 12 dp band and every target in
-     * the header stands 40 dp, which the audit of each frame holds it to.
+     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). The
+     * window has no status bar to lend the strip Compact's step, so under Compact the skin's strip
+     * stands whole, a 40 dp row of 32 dp tabs, and the panes' headers stay 40 with it, never cut at
+     * the cap either; every target in the header stands 40 dp, which the audit of each frame holds.
      */
     @Test
     @Config(qualifiers = "w1280dp-h800dp-land-320dpi")
@@ -235,15 +238,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
         setDensity(Density.COMPACT)
         capture("density-panes-compact")
-        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals("the skin's 40 dp row", 40f, stripRowDp(), 1f)
         assertEquals(40f, stripHeightDp(), 0.5f)
-        // Body's 22 sp line at the capped scale, rounded up to a whole pixel as the text's box is.
-        val line = kotlin.math.ceil(22f * minOf(systemFontScale, 1.3f) * compose.density.density) / compose.density.density
-        assertEquals(maxOf(28f, line), paneHeaderDp(), 0.5f)
+        assertEquals("its swatch the skin's 20", 20f, swatchDp(), 0.5f)
+        assertEquals("the panes' headers the strip's 40", 40f, paneHeaderDp(), 0.5f)
         assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
     }
 
-    /** The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, and the strip above it Compact's 28 on the Stage itself. */
+    /** The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, and no status bar here, so the strip above it is the skin's 40. */
     @Test
     fun `the deck`() {
         StageFixture.seed(graph)
@@ -257,7 +259,7 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         setDensity(Density.COMPACT)
         capture("density-deck-compact")
         assertEquals(40f, ctrlKeyDp(), 0.5f)
-        assertEquals(28f, stripRowDp(), 1f)
+        assertEquals(40f, stripRowDp(), 1f)
     }
 
     /** The shell as it mounts, on the Stage fixture's three detached tabs with homelab on stage. */
@@ -313,6 +315,13 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         val pane = compose.onAllNodes(hasContentDescription(" pane", substring = true) and hasStateDescription("Focused")).onFirst().fetchSemanticsNode().boundsInRoot
         return ((close.positionInRoot.y + close.size.height / 2f - pane.top) * 2).inDp()
     }
+
+    /** The active tab's swatch, across: the width its monogram is laid out in. */
+    private fun swatchDp(): Float = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(onTheStrip), useUnmergedTree = true)
+        .fetchSemanticsNodes()
+        .mapNotNull { it.textLayout() }
+        .first { it.layoutInput.text.text == "HO" }
+        .layoutInput.constraints.maxWidth.toFloat().inDp()
 
     private fun ctrlKeyDp(): Float = compose.onNode(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNode().size.height.toFloat().inDp()
 

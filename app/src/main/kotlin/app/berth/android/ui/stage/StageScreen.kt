@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -136,7 +138,7 @@ import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabHeader
 import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.tabs.rememberTabStripState
-import app.berth.android.ui.tabs.within
+import app.berth.android.ui.tabs.atDensity
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
 import app.berth.android.ui.terminal.cursorShapeOf
@@ -322,7 +324,8 @@ fun StageScreen(
 
     // The Stage's chrome at the density in force (spec A12): the strip, the bars that stand in
     // for it and the panes' headers, on whatever style the shell hands the Stage.
-    CompositionLocalProvider(LocalTabStripStyle provides LocalTabStripStyle.current.within(Berth.density.header)) {
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    CompositionLocalProvider(LocalTabStripStyle provides LocalTabStripStyle.current.atDensity(Berth.density.header, statusTop)) {
         Column(
             modifier
                 .fillMaxSize()
