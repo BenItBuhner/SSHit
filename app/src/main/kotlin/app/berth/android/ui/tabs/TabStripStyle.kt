@@ -79,6 +79,10 @@ data class TabStripStyle(
     val tabHeight: Dp = 32.dp,
     /** Null follows `BerthRadius.key` (10 dp at the default scale). */
     val tabRadius: Dp? = null,
+    /**
+     * Inset at either end of a tab. Its contents centre in [tabHeight], which at these sizes sets
+     * the swatch the same inset in from the top and bottom, and a title's taller line has the rest.
+     */
     val tabPadding: Dp = 6.dp,
     val tabMinWidth: Dp = 88.dp,
     val tabMaxWidth: Dp = 160.dp,
@@ -106,7 +110,10 @@ data class TabStripStyle(
     /** The monogram on the swatch; null is Label at 9 sp in white at 92 %. */
     val monogramStyle: TextStyle? = null,
     val monogramColor: Color? = null,
-    /** Group chip height, corner radius (null is a full pill) and the padding either side of its label. */
+    /**
+     * Group chip height, at least (a label's line at the interface's font cap may stand taller),
+     * corner radius (null is a full pill) and the padding either side of its label.
+     */
     val chipHeight: Dp = 22.dp,
     val chipRadius: Dp? = null,
     val chipPadding: Dp = 8.dp,

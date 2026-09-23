@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -953,7 +954,9 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                         drawRoundRect(bar, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
                     }
                 }
-                .padding(s.tabPadding),
+                // Across only: the title's line at the interface's font cap is taller than the room
+                // between a padding above and below would be, and cut there it loses its descenders.
+                .padding(horizontal = s.tabPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabSwatch(
@@ -1253,7 +1256,7 @@ internal fun ChipPill(
     val s = style.style
     Box(
         modifier
-            .height(s.chipHeight)
+            .heightIn(min = s.chipHeight)
             .drawBehind {
                 if (attention) {
                     val out = 2.dp.toPx()
