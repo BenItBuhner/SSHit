@@ -111,6 +111,43 @@ class SessionLifecycleTest {
         await("only the tab whose screen moved") { graph.sessionRecords.frames.keys == setOf("s-a") }
     }
 
+    /**
+     * A host's scrollback lowered below the history its tab restored drops the oldest lines, and
+     * the next trim saves that tab's frame, and only it, without them; a cap raised over shorter
+     * history drops nothing, and the next trim writes nothing.
+     */
+    @Test
+    fun `a scrollback cap that drops restored history gets the frame saved, and one that drops none does not`() {
+        seed()
+        runBlocking { graph.sessionRecords.saveFrame("s-a", frame(List(2_500) { "line $it" })) }
+        restore()
+        val a = graph.sessions.get("s-a")!!
+        await("the app's cap reached the tab over its restored history") { a.emulator.maxScrollback == 10_000 && a.emulator.scrollbackSize > 2_000 }
+        graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+        await("both frames saved on the first trim") { graph.sessionRecords.frames.keys == setOf("s-a", "s-b") }
+
+        graph.sessionRecords.frames.clear()
+        val homelab = graph.hosts.items.value.first { it.id == "homelab" }
+        runBlocking { graph.hosts.upsert(homelab.copy(scrollbackLines = 1_000)) }
+        await("the host's lower cap dropped the oldest lines") { a.emulator.scrollbackSize == 1_000 }
+        graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND)
+        await("the trimmed tab's frame saved") { graph.sessionRecords.frames.keys == setOf("s-a") }
+        Thread.sleep(150)
+        assertEquals("only the tab whose history was cut", setOf("s-a"), graph.sessionRecords.frames.keys)
+        val saved = lines(graph.sessionRecords.frames.getValue("s-a"))
+        assertFalse("the dropped lines are gone from the frame", saved.contains("line 0"))
+        assertTrue("${saved.size} lines saved", saved.size <= 1_000 + 24)
+        assertTrue(saved.contains("line 2499"))
+
+        graph.sessionRecords.frames.clear()
+        runBlocking { graph.hosts.upsert(homelab.copy(scrollbackLines = 5_000)) }
+        await("the higher cap reached the tab") { a.emulator.maxScrollback == 5_000 }
+        graph.sessions.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+        Thread.sleep(150)
+        assertTrue("a cap over shorter history cuts nothing, so nothing is rewritten", graph.sessionRecords.frames.isEmpty())
+        assertEquals(1_000, a.emulator.scrollbackSize)
+    }
+
     @Test
     fun `a RUNNING trim level, with the app on screen, saves nothing`() {
         seed()
