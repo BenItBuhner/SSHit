@@ -144,7 +144,8 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
 /**
  * A licence file's paragraphs with its hard wraps joined, so its words flow to the sheet's width
  * rather than breaking twice a line. A line of 48 characters or more runs on into the next; a
- * shorter one (a heading, a title block, an address) keeps its break, as does a rule of dashes.
+ * shorter one (a heading, a title block, an address) keeps its break, as does a rule of dashes,
+ * and so does a table's row (three or more columns padded apart with spaces), whose padding stays.
  */
 internal fun licenceParagraphs(text: String): List<String> {
     val out = mutableListOf<String>()
@@ -158,15 +159,18 @@ internal fun licenceParagraphs(text: String): List<String> {
             runsOn = false
             continue
         }
-        val words = line.any(Char::isLetter)
+        val prose = line.any(Char::isLetter) && COLUMN_GAP.findAll(line).count() < 2
         when {
             paragraph.isEmpty() -> Unit
-            runsOn && words -> paragraph.append(' ')
+            runsOn && prose -> paragraph.append(' ')
             else -> paragraph.append('\n')
         }
         paragraph.append(line)
-        runsOn = words && line.length >= 48
+        runsOn = prose && line.length >= 48
     }
     if (paragraph.isNotEmpty()) out += paragraph.toString()
     return out
 }
+
+/** Two spaces or more between words: one such gap is a sentence's end in older texts, two make a table's row. */
+private val COLUMN_GAP = Regex("(?<=\\S) {2,}(?=\\S)")

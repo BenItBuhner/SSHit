@@ -8,7 +8,7 @@ import java.io.File
 /**
  * Settings › Licences against what ships: every licence file under `assets/licenses/` is opened by
  * exactly one row and every row's file is there, so a text added or renamed cannot go unlisted;
- * and a file's hard wraps are joined while its headings, title block and rules keep their lines.
+ * and a file's hard wraps are joined while its headings, title block, rules and table rows keep their lines.
  */
 class LicencesTest {
     private val shipped = File("src/main/assets/licenses")
@@ -50,6 +50,30 @@ class LicencesTest {
         )
         val apache = "                                 Apache License\r\n                           Version 2.0, January 2004\r\n\r\n   1. Definitions.\r\n"
         assertEquals(listOf("Apache License\nVersion 2.0, January 2004", "1. Definitions."), licenceParagraphs(apache))
+    }
+
+    @Test
+    fun `a table's rows keep their lines, while one sentence's double space still runs on`() {
+        val table = """
+            |The font as a whole is under the MIT licence (nerd-fonts-symbols-MIT.txt). The icon sets it
+            |collects keep their own licences:
+            |
+            |Codicons                https://github.com/microsoft/vscode-codicons           0.0.45           CC BY 4.0
+            |extraglyphs             https://github.com/source-foundry/Hack                 -                MIT
+            |Font Logos              https://github.com/lukas-w/font-logos                  1.3.0            The Unlicense
+        """.trimMargin()
+        assertEquals(
+            listOf(
+                "The font as a whole is under the MIT licence (nerd-fonts-symbols-MIT.txt). The icon sets it collects keep their own licences:",
+                table.lines().drop(3).joinToString("\n"),
+            ),
+            licenceParagraphs(table),
+        )
+        val sentences = "      the brackets!)  The text should be enclosed in the appropriate\n      comment syntax for the file format."
+        assertEquals(
+            listOf("the brackets!)  The text should be enclosed in the appropriate comment syntax for the file format."),
+            licenceParagraphs(sentences),
+        )
     }
 
     @Test
