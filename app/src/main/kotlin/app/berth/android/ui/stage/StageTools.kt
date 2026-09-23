@@ -803,9 +803,15 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
 
         /**
          * The host of an address with a scheme and an authority, as the parser that opens it would
-         * read it ([asRead]), lowercased and in ASCII ([asciiHost]); null for one without (`mailto:`, a bare word).
+         * read it ([asRead]), lowercased and in ASCII ([asciiHost]); null for one without (`mailto:`, a bare word),
+         * and for a host made only of code points UTS #46 deletes (a lone soft hyphen), which names
+         * nothing and which the browser refuses, so the caption names no host rather than an empty one.
          */
-        fun hostOf(url: String): String? = SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.let(::asciiHost)
+        fun hostOf(url: String): String? =
+            SCHEME_HOST.find(asRead(url.trim()))?.groupValues?.get(1)?.takeUnless(::namesNothing)?.let(::asciiHost)
+
+        private fun namesNothing(host: String): Boolean =
+            host.any { it.code >= 0x80 } && UTS46.nameToASCII(host.lowercase(), StringBuilder(), IDNA.Info()).isEmpty()
 
         /**
          * The UTS #46 processor the browsers name a host by, with the WHATWG URL Standard's options
@@ -837,15 +843,15 @@ class LinkLook(val caption: String, val warning: Boolean, val posture: Posture, 
          * measured against that, and `straße.de` is xn--strae-oqa.de, the name the tap resolves,
          * rather than strasse.de (IDNA2003's reading, and a name another registrant may hold). A
          * bracketed IPv6 literal is ASCII already; a host the browser refuses too (a code point
-         * UTS #46 disallows, a label opening on a combining mark, a bidi or joiner rule broken)
-         * stands as it is, lowercased.
+         * UTS #46 disallows, a label opening on a combining mark, a bidi or joiner rule broken, or
+         * nothing left once it is mapped, which Chrome counts as a failure) stands as it is, lowercased.
          */
         fun asciiHost(host: String): String {
             val lower = host.lowercase()
             if (lower.all { it.code < 0x80 }) return lower
             val info = IDNA.Info()
-            val ascii = UTS46.nameToASCII(lower, StringBuilder(), info)
-            return if (info.errors.any { it !in LENIENT }) lower else ascii.toString().lowercase()
+            val ascii = UTS46.nameToASCII(lower, StringBuilder(), info).toString()
+            return if (ascii.isEmpty() || info.errors.any { it !in LENIENT }) lower else ascii.lowercase()
         }
 
         /**

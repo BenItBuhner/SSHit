@@ -223,6 +223,13 @@ class LinkLookTest {
         // Nor does it check DNS's lengths or a label's hyphens: a label past 63 bytes is encoded all the same.
         assertEquals("xn--4c" + "a".repeat(60) + ".com", LinkLook.asciiHost("\u00C4".repeat(60) + ".com"))
         assertEquals("xn--ab--c-kra.de", LinkLook.asciiHost("ab--c\u00E4.de"))
+        // But a host with nothing left once mapped, a lone soft hyphen, is refused as Chrome refuses it: the caption
+        // names no host where it read "goes to " and nothing, and the panel keeps the address as it came.
+        assertEquals("\u00AD", LinkLook.asciiHost("\u00AD"))
+        assertNull(LinkLook.hostOf("https://\u00AD/"))
+        assertPlain("https://\u00AD/", "https://\u00AD/", "A web link")
+        assertPlain("https://\u00AD/", "click here", "Shown as \u201Cclick here\u201D, a web link")
+        assertEquals("https://\u00AD/", LinkLook.withAsciiHost("https://\u00AD/"))
     }
 
     @Test
