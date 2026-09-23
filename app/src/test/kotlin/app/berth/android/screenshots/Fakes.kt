@@ -306,6 +306,9 @@ class InMemorySettings : SettingsRepository {
     private val commandHistory = MutableStateFlow(true)
     override val commandHistoryEnabled: Flow<Boolean> = commandHistory
     override suspend fun setCommandHistoryEnabled(enabled: Boolean) { commandHistory.value = enabled }
+    val predictiveDefault = MutableStateFlow(false)
+    override val predictiveTextDefault: Flow<Boolean> = predictiveDefault
+    override suspend fun setPredictiveTextDefault(on: Boolean) { predictiveDefault.value = on }
 
     val hardwareKeyboard = MutableStateFlow(HardwareKeyboardSettings())
     override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> = hardwareKeyboard

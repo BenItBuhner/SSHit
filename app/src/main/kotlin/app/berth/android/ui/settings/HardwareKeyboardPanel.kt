@@ -114,6 +114,22 @@ private fun prefixNote(table: ChordTable): String {
 }
 
 /**
+ * Settings › Predictive text (spec C20, "Off by default"): what a terminal tab starts with, the
+ * tab's own after (C6). Off, the keyboard is told to learn nothing and suggest nothing on a shell
+ * tab until its Session sheet or a Deck key says otherwise; on, a tab opened from now on starts
+ * with suggestions, and one already open keeps what it has. Between the two keyboard panels, where
+ * C20 lists it.
+ */
+@Composable
+fun PredictiveTextPanel(vm: AppViewModel) {
+    val on by vm.predictiveTextDefault.collectAsState()
+    Panel(label = "Predictive text") {
+        ToggleRow("On for new tabs", on, vm::setPredictiveTextDefault, caption = "Off, the keyboard learns nothing typed in a shell")
+        PanelNote("A tab already open keeps its own. The Session sheet, or a Deck key, turns it on or off for one tab.")
+    }
+}
+
+/**
  * Settings › Volume buttons (spec A43, C20): what the phone's two buttons do while a shell tab is on
  * stage, off by default. Its own panel beside the keyboard's, the way C20 lists it, since a phone
  * has these buttons with no keyboard attached and the panel's label is what a user scanning for

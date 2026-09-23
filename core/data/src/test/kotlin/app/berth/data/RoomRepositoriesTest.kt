@@ -329,6 +329,9 @@ class RoomRepositoriesTest {
         assertFalse(settings.ctrlTabKeysReachTerminal.first(), "Ctrl+T and Ctrl+W are tab shortcuts by default")
         settings.setCtrlTabKeysReachTerminal(true)
         assertTrue(settings.ctrlTabKeysReachTerminal.first())
+        assertFalse(settings.predictiveTextDefault.first(), "a tab starts with the keyboard's suggestions off")
+        settings.setPredictiveTextDefault(true)
+        assertTrue(settings.predictiveTextDefault.first())
     }
 
     @Test

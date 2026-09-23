@@ -186,6 +186,8 @@ fun SettingsScreen(
 
             HardwareKeyboardPanel(vm)
 
+            PredictiveTextPanel(vm)
+
             VolumeButtonsPanel(vm)
 
             ConnectionSettingsPanel(vm)

@@ -52,6 +52,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SnippetAction
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
@@ -1248,27 +1249,45 @@ class AppViewModel @Inject constructor(
         }
     }
 
-    // ---- predictive text (spec C6) ----------------------------------------------------------------
+    // ---- predictive text (spec C6, C20) -----------------------------------------------------------
 
     private val _predictiveTextTabIds = MutableStateFlow<Set<String>>(emptySet())
 
     /**
      * The terminal tabs whose keyboard may suggest words (spec C6, the Session sheet's row): the
-     * Stage tells the keyboard and lights the grip from the one flag. Off for every tab until asked,
-     * and the tab's alone: not saved with it, so a shell told to suggest is told again next launch,
-     * and the privacy default is the one a restored tab comes back to.
+     * Stage tells the keyboard and lights the grip from the one flag. A terminal tab starts at
+     * [predictiveTextDefault], off unless Settings says otherwise, and is the tab's alone after:
+     * not saved with it, so a restored tab comes back at the default, and the privacy default is
+     * the one it comes back to unless the user chose another.
      */
     val predictiveTextTabIds: StateFlow<Set<String>> = _predictiveTextTabIds.asStateFlow()
+
+    /** Settings › Input › Predictive text (spec C20): what a terminal tab starts with; a tab already open keeps its own. */
+    val predictiveTextDefault: StateFlow<Boolean> = settings.predictiveTextDefault.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun setPredictiveTextDefault(on: Boolean) {
+        viewModelScope.launch { settings.setPredictiveTextDefault(on) }
+    }
 
     fun setPredictiveText(tabId: String, on: Boolean) {
         _predictiveTextTabIds.update { if (on) it + tabId else it - tabId }
     }
 
     init {
-        // A closed tab's flag goes with it. Ids are never reused, so this is tidiness, not correctness.
+        // Each tab takes the default once, when this process first sees it, and only from the stored
+        // value: combine waits for the setting's first read, so a tab restored at launch is never
+        // decided on a placeholder. A closed tab's flag goes with it; ids are never reused, so that
+        // part is tidiness, not correctness.
         viewModelScope.launch {
-            sessions.records.collect { list ->
-                _predictiveTextTabIds.update { on -> if (on.isEmpty()) on else on.filterTo(HashSet()) { id -> list.any { it.id == id } } }
+            val decided = HashSet<String>()
+            combine(sessions.records, settings.predictiveTextDefault, ::Pair).collect { (list, on) ->
+                val fresh = list.filter { decided.add(it.id) }
+                decided.retainAll(list.mapTo(HashSet()) { it.id })
+                val start = if (on) fresh.filter { it.kind == TabKind.Ssh }.map { it.id } else emptyList()
+                _predictiveTextTabIds.update { current ->
+                    val open = if (current.isEmpty()) current else current.filterTo(HashSet()) { id -> list.any { it.id == id } }
+                    if (start.isEmpty()) open else open + start
+                }
             }
         }
     }

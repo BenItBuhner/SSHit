@@ -312,6 +312,8 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override suspend fun setCtrlTabKeysReachTerminal(enabled: Boolean) = write(KEY_CTRL_TAB_KEYS_TERMINAL, Boolean.serializer(), enabled)
     override val commandHistoryEnabled: Flow<Boolean> = document(KEY_COMMAND_HISTORY, Boolean.serializer()) { true }
     override suspend fun setCommandHistoryEnabled(enabled: Boolean) = write(KEY_COMMAND_HISTORY, Boolean.serializer(), enabled)
+    override val predictiveTextDefault: Flow<Boolean> = document(KEY_PREDICTIVE_TEXT_DEFAULT, Boolean.serializer()) { false }
+    override suspend fun setPredictiveTextDefault(on: Boolean) = write(KEY_PREDICTIVE_TEXT_DEFAULT, Boolean.serializer(), on)
 
     private val securityLock = Mutex()
     override val securitySettings: Flow<SecuritySettings> = document(KEY_SECURITY, SecuritySettings.serializer()) { SecuritySettings() }
@@ -369,6 +371,7 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_SECURITY = "security"
         const val KEY_CONNECTION = "connection"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
+        const val KEY_PREDICTIVE_TEXT_DEFAULT = "predictive_text_default"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
         const val KEY_TERMINAL = "terminal"
         const val KEY_DECK_SETTINGS = "deck_settings"
