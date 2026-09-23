@@ -187,7 +187,7 @@ fun chordTitle(action: ChordAction): String = when (action) {
     ChordAction.FIND -> "Find in scrollback"
     ChordAction.COPY -> "Copy the selection"
     ChordAction.PASTE -> "Paste"
-    ChordAction.TOGGLE_DECK -> "Show or hide the Deck"
+    ChordAction.TOGGLE_DECK -> "Toggle Deck"
     ChordAction.FONT_LARGER -> "Font larger"
     ChordAction.FONT_SMALLER -> "Font smaller"
     ChordAction.SPLIT -> "Split the Stage"
