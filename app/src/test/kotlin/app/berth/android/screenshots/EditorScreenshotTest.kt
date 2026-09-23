@@ -217,6 +217,29 @@ class EditorScreenshotTest {
     }
 
     @Test
+    fun `theme gallery's last row, the GitHub pair`() = githubPair("")
+
+    @Test
+    fun `theme gallery's last row, the GitHub pair at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        githubPair("-font-scale-2x")
+    }
+
+    /** The gallery's last row: each GitHub name breaks before "High Contrast", its full name kept. */
+    private fun githubPair(suffix: String) {
+        themed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasContentDescription("Theme GitHub Light High Contrast", substring = true))
+        compose.waitForIdle()
+        capture("themes-github-pair$suffix")
+        for (name in listOf("GitHub Dark High Contrast", "GitHub Light High Contrast")) {
+            val layout = compose.onNodeWithText(name, useUnmergedTree = true).fetchSemanticsNode().textLayout()!!
+            val lines = (0 until layout.lineCount).map { name.substring(layout.getLineStart(it), layout.getLineEnd(it)).trim() }
+            assertEquals("$name's lines", listOf(name.removeSuffix(" High Contrast"), "High Contrast"), lines)
+        }
+    }
+
+    @Test
     fun `a pasted base16 scheme lands at the gallery's foot under its own name`() = pastedImport("")
 
     @Test
@@ -612,10 +635,15 @@ class EditorScreenshotTest {
         assertEquals(false, graph.viewModel.interfaceTheme.value.materialYou)
     }
 
+    /** Settings opens on Input, so the frame scrolls to Appearance, where the two editor rows are. */
     @Test
     fun `settings with the editor rows`() {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Terminal themes").performScrollTo()
+        compose.waitForIdle()
         capture("settings-editors")
+        compose.onNodeWithText("Interface editor").assertIsDisplayed()
+        compose.onNodeWithText("Terminal themes").assertIsDisplayed()
     }
 
     // ---- deck -------------------------------------------------------------------------------------
