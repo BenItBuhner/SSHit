@@ -91,6 +91,9 @@ import app.berth.android.ui.a11y.keyPressable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
+import app.berth.android.ui.components.BerthMenuToggle
 import app.berth.android.ui.components.BerthPopup
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -157,6 +160,8 @@ class DeckEditing(
  * to one key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
  * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
+ * [onPredictiveTextChange], where the Stage gives one, puts the tab's [predictiveText] in the
+ * layer picker.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -168,6 +173,7 @@ fun Deck(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     predictiveText: Boolean = false,
+    onPredictiveTextChange: ((Boolean) -> Unit)? = null,
     settings: DeckSettings = DeckSettings(),
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
@@ -192,6 +198,10 @@ fun Deck(
     var secondIndex by rememberSaveable(layers.size) {
         mutableIntStateOf(layers.indexOfFirst { it.name.equals("Nav/Fn", ignoreCase = true) }.takeIf { it >= 0 } ?: 1)
     }
+    // The picker reads in the interface's direction; left reach mirrors the row, not the words.
+    val direction = LocalLayoutDirection.current
+    fun pickerFor(shown: Int, taken: Int?, onSelect: (Int) -> Unit) =
+        LayerPicker(layers, shown, taken, onSelect, predictiveText, onPredictiveTextChange, direction)
 
     CompositionLocalProvider(LocalLayoutDirection provides if (layout.reach == DeckReach.LEFT) LayoutDirection.Rtl else LayoutDirection.Ltr) {
         Column(
@@ -239,6 +249,7 @@ fun Deck(
                 // step would drop a row of Deck under the finger and reflow the terminal (#20 review).
                 onNext = { onLayerIndexChange((index + 1) % layers.size) },
                 onPrevious = { onLayerIndexChange((index - 1 + layers.size) % layers.size) },
+                picker = pickerFor(index, taken = null, onLayerIndexChange),
                 onLayerHold = onOpenDeckEditor,
                 onStrip = { held -> strip = if (strip == held) null else held },
                 editing = editing,
@@ -259,6 +270,8 @@ fun Deck(
                     grip = null,
                     onNext = { secondIndex = (second + 1) % layers.size },
                     onPrevious = { secondIndex = (second - 1 + layers.size) % layers.size },
+                    // The first row's layer is not offered here: this row would step past it the moment it took it.
+                    picker = pickerFor(second, taken = index) { secondIndex = it },
                     onLayerHold = onOpenDeckEditor,
                     onStrip = { held -> strip = if (strip == held) null else held },
                     editing = null,
@@ -347,6 +360,7 @@ private fun DeckRow(
     grip: (@Composable () -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    picker: LayerPicker,
     onLayerHold: (() -> Unit)?,
     onStrip: (List<DeckKeyCode>) -> Unit,
     editing: DeckEditing?,
@@ -428,15 +442,21 @@ private fun DeckRow(
             }
         }
         if (layerCount > 1) {
-            LayerKey(
-                enabled = enabled,
-                haptics = haptics,
-                layerName = layer.name,
-                modifier = Modifier.width(40.dp).fillMaxHeight(),
-                onNext = onNext,
-                onPrevious = onPrevious,
-                onHold = onLayerHold,
-            )
+            var picking by remember { mutableStateOf(false) }
+            // The picker hangs from the key: the menu is placed from the box that holds it.
+            Box(Modifier.width(40.dp).fillMaxHeight()) {
+                LayerKey(
+                    enabled = enabled,
+                    haptics = haptics,
+                    layerName = layer.name,
+                    modifier = Modifier.fillMaxSize(),
+                    onNext = onNext,
+                    onPrevious = onPrevious,
+                    onPick = { picking = true },
+                    onHold = onLayerHold,
+                )
+                LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
+            }
         } else {
             DeckEditorKey(
                 enabled = enabled,
@@ -1144,9 +1164,10 @@ fun Nub(
 }
 
 /**
- * The trailing layer key: tap for the next layer, swipe up for the previous one, hold for the Deck
- * editor. To a reader it is the `Layer` button in the state [layerName], whose activation is
- * `Next layer` and whose actions are the previous layer and the editor.
+ * The trailing layer key (spec C4): tap for the next layer, swipe up for the layer picker
+ * ([LayerPickerMenu]), hold for the Deck editor. To a reader it is the `Layer` button in the state
+ * [layerName], whose activation is `Next layer` and whose actions are the previous layer, the
+ * picker and the editor; the swipe across a key (spec D2) is the finger's way back a layer.
  */
 @Composable
 private fun LayerKey(
@@ -1156,6 +1177,7 @@ private fun LayerKey(
     modifier: Modifier = Modifier,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onPick: () -> Unit,
     onHold: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
@@ -1165,6 +1187,7 @@ private fun LayerKey(
     // rather than the ones captured when the key first composed (those hold that moment's layer index).
     val currentOnNext by rememberUpdatedState(onNext)
     val currentOnPrevious by rememberUpdatedState(onPrevious)
+    val currentOnPick by rememberUpdatedState(onPick)
     val currentOnHold by rememberUpdatedState(onHold)
     val interaction = remember { MutableInteractionSource() }
     val focused = interaction.showsFocus()
@@ -1181,6 +1204,7 @@ private fun LayerKey(
                     onClick(label = "Next layer") { patterns.keyTap(); currentOnNext(); true }
                     customActions = buildList {
                         add(CustomAccessibilityAction("Previous layer") { patterns.keyTap(); currentOnPrevious(); true })
+                        add(CustomAccessibilityAction("Layers") { patterns.keyTap(); currentOnPick(); true })
                         if (onHold != null) add(CustomAccessibilityAction("Deck editor") { patterns.hold(); currentOnHold?.invoke(); true })
                     }
                 } else {
@@ -1209,7 +1233,7 @@ private fun LayerKey(
                             if (!change.pressed) {
                                 if (!held) {
                                     patterns.keyTap()
-                                    if (up) currentOnPrevious() else currentOnNext()
+                                    if (up) currentOnPick() else currentOnNext()
                                 }
                                 break
                             }
@@ -1224,6 +1248,43 @@ private fun LayerKey(
         contentAlignment = Alignment.Center,
     ) {
         BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
+    }
+}
+
+/**
+ * What a row's layer picker offers: the Deck's [layers] with the row's [shown] one selected, less
+ * the one the other row [taken] shows, and the tab's predictive text when the Stage lets the Deck
+ * switch it ([onPredictiveTextChange]). The picker reads in [direction], the interface's.
+ */
+private class LayerPicker(
+    val layers: List<DeckLayer>,
+    val shown: Int,
+    val taken: Int?,
+    val onSelect: (Int) -> Unit,
+    val predictiveText: Boolean,
+    val onPredictiveTextChange: ((Boolean) -> Unit)?,
+    val direction: LayoutDirection,
+)
+
+/**
+ * The layer picker the layer key's swipe up opens (spec C4): a menu of the row's layers, where a
+ * choice shows that layer and closes it, then the Predictive text switch for the tab on stage
+ * (product vision, the IME: the Session sheet's and the picker's), which leaves it open.
+ */
+@Composable
+private fun LayerPickerMenu(picker: LayerPicker, expanded: Boolean, onDismiss: () -> Unit) {
+    CompositionLocalProvider(LocalLayoutDirection provides picker.direction) {
+        BerthMenu(expanded = expanded, onDismiss = onDismiss) {
+            picker.layers.forEachIndexed { i, layer ->
+                if (i != picker.taken) {
+                    BerthMenuItem(layer.name, selected = i == picker.shown, onClick = {
+                        picker.onSelect(i)
+                        onDismiss()
+                    })
+                }
+            }
+            picker.onPredictiveTextChange?.let { change -> BerthMenuToggle("Predictive text", picker.predictiveText, change) }
+        }
     }
 }
 

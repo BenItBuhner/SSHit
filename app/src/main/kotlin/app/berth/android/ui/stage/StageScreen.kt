@@ -886,6 +886,7 @@ private fun StageBody(
                         snippets = pinnedSnippets,
                         onOpenDeckEditor = onOpenDeckEditor,
                         predictiveText = predictiveText,
+                        onPredictiveTextChange = { vm.setPredictiveText(session.id, it) },
                     )
                 }
                 if (!deckVisible && deckStateOk) {

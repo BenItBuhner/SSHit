@@ -76,6 +76,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
@@ -138,6 +139,7 @@ class DeckRailScreenshotTest {
     @After
     fun tearDown() {
         graph.close()
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -352,6 +354,37 @@ class DeckRailScreenshotTest {
         grip.performTouchInput { down(center); moveBy(Offset(0f, 40.dp.px())); up() }
         compose.waitForIdle()
         assertEquals(2, opens)
+    }
+
+    /**
+     * The layer key's swipe up (spec C4): the layer picker hangs over the Deck from the key, the
+     * row's layers with Base selected and the tab's Predictive text switch at the foot (product
+     * vision, the IME), every line whole.
+     */
+    @Test
+    fun `the layer key's swipe up opens the layer picker over the Deck`() = layerPicker("deck-layer-picker")
+
+    /** The same picker at the interface's 1.3× cap (spec A11): the menu is a window of its own, capped again. */
+    @Test
+    fun `the layer picker at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        layerPicker("deck-layer-picker-font-scale-2x")
+    }
+
+    private fun layerPicker(name: String) {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed { Stage(live) }
+        awaitDeck()
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Base")).performTouchInput { down(center); moveBy(Offset(0f, -40.dp.px())); up() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Predictive text") and hasAnyAncestor(isPopup())).fetchSemanticsNodes().isNotEmpty() }
+        for (layer in listOf("Base", "Symbols", "Nav/Fn", "tmux")) compose.onNode(hasText(layer) and hasAnyAncestor(isPopup())).assertIsDisplayed()
+        compose.onNode(hasText("Base") and hasAnyAncestor(isPopup())).assertIsSelected()
+        compose.assertNoTextCut("the layer picker", within = isPopup())
+        compose.assertNoBrokenWords("the layer picker", within = isPopup())
+        settle(400)
+        capture(name)
     }
 
     /**

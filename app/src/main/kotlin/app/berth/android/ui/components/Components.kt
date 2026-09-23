@@ -102,6 +102,8 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -513,7 +515,6 @@ fun ToggleRow(
     captionLines: Int = 2,
     enabled: Boolean = true,
 ) {
-    val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     ListRow(
         title = title,
@@ -531,28 +532,33 @@ fun ToggleRow(
         ),
         interactionSource = interaction,
         enabled = enabled,
-        trailing = {
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                enabled = enabled,
-                modifier = Modifier.clearAndSetSemantics { },
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = c.onAccent,
-                    checkedTrackColor = c.accent,
-                    checkedBorderColor = Color.Transparent,
-                    uncheckedThumbColor = c.text2,
-                    uncheckedTrackColor = c.surface4,
-                    uncheckedBorderColor = Color.Transparent,
-                    disabledCheckedThumbColor = c.onAccent.copy(alpha = DisabledAlpha),
-                    disabledCheckedTrackColor = c.accent.copy(alpha = DisabledAlpha),
-                    disabledCheckedBorderColor = Color.Transparent,
-                    disabledUncheckedThumbColor = c.text2.copy(alpha = DisabledAlpha),
-                    disabledUncheckedTrackColor = c.surface4.copy(alpha = DisabledAlpha),
-                    disabledUncheckedBorderColor = Color.Transparent,
-                ),
-            )
-        },
+        trailing = { SilentSwitch(checked, onCheckedChange, enabled) },
+    )
+}
+
+/** The switch a [ToggleRow] or a [BerthMenuToggle] draws, silent: the row around it is the switch to a reader. */
+@Composable
+private fun SilentSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
+    val c = Berth.colors
+    Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        enabled = enabled,
+        modifier = Modifier.clearAndSetSemantics { },
+        colors = SwitchDefaults.colors(
+            checkedThumbColor = c.onAccent,
+            checkedTrackColor = c.accent,
+            checkedBorderColor = Color.Transparent,
+            uncheckedThumbColor = c.text2,
+            uncheckedTrackColor = c.surface4,
+            uncheckedBorderColor = Color.Transparent,
+            disabledCheckedThumbColor = c.onAccent.copy(alpha = DisabledAlpha),
+            disabledCheckedTrackColor = c.accent.copy(alpha = DisabledAlpha),
+            disabledCheckedBorderColor = Color.Transparent,
+            disabledUncheckedThumbColor = c.text2.copy(alpha = DisabledAlpha),
+            disabledUncheckedTrackColor = c.surface4.copy(alpha = DisabledAlpha),
+            disabledUncheckedBorderColor = Color.Transparent,
+        ),
     )
 }
 
@@ -698,6 +704,25 @@ fun BerthMenuItem(text: String, onClick: () -> Unit, selected: Boolean = false, 
         },
         onClick = onClick,
         leadingIcon = leading,
+    )
+}
+
+/**
+ * A switch among a [BerthMenu]'s lines: Body text and the [ToggleRow]'s switch at the end. The
+ * line is the switch to a reader, on or off, and a tap anywhere on it flips it; the menu stays
+ * open, since what it switches is shown in the switch and not by the menu going away.
+ */
+@Composable
+fun BerthMenuToggle(text: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val c = Berth.colors
+    DropdownMenuItem(
+        modifier = Modifier.semantics {
+            role = Role.Switch
+            toggleableState = ToggleableState(checked)
+        },
+        text = { Text(text, style = BerthType.body, color = c.text1) },
+        onClick = { onCheckedChange(!checked) },
+        trailingIcon = { SilentSwitch(checked, onCheckedChange) },
     )
 }
 
