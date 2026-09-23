@@ -32,7 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.AppViewModel.Companion.toTunnel
@@ -61,6 +64,8 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.tunnels.PendingTunnelRow
 import app.berth.android.ui.tunnels.TunnelsPanelContent
+import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.AuthMethod
@@ -114,6 +119,8 @@ fun HostEditorScreen(
     var user by remember { mutableStateOf(fromLink?.user ?: "") }
     var auth by remember { mutableStateOf<AuthMethod>(AuthMethod.AskEachTime) }
     var password by remember { mutableStateOf("") }
+    var agentForwarding by remember { mutableStateOf(false) }
+    var agentSilent by remember { mutableStateOf(false) }
     var keepalive by remember { mutableStateOf(15) }
     var reconnectMinutes by remember { mutableStateOf(15) }
     var tmux by remember { mutableStateOf(TmuxMode.OFF) }
@@ -136,7 +143,9 @@ fun HostEditorScreen(
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
-            remoteClipboard = vm.security.settings.filterNotNull().first().remoteClipboardPolicy(hostId)
+            val security = vm.security.settings.filterNotNull().first()
+            remoteClipboard = security.remoteClipboardPolicy(hostId)
+            agentSilent = security.signsAgentSilently(hostId)
             altKey = vm.hardwareKeyboard.value.altKeyOverride(hostId)
             vm.host(hostId)?.let { h ->
                 original = h
@@ -148,6 +157,7 @@ fun HostEditorScreen(
                 port = h.port.toString()
                 user = h.user
                 auth = h.auth
+                agentForwarding = h.agentForwarding
                 keepalive = h.persistence.keepaliveSeconds
                 reconnectMinutes = h.persistence.reconnectMinutes
                 tmux = h.persistence.tmux
@@ -188,8 +198,8 @@ fun HostEditorScreen(
     fun save() {
         val base = original
         val finalName = name.ifBlank { address }
-        // The saved host is the base, so what this screen has no field for (agent forwarding, which
-        // waits on the agent protocol) comes through unchanged rather than reset to the default.
+        // The saved host is the base, so what this screen has no field for (when it was made and last
+        // connected) comes through unchanged rather than reset to the default.
         val host = (base ?: Host(id = UUID.randomUUID().toString(), name = finalName, color = color, monogram = "", address = "", user = "", createdAt = System.currentTimeMillis())).copy(
             name = finalName,
             color = color,
@@ -198,6 +208,7 @@ fun HostEditorScreen(
             port = portValue ?: 22,
             user = user.trim(),
             auth = auth,
+            agentForwarding = agentForwarding,
             jumpHostIds = jumpHostIds,
             persistence = (base?.persistence ?: app.berth.domain.model.PersistencePolicy()).copy(
                 keepaliveSeconds = keepalive,
@@ -222,6 +233,9 @@ fun HostEditorScreen(
             vm.security.setHostRemoteClipboard(base.id, remoteClipboard)
             vm.updateHardwareKeyboard { it.withHostAltKey(base.id, altKey) }
         }
+        // Silent signing is kept only while forwarding is on, so switching forwarding back on later asks again.
+        val silent = agentForwarding && agentSilent
+        if (base != null || silent) vm.security.setHostAgentSilent(host.id, silent)
         onDone()
     }
 
@@ -346,6 +360,19 @@ fun HostEditorScreen(
                 if (identities.isEmpty()) {
                     PanelNote("No keys yet. Create one under Keys in the rail.")
                 }
+                ToggleRow("Agent forwarding", agentForwarding, { agentForwarding = it }, caption = "Programs on the host may ask to sign")
+                if (agentForwarding) {
+                    CyclePicker("Signatures", listOf(false, true), agentSilent, { if (it) "Always allow" else "Ask each time" }) { agentSilent = it }
+                    val key = identities.firstOrNull { it.id == (auth as? AuthMethod.Key)?.identityId }
+                    val keyModel = remember(key?.id, key?.protection) { key?.let { vm.keyAuthModel(it) } }
+                    val note = agentForwardingNote(name.ifBlank { address }, key?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly, keyModel)
+                    PanelNote(
+                        buildAnnotatedString {
+                            note.lead?.let { withStyle(SpanStyle(color = c.text1)) { append(it) }; append(" ") }
+                            append(note.rest)
+                        },
+                    )
+                }
             }
 
             Panel(label = "Persistence") {
@@ -444,6 +471,41 @@ fun <T> CyclePicker(title: String, options: List<T>, value: T, label: (T) -> Str
         }
     }
 }
+
+/**
+ * The note under Agent forwarding. [lead], when there is one, is the consequence the choice has,
+ * set first in the stronger tone; [rest] follows in the note's own.
+ */
+data class AgentForwardingNote(val lead: String?, val rest: String) {
+    val text: String get() = listOfNotNull(lead, rest).joinToString(" ")
+}
+
+/**
+ * What forwarding [hostName]'s agent means, under the switch: which key it offers, that only
+ * signatures leave, and who can ask. The agent holds only the key that logged in, so a host that
+ * logs in with a password has nothing to offer, and a Tunnels only host opens no shell to forward to.
+ * Always allow leads with who can then sign; a Keystore key that needs the user ([keyModel], as
+ * the key unlocker reads it) still takes its system prompt, for each signature or once its unlock
+ * window has closed, and the note says so.
+ */
+fun agentForwardingNote(hostName: String, keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean, keyModel: KeyAuthModel? = null): AgentForwardingNote {
+    val offered = "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone."
+    return when {
+        tunnelsOnly -> AgentForwardingNote(null, "With Tunnels only on, Connect opens no shell, so no agent is forwarded.")
+        !keyAuth -> AgentForwardingNote(null, "Only the key that signs in to this host is offered, and this host signs in without one, so the agent has nothing to offer.")
+        silent -> AgentForwardingNote(
+            "Anything on ${hostName.ifBlank { "this host" }}, root included, can sign as you without asking while a tab is connected.",
+            when (keyModel) {
+                KeyAuthModel.PER_USE -> "$offered The key still asks for your fingerprint, face or screen lock for each signature."
+                KeyAuthModel.TIMED_WINDOW -> "$offered The key signs silently while its ${HardwareKeys.AUTH_WINDOW_SECONDS} s unlock window is open, then asks for your fingerprint, face or screen lock again."
+                KeyAuthModel.NONE, null -> offered
+            },
+        )
+        else -> AgentForwardingNote(null, "$offered Each request asks you first, naming the host and what it is for.")
+    }
+}
+
+private fun keyPhrase(keyName: String?): String = keyName?.let { "the key \u201c$it\u201d" } ?: "the key that signs in"
 
 fun TmuxMode.label(): String = when (this) {
     TmuxMode.OFF -> "Off"

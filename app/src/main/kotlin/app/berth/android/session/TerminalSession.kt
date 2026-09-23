@@ -15,10 +15,14 @@ import app.berth.domain.model.TunnelType
 import app.berth.sftp.SftpClient
 import app.berth.sftp.SftpError
 import app.berth.sftp.SftpFileSystem
+import app.berth.ssh.AgentApprover
+import app.berth.ssh.AgentSignPurpose
+import app.berth.ssh.AgentSignRequest
 import app.berth.ssh.ForwardHandle
 import app.berth.ssh.ForwardTraffic
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.ShellChannel
+import app.berth.ssh.SshAgent
 import app.berth.ssh.SshAuth
 import app.berth.ssh.SshConnection
 import app.berth.ssh.SshConnectionState
@@ -107,6 +111,16 @@ interface SessionEnvironment {
 
     /** A program on [host] asked to write the phone's clipboard (OSC 52); the app decides whether it may. */
     fun onClipboardText(host: Host, text: String)
+
+    /**
+     * Whether the agent forwarded to [host] signs without asking (the host editor's Signatures,
+     * Always allow); read at each request, so a change reaches a tab already connected.
+     * A stand-in asks.
+     */
+    suspend fun agentSignsSilently(host: Host): Boolean = false
+
+    /** A program on [host] asked the agent forwarded to it for [request]; the user's answer. A stand-in refuses. */
+    suspend fun approveAgentRequest(host: Host, request: AgentSignRequest): AgentAnswer = AgentAnswer.DENY
     fun now(): Long = System.currentTimeMillis()
 
     /** The tunnels configured for a host, as they change. */
@@ -720,11 +734,17 @@ class TerminalSession(
             if (h.persistence.tmux == TmuxMode.OFF && !h.startupCommand.isNullOrBlank()) append(h.startupCommand)
         }.ifBlank { null }
 
-        val sh = conn.openShell(cols, rows, h.terminalType, h.environment + mapOf("COLORTERM" to "truecolor", "TERM_PROGRAM" to "berth"), command)
+        // The agent lives as long as this connection; a Tunnels tab has returned above and has none.
+        val agent = if (h.agentForwarding) SshAgent(conn.agentKey, agentApprover(h)) else null
+        val sh = conn.openShell(cols, rows, h.terminalType, h.environment + mapOf("COLORTERM" to "truecolor", "TERM_PROGRAM" to "berth"), command, agent = agent)
         shell = sh
         val firstShell = !everLive
         everLive = true
         if (isReconnect) marker("reconnected")
+        if (agent != null) {
+            BerthLog.i(LOG_TAG, "[${h.name}] agent forwarding ${if (sh.agentForwarded) "on" else "refused by the server"}; the agent holds ${agent.key?.keyType ?: "no key"}")
+            if (!sh.agentForwarded) marker("agent forwarding refused by the server")
+        }
         // A fresh shell is activity: an idle span counts from here, not from before the connect.
         noteActivity()
         transition(SessionState.LIVE, if (h.persistence.tmux != TmuxMode.OFF) PersistenceLayer.TMUX else PersistenceLayer.IN_APP)
@@ -750,6 +770,41 @@ class TerminalSession(
         // EOF: either the remote shell exited or the transport died underneath it.
         val disconnect = dropped.value
         return if (disconnect != null || !conn.isConnected) Outcome.Dropped(disconnect?.message ?: "connection lost", disconnect) else Outcome.Ended
+    }
+
+    /**
+     * Decides the sign requests of one connection's agent, one at a time, so a second request waits
+     * for the answer to the first and Allow for this session answers it too; that answer lasts as
+     * long as the connection, and a reconnect asks again. While the question is up the tab is lit
+     * off stage (the ring, and the shade while the app is away), and once answered it goes dark, or
+     * back to what lit it before (a bell the user has not seen yet). A request the remote gives up
+     * on, its channel closing under it, is withdrawn the same way, sheet and all.
+     */
+    private fun agentApprover(h: Host): AgentApprover {
+        val turn = Mutex()
+        var allowedForSession = false
+        return AgentApprover { request ->
+            turn.withLock {
+                if (allowedForSession || env.agentSignsSilently(h)) return@withLock true
+                val what = when (request.purpose) {
+                    is AgentSignPurpose.Login -> "a login"
+                    is AgentSignPurpose.SshSig -> "an SSHSIG"
+                    is AgentSignPurpose.Unknown -> "unread data"
+                }
+                val earlier = attentionOver(AGENT_REQUEST_REASON)
+                val answer = try {
+                    env.approveAgentRequest(h, request)
+                } catch (e: CancellationException) {
+                    BerthLog.i(LOG_TAG, "[${h.name}] agent sign request for $what: withdrawn")
+                    throw e
+                } finally {
+                    settle(AGENT_REQUEST_REASON, earlier)
+                }
+                BerthLog.i(LOG_TAG, "[${h.name}] agent sign request for $what: ${answer.name.lowercase()}")
+                if (answer == AgentAnswer.ALLOW_FOR_SESSION) allowedForSession = true
+                answer != AgentAnswer.DENY
+            }
+        }
     }
 
     /**
@@ -1088,6 +1143,33 @@ class TerminalSession(
         }
     }
 
+    /** What a tab was lit for: the reason, when, and the problem behind it, as [attentionOver] hands it to [settle] to put back. */
+    private class Lit(val reason: String?, val at: Long?, val problem: SessionProblem?)
+
+    /**
+     * Raises attention for [reason] as [attention] does, over whatever the tab was already lit for,
+     * and hands that back, read in the same step, so [settle] can put it back once [reason] is over.
+     */
+    private fun attentionOver(reason: String): Lit? = synchronized(attentionLock) {
+        val before = _record.value.takeIf { it.needsAttention }?.let { Lit(it.attentionReason, attentionAt, attentionProblem) }
+        attention(reason)
+        before
+    }
+
+    /**
+     * Takes down the attention [reason] raised once what it was about is over, unless something else
+     * has lit the tab since or the user has seen it. What the tab was lit for before [reason]
+     * ([earlier]) comes back as it was, since nobody has seen it yet.
+     */
+    private fun settle(reason: String, earlier: Lit? = null) {
+        synchronized(attentionLock) {
+            if (!_record.value.needsAttention || _record.value.attentionReason != reason) return
+            attentionAt = earlier?.at
+            attentionProblem = earlier?.problem
+            patch { copy(needsAttention = earlier != null, attentionReason = earlier?.reason) }
+        }
+    }
+
     private fun transition(state: SessionState, layer: PersistenceLayer) {
         val before = _record.value.state
         patch { copy(state = state, layer = layer) }
@@ -1188,6 +1270,9 @@ class TerminalSession(
          * arriving meanwhile counts as an answer, so a link busy with it is not mistaken.
          */
         const val PROBE_TIMEOUT_MS = 2_000L
+
+        /** What the ring stands for while a program on the host waits for the user to answer its sign request. */
+        const val AGENT_REQUEST_REASON = "Signature request"
 
         /** What the `connection lost` marker says after a probe found nobody: the network moved, and the socket did not follow. */
         const val PROBE_LOST_REASON = "the network changed and the server did not answer"

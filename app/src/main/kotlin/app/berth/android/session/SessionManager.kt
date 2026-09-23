@@ -35,6 +35,7 @@ import app.berth.domain.repository.SettingsRepository
 import app.berth.domain.repository.SnippetRepository
 import app.berth.domain.repository.TunnelRepository
 import app.berth.domain.repository.WorkspaceRepository
+import app.berth.ssh.AgentSignRequest
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -342,6 +343,13 @@ class SessionManager @Inject constructor(
         override val networkChanges: Flow<Unit> = this@SessionManager.networkChanges
         override val idleDetachAfter: Flow<Long?> = this@SessionManager.idleDetachAfter
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
+        override suspend fun agentSignsSilently(host: Host): Boolean = settings.securitySettings.first().signsAgentSilently(host.id)
+
+        // Like the key prompts, never over the lock screen: the request waits, the tab lit, until the lock lifts.
+        override suspend fun approveAgentRequest(host: Host, request: AgentSignRequest): AgentAnswer {
+            lock.awaitUnlocked()
+            return prompts.agentRequest(host, request)
+        }
         override fun tunnelsFor(hostId: String): Flow<List<Tunnel>> = tunnelRepository.observeForHost(hostId)
         override suspend fun connectCommands(host: Host, workspaceId: String): List<String> =
             snippetRepository.observeAll().first()

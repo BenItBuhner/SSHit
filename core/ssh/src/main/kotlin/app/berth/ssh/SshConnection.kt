@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import net.schmizz.keepalive.KeepAliveProvider
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.Service
 import net.schmizz.sshj.common.DisconnectReason
 import net.schmizz.sshj.connection.ConnectionException
 import net.schmizz.sshj.connection.channel.direct.Session
@@ -43,8 +44,10 @@ sealed interface SshAuth {
     /**
      * A key. With a [signer] the userauth signature comes from it rather than from a JCA
      * `Signature` sshj builds itself: a Keystore key that a prompt has just unlocked for one use.
+     * [agentKey] is the same key as a forwarded agent would hold it, set for a host that forwards
+     * one; the agent holds it only when this is the method that logged in ([SshConnection.agentKey]).
      */
-    class PublicKey(val keyProvider: KeyProvider, val signer: SshSigner? = null) : SshAuth
+    class PublicKey(val keyProvider: KeyProvider, val signer: SshSigner? = null, val agentKey: AgentKey? = null) : SshAuth
 
     /** [respond] receives each server prompt and whether the answer should echo; null cancels. */
     class KeyboardInteractive(val respond: (instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
@@ -94,10 +97,14 @@ sealed interface SshConnectionState {
     data class Disconnected(val reason: String, val error: Throwable?) : SshConnectionState
 }
 
-/** An interactive shell on a PTY. Reading is a cold flow; writing and resizing are immediate. */
+/**
+ * An interactive shell on a PTY. Reading is a cold flow; writing and resizing are immediate.
+ * [agentForwarded] says whether the server agreed to forward an agent into it.
+ */
 class ShellChannel internal constructor(
     private val session: Session,
     private val shell: Session.Shell,
+    val agentForwarded: Boolean = false,
 ) : Closeable {
     private val output: OutputStream = shell.outputStream
     private val closed = AtomicBoolean(false)
@@ -206,6 +213,22 @@ class SshConnection(
     var serverHostKeyType: String? = null
         private set
 
+    /** The target's auth method that logged in; null before the login and for a login that failed. */
+    @Volatile var authenticatedWith: SshAuth? = null
+        private set
+
+    /**
+     * The key a forwarded agent on this connection may hold: the one that logged in to the target,
+     * when a key did and it was offered with an [SshAuth.PublicKey.agentKey]. A login by password
+     * or keyboard-interactive, or one where the key was refused and a password let the user in,
+     * leaves the agent with nothing to offer.
+     */
+    val agentKey: AgentKey? get() = (authenticatedWith as? SshAuth.PublicKey)?.agentKey
+
+    /** The agent the connection's shell forwards, if it forwards one; closed with the connection. */
+    @Volatile private var agent: SshAgent? = null
+    private var agentOpener: AgentChannelOpener? = null
+
     init {
         SshSecurity.ensureProviders()
     }
@@ -233,7 +256,7 @@ class SshConnection(
             val target = begin(newClient(endpoint, hostKeyPolicy, isTarget = true))
             connectClient(target, endpoint, previous)
             _state.value = SshConnectionState.Authenticating
-            authenticate(target, endpoint)
+            authenticatedWith = authenticate(target, endpoint)
             target.transport.setDisconnectListener { reason, message ->
                 val text = if (message.isNullOrBlank()) reason.toString() else message
                 val error = SshError.Disconnected(text)
@@ -324,10 +347,24 @@ class SshConnection(
         return preferred ?: all.first()
     }
 
-    private fun authenticate(c: SSHClient, ep: SshEndpoint) {
-        val methods = ep.auth.map { it.toSshj() }
-        if (methods.isEmpty()) throw SshError.AuthenticationFailed(ep.user, null)
-        c.auth(ep.user, methods)
+    /**
+     * Tries [ep]'s methods in order and returns the one that logged in. The loop is sshj's own
+     * (`SSHClient.auth`) with the method kept, so the agent knows whether a key or a password
+     * got the user in; the failure it throws is the one sshj would.
+     */
+    private fun authenticate(c: SSHClient, ep: SshEndpoint): SshAuth {
+        if (ep.auth.isEmpty()) throw SshError.AuthenticationFailed(ep.user, null)
+        val failures = ArrayDeque<UserAuthException>()
+        for (auth in ep.auth) {
+            val method = auth.toSshj()
+            method.setLoggerFactory(c.transport.config.loggerFactory)
+            try {
+                if (c.userAuth.authenticate(ep.user, c.connection as Service, method, c.transport.timeoutMs)) return auth
+            } catch (e: UserAuthException) {
+                failures.addFirst(e)
+            }
+        }
+        throw UserAuthException("Exhausted available authentication methods", failures.firstOrNull())
     }
 
     private fun SshAuth.toSshj(): AuthMethod = when (this) {
@@ -352,22 +389,44 @@ class SshConnection(
         })
     }
 
-    /** Opens an interactive shell with a PTY of [cols] x [rows]. */
+    /**
+     * Opens an interactive shell with a PTY of [cols] x [rows]. With an [agent], the shell asks
+     * for agent forwarding first, as `ssh -A` does, and the agent answers every agent channel the
+     * server opens on this connection from then on; the connection's [close] closes it. Whether
+     * the server agreed is [ShellChannel.agentForwarded]; a refusal still opens the shell.
+     */
     suspend fun openShell(
         cols: Int,
         rows: Int,
         terminalType: String = "xterm-256color",
         environment: Map<String, String> = emptyMap(),
         command: String? = null,
+        agent: SshAgent? = null,
     ): ShellChannel = withContext(Dispatchers.IO) {
         val c = client ?: throw SshError.Disconnected("not connected")
-        val session = c.startSession()
+        val session = if (agent == null) c.startSession() else AgentSessionChannel(c.connection, c.remoteCharset).also { it.open() }
+        val forwarded = agent != null && forwardAgent(c, session as AgentSessionChannel, agent)
         for ((k, v) in environment) runCatching { session.setEnvVar(k, v) }
         session.allocatePTY(terminalType, cols, rows, 0, 0, emptyMap())
         val shell = session.startShell()
-        val channel = ShellChannel(session, shell)
+        val channel = ShellChannel(session, shell, forwarded)
         if (!command.isNullOrBlank()) channel.write(command.trimEnd('\n', '\r') + "\n")
         channel
+    }
+
+    /**
+     * Makes [agent] the one this connection's agent channels reach, replacing and closing an
+     * earlier one, then asks the server to forward it into [session]. The opener goes on before
+     * the request, so a channel the server opens the moment it agrees has somewhere to land.
+     */
+    private fun forwardAgent(c: SSHClient, session: AgentSessionChannel, agent: SshAgent): Boolean {
+        val previous = this.agent
+        this.agent = agent
+        if (previous !== agent) previous?.close()
+        if (agentOpener == null) {
+            agentOpener = AgentChannelOpener(c.connection) { this.agent }.also { c.connection.attach(it) }
+        }
+        return session.requestAgentForwarding(c.connection.timeoutMs.toLong())
     }
 
     /**
@@ -498,6 +557,8 @@ class SshConnection(
     }
 
     private fun closeQuietly() {
+        agent?.close()
+        agent = null
         client?.let { c ->
             runCatching { c.transport.setDisconnectListener(null) }
             runCatching { c.disconnect() }

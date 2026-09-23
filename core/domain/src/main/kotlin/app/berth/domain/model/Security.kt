@@ -45,6 +45,12 @@ data class SecuritySettings(
     val remoteClipboardByHost: Map<String, RemoteClipboardPolicy> = emptyMap(),
     /** Hosts that have already had the one-time notice about a blocked clipboard write. */
     val remoteClipboardNoticed: Set<String> = emptySet(),
+    /**
+     * Hosts whose forwarded agent signs without asking each time. Every other host with agent
+     * forwarding on asks the user before each signature; a key under biometric protection still
+     * takes its prompt either way.
+     */
+    val agentSignsSilently: Set<String> = emptySet(),
 ) {
     fun remoteClipboardPolicy(hostId: String): RemoteClipboardPolicy = remoteClipboardByHost[hostId] ?: RemoteClipboardPolicy.INHERIT
 
@@ -59,9 +65,16 @@ data class SecuritySettings(
         remoteClipboardByHost = if (policy == RemoteClipboardPolicy.INHERIT) remoteClipboardByHost - hostId else remoteClipboardByHost + (hostId to policy),
     )
 
-    /** The document without [hostId]'s override and notice, for a host that was deleted. */
+    fun signsAgentSilently(hostId: String): Boolean = hostId in agentSignsSilently
+
+    fun withHostAgentSilent(hostId: String, silent: Boolean): SecuritySettings = copy(
+        agentSignsSilently = if (silent) agentSignsSilently + hostId else agentSignsSilently - hostId,
+    )
+
+    /** The document without anything kept for [hostId], for a host that was deleted. */
     fun withoutHost(hostId: String): SecuritySettings = copy(
         remoteClipboardByHost = remoteClipboardByHost - hostId,
         remoteClipboardNoticed = remoteClipboardNoticed - hostId,
+        agentSignsSilently = agentSignsSilently - hostId,
     )
 }

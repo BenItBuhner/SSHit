@@ -405,7 +405,7 @@ class TestGraph(
     val inbox = IntentInbox()
     val viewModel: AppViewModel by lazy {
         val bundles = BerthBundles(hosts, identities, workspaces, snippets, tunnels, knownHosts, settings, secrets)
-        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, inbox, reports, commandHistory, bundles)
+        AppViewModel(sessions, hosts, identities, knownHosts, settings, secrets, hardwareKeys, prompts, tunnels, snippets, workspaces, files, security, inbox, reports, commandHistory, bundles, keystore)
     }
 
     private companion object {
