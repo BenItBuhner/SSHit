@@ -147,6 +147,46 @@ class RoomRepositoriesTest {
     }
 
     @Test
+    fun `a software key's file and protection are replaced together or not at all`() = runTest {
+        var keystoreDown = false
+        val flaky = object : SecretCrypto {
+            override fun encrypt(plain: ByteArray): ByteArray {
+                check(!keystoreDown) { "Keystore unavailable" }
+                return crypto.encrypt(plain)
+            }
+            override fun decrypt(blob: ByteArray) = crypto.decrypt(blob)
+        }
+        val repo = RoomIdentityRepository(db, EncryptedSecretStore(db, flaky), HardwareKeys(RuntimeEnvironment.getApplication()))
+        val locked = Identity(
+            id = "id-1", name = "laptop", algorithm = KeyAlgorithm.ED25519, storage = KeyStorage.SOFTWARE_ENCRYPTED,
+            protection = KeyProtection.PASSPHRASE, publicKeyOpenSsh = "ssh-ed25519 AAAA laptop", fingerprintSha256 = "SHA256:abc", createdAt = 1,
+        )
+        val lockedPem = "locked".toByteArray()
+        val openPem = "open".toByteArray()
+        repo.insert(locked, lockedPem)
+
+        repo.replacePrivateKey(locked.copy(protection = KeyProtection.NONE), openPem)
+        assertEquals(KeyProtection.NONE, assertNotNull(repo.get("id-1")).protection)
+        assertContentEquals(openPem, repo.privateKey("id-1"))
+
+        // The record is written first; the key file failing after it takes the record back with it.
+        keystoreDown = true
+        assertTrue(runCatching { repo.replacePrivateKey(locked, lockedPem) }.isFailure)
+        keystoreDown = false
+        assertEquals(KeyProtection.NONE, assertNotNull(repo.get("id-1")).protection)
+        assertContentEquals(openPem, repo.privateKey("id-1"))
+
+        val hardware = locked.copy(id = "id-2", storage = KeyStorage.ANDROID_KEYSTORE, protection = KeyProtection.BIOMETRIC, keystoreAlias = "berth.identity.id-2")
+        repo.insert(hardware, null)
+        assertTrue(runCatching { repo.replacePrivateKey(hardware.copy(protection = KeyProtection.NONE), openPem) }.isFailure)
+        assertEquals(KeyProtection.BIOMETRIC, assertNotNull(repo.get("id-2")).protection)
+        assertNull(repo.privateKey("id-2"))
+
+        assertTrue(runCatching { repo.replacePrivateKey(locked.copy(id = "gone"), openPem) }.isFailure)
+        assertNull(repo.privateKey("gone"))
+    }
+
+    @Test
     fun `known hosts are looked up by endpoint and can be pinned`() = runTest {
         val repo = RoomKnownHostRepository(db)
         repo.upsert(KnownHostKey("k1", "example.com", 22, "ssh-ed25519", "AAAA1", "SHA256:1", 1, 1))

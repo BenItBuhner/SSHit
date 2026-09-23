@@ -145,6 +145,10 @@ class InMemoryIdentities(private val hosts: InMemoryHosts) : IdentityRepository 
     override suspend fun update(identity: Identity) = items.update { list -> list.map { if (it.id == identity.id) identity else it } }
     override suspend fun delete(id: String) { items.update { list -> list.filter { it.id != id } }; keys.remove(id) }
     override suspend fun privateKey(id: String): ByteArray? = keys[id]
+    override suspend fun replacePrivateKey(identity: Identity, privateKeyOpenSsh: ByteArray) {
+        keys[identity.id] = privateKeyOpenSsh
+        update(identity)
+    }
     override suspend fun hostsUsing(id: String): List<Host> =
         hosts.items.value.filter { (it.auth as? app.berth.domain.model.AuthMethod.Key)?.identityId == id }
 }

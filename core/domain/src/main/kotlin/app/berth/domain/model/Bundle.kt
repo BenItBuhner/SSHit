@@ -42,6 +42,12 @@ data class BerthBundle(
     /** Identities that were hardware-backed where the bundle was made: they come without a key. */
     val hardwareIdentities: List<Identity> get() = identities.filter { it.identity.isHardwareBacked }.map { it.identity }
 
+    /**
+     * Software identities the bundle names without their key: a hosts-only export's (Hosts ›
+     * Export), which carries the public record of each key a host logs in with and no private half.
+     */
+    val leftBehindIdentities: List<Identity> get() = identities.filter { !it.identity.isHardwareBacked && it.privateKey == null }.map { it.identity }
+
     val isEmpty: Boolean
         get() = hosts.isEmpty() && identities.isEmpty() && workspaces.isEmpty() && snippets.isEmpty() && tunnels.isEmpty() &&
             terminalThemes.isEmpty() && deck == null && knownHosts.isEmpty() && interfaceTheme == null
@@ -167,6 +173,12 @@ data class BundleImportPlan(
      * bundle's being this phone's already or none this phone will have.
      */
     val defaultTerminalTheme: String? = null,
+    /**
+     * Bundled identity id → the name of the key this phone holds that it names, by id or by
+     * fingerprint: the bundle's hosts on it are pointed at that key, and the bundle's copy, if it
+     * carries one, is not stored twice.
+     */
+    val identitiesHere: Map<String, String> = emptyMap(),
 ) {
     /** Bundled keys for endpoints this phone holds nothing for: written, no decision to make. */
     val knownHostsNew: Int get() = knownHosts.count { it.standing == KnownHostStanding.NEW }
@@ -207,9 +219,10 @@ data class BundledKnownHost(val key: KnownHostKey, val standing: KnownHostStandi
 }
 
 /**
- * What an import did (spec C20, Data): the counts, and the identities that were hardware-backed
- * on the phone that made the bundle, with the hosts that used them, since those keys have to be
- * made again here and the hosts ask each time until they are.
+ * What an import did (spec C20, Data): the counts, and the identities the bundle named without a
+ * key that this phone does not hold, hardware-backed on the phone that made the bundle or left
+ * there by a hosts-only export, with the hosts that used them, since those keys have to be made
+ * or brought here and the hosts ask each time until they are.
  */
 data class BundleImportReport(
     val hosts: Int,
@@ -260,8 +273,12 @@ data class BundleImportReport(
     }
 }
 
-/** A hardware-backed identity the bundle could not carry, and the hosts that used it. */
-data class RecreateNotice(val identityName: String, val algorithm: KeyAlgorithm, val hostNames: List<String>)
+/**
+ * An identity the bundle named without its key and this phone does not hold, and the hosts that
+ * used it: [hardware] when it was hardware-backed where the bundle was made and so never leaves
+ * that phone, else a software key a hosts-only export left there.
+ */
+data class RecreateNotice(val identityName: String, val algorithm: KeyAlgorithm, val hostNames: List<String>, val hardware: Boolean = true)
 
 /** Standard base64 with padding, the JDK's (API 26 and later on Android). */
 object Base64Codec {

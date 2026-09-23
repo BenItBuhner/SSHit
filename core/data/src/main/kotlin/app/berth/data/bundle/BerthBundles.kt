@@ -9,6 +9,7 @@ import app.berth.domain.model.BundleImportReport
 import app.berth.domain.model.BundledIdentity
 import app.berth.domain.model.BundledKnownHost
 import app.berth.domain.model.BundledSecret
+import app.berth.domain.model.Host
 import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
@@ -39,7 +40,9 @@ import kotlinx.coroutines.flow.first
  *   id, is kept and the bundle's hosts are pointed at it; a key new here is stored with the
  *   public half and fingerprint read from its private bytes, never the ones the document claims;
  *   and a hardware-backed identity, which comes without a key by construction, is not created,
- *   the hosts that used it ask each time and the report names both so the user knows what to make again.
+ *   the hosts that used it ask each time and the report names both so the user knows what to make
+ *   again. A software key a hosts-only export ([collectHosts]) named without its private half
+ *   takes the same path: matched here if this phone holds it, else named with its hosts.
  * - Known hosts: a bundled key for an endpoint this phone already holds a key for is not taken as
  *   carried, whether it differs from the key of its type, from a pin, or is of a type this phone
  *   holds none of for that endpoint ([standings]); the key this phone holds is the check between
@@ -78,8 +81,6 @@ class BerthBundles(
         val bundledIdentities = identities.observeAll().first().map { identity ->
             BundledIdentity.of(identity, if (identity.isHardwareBacked) null else identities.privateKey(identity.id))
         }
-        val passwords = hostList.mapNotNull { (it.auth as? AuthMethod.Password)?.secretId }.distinct()
-            .mapNotNull { id -> secrets.get(id)?.let { BundledSecret.of(id, it) } }
         return BerthBundle(
             exportedAt = exportedAt,
             appVersion = appVersion,
@@ -93,13 +94,46 @@ class BerthBundles(
             interfaceTheme = settings.interfaceTheme.first(),
             deck = settings.deckLayout.first(),
             knownHosts = knownHosts.observeAll().first(),
-            passwords = passwords,
+            passwords = passwordsOf(hostList),
         )
     }
 
+    /**
+     * The hosts alone (spec C9, Hosts › Export): every host, the passwords it logs in with and the
+     * tunnels defined on it, and each key a host logs in with as its public record only, no
+     * private half whatever its kind. The phone that opens it points a host at the same key where
+     * it holds one ([plan]'s [BundleImportPlan.identitiesHere]); elsewhere the host asks each time
+     * and the report names the key. A tunnel bound to every interface comes in switched off, as
+     * from any bundle. Nothing else goes in, so the import leaves the rest of that phone as it is.
+     */
+    suspend fun collectHosts(exportedAt: Long, appVersion: String = ""): BerthBundle {
+        val hostList = hosts.observeAll().first()
+        val hostIds = hostList.map { it.id }.toSet()
+        val used = hostList.mapNotNull { (it.auth as? AuthMethod.Key)?.identityId }.toSet()
+        return BerthBundle(
+            exportedAt = exportedAt,
+            appVersion = appVersion,
+            hosts = hostList,
+            identities = identities.observeAll().first().filter { it.id in used }.map { BundledIdentity.of(it, null) },
+            tunnels = tunnels.observeAll().first().filter { it.hostId in hostIds },
+            passwords = passwordsOf(hostList),
+        )
+    }
+
+    private suspend fun passwordsOf(hostList: List<Host>): List<BundledSecret> =
+        hostList.mapNotNull { (it.auth as? AuthMethod.Password)?.secretId }.distinct()
+            .mapNotNull { id -> secrets.get(id)?.let { BundledSecret.of(id, it) } }
+
     /** The bundle file: [collect] sealed under [passphrase]. The passphrase is the caller's to clear. */
-    suspend fun export(passphrase: CharArray, exportedAt: Long, appVersion: String = "", cost: BundleKdf = BundleKdf.DEFAULT): ByteArray {
-        val document = collect(exportedAt, appVersion).toJson().toByteArray(Charsets.UTF_8)
+    suspend fun export(passphrase: CharArray, exportedAt: Long, appVersion: String = "", cost: BundleKdf = BundleKdf.DEFAULT): ByteArray =
+        seal(collect(exportedAt, appVersion), passphrase, cost)
+
+    /** The hosts-only bundle file: [collectHosts] sealed under [passphrase], as [export] seals everything. */
+    suspend fun exportHosts(passphrase: CharArray, exportedAt: Long, appVersion: String = "", cost: BundleKdf = BundleKdf.DEFAULT): ByteArray =
+        seal(collectHosts(exportedAt, appVersion), passphrase, cost)
+
+    private fun seal(bundle: BerthBundle, passphrase: CharArray, cost: BundleKdf): ByteArray {
+        val document = bundle.toJson().toByteArray(Charsets.UTF_8)
         try {
             return codec.seal(document, passphrase, cost)
         } finally {
@@ -126,14 +160,26 @@ class BerthBundles(
      * the write.
      */
     suspend fun plan(bundle: BerthBundle): BundleImportPlan {
-        // Read for the refusal alone: a key Berth cannot read fails the plan, so the sheet never offers the import.
-        readIdentities(bundle)
+        // A key Berth cannot read fails the plan here, so the sheet never offers the import.
+        val read = readIdentities(bundle)
+        val here = localIdentities()
         return BundleImportPlan(
             knownHosts = standings(bundle.knownHosts),
             tunnelsOnEveryInterface = bundle.tunnels.filter { it.exposed && it.enabled },
             defaultTerminalTheme = newDefaultTerminalTheme(bundle)?.name,
+            identitiesHere = read.mapNotNull { (identity) -> here.match(identity)?.let { identity.id to it.name } }.toMap(),
         )
     }
+
+    /** This phone's keys, looked up the way the import names a bundled key here: by id, else by the fingerprint of its public half. */
+    private class LocalIdentities(all: List<Identity>) {
+        private val byId = all.associateBy { it.id }
+        private val byFingerprint = all.associateBy { it.fingerprintSha256 }
+
+        fun match(identity: Identity): Identity? = byId[identity.id] ?: byFingerprint[identity.fingerprintSha256]
+    }
+
+    private suspend fun localIdentities() = LocalIdentities(identities.observeAll().first())
 
     /**
      * Each bundled key with where it stands for the import against the keys this phone holds for
@@ -187,17 +233,15 @@ class BerthBundles(
         workspaces.upsertAll(bundle.workspaces)
 
         // Bundled identity id → the id that names the same key here.
-        val local = identities.observeAll().first()
-        val byId = local.associateBy { it.id }
-        val byFingerprint = local.associateBy { it.fingerprintSha256 }
+        val local = localIdentities()
         val mapped = HashMap<String, String>()
         val absent = LinkedHashMap<String, Identity>()
         var identitiesWritten = 0
         for ((identity, key) in read) {
-            val here = byId[identity.id] ?: byFingerprint[identity.fingerprintSha256]
+            val here = local.match(identity)
             when {
                 here != null -> mapped[identity.id] = here.id
-                // Hardware-backed where the bundle was made, or a software key the bundle somehow lacks: nothing to store.
+                // Hardware-backed where the bundle was made, or a software key a hosts-only export left there: nothing to store.
                 identity.isHardwareBacked || key == null -> absent[identity.id] = identity
                 else -> {
                     identities.insert(identity, key)
@@ -280,7 +324,7 @@ class BerthBundles(
             knownHosts = knownHostsWritten,
             deck = options.deck && bundle.deck != null,
             needsRecreation = absent.values.map { identity ->
-                RecreateNotice(identity.name, identity.algorithm, usedAbsent[identity.id].orEmpty())
+                RecreateNotice(identity.name, identity.algorithm, usedAbsent[identity.id].orEmpty(), hardware = identity.isHardwareBacked)
             },
             knownHostsKept = knownHostsKept,
             knownHostsReplaced = knownHostsReplaced,

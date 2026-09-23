@@ -17,6 +17,7 @@ import net.schmizz.sshj.connection.ConnectionException
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.connection.channel.forwarded.RemotePortForwarder
 import net.schmizz.sshj.sftp.SFTPClient
+import net.schmizz.sshj.transport.Transport
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider
@@ -34,6 +35,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Ways to prove who we are, tried in order. Secrets are pulled lazily so prompts can happen late. */
@@ -63,6 +65,8 @@ data class SshEndpoint(
     val connectTimeoutMillis: Int = 15_000,
     /** Preferred address family; null lets the resolver choose. */
     val preferIpv6: Boolean? = null,
+    /** The cipher names offered, most preferred first ([SshCiphers.select]); empty offers every cipher sshj has, the modern ones first. */
+    val ciphers: List<String> = emptyList(),
 )
 
 /**
@@ -77,6 +81,13 @@ sealed class SshError(message: String, cause: Throwable? = null) : Exception(mes
     class AuthenticationFailed(user: String, cause: Throwable?) : SshError("Authentication failed for $user", cause)
     class ConnectFailed(host: String, port: Int, cause: Throwable) : SshError("Couldn't reach $host:$port: ${cause.message ?: cause.javaClass.simpleName}", cause)
     class Disconnected(reason: String) : SshError(reason)
+
+    /**
+     * Key exchange found no cipher both sides speak: the server accepts none of [offered]. Not
+     * something a retry fixes; the host's cipher list (or the server's) has to change.
+     */
+    class NoCommonCipher(host: String, port: Int, val offered: List<String>, cause: Throwable?) :
+        SshError("$host${if (port == 22) "" else ":$port"} accepts none of the ciphers offered: ${offered.joinToString(", ")}", cause)
 
     /**
      * A jump host, not the target, failed: [reason] is what went wrong there, [hop] which hop
@@ -229,6 +240,10 @@ class SshConnection(
     @Volatile private var agent: SshAgent? = null
     private var agentOpener: AgentChannelOpener? = null
 
+    /** The cipher key exchange settled on with the target, client to server (the first of the host's list its server speaks). */
+    @Volatile var negotiatedCipher: String? = null
+        private set
+
     init {
         SshSecurity.ensureProviders()
     }
@@ -288,13 +303,33 @@ class SshConnection(
         is UserAuthException -> SshError.AuthenticationFailed(ep.user, this)
         is TransportException ->
             if (disconnectReason == DisconnectReason.HOST_KEY_NOT_VERIFIABLE) SshError.HostKeyRejected(ep.host)
+            else if (isCipherSettlementFailure()) SshError.NoCommonCipher(ep.host, ep.port, offeredCiphers(ep), this)
             else SshError.ConnectFailed(ep.host, ep.port, this)
-        else -> SshError.ConnectFailed(ep.host, ep.port, this)
+        else ->
+            if (isCipherSettlementFailure()) SshError.NoCommonCipher(ep.host, ep.port, offeredCiphers(ep), this)
+            else SshError.ConnectFailed(ep.host, ep.port, this)
     }
 
+    /** sshj's word for a key exchange with no cipher in common, either direction, anywhere in the chain of causes. */
+    private fun Throwable.isCipherSettlementFailure(): Boolean = generateSequence(this) { it.cause }.take(8).any { e ->
+        val message = e.message.orEmpty()
+        message.contains("settlement of") && message.contains("CipherAlgorithms")
+    }
+
+    private fun offeredCiphers(ep: SshEndpoint): List<String> = SshCiphers.select(DefaultConfig().cipherFactories, ep.ciphers).map { it.name }
+
     private fun newClient(ep: SshEndpoint, policy: HostKeyPolicy, isTarget: Boolean): SSHClient {
-        val config = DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE }
+        val config = DefaultConfig().apply {
+            keepAliveProvider = KeepAliveProvider.KEEP_ALIVE
+            cipherFactories = SshCiphers.select(cipherFactories, ep.ciphers)
+        }
         val c = SSHClient(config)
+        if (isTarget) {
+            c.transport.addAlgorithmsVerifier { negotiated ->
+                negotiatedCipher = negotiated.client2ServerCipherAlgorithm
+                true
+            }
+        }
         c.addHostKeyVerifier(
             PolicyHostKeyVerifier(
                 host = ep.host,
@@ -328,10 +363,12 @@ class SshConnection(
     }
 
     private fun connectClient(c: SSHClient, ep: SshEndpoint, via: SSHClient?) {
-        when {
-            via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
-            ep.preferIpv6 == null -> c.connect(ep.host, ep.port)
-            else -> c.connect(resolve(ep), ep.port)
+        c.connectOrCauseOfDeath {
+            when {
+                via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
+                ep.preferIpv6 == null -> c.connect(ep.host, ep.port)
+                else -> c.connect(resolve(ep), ep.port)
+            }
         }
         if (ep.compression) c.useCompression()
         c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
@@ -577,9 +614,37 @@ class SshConnection(
     }
 }
 
+/**
+ * Runs sshj's [connect] on this client and, when it ends in sshj's bare "Not connected", throws
+ * what the transport died of instead. sshj's reader can take the server's key exchange offer, fail
+ * to settle it (no cipher in common) and die before connect reaches its own check, which then
+ * knows only that the client is down.
+ */
+internal fun SSHClient.connectOrCauseOfDeath(connect: () -> Unit) {
+    try {
+        connect()
+    } catch (e: IllegalStateException) {
+        throw transport.causeOfDeath() ?: e
+    }
+}
+
+/**
+ * The error a dead transport died of. A transport that is up, closed cleanly or never started has
+ * none; one that died answers at once, so the short join only ever expires for one never started.
+ */
+private fun Transport.causeOfDeath(): TransportException? {
+    if (isRunning) return null
+    return try {
+        join(1, TimeUnit.MILLISECONDS)
+        null
+    } catch (e: TransportException) {
+        e.takeIf { it.cause !is TimeoutException }
+    }
+}
+
 /** True for the failures that a reconnect loop should treat as transient. */
 fun Throwable.isTransientSshFailure(): Boolean = when (this) {
-    is SshError.HostKeyRejected, is SshError.AuthenticationFailed -> false
+    is SshError.HostKeyRejected, is SshError.AuthenticationFailed, is SshError.NoCommonCipher -> false
     is SshError.JumpHopFailed -> reason.isTransientSshFailure()
     is SshError.ConnectFailed, is SshError.Disconnected -> true
     is ConnectionException, is TransportException, is IOException -> true

@@ -67,6 +67,7 @@ import app.berth.android.ui.importer.ImportHostsSheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.keys.GenerateKeySheet
 import app.berth.android.ui.keys.NewKeyPrefill
+import app.berth.android.ui.settings.ExportBundleSheet
 import app.berth.android.ui.settings.ImportBundleSheet
 import app.berth.android.ui.stage.ageText
 import app.berth.android.ui.stage.ageTicker
@@ -95,9 +96,11 @@ enum class HostSort(val label: String) {
  * bastion` for a host that jumps, the chain as `bastion › edge`. Long-press offers Edit, Connect in
  * new group (when [onConnectInNewGroup] is given), Connect as tunnel only (a Tunnels tab on the
  * host, whatever its toggle says, when [onTunnels] is given), Files (when [onFiles] is given),
- * Duplicate (a copy, opened in the editor), Share as `ssh://` link and Delete. Overflow holds
- * Sort, Quick connect, the two imports and Known hosts. [picker] mode titles the screen "New tab";
- * back returns to the Stage.
+ * Duplicate (a copy, opened in the editor), Share as `ssh://` link and Delete. The header's `+`
+ * adds a host and its long-press opens Quick connect. Overflow holds Sort, Quick connect, the two
+ * imports, Export hosts (the hosts alone in a `.berth` file, [ExportBundleSheet]'s hosts-only
+ * mode, once there is a host to export) and Known hosts; the export's one line shows at the foot as
+ * the bundle import's does. [picker] mode titles the screen "New tab"; back returns to the Stage.
  *
  * With no host saved the screen is the empty state (spec C1): the stance, then Add host with
  * Import a bundle beside it, since a new install's first screen is where a `.berth` file from the
@@ -132,6 +135,7 @@ fun HostsScreen(
     var importConfig by remember { mutableStateOf(false) }
     var importKnownHosts by remember { mutableStateOf(false) }
     var importBundle by remember { mutableStateOf(false) }
+    var exportHosts by remember { mutableStateOf(false) }
     // The New key sheet the bundle import's report opens, on the key it names to make again (spec C20).
     var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
     // One line at the foot for what the bundle import did; the text stays for the exit animation.
@@ -170,7 +174,7 @@ fun HostsScreen(
                 if (onOpenDrawer != null && onBack == null) {
                     IconAction(onClick = onOpenDrawer, description = "Open the drawer") { BerthIcon(BerthIcons.workspace) }
                 }
-                IconAction(onClick = onAddHost, description = "Add host") { BerthIcon(BerthIcons.add) }
+                IconAction(onClick = onAddHost, description = "Add host", onLongClick = { quickConnect = true }, longClickLabel = "Quick connect") { BerthIcon(BerthIcons.add) }
                 Box {
                     IconAction(onClick = { menu = true }, description = "More") { BerthIcon(BerthIcons.moreVert) }
                     BerthMenu(expanded = menu, onDismiss = { menu = false }) {
@@ -178,6 +182,7 @@ fun HostsScreen(
                         BerthMenuItem("Quick connect", onClick = { menu = false; quickConnect = true })
                         BerthMenuItem("Import ssh config", onClick = { menu = false; importConfig = true })
                         BerthMenuItem("Import known_hosts", onClick = { menu = false; importKnownHosts = true })
+                        if (hosts.isNotEmpty()) BerthMenuItem("Export hosts", onClick = { menu = false; exportHosts = true })
                         BerthMenuItem("Known hosts", onClick = { menu = false; onKnownHosts() })
                     }
                     BerthMenu(expanded = sortMenu, onDismiss = { sortMenu = false }) {
@@ -309,6 +314,9 @@ fun HostsScreen(
     }
     if (importBundle) {
         ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = { notice = it }, onMakeKey = { makeKey = it })
+    }
+    if (exportHosts) {
+        ExportBundleSheet(vm, onDismiss = { exportHosts = false }, onNotice = { notice = it }, hostsOnly = true)
     }
     makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
 }

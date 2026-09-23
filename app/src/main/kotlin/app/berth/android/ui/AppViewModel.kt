@@ -76,6 +76,7 @@ import app.berth.ssh.SshConfigParser
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshLink
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -905,6 +906,12 @@ class AppViewModel @Inject constructor(
         data class Failed(val reason: String) : KeyGenResult
     }
 
+    sealed interface KeyChangeResult {
+        data object Done : KeyChangeResult
+        data object WrongPassphrase : KeyChangeResult
+        data class Failed(val reason: String) : KeyChangeResult
+    }
+
     val strongBoxAvailable: Boolean get() = hardwareKeys.strongBoxAvailable
 
     /**
@@ -973,8 +980,72 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { identityRepository.delete(id) }
     }
 
+    /** A new name for the key; its key pair, fingerprint and the hosts using it are unchanged. */
+    suspend fun renameIdentity(id: String, name: String) {
+        val identity = identityRepository.get(id) ?: return
+        identityRepository.update(identity.copy(name = name.trim()))
+    }
+
+    /**
+     * Re-encodes a software key's private half under [next], or with no passphrase when [next] is
+     * null or empty, after opening it with [current] (needed when it has one now). The key pair,
+     * and so its fingerprint and every host that trusts it, stays the same; only the file at rest
+     * changes, still encrypted under the Keystore as every stored secret is. A hardware key's
+     * protection was fixed when it was generated and is not Berth's to change.
+     */
+    suspend fun changeProtection(identity: Identity, current: CharArray?, next: CharArray?): KeyChangeResult =
+        withContext(Dispatchers.Default) {
+            try {
+                if (identity.isHardwareBacked) return@withContext KeyChangeResult.Failed("A hardware key's protection is fixed when it is made.")
+                val pem = identityRepository.privateKey(identity.id)?.toString(Charsets.UTF_8)
+                    ?: return@withContext KeyChangeResult.Failed("The key \u201C${identity.name}\u201D has no stored private key.")
+                val opened = try {
+                    SshKeys.importPrivate(pem, current?.copyOf())
+                } catch (_: SshKeys.ImportError.PassphraseNeeded) {
+                    return@withContext KeyChangeResult.WrongPassphrase
+                } catch (_: SshKeys.ImportError.WrongPassphrase) {
+                    return@withContext KeyChangeResult.WrongPassphrase
+                }
+                if (SshKeys.fingerprintSha256(opened.pair.public) != identity.fingerprintSha256) {
+                    return@withContext KeyChangeResult.Failed("The stored file for the key \u201C${identity.name}\u201D does not match its fingerprint, so it was left as it is.")
+                }
+                val passphrase = next?.takeIf { it.isNotEmpty() }
+                val reencoded = SshKeys.openSshPrivate(opened.pair, identity.comment, passphrase)
+                identityRepository.replacePrivateKey(
+                    identity.copy(protection = if (passphrase != null) KeyProtection.PASSPHRASE else KeyProtection.NONE),
+                    reencoded.toByteArray(Charsets.UTF_8),
+                )
+                KeyChangeResult.Done
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                KeyChangeResult.Failed(e.message ?: e.javaClass.simpleName)
+            } finally {
+                current?.fill('\u0000')
+                next?.fill('\u0000')
+            }
+        }
+
+    /** Held across a forget and its Undo, so an Undo tapped the moment a row goes writes after the delete and not before it. */
+    private val knownHostEdits = Mutex()
+
     fun forgetKnownHost(id: String) {
-        viewModelScope.launch { knownHostRepository.delete(id) }
+        viewModelScope.launch { knownHostEdits.withLock { knownHostRepository.delete(id) } }
+    }
+
+    /**
+     * Undo for [forgetKnownHost]: each key back as it was, id, dates and pin, unless this phone has
+     * trusted the very same key for its endpoint again since, which would make it a second row.
+     */
+    fun restoreKnownHosts(keys: List<KnownHostKey>) {
+        viewModelScope.launch {
+            knownHostEdits.withLock {
+                for (key in keys) {
+                    val here = knownHostRepository.find(key.host, key.port)
+                    if (here.none { it.keyType == key.keyType && it.publicKeyBase64 == key.publicKeyBase64 }) knownHostRepository.upsert(key)
+                }
+            }
+        }
     }
 
     fun setKnownHostPinned(id: String, pinned: Boolean) {
@@ -1136,6 +1207,11 @@ class AppViewModel @Inject constructor(
     /** Everything the bundle covers, sealed under [passphrase]; a second or two of key derivation, off the main thread. */
     suspend fun exportBundle(passphrase: CharArray, appVersion: String): ByteArray = withContext(Dispatchers.Default) {
         bundles.export(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
+    }
+
+    /** Hosts › Export: the hosts alone ([BerthBundles.collectHosts]), sealed under [passphrase] as [exportBundle] seals everything. */
+    suspend fun exportHosts(passphrase: CharArray, appVersion: String): ByteArray = withContext(Dispatchers.Default) {
+        bundles.exportHosts(passphrase, exportedAt = System.currentTimeMillis(), appVersion = appVersion)
     }
 
     /** The document [blob] seals, read with [passphrase]; throws [app.berth.data.bundle.BundleException] or [app.berth.domain.model.BundleFormatException]. */

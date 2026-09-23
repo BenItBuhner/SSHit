@@ -111,6 +111,16 @@ data class Host(
      * terminal: for a bastion whose only job is to carry tunnels. Terminal and Files stay a menu away.
      */
     val tunnelsOnly: Boolean = false,
+    /**
+     * Lines of history this host's terminals keep (spec, "Very long output"); null follows
+     * Settings › Terminal › Scrollback. Held to the spec's bounds where it is used ([TerminalSettings.scrollbackFor]).
+     */
+    val scrollbackLines: Int? = null,
+    /**
+     * The SSH ciphers offered to this host, most preferred first, by their protocol names (spec
+     * C10, Advanced › Ciphers); empty offers the client's own list.
+     */
+    val ciphers: List<String> = emptyList(),
     val lastConnectedAt: Long? = null,
     val createdAt: Long,
 ) {

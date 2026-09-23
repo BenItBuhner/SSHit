@@ -108,4 +108,20 @@ class SerializedNamesTest {
         val withExtra = stored.replaceFirst("{", """{"fieldFromALaterBuild":true,""")
         assertEquals(tunnelsOnly, json.decodeFromString(Host.serializer(), withExtra))
     }
+
+    @Test
+    fun `a host snapshot carries its scrollback and ciphers, and one written before them reads back on the defaults`() {
+        val tuned = host.copy(scrollbackLines = 50_000, ciphers = listOf("aes256-gcm@openssh.com", "aes256-ctr"))
+        val stored = json.encodeToString(Host.serializer(), tuned)
+        assertTrue(""""scrollbackLines":50000""" in stored, stored)
+        assertTrue(""""ciphers":["aes256-gcm@openssh.com","aes256-ctr"]""" in stored, stored)
+        assertEquals(tuned, json.decodeFromString(Host.serializer(), stored))
+
+        // A tab's frame saved by a schema-6 build has neither key; it follows the app's scrollback and offers every cipher.
+        val older = json.encodeToString(Host.serializer(), host)
+            .replace(""""scrollbackLines":null,""", "")
+            .replace(""""ciphers":[],""", "")
+        assertTrue("scrollbackLines" !in older && "ciphers" !in older, older)
+        assertEquals(host, json.decodeFromString(Host.serializer(), older))
+    }
 }

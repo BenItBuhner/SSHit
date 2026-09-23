@@ -1,5 +1,7 @@
 package app.berth.android.ui.settings
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,18 +18,28 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -55,19 +67,26 @@ import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.prompts.Fingerprint
 import app.berth.android.ui.prompts.formatDate
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.theme.Berth
+import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.KnownHostKey
 import app.berth.ssh.SshKeys
+import kotlinx.coroutines.delay
 
 /**
  * Every server key the user has trusted (C13): searchable, one row per key with the algorithm and
- * fingerprint, a pill on pinned keys. Tap opens the detail sheet with pin and forget. The header's
- * overflow, and the empty screen, offer the `known_hosts` import (A16), the same sheet the Hosts
- * overflow and Settings › Data open.
+ * fingerprint, a pill on pinned keys. Tap opens the detail sheet with pin and forget; a swipe to
+ * the left forgets an unpinned key there (a pinned one does not swipe, and is forgotten from its
+ * sheet), and either way `Forgot the key for prod-api · Undo` stands at the foot for six seconds,
+ * the keys forgotten while it is up counted into it and put back together.
+ * The header's overflow, and the empty screen, offer the `known_hosts` import (A16), the same sheet
+ * the Hosts overflow and Settings › Data open.
  */
 @Composable
 fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -78,6 +97,24 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     var detail by remember { mutableStateOf<String?>(null) }
     var menu by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
+    // The keys forgotten while the notice is up, in the order they went; the line stays for the bar's exit.
+    var forgotten by remember { mutableStateOf<List<KnownHostKey>>(emptyList()) }
+    var forgottenLine by remember { mutableStateOf("") }
+    LaunchedEffect(forgotten) {
+        if (forgotten.isNotEmpty()) {
+            delay(NOTICE_BAR_MS)
+            forgotten = emptyList()
+        }
+    }
+    fun forget(key: KnownHostKey) {
+        if (forgotten.any { it.id == key.id }) return
+        val beside = known.any { it.id != key.id && it.endpoint == key.endpoint }
+        forgotten = forgotten + key
+        forgottenLine = forgotLine(forgotten, beside)
+        vm.forgetKnownHost(key.id)
+    }
+    // Kept while a search is typed, so forgetting down to a short list does not hide the field that filters it.
+    val searchable = known.size > 4 || query.isNotEmpty()
 
     val q = query.trim().lowercase()
     val shown = known
@@ -87,10 +124,10 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
         }
         .sortedWith(compareBy({ it.host }, { it.port }, { it.keyType }))
 
+    Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(c.surface0)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -112,7 +149,7 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 BerthButton("Import known_hosts", onClick = { importing = true }, kind = ButtonKind.TEXT)
             }
         } else {
-            if (known.size > 4) {
+            if (searchable) {
                 // 4 of the 12 dp over the first row end here, outside the list, so the 44 dp field's
                 // 48 dp reach is not cut by the list's claim on the space (as the Hosts search).
                 BerthField(
@@ -125,30 +162,34 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             }
             LazyColumn(
                 Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, top = if (known.size > 4) 8.dp else 12.dp, bottom = 12.dp),
+                contentPadding = PaddingValues(start = BerthSpace.screenMargin, end = BerthSpace.screenMargin, top = if (searchable) 8.dp else 12.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(shown, key = { it.id }) { k ->
                     val names = hostNamesFor(k, hosts)
-                    ListRow(
-                        title = k.endpoint + if (names.isNotEmpty()) "  \u00B7  ${names.joinToString(", ")}" else "",
-                        // One Caption line: algorithm, the pin, then the hash and its leading groups in Mono (K1).
-                        subtitle = buildAnnotatedString {
-                            append(k.algorithmLabel)
-                            if (k.pinned) {
+                    SwipeToForget(enabled = !k.pinned, onForget = { forget(k) }, modifier = Modifier.animateItem()) {
+                        ListRow(
+                            title = k.endpoint + if (names.isNotEmpty()) "  \u00B7  ${names.joinToString(", ")}" else "",
+                            // A swipe is out of a screen reader's reach; an unpinned row offers the same Forget as an action of its own.
+                            modifier = Modifier.semantics { if (!k.pinned) customActions = listOf(CustomAccessibilityAction("Forget") { forget(k); true }) },
+                            // One Caption line: algorithm, the pin, then the hash and its leading groups in Mono (K1).
+                            subtitle = buildAnnotatedString {
+                                append(k.algorithmLabel)
+                                if (k.pinned) {
+                                    append(" \u00B7 ")
+                                    withStyle(SpanStyle(color = c.accent)) { append("pinned") }
+                                }
                                 append(" \u00B7 ")
-                                withStyle(SpanStyle(color = c.accent)) { append("pinned") }
-                            }
-                            append(" \u00B7 ")
-                            withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp, fontFeatureSettings = MonoFontFeatures)) {
-                                append(shortFingerprint(k.fingerprintSha256, prefixLength = length))
-                            }
-                        },
-                        onClick = { detail = k.id },
-                        trailing = {
-                            Text(formatDate(k.lastSeenAt), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        },
-                    )
+                                withStyle(SpanStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Normal, letterSpacing = 0.sp, fontFeatureSettings = MonoFontFeatures)) {
+                                    append(shortFingerprint(k.fingerprintSha256, prefixLength = length))
+                                }
+                            },
+                            onClick = { detail = k.id },
+                            trailing = {
+                                Text(formatDate(k.lastSeenAt), style = BerthType.caption, color = c.text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                        )
+                    }
                 }
                 if (shown.isEmpty()) {
                     item { Text("Nothing matches.", style = BerthType.body, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp)) }
@@ -164,10 +205,22 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             }
         }
     }
+    NoticeBar(
+        visible = forgotten.isNotEmpty(),
+        text = forgottenLine,
+        action = "Undo",
+        onAction = {
+            vm.restoreKnownHosts(forgotten)
+            forgotten = emptyList()
+        },
+        modifier = Modifier.align(Alignment.BottomCenter),
+        maxLines = 2,
+    )
+    }
 
     val selected = detail?.let { id -> known.firstOrNull { it.id == id } }
     if (selected != null) {
-        KnownHostSheet(vm, selected, hostNamesFor(selected, hosts), onDismiss = { detail = null })
+        KnownHostSheet(vm, selected, hostNamesFor(selected, hosts), onDismiss = { detail = null }, onForget = { forget(selected) })
     }
     if (importing) {
         ImportKnownHostsSheet(vm, onDismiss = { importing = false })
@@ -191,10 +244,63 @@ internal fun shortFingerprint(fingerprint: String, prefixLength: Int): String {
     return "SHA256:" + groups.take(count).joinToString(" ") + " \u2026"
 }
 
-/** One key in full: fingerprint, dates, pin toggle, copy and forget. */
+/**
+ * The notice's line: the one key forgotten by its endpoint, with its algorithm when the endpoint
+ * keeps another key [beside] it on the list, or how many went while the notice was up.
+ */
+internal fun forgotLine(keys: List<KnownHostKey>, beside: Boolean): String {
+    val key = keys.singleOrNull() ?: return "Forgot ${keys.size} keys"
+    return if (beside) "Forgot the ${key.algorithmLabel} key for ${key.endpoint}" else "Forgot the key for ${key.endpoint}"
+}
+
+/**
+ * A row that forgets its key on a swipe to the left, past 40 % of its width or on a fling. The
+ * strip behind it is drawn only while the row is moved: `Forget` in danger on the quiet surface,
+ * filling with danger once letting go would forget. With [enabled] off the row does not move: a
+ * pinned key is the one trust nothing light may take away, so it is forgotten from its sheet.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun KnownHostSheet(vm: AppViewModel, key: KnownHostKey, hostNames: List<String>, onDismiss: () -> Unit) {
+private fun SwipeToForget(enabled: Boolean, onForget: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    // Not rememberSaveable: the list keeps each key's saved state, so a row put back by Undo would come back swiped away and forget itself again.
+    val state = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { it * 0.4f }) }
+    SwipeToDismissBox(
+        state = state,
+        backgroundContent = {
+            if (state.dismissDirection == SwipeToDismissBoxValue.EndToStart) ForgetStrip(armed = state.targetValue == SwipeToDismissBoxValue.EndToStart)
+        },
+        modifier = modifier,
+        enableDismissFromStartToEnd = false,
+        gesturesEnabled = enabled,
+        onDismiss = { onForget() },
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun ForgetStrip(armed: Boolean) {
+    val c = Berth.colors
+    val fill by animateColorAsState(if (armed) c.danger else c.surface1, tween(120), label = "forget strip")
+    val ink by animateColorAsState(if (armed) c.onDanger else c.danger, tween(120), label = "forget ink")
+    Row(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(BerthRadius.row))
+            .background(fill)
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BerthIcon(BerthIcons.trash, tint = ink, size = 20.dp)
+        Text("Forget", style = BerthType.label, color = ink, maxLines = 1)
+    }
+}
+
+/** One key in full: fingerprint, dates, pin toggle, copy and forget; [onForget] is the screen's, which offers Undo. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun KnownHostSheet(vm: AppViewModel, key: KnownHostKey, hostNames: List<String>, onDismiss: () -> Unit, onForget: () -> Unit = { vm.forgetKnownHost(key.id) }) {
     val c = Berth.colors
     val clipboard = LocalClipboardManager.current
     BerthSheet(onDismiss = onDismiss) {
@@ -222,7 +328,7 @@ fun KnownHostSheet(vm: AppViewModel, key: KnownHostKey, hostNames: List<String>,
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton("Copy public key", onClick = { clipboard.setText(AnnotatedString("${key.keyType} ${key.publicKeyBase64}")) })
                 Spacer(Modifier.weight(1f))
-                BerthButton("Forget", kind = ButtonKind.DESTRUCTIVE, onClick = { vm.forgetKnownHost(key.id); onDismiss() })
+                BerthButton("Forget", kind = ButtonKind.DESTRUCTIVE, onClick = { onForget(); onDismiss() })
             }
             Text(
                 "Forgetting a key means the next connection asks you to trust the server again.",

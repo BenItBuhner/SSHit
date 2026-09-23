@@ -416,6 +416,46 @@ class SshIntegrationTest {
         }
     }
 
+    /** The server settles on the first cipher of the host's list it also speaks; the test sshd speaks OpenSSH's defaults. */
+    @Test
+    fun `the host's cipher list is what the login offers, and the server takes the first it speaks`() = runBlocking {
+        suspend fun negotiated(ciphers: List<String>): String? = SshConnection(passwordEndpoint().copy(ciphers = ciphers), AcceptAllHostKeys).use { connection ->
+            connection.connect()
+            assertEquals("ok", connection.exec("printf ok"))
+            connection.negotiatedCipher
+        }
+        assertEquals("chacha20-poly1305@openssh.com", negotiated(emptyList()))
+        assertEquals("aes256-ctr", negotiated(listOf("aes256-ctr")))
+        assertEquals("aes128-gcm@openssh.com", negotiated(listOf("3des-cbc", "aes128-gcm@openssh.com", "aes256-ctr")))
+        assertEquals("chacha20-poly1305@openssh.com", negotiated(SshCiphers.MODERN))
+    }
+
+    @Test
+    fun `a cipher list the server shares nothing with fails as NoCommonCipher, which no retry fixes`() = runBlocking {
+        val error = assertFailsWith<SshError.NoCommonCipher> {
+            SshConnection(passwordEndpoint().copy(ciphers = listOf("3des-cbc")), AcceptAllHostKeys).use { it.connect() }
+        }
+        assertEquals(listOf("3des-cbc"), error.offered)
+        assertTrue(error.message!!.contains("3des-cbc"), error.message!!)
+        assertTrue(!error.isTransientSshFailure())
+    }
+
+    @Test
+    fun `a hop's own cipher list applies to the hop, and a hop that shares none fails naming that hop`() = runBlocking {
+        val target = targetBeyondJump()
+        val error = assertFailsWith<SshError.JumpHopFailed> {
+            SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint().copy(ciphers = listOf("3des-cbc")), AcceptAllHostKeys))).use { it.connect() }
+        }
+        assertEquals(0, error.hop)
+        assertTrue(error.reason is SshError.NoCommonCipher, "reason was ${error.reason}")
+        assertTrue(!error.isTransientSshFailure())
+        // The target's own list is its own: through a hop on the default list, the target settles on its one cipher.
+        SshConnection(target.copy(ciphers = listOf("aes192-ctr")), AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(), AcceptAllHostKeys))).use { connection ->
+            connection.connect()
+            assertEquals("aes192-ctr", connection.negotiatedCipher)
+        }
+    }
+
     @Test
     fun `unreachable host fails fast with ConnectFailed`() = runBlocking {
         val endpoint = SshEndpoint(host = "127.0.0.1", port = 1, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }), connectTimeoutMillis = 2_000)

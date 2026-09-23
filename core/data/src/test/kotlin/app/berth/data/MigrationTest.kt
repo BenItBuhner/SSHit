@@ -95,7 +95,14 @@ import kotlin.test.assertTrue
  * and inherits its reconnect; the bastion inherits its keepalive and keeps Forever (0); the nas, a
  * host nobody changed, stored at the editor's 15 s and 15 min, inherits both, and so does its tab's
  * snapshot; the detached tab's snapshot of the web host folds as the host does; the quick
- * connect's, stored without a policy, is left as it was.
+ * connect's, stored without a policy, is left as it was. A version 7 phone holds its rows folded
+ * already, and a 15 set on it since is the host's own: the bastion's Keepalive, chosen as 15 there,
+ * stays 15 through the steps after.
+ *
+ * Version 8 gives each host its own scrollback cap and cipher list, two columns whose defaults
+ * (null, and an empty list) leave every host as it was: following Settings › Terminal ›
+ * Scrollback and offering the client's own ciphers. A session's host snapshot, a JSON document
+ * without either field, reads them as the same defaults.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -123,6 +130,9 @@ class MigrationTest {
 
     @Test
     fun `a version 6 database migrates to the current version keeping every row`() = migrateAndCheck(from = 6)
+
+    @Test
+    fun `a version 7 database migrates to the current version keeping every row`() = migrateAndCheck(from = 7)
 
     /** Version 7's row changes on the framework's connection, the path the app opens its database on. */
     @Test
@@ -449,6 +459,18 @@ class MigrationTest {
             execSQL("DELETE FROM known_hosts WHERE id IN ('k3', 'k6')")
             execSQL("UPDATE known_hosts SET host = LOWER(host)")
         }
+
+        if (version >= 7) {
+            // A version 7 phone holds its policies as its own migration left them, a stored 15 in either field null; the
+            // bastion's Keepalive was chosen as 15 on that build since, the host's own value and not the editor's start.
+            for ((table, column) in listOf("hosts" to "persistenceJson", "sessions" to "hostSnapshotJson")) {
+                execSQL(
+                    "UPDATE $table SET $column = REPLACE(REPLACE($column, '\"keepaliveSeconds\":15,', '\"keepaliveSeconds\":null,'), " +
+                        "'\"reconnectMinutes\":15,', '\"reconnectMinutes\":null,')",
+                )
+            }
+            execSQL("UPDATE hosts SET persistenceJson = REPLACE(persistenceJson, '\"keepaliveSeconds\":null,', '\"keepaliveSeconds\":15,') WHERE id = 'bastion'")
+        }
     }
 
     // ---- after the migration -----------------------------------------------------------------------
@@ -471,8 +493,9 @@ class MigrationTest {
             text("SELECT persistenceJson FROM hosts WHERE id = 'h1'"),
         )
         assertEquals(
-            """{"keepaliveSeconds":null,"reconnectMinutes":0,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
+            """{"keepaliveSeconds":${if (from >= 7) 15 else null},"reconnectMinutes":0,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
             text("SELECT persistenceJson FROM hosts WHERE id = 'bastion'"),
+            "a 15 chosen on a version 7 phone is not folded a second time",
         )
         assertEquals(
             """{"keepaliveSeconds":null,"reconnectMinutes":null,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
@@ -496,6 +519,9 @@ class MigrationTest {
             text("SELECT hostSnapshotJson FROM sessions WHERE id = 's2'"),
             "a snapshot with no policy already inherits and is not rewritten",
         )
+
+        // Version 8: every old host follows Settings' scrollback and offers the client's own ciphers until its editor says otherwise.
+        assertEquals(3L, long("SELECT COUNT(*) FROM hosts WHERE scrollbackLines IS NULL AND ciphersJson = '[]'"))
 
         // Version 6: every known host's name is lowercase, and one row stands per endpoint and key type. k3, seen less
         // recently than k2 though saved later, went; k5 and k6 turn on the pin version 2 brought: with it, the pinned
@@ -539,7 +565,10 @@ class MigrationTest {
     private suspend fun checkRows(db: BerthDatabase, from: Int) {
         val hosts = RoomHostRepository(db)
         assertEquals(prodWeb, hosts.get("h1"))
-        assertEquals(bastion.copy(tunnelsOnly = from >= 4), hosts.get("bastion"))
+        assertEquals(
+            bastion.copy(tunnelsOnly = from >= 4, persistence = bastion.persistence.copy(keepaliveSeconds = if (from >= 7) 15 else null)),
+            hosts.get("bastion"),
+        )
         assertEquals(nas, hosts.get("nas"))
         assertEquals(listOf("bastion", "nas", "h1"), hosts.observeAll().first().map { it.id })
 
@@ -618,6 +647,13 @@ class MigrationTest {
         assertEquals(0.5f, settings.paneDividerFraction.first())
         // Settings › Connection is new with this build too: idle sessions are kept, and neither one-time notice has been shown.
         assertEquals(ConnectionSettings(), settings.connectionSettings.first())
+
+        // Version 8: the migrated table keeps a host's own scrollback cap and cipher list, and hands them back as set.
+        val tuned = prodWeb.copy(scrollbackLines = 50_000, ciphers = listOf("aes256-gcm@openssh.com", "aes256-ctr"))
+        hosts.upsert(tuned)
+        assertEquals(tuned, hosts.get("h1"))
+        hosts.upsert(prodWeb)
+        assertEquals(prodWeb, hosts.get("h1"))
     }
 
     // ---- SQL helpers -------------------------------------------------------------------------------
@@ -646,6 +682,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 7
+        const val CURRENT_VERSION = 8
     }
 }

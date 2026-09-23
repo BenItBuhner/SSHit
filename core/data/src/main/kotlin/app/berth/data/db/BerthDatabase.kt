@@ -28,7 +28,7 @@ import kotlinx.serialization.json.intOrNull
         PreferenceEntity::class,
         CommandHistoryEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -37,6 +37,8 @@ import kotlinx.serialization.json.intOrNull
         AutoMigration(from = 4, to = 5),
         AutoMigration(from = 5, to = 6, spec = KnownHostsCaseBlind::class),
         AutoMigration(from = 6, to = 7, spec = PersistenceInherits::class),
+        // Version 8: a host's own scrollback cap and cipher list, two columns whose defaults leave every host as it was.
+        AutoMigration(from = 7, to = 8),
     ],
 )
 abstract class BerthDatabase : RoomDatabase() {

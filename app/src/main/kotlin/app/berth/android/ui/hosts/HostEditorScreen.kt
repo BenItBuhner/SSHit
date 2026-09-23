@@ -1,5 +1,6 @@
 package app.berth.android.ui.hosts
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,10 +51,12 @@ import app.berth.android.ui.components.PanelNote
 import app.berth.android.ui.components.PickerRow
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SegmentedControl
+import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
 import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
+import app.berth.android.ui.prompts.PromptSheet
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
 import app.berth.android.ui.settings.hostKeepaliveLabel
@@ -75,7 +78,9 @@ import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TmuxMode
+import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshConfigForward
 import app.berth.ssh.SshLink
 import kotlinx.coroutines.flow.filterNotNull
@@ -90,6 +95,11 @@ import java.util.UUID
  * Either way the link's forwards are pending rows in the Tunnels panel, each with a switch, and
  * nothing is saved or started until Save, which keeps the ones switched on and connects the way the
  * link asked ([AppViewModel.saveHostFromLink]).
+ *
+ * Leaving with unsaved changes asks once (spec C10): Back, or the header's back, with any field
+ * other than it stood when the screen opened raises [DiscardChangesSheet], Discard or Keep editing;
+ * with nothing changed, it leaves at once. The Tunnels panel's rows are not the editor's to hold,
+ * since a saved host's tunnels are written as they are made.
  */
 @Composable
 fun HostEditorScreen(
@@ -144,7 +154,20 @@ fun HostEditorScreen(
     var tags by remember { mutableStateOf("") }
     var environment by remember { mutableStateOf("") }
     var muteBell by remember { mutableStateOf(false) }
+    var scrollbackLines by remember { mutableStateOf<Int?>(null) }
+    var ciphers by remember { mutableStateOf<List<String>>(emptyList()) }
     var colorPicker by remember { mutableStateOf(false) }
+    var discardPrompt by remember { mutableStateOf(false) }
+
+    // Signatures counts only while forwarding is on, as Save keeps it: chosen and then hidden, it saves nothing.
+    fun draft() = HostDraft(
+        name, monogramEdited, monogram, color, address, port, user, auth, password, agentForwarding, agentForwarding && agentSilent,
+        keepalive, reconnectMinutes, tmux, tmuxPrefix,
+        themeId, fontFamily, fontSize, startupCommand, terminalType, compression, addressFamily, remoteClipboard, jumpHostIds,
+        tunnelsOnly, altKey, tags, environment, muteBell, scrollbackLines, ciphers, leftOut,
+    )
+    // The fields as the screen opened with them, once loaded: what Back compares against.
+    var opened by remember { mutableStateOf<HostDraft?>(null) }
 
     LaunchedEffect(hostId) {
         if (hostId != null) {
@@ -179,11 +202,20 @@ fun HostEditorScreen(
                 tags = HostEditorFields.tagsText(h.tags)
                 environment = HostEditorFields.environmentText(h.environment)
                 muteBell = h.muteBell
+                scrollbackLines = h.scrollbackLines
+                ciphers = h.ciphers
             }
         }
+        opened = draft()
         loaded = true
     }
     if (!loaded) return
+
+    val edited = draft() != opened
+    fun leave() {
+        if (edited) discardPrompt = true else onDone()
+    }
+    BackHandler(enabled = edited && !discardPrompt) { discardPrompt = true }
 
     val portValue = port.toIntOrNull()
     val portError = port.isNotBlank() && (portValue == null || portValue !in 1..65535)
@@ -230,6 +262,8 @@ fun HostEditorScreen(
             tags = HostEditorFields.parseTags(tags),
             environment = environmentValue ?: base?.environment ?: emptyMap(),
             muteBell = muteBell,
+            scrollbackLines = scrollbackLines,
+            ciphers = ciphers,
         )
         val secret = password.takeIf { it.isNotEmpty() }
         if (fromLink != null) vm.saveHostFromLink(host, secret, fromLink, pending.filter { it !in leftOut }) else vm.saveHost(host, secret)
@@ -254,7 +288,7 @@ fun HostEditorScreen(
     ) {
         ScreenHeader(
             title = if (original == null) "New host" else original!!.name,
-            onBack = onDone,
+            onBack = ::leave,
             actions = {
                 BerthButton(
                     when {
@@ -436,10 +470,12 @@ fun HostEditorScreen(
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
                 )
                 BerthField(terminalType, { terminalType = it }, label = "Terminal type", mono = true)
+                HostScrollbackPicker(vm, scrollbackLines) { scrollbackLines = it }
                 ToggleRow("Compression", compression, { compression = it })
                 ToggleRow("Mute bell", muteBell, { muteBell = it }, caption = "No buzz when the shell rings; off stage the tab still lights.")
                 Text("Address family", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
                 SegmentedControl(listOf("Auto", "IPv4", "IPv6"), addressFamily.ordinal, { addressFamily = AddressFamily.entries[it] })
+                HostCiphersPicker(ciphers) { ciphers = it }
                 HostRemoteClipboardPicker(vm, original?.id, remoteClipboard) { remoteClipboard = it }
                 HostAltKeyPicker(vm, original?.id, altKey) { altKey = it }
             }
@@ -450,6 +486,117 @@ fun HostEditorScreen(
             }
         }
     }
+
+    if (discardPrompt) {
+        DiscardChangesSheet(
+            hostName = original?.name,
+            onDiscard = { discardPrompt = false; onDone() },
+            onKeepEditing = { discardPrompt = false },
+        )
+    }
+}
+
+/** Every field the editor holds, as one value, so the fields as opened and as they stand compare in one step. */
+private data class HostDraft(
+    val name: String,
+    val monogramEdited: Boolean,
+    val monogram: String,
+    val color: SwatchColor,
+    val address: String,
+    val port: String,
+    val user: String,
+    val auth: AuthMethod,
+    val password: String,
+    val agentForwarding: Boolean,
+    val agentSilent: Boolean,
+    val keepalive: Int?,
+    val reconnectMinutes: Int?,
+    val tmux: TmuxMode,
+    val tmuxPrefix: String,
+    val themeId: String?,
+    val fontFamily: String?,
+    val fontSize: Int?,
+    val startupCommand: String,
+    val terminalType: String,
+    val compression: Boolean,
+    val addressFamily: AddressFamily,
+    val remoteClipboard: RemoteClipboardPolicy,
+    val jumpHostIds: List<String>,
+    val tunnelsOnly: Boolean,
+    val altKey: AltKeyMode?,
+    val tags: String,
+    val environment: String,
+    val muteBell: Boolean,
+    val scrollbackLines: Int?,
+    val ciphers: List<String>,
+    val leftOut: Set<SshConfigForward>,
+)
+
+/**
+ * Back with unsaved edits (spec C10, "asks once"): the prompt sheet's shape, the question and what
+ * stands to be lost, then the two answers stacked full width, Discard in the danger tint over Keep
+ * editing. A swipe or a tap on the scrim keeps editing, as the sheet's own way out.
+ */
+@Composable
+internal fun DiscardChangesSheet(hostName: String?, onDiscard: () -> Unit, onKeepEditing: () -> Unit) {
+    PromptSheet(onDismiss = onKeepEditing) {
+        SheetTitle("Discard changes?", if (hostName == null) "This new host is not saved yet." else "The edits to $hostName are not saved yet.")
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            BerthButton("Discard", onClick = onDiscard, kind = ButtonKind.DESTRUCTIVE, modifier = Modifier.fillMaxWidth())
+            BerthButton("Keep editing", onClick = onKeepEditing, kind = ButtonKind.TEXT, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/**
+ * Lines of history this host's terminals keep (spec C2, "Very long output"): Inherit follows
+ * Settings › Terminal › Scrollback and says what that is now; a value the choices lack, as a
+ * bundle may carry, is offered beside them rather than dropped.
+ */
+@Composable
+private fun HostScrollbackPicker(vm: AppViewModel, value: Int?, onSelect: (Int?) -> Unit) {
+    val app by vm.terminalSettings.collectAsState()
+    val options = listOf<Int?>(null) + (TerminalSettings.SCROLLBACK_CHOICES + listOfNotNull(value)).distinct().sorted()
+    CyclePicker(
+        "Scrollback",
+        options,
+        value,
+        // Inherit's count without the unit, like "Inherit (blocked)": with it the value takes the
+        // title's room at the 1.3x font cap and one word has nowhere to wrap.
+        { lines -> if (lines == null) "Inherit (%,d)".format(app.scrollbackLines) else "%,d lines".format(lines) },
+        caption = "History kept above the screen",
+        onSelect = onSelect,
+    )
+}
+
+/**
+ * The ciphers offered to this host (spec C10, Advanced › Ciphers): every one Berth knows, for the
+ * servers that still speak only the old ones, or the modern set. A list neither names, as a bundle
+ * may carry, reads as Custom and is kept on offer until Save, so trying another choice can go back.
+ */
+@Composable
+private fun HostCiphersPicker(value: List<String>, onSelect: (List<String>) -> Unit) {
+    val stored = remember { value.takeUnless { it.isEmpty() || it == SshCiphers.MODERN } }
+    CyclePicker(
+        "Ciphers",
+        listOfNotNull(emptyList(), SshCiphers.MODERN, stored),
+        value,
+        { list ->
+            when {
+                list.isEmpty() -> "Default"
+                list == SshCiphers.MODERN -> "Modern only"
+                else -> "Custom"
+            }
+        },
+        caption = when {
+            value.isEmpty() -> "Every cipher Berth knows, old ones too"
+            value == SshCiphers.MODERN -> "ChaCha20, AES-GCM and AES-CTR only"
+            // By name without the vendor suffix, so a pair fits the caption's two lines.
+            else -> "Offers " + value.take(2).joinToString(", ") { it.removeSuffix("@openssh.com") } +
+                if (value.size > 2) " and ${value.size - 2} more" else ""
+        },
+        onSelect = onSelect,
+    )
 }
 
 /** The host's swatch colour as a [ColorOption]: named for a screen reader, in a 48 dp target. */

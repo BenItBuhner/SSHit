@@ -20,5 +20,8 @@ data class TerminalSettings(
 
         /** The sizes the Settings row cycles through, the spec's bounds at either end. */
         val SCROLLBACK_CHOICES: List<Int> = listOf(1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000)
+
+        /** The history a terminal keeps: the host's own cap when it has one ([Host.scrollbackLines]), else [appLines], within the spec's bounds. */
+        fun scrollbackFor(hostLines: Int?, appLines: Int): Int = (hostLines ?: appLines).coerceIn(MIN_SCROLLBACK, MAX_SCROLLBACK)
     }
 }

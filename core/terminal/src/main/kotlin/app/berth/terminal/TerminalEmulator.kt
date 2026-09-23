@@ -37,14 +37,17 @@ class TerminalEmulator(
 
     /**
      * How many lines of history the main screen keeps (Settings › Terminal › Scrollback). Lowering
-     * it drops the oldest lines at once; raising it lets history grow from here.
+     * it drops the oldest lines at once; raising it lets history grow from here. Only a change that
+     * drops lines is a change on screen: a session saves its frame when the screen changed, and a
+     * cap moved over history shorter than both values leaves the frame as it was.
      */
     var maxScrollback: Int
         get() = mainBuffer.maxScrollback
         set(value) {
             synchronized(lock) {
-                if (mainBuffer.maxScrollback == value.coerceAtLeast(0)) return
+                val dropped = mainBuffer.dropped
                 mainBuffer.maxScrollback = value
+                if (mainBuffer.dropped == dropped) return
                 markDirty()
             }
             flushChanges()

@@ -67,6 +67,8 @@ internal fun Host.toEntity() = HostEntity(
     lastConnectedAt = lastConnectedAt,
     createdAt = createdAt,
     tunnelsOnly = tunnelsOnly,
+    scrollbackLines = scrollbackLines,
+    ciphersJson = dataJson.encodeToString(stringList, ciphers),
 )
 
 internal fun HostEntity.toDomain() = Host(
@@ -90,6 +92,8 @@ internal fun HostEntity.toDomain() = Host(
     tags = runCatching { dataJson.decodeFromString(stringList, tagsJson) }.getOrDefault(emptyList()),
     muteBell = muteBell,
     tunnelsOnly = tunnelsOnly,
+    scrollbackLines = scrollbackLines,
+    ciphers = runCatching { dataJson.decodeFromString(stringList, ciphersJson) }.getOrDefault(emptyList()),
     lastConnectedAt = lastConnectedAt,
     createdAt = createdAt,
 )

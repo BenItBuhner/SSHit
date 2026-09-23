@@ -14,6 +14,7 @@ import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.ReconnectBackoff
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
@@ -210,5 +211,13 @@ class DomainModelTest {
         val v2 = BerthBundle(exportedAt = 1, hosts = listOf(pinned, pinned.copy(id = "e", persistence = PersistencePolicy()))).toJson()
         assertTrue(v2.contains(""""format":2"""))
         assertEquals(listOf(PersistencePolicy(keepaliveSeconds = 15), PersistencePolicy()), BerthBundle.fromJson(v2).hosts.map { it.persistence })
+    }
+
+    @Test
+    fun `a host's scrollback stands over the app's, and either is held to the bounds`() {
+        assertEquals(50_000, TerminalSettings.scrollbackFor(hostLines = 50_000, appLines = 10_000))
+        assertEquals(10_000, TerminalSettings.scrollbackFor(hostLines = null, appLines = 10_000))
+        assertEquals(TerminalSettings.MIN_SCROLLBACK, TerminalSettings.scrollbackFor(hostLines = 10, appLines = 10_000))
+        assertEquals(TerminalSettings.MAX_SCROLLBACK, TerminalSettings.scrollbackFor(hostLines = null, appLines = Int.MAX_VALUE))
     }
 }

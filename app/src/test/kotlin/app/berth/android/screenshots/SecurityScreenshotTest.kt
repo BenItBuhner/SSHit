@@ -40,6 +40,7 @@ import app.berth.android.ui.prompts.PromptHost
 import app.berth.android.ui.security.LockWindow
 import app.berth.android.ui.security.RemoteClipboardNoticeSheet
 import app.berth.android.ui.settings.SettingsScreen
+import app.berth.android.ui.settings.UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
@@ -391,8 +392,9 @@ class SecurityScreenshotTest {
         seedLibrary()
         themed { HostEditorScreen(graph.viewModel, hostId = null, onDone = {}) }
         compose.onNodeWithText("Remote clipboard").performScrollTo()
-        // The Alt key row (Settings > Hardware keyboard's per-host override) waits on the same rule.
-        compose.onAllNodesWithText("Save the host first").assertCountEquals(2)
+        // The Alt key row (Settings > Hardware keyboard's per-host override) waits on the same rule; this row says it in its caption.
+        compose.onAllNodesWithText("Save the host first").assertCountEquals(1)
+        compose.onNodeWithText(UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION).assertExists()
         compose.onNodeWithText("Remote clipboard").assertIsNotEnabled()
         compose.onNodeWithText("Alt key").assertIsNotEnabled()
         compose.onNodeWithText("Remote clipboard").performClick()

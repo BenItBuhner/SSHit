@@ -853,6 +853,22 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `a scrollback change that drops no line does not redraw`() {
+        val (t, r) = term(cols = 5, rows = 2, scrollback = 10)
+        for (i in 1..4) t.write("l$i\r\n")
+        assertEquals(3, t.scrollbackSize)
+        val changes = r.screenChanges
+        t.maxScrollback = 100
+        t.maxScrollback = 3
+        t.maxScrollback = 3
+        assertEquals(changes, r.screenChanges, "history shorter than both caps is the same screen")
+        assertEquals(0L, t.linesDropped)
+        t.maxScrollback = 2
+        assertEquals(changes + 1, r.screenChanges)
+        assertEquals(1L, t.linesDropped)
+    }
+
+    @Test
     fun `the cursor shows the user's default until the application chooses, and again when it lets go`() {
         val (t, _) = term()
         assertEquals(CursorStyle.DEFAULT, t.cursorStyle)

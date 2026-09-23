@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
@@ -18,12 +20,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,17 +35,20 @@ import app.berth.android.qr.QrCode
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
+import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthSheet
 import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.QrImage
 import app.berth.android.ui.components.SectionLabel
+import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.StatusDot
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.prompts.CopyableLine
 import app.berth.android.ui.prompts.Fingerprint
 import app.berth.android.ui.prompts.HostLine
+import app.berth.android.ui.prompts.PromptSheet
 import app.berth.android.ui.prompts.VisualFingerprint
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -55,6 +62,7 @@ import app.berth.ssh.Randomart
 import app.berth.ssh.SshKeys
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.security.PublicKey
 
@@ -134,6 +142,171 @@ internal fun keyCaption(identity: Identity, users: List<Host>?): String {
         }
     }
     return parts.joinToString(" \u00B7 ")
+}
+
+/**
+ * Rename (spec C12): the name Berth shows for the key and nothing else. The key pair, its
+ * fingerprint, the comment in its public line and the hosts that sign in with it are untouched, so
+ * nothing on a server needs to change.
+ */
+@Composable
+fun RenameKeySheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(identity.name) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val canRename = !busy && name.isNotBlank() && name.trim() != identity.name
+    fun rename() {
+        if (!canRename) return
+        busy = true
+        scope.launch {
+            vm.renameIdentity(identity.id, name)
+            onDismiss()
+        }
+    }
+    PromptSheet(onDismiss) {
+        SheetTitle("Rename key", "Only the name changes. The key, its fingerprint and the hosts that use it stay as they are.")
+        BerthField(
+            name,
+            { name = it },
+            label = "Name",
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { rename() }),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BerthButton("Rename", onClick = ::rename, kind = ButtonKind.PRIMARY, enabled = canRename)
+            BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
+        }
+    }
+}
+
+/**
+ * Change protection (spec C12). A software key is opened with its current passphrase, when it has
+ * one, and written again under the new one or none; the key pair is the same, so its fingerprint
+ * and every host that trusts it are too. A hardware-backed key's protection was fixed inside the
+ * secure hardware when it was generated, so its sheet says so and offers a new key instead.
+ */
+@Composable
+fun ChangeProtectionSheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit, onNewHardwareKey: () -> Unit) {
+    if (identity.isHardwareBacked) HardwareProtectionSheet(vm, identity, onDismiss, onNewHardwareKey)
+    else SoftwareProtectionSheet(vm, identity, onDismiss)
+}
+
+@Composable
+private fun SoftwareProtectionSheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit) {
+    val c = Berth.colors
+    val hasPassphrase = identity.protection == KeyProtection.PASSPHRASE
+    var choice by remember { mutableStateOf(if (hasPassphrase) 1 else 0) }
+    var current by remember { mutableStateOf("") }
+    var next by remember { mutableStateOf("") }
+    var again by remember { mutableStateOf("") }
+    var wrongCurrent by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val passphrase = choice == 1
+    val mismatch = passphrase && again.isNotEmpty() && again != next
+    val changes = passphrase || hasPassphrase
+    val canSave = !busy && changes &&
+        (!hasPassphrase || current.isNotEmpty()) &&
+        (!passphrase || (next.isNotEmpty() && next == again))
+
+    PromptSheet(onDismiss) {
+        SheetTitle("Change protection", "${identity.name} \u00B7 ${identity.algorithm.displayName}")
+        if (hasPassphrase) {
+            BerthField(
+                current,
+                { current = it; wrongCurrent = false },
+                label = "Current passphrase",
+                password = true,
+                isError = wrongCurrent,
+                helper = if (wrongCurrent) "That passphrase didn't unlock the key." else null,
+            )
+        }
+        Text("Protect", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp))
+        SegmentedControl(listOf("None", "Passphrase"), choice, { choice = it; error = null })
+        Text(
+            when {
+                passphrase && hasPassphrase -> "The new passphrase replaces the old one and is asked for on each connection."
+                passphrase -> "Asked for on each connection; the key file is also encrypted at rest."
+                hasPassphrase -> "Signs in without asking. The key file stays encrypted at rest under this phone's Keystore."
+                else -> "Signs in without asking. The key file is encrypted at rest under this phone's Keystore."
+            },
+            style = BerthType.caption,
+            color = c.text2,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        if (passphrase) {
+            BerthField(next, { next = it }, label = "New passphrase", password = true)
+            BerthField(
+                again,
+                { again = it },
+                label = "Confirm new passphrase",
+                password = true,
+                isError = mismatch,
+                helper = if (mismatch) "The two passphrases don't match." else null,
+            )
+        }
+        Text(
+            "The key stays the same, so its fingerprint and the hosts that trust it do too.",
+            style = BerthType.caption,
+            color = c.text2,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        if (error != null) Text(error!!, style = BerthType.caption, color = c.danger)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BerthButton(
+                if (busy) "Saving\u2026" else "Save",
+                kind = ButtonKind.PRIMARY,
+                enabled = canSave,
+                onClick = {
+                    busy = true
+                    error = null
+                    scope.launch {
+                        val result = vm.changeProtection(
+                            identity,
+                            current = current.takeIf { hasPassphrase }?.toCharArray(),
+                            next = next.takeIf { passphrase }?.toCharArray(),
+                        )
+                        busy = false
+                        when (result) {
+                            AppViewModel.KeyChangeResult.Done -> onDismiss()
+                            AppViewModel.KeyChangeResult.WrongPassphrase -> wrongCurrent = true
+                            is AppViewModel.KeyChangeResult.Failed -> error = result.reason
+                        }
+                    }
+                },
+            )
+            BerthButton("Cancel", onClick = onDismiss, kind = ButtonKind.TEXT)
+        }
+    }
+}
+
+@Composable
+private fun HardwareProtectionSheet(vm: AppViewModel, identity: Identity, onDismiss: () -> Unit, onNewHardwareKey: () -> Unit) {
+    val c = Berth.colors
+    val model = remember(identity.id) { vm.keyAuthModel(identity) }
+    val now = when (identity.protection) {
+        KeyProtection.BIOMETRIC -> biometricModelLabel(model)
+        else -> "None \u00B7 signs in without asking"
+    }
+    PromptSheet(onDismiss) {
+        SheetTitle("Change protection", "${identity.name} \u00B7 hardware-backed")
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Protect", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp))
+            Text(now, style = BerthType.body, color = c.text1, modifier = Modifier.padding(horizontal = 4.dp))
+        }
+        Text(
+            "A hardware-backed key's protection is set inside this phone's secure hardware when the key is made, and Android does not let it change afterwards. " +
+                "To protect it another way, make a new hardware key with the protection you want, install it on your hosts, then delete this one.",
+            style = BerthType.body,
+            color = c.text2,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BerthButton("New hardware key", onClick = onNewHardwareKey, kind = ButtonKind.SECONDARY)
+            BerthButton("Close", onClick = onDismiss, kind = ButtonKind.TEXT)
+        }
+    }
 }
 
 /**

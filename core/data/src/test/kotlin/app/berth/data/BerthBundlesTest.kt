@@ -33,6 +33,7 @@ import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
+import app.berth.domain.model.RecreateNotice
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
@@ -109,7 +110,8 @@ class BerthBundlesTest {
         protection = KeyProtection.BIOMETRIC, publicKeyOpenSsh = "ecdsa-sha2-nistp256 AAAAphone", fingerprintSha256 = "SHA256:phone",
         keystoreAlias = "berth.identity.id-phone", createdAt = 2,
     )
-    private val web = Host(id = "h-web", name = "prod-web", color = SwatchColor.VERDIGRIS, monogram = "PW", address = "203.0.113.10", user = "deploy", auth = AuthMethod.Key("id-laptop"), tags = listOf("prod"), createdAt = 3)
+    private val web = Host(id = "h-web", name = "prod-web", color = SwatchColor.VERDIGRIS, monogram = "PW", address = "203.0.113.10", user = "deploy", auth = AuthMethod.Key("id-laptop"), tags = listOf("prod"),
+        scrollbackLines = 50_000, ciphers = listOf("aes256-gcm@openssh.com", "aes256-ctr"), createdAt = 3)
     private val db1 = Host(id = "h-db", name = "db-primary", color = SwatchColor.SLATE, monogram = "DB", address = "db.internal", port = 2200, user = "postgres", auth = AuthMethod.Key("id-phone"), jumpHostIds = listOf("h-web"), createdAt = 4)
     private val nas = Host(id = "h-nas", name = "nas", color = SwatchColor.MOSS, monogram = "NA", address = "10.0.0.5", user = "admin", auth = AuthMethod.Password("host-password:h-nas"), createdAt = 5)
     private val work = Workspace(id = "w-work", name = "Work", color = SwatchColor.PLUM, monogram = "WK", sortOrder = 1, createdAt = 6, reconnectAtLaunch = true)
@@ -526,5 +528,116 @@ class BerthBundlesTest {
         assertTrue(report.interfaceTheme, "and so is the interface theme")
         assertFalse(report.defaultTerminalTheme, "the default terminal theme is carried too, and is this phone's already")
         assertEquals("Imported 1 workspace, the Deck and the interface theme.", report.summary)
+    }
+
+    // ---- the hosts alone (Hosts › Export) ----------------------------------------------------------
+
+    @Test
+    fun `a hosts-only export carries the hosts, their passwords and tunnels, and each key a host logs in with by its public record alone`() = runTest {
+        fillOldPhone()
+        // A key no host logs in with is not the hosts' business, nor a tunnel left from a host deleted since.
+        val sparePair = SshKeys.generate(KeyAlgorithm.ED25519)
+        old.identities.insert(
+            laptop.copy(id = "id-spare", name = "spare", publicKeyOpenSsh = SshKeys.openSshPublic(sparePair.public), fingerprintSha256 = SshKeys.fingerprintSha256(sparePair.public)),
+            SshKeys.openSshPrivate(sparePair).toByteArray(),
+        )
+        old.tunnels.upsert(forward.copy(id = "t-gone", hostId = "h-gone", bindPort = 8081))
+        val bundle = old.bundles.collectHosts(exportedAt = 5, appVersion = "1.2")
+
+        assertEquals(5, bundle.exportedAt)
+        assertEquals("1.2", bundle.appVersion)
+        assertEquals(setOf(web, db1, nas), bundle.hosts.toSet())
+        assertEquals(listOf("host-password:h-nas"), bundle.passwords.map { it.id })
+        assertContentEquals("hunter2".toByteArray(), bundle.passwords.single().bytes())
+        // Both keys the hosts use are named and neither travels: the software key's private half stays here, as a hardware key's always does.
+        assertEquals(setOf("id-laptop", "id-phone"), bundle.identities.map { it.identity.id }.toSet())
+        assertTrue(bundle.identities.all { it.privateKey == null })
+        assertEquals(listOf("laptop"), bundle.leftBehindIdentities.map { it.name })
+        assertEquals(listOf("Phone key"), bundle.hardwareIdentities.map { it.name })
+        assertEquals(laptop.fingerprintSha256, bundle.identities.single { it.identity.id == "id-laptop" }.identity.fingerprintSha256)
+        assertNull(bundle.identities.single { it.identity.id == "id-phone" }.identity.keystoreAlias)
+        val text = bundle.toJson()
+        assertFalse(Base64Codec.encode(laptopKey) in text, "no private half is in the document")
+        assertFalse("berth.identity.id-phone" in text)
+        assertEquals(setOf(forward, socks), bundle.tunnels.toSet(), "the tunnels defined on the hosts go with them")
+        // Nothing else goes in, so an import leaves the rest of the other phone as it is.
+        assertTrue(bundle.workspaces.isEmpty())
+        assertTrue(bundle.snippets.isEmpty())
+        assertTrue(bundle.knownHosts.isEmpty())
+        assertTrue(bundle.terminalThemes.isEmpty())
+        assertNull(bundle.deck)
+        assertNull(bundle.interfaceTheme)
+        assertNull(bundle.defaultTerminalThemeId)
+    }
+
+    @Test
+    fun `a hosts-only bundle points a host at the same key found here by fingerprint, and the rest ask each time and are named`() = runTest {
+        fillOldPhone()
+        val blob = old.bundles.exportHosts("pw".toCharArray(), exportedAt = 1, cost = quick)
+        // The new phone already holds the laptop key, imported by hand under its own id and name, and a snippet and a Deck of its own.
+        new.identities.insert(laptop.copy(id = "id-other", name = "same laptop key"), laptopKey)
+        val mySnippet = Snippet(id = "s-mine", name = "uptime", body = "uptime")
+        new.snippets.upsert(mySnippet)
+        val myDeck = DeckLayout(layers = listOf(DeckLayer("Mine", listOf(DeckKey(tap = DeckAction.Text("y"))))))
+        new.settings.setDeckLayout(myDeck)
+
+        val bundle = new.bundles.open(blob, "pw".toCharArray())
+        val plan = new.bundles.plan(bundle)
+        assertEquals(mapOf("id-laptop" to "same laptop key"), plan.identitiesHere, "the sheet can say which key this phone already has")
+        assertNull(plan.defaultTerminalTheme)
+        val report = new.bundles.apply(bundle)
+
+        assertEquals(web.copy(auth = AuthMethod.Key("id-other")), new.hosts.get("h-web"))
+        assertEquals(db1.copy(auth = AuthMethod.AskEachTime), new.hosts.get("h-db"))
+        assertEquals(nas, new.hosts.get("h-nas"))
+        assertContentEquals("hunter2".toByteArray(), new.secrets.get("host-password:h-nas"))
+        assertEquals(listOf("id-other"), new.identities.observeAll().first().map { it.id }, "no key is written")
+        assertEquals(0, report.identities)
+        assertEquals(listOf(RecreateNotice("Phone key", KeyAlgorithm.ECDSA_P256, listOf("db-primary"), hardware = true)), report.needsRecreation)
+        assertEquals("Imported 3 hosts and 2 tunnels.", report.summary)
+        assertEquals(setOf(forward, socks), new.tunnels.observeAll().first().toSet())
+        assertEquals(listOf(mySnippet), new.snippets.observeAll().first())
+        assertEquals(myDeck, new.settings.deckLayout.first())
+        assertFalse(report.deck)
+
+        // A phone that holds neither key: the host on the software key asks each time too, named as a key left on the other phone.
+        val third = Phone()
+        try {
+            val onThird = third.bundles.open(blob, "pw".toCharArray())
+            assertTrue(third.bundles.plan(onThird).identitiesHere.isEmpty())
+            val thirdReport = third.bundles.apply(onThird)
+            assertEquals(web.copy(auth = AuthMethod.AskEachTime), third.hosts.get("h-web"))
+            assertEquals(
+                setOf(
+                    RecreateNotice("laptop", KeyAlgorithm.ED25519, listOf("prod-web"), hardware = false),
+                    RecreateNotice("Phone key", KeyAlgorithm.ECDSA_P256, listOf("db-primary"), hardware = true),
+                ),
+                thirdReport.needsRecreation.toSet(),
+            )
+            assertTrue(third.identities.observeAll().first().isEmpty())
+        } finally {
+            third.db.close()
+        }
+    }
+
+    @Test
+    fun `a hosts-only bundle opened on the phone that made it keeps every host on its key and names nothing`() = runTest {
+        fillOldPhone()
+        val blob = old.bundles.exportHosts("pw".toCharArray(), exportedAt = 1, cost = quick)
+        old.hosts.delete("h-nas")
+        val before = old.identities.observeAll().first()
+
+        val bundle = old.bundles.open(blob, "pw".toCharArray())
+        assertEquals(mapOf("id-laptop" to "laptop", "id-phone" to "Phone key"), old.bundles.plan(bundle).identitiesHere)
+        val report = old.bundles.apply(bundle)
+
+        assertEquals(before, old.identities.observeAll().first())
+        assertTrue(report.needsRecreation.isEmpty())
+        assertEquals(web, old.hosts.get("h-web"))
+        assertEquals(db1, old.hosts.get("h-db"), "the host on the hardware key keeps it")
+        assertEquals(nas, old.hosts.get("h-nas"), "the deleted host is back")
+        assertEquals(deck, old.settings.deckLayout.first())
+        assertEquals(look, old.settings.interfaceTheme.first())
+        assertEquals("mine", old.settings.defaultTerminalThemeId.first())
     }
 }

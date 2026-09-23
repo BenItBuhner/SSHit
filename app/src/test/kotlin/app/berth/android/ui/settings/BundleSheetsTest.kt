@@ -1,7 +1,15 @@
 package app.berth.android.ui.settings
 
+import app.berth.android.ui.keys.NewKeyPrefill
 import app.berth.android.ui.prompts.formatDate
+import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.Host
+import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.RecreateNotice
+import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -96,6 +104,55 @@ class BundleSheetsTest {
             "Hosts, keys, workspaces, snippets, tunnels and themes already here with the same id are replaced by the bundle's copies; nothing is removed but the 2 host keys you ticked to replace.",
             importDisclosure(replacing = 2),
         )
+    }
+
+    @Test
+    fun `the hosts-only export counts the hosts, their saved passwords and tunnels, and a named key's row says whether this phone has it`() {
+        fun host(id: String, auth: AuthMethod) = Host(id = id, name = id, color = SwatchColor.COPPER, monogram = "HO", address = "$id.local", user = "ben", auth = auth, createdAt = 0)
+        assertEquals("1 host", hostsExportContents(listOf(host("web", AuthMethod.Key("id-laptop"))), emptyList()))
+        assertEquals(
+            "a password asked each time is not a saved one",
+            "3 hosts \u00B7 2 saved passwords",
+            hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.Password("s-b")), host("c", AuthMethod.Password(null))), emptyList()),
+        )
+        assertEquals("2 hosts \u00B7 1 saved password", hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.AskEachTime)), emptyList()))
+        val forward = Tunnel(id = "t-web", hostId = "web", type = TunnelType.LOCAL, bindPort = 8080, destinationPort = 80)
+        assertEquals(
+            "a tunnel on no host in the file is not counted",
+            "1 host \u00B7 2 tunnels",
+            hostsExportContents(listOf(host("web", AuthMethod.AskEachTime)), listOf(forward, forward.copy(id = "t-socks", type = TunnelType.DYNAMIC, bindPort = 1080), forward.copy(id = "t-gone", hostId = "gone"))),
+        )
+
+        // The keys a bundle carries, and the hardware keys it names: never `0 keys and`.
+        assertEquals("2 keys", keysLine(carried = 2, hardware = 0))
+        assertEquals("1 key and 1 hardware key to make again", keysLine(carried = 1, hardware = 1))
+        assertEquals("2 hardware keys to make again", keysLine(carried = 0, hardware = 2))
+
+        // A key named and not carried: what it is, and so what its hosts do here.
+        assertEquals("Ed25519, not in the file \u00B7 this phone has it, so prod-web logs in with it", namedKeyLine("laptop", "Ed25519", hereAs = "laptop", hosts = listOf("prod-web")))
+        assertEquals(
+            "Ed25519, not in the file \u00B7 this phone has it as the key \u201Claptop ed25519\u201D, so prod-web, staging log in with it",
+            namedKeyLine("old laptop", "Ed25519", hereAs = "laptop ed25519", hosts = listOf("prod-web", "staging")),
+        )
+        assertEquals(
+            "RSA 4096, not in the file \u00B7 this phone does not have it, so ci-runner asks each time until you pick a key",
+            namedKeyLine("deploy bot", "RSA 4096", hereAs = null, hosts = listOf("ci-runner")),
+        )
+        assertEquals(
+            "Ed25519, not in the file \u00B7 this phone does not have it, so a, b ask each time until you pick a key",
+            namedKeyLine("k", "Ed25519", hereAs = null, hosts = listOf("a", "b")),
+        )
+        assertEquals("Ed25519, not in the file \u00B7 this phone does not have it", namedKeyLine("k", "Ed25519", hereAs = null, hosts = emptyList()))
+
+        // The report's lines under the keys to make again and the keys left on the other phone speak to one key or to several.
+        assertTrue(hardwareNote(1).startsWith("This key was hardware-backed on the phone that made the bundle"))
+        assertTrue(hardwareNote(2).startsWith("These were hardware-backed on the phone that made the bundle"))
+        assertTrue(leftBehindNote(1).startsWith("This key stayed on the phone that made the file. Bring it here"))
+        assertTrue(leftBehindNote(2).startsWith("These keys stayed on the phone that made the file. Bring each here"))
+
+        // Make a key on the report opens as the key it stands in for: hardware where the named one was, software where it was not.
+        assertEquals(NewKeyPrefill("Phone key", KeyAlgorithm.ECDSA_P256, hardware = true), NewKeyPrefill(RecreateNotice("Phone key", KeyAlgorithm.ECDSA_P256, listOf("db"))))
+        assertEquals(NewKeyPrefill("laptop", KeyAlgorithm.ED25519, hardware = false), NewKeyPrefill(RecreateNotice("laptop", KeyAlgorithm.ED25519, listOf("web"), hardware = false)))
     }
 
     @Test

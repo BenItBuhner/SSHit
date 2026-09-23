@@ -10,6 +10,7 @@ import app.berth.domain.model.ReconnectBackoff
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
@@ -112,6 +113,14 @@ interface SessionEnvironment {
     suspend fun connectionDefaults(): ConnectionSettings = ConnectionSettings()
 
     /**
+     * Lines of history [host]'s terminal keeps: the host's own (Advanced › Scrollback) or Settings ›
+     * Terminal › Scrollback, held to the spec's bounds ([TerminalSettings.scrollbackFor]); the current
+     * value and each change, so an edit reaches a tab already open. A stand-in keeps the host's or the default.
+     */
+    fun scrollbackLinesFor(host: Host): Flow<Int> =
+        flowOf(TerminalSettings.scrollbackFor(host.scrollbackLines, TerminalSettings.DEFAULT_SCROLLBACK))
+
+    /**
      * The host's ProxyJump chain as saved hosts, first hop first; an id no host answers to any
      * more is skipped. Each hop logs in with its own [authFor] and is trusted by its own [hostKeyPolicyFor].
      */
@@ -177,6 +186,7 @@ internal fun sshEndpointFor(h: Host, auth: List<SshAuth>, defaults: ConnectionSe
     auth = auth,
     keepaliveSeconds = h.persistence.effectiveKeepaliveSeconds(defaults),
     compression = h.compression,
+    ciphers = h.ciphers,
     preferIpv6 = when (h.addressFamily) {
         AddressFamily.AUTO -> null
         AddressFamily.IPV4 -> false
@@ -907,14 +917,21 @@ class TerminalSession(
                 is SshError.AuthenticationFailed -> "$hop did not accept the credentials for ${e.user}."
                 is SshError.HostKeyRejected -> "$hop presented a host key that was not trusted, so the connection stopped there."
                 is SshError.ConnectFailed -> "$hop couldn't be reached."
+                is SshError.NoCommonCipher -> "$hop ${noCommonCipher(chainHosts.getOrNull(e.hop))}"
                 else -> "$hop failed: ${reason.message ?: "couldn't connect"}."
             }
         }
         is SshError.AuthenticationFailed -> "The server did not accept the credentials for ${host.user}."
         is SshError.HostKeyRejected -> "The host key was not trusted, so the connection was not made."
+        is SshError.NoCommonCipher -> "The server ${noCommonCipher(host)}"
         is IllegalStateException -> e.message ?: "Couldn't connect."
         else -> "Couldn't connect to ${host.address}:${host.port}."
     }
+
+    /** The rest of a no-common-cipher sentence for [h], naming the host editor's row when the list offered was the host's own. */
+    private fun noCommonCipher(h: Host?): String =
+        if (h?.ciphers.isNullOrEmpty()) "accepts none of the ciphers Berth offers."
+        else "accepts none of the ciphers set under Advanced \u203A Ciphers."
 
     private fun Throwable.rootSshError(): Throwable = if (this is SshError.JumpHopFailed) reason else this
 
@@ -1098,10 +1115,25 @@ class TerminalSession(
         }
     }
 
-    /** The probe's and the idle watch's collectors, for the life of the tab; [close] ends them. */
+    /**
+     * The history cap the environment last gave ([SessionEnvironment.scrollbackLinesFor]), null
+     * until it has; [capLock] orders setting it against [restoreFrame] replaying a frame.
+     */
+    private var historyCap: Int? = null
+    private val capLock = Any()
+
+    /** The probe's, the idle watch's and the history cap's collectors, for the life of the tab; [close] ends them. */
     private val watchers: Job = scope.launch {
         launch { env.networkChanges.collect { probe() } }
         launch { watchIdle() }
+        launch {
+            env.scrollbackLinesFor(host).collect { lines ->
+                synchronized(capLock) {
+                    historyCap = lines
+                    emulator.maxScrollback = lines
+                }
+            }
+        }
     }
 
     fun resize(newCols: Int, newRows: Int) {
@@ -1242,30 +1274,38 @@ class TerminalSession(
      * process died: the frame then ends in a `detached 14:07` marker stamped with the last moment
      * it was known to be live, the same word as the pill above it, Detach all and tmux, so the
      * relaunch reads as a session that was cut rather than one that vanished (vision §4.3, L0).
-     * Reconnect opens a fresh shell, so the marker promises nothing more.
+     * Reconnect opens a fresh shell, so the marker promises nothing more. The frame is replayed
+     * under the widest cap and then held to the host's, so history saved under a cap above the
+     * emulator's default comes back whole whether or not the cap has arrived yet.
      */
     fun restoreFrame(frame: ByteArray?, detachedAt: Long? = null) {
-        if (frame != null) {
-            runCatching {
-                DataInputStream(frame.inputStream()).use { d ->
-                    val version = d.readInt()
-                    if (version !in FRAME_VERSION_TEXT_ONLY..FRAME_VERSION) return@runCatching
-                    val n = d.readInt()
-                    val text = StringBuilder()
-                    repeat(n) { text.append(d.readUTF()).append("\r\n") }
-                    emulator.write("\u001b[2m")
-                    emulator.write(text.toString())
-                    emulator.write("\u001b[0m")
-                    if (version == FRAME_VERSION_WITH_HISTORY) {
-                        val m = d.readInt()
-                        val saved = ArrayList<Pair<String, Long>>(m)
-                        repeat(m) { saved += d.readUTF() to d.readLong() }
-                        if (saved.isNotEmpty()) env.importCommands(commandHistoryKey, saved)
-                    }
+        if (frame != null) synchronized(capLock) {
+            emulator.maxScrollback = TerminalSettings.MAX_SCROLLBACK
+            replayFrame(frame)
+            historyCap?.let { emulator.maxScrollback = it }
+        }
+        if (detachedAt != null) marker("detached", detachedAt)
+    }
+
+    private fun replayFrame(frame: ByteArray) {
+        runCatching {
+            DataInputStream(frame.inputStream()).use { d ->
+                val version = d.readInt()
+                if (version !in FRAME_VERSION_TEXT_ONLY..FRAME_VERSION) return@runCatching
+                val n = d.readInt()
+                val text = StringBuilder()
+                repeat(n) { text.append(d.readUTF()).append("\r\n") }
+                emulator.write("\u001b[2m")
+                emulator.write(text.toString())
+                emulator.write("\u001b[0m")
+                if (version == FRAME_VERSION_WITH_HISTORY) {
+                    val m = d.readInt()
+                    val saved = ArrayList<Pair<String, Long>>(m)
+                    repeat(m) { saved += d.readUTF() to d.readLong() }
+                    if (saved.isNotEmpty()) env.importCommands(commandHistoryKey, saved)
                 }
             }
         }
-        if (detachedAt != null) marker("detached", detachedAt)
     }
 
     companion object {
