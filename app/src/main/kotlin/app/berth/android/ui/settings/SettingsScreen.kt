@@ -47,6 +47,7 @@ import app.berth.android.ui.importer.ImportKeySheet
 import app.berth.android.ui.importer.ImportKnownHostsSheet
 import app.berth.android.ui.keys.GenerateKeySheet
 import app.berth.android.ui.keys.NewKeyPrefill
+import app.berth.android.ui.stage.deckKeyHeightNote
 import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.terminal.resolvedFamily
 import app.berth.android.ui.theme.Berth
@@ -144,7 +145,7 @@ fun SettingsScreen(
             val chevron: @Composable RowScope.() -> Unit = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }
             Panel(label = "Deck") {
                 ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
-                CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
+                CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }, caption = deckKeyHeightNote(deck.heightDp, Berth.density)) { vm.setDeckLayout(deck.copy(heightDp = it)) }
                 // Two-row mode (spec C4) is the tablet's default: a device preference over the layout's own row count, which the editor sets.
                 ToggleRow(
                     "Two rows on a large screen",

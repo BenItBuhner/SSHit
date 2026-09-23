@@ -99,6 +99,7 @@ import app.berth.android.ui.components.CoachMark
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.DeckAction
@@ -116,6 +117,7 @@ import app.berth.domain.model.isEmpty
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Layers that can be shown: a layer that is only the snippets slot needs pinned snippets to show. */
 fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
@@ -196,8 +198,8 @@ fun Deck(
     val layer = layers[index]
     var strip by remember { mutableStateOf<List<DeckKeyCode>?>(null) }
     val haptics = LocalHapticFeedback.current
-    // The setting is the key height (A9: 44, range 40 to 52); each row adds the 4 dp gap above and below.
-    val keyHeight = layout.heightDp.coerceIn(40, 52).dp
+    // Each row adds the 4 dp gap above and below the key.
+    val keyHeight = deckKeyHeight(layout.heightDp, Berth.density)
     val rowHeight = keyHeight + DeckGap * 2
     // The second row keeps its own layer and starts on Nav/Fn when the layout has one (spec C4).
     var secondIndex by rememberSaveable(layers.size) {
@@ -312,7 +314,8 @@ private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
 
 /**
  * A key's text sized from the key rather than from the system's font size (spec A11 at the
- * interface's 1.3× cap): the key stands 44 dp whatever the font size, so a label in sp outgrows it,
+ * interface's 1.3× cap): the key stands as tall as it is set (44 dp, 40 under Compact) whatever the
+ * font size, so a label in sp outgrows it,
  * and at the cap the alternate's hint at the top right ran into the label under it (`S-Tab` into
  * `Tab`, `^C` into `Ctrl`). Font size and line height are read as dp, the way a terminal's cell text
  * is sized, so the two texts sit where they sit at 1×; what a reader hears is not affected, and the
@@ -333,6 +336,26 @@ private fun TextStyle.keySized(): TextStyle = with(LocalDensity.current) {
  * would fuse them into.
  */
 private fun TextStyle.inMono(): TextStyle = copy(fontFamily = JetBrainsMono, fontFeatureSettings = MonoFontFeatures)
+
+/** The key heights the setting offers (spec A9: 44, from 40 to 52). */
+private const val MIN_KEY_DP = 40
+private const val MAX_KEY_DP = 52
+
+/**
+ * A Deck key's height: the setting (spec A9) less the step [density] takes off the Deck (A12: 44
+ * to 40 under Compact), and never under the setting's own least, so Compact brings each height one
+ * step down and leaves 40 where it is.
+ */
+fun deckKeyHeight(setting: Int, density: DensityTokens): Dp {
+    val step = DensityTokens.Comfortable.deckKey - density.deckKey
+    return (setting.coerceIn(MIN_KEY_DP, MAX_KEY_DP).dp - step).coerceAtLeast(MIN_KEY_DP.dp)
+}
+
+/** What [density] makes of the height [setting], to say beside the setting (`40 dp under Compact`); null where the keys stand as set. */
+fun deckKeyHeightNote(setting: Int, density: DensityTokens): String? {
+    val height = deckKeyHeight(setting, density)
+    return if (height < setting.coerceIn(MIN_KEY_DP, MAX_KEY_DP).dp) "${height.value.roundToInt()} dp under Compact" else null
+}
 
 /** Gap between Deck keys and between the keys and the strip's edges (A11). */
 private val DeckGap = 4.dp
