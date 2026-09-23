@@ -651,6 +651,9 @@ class AppViewModel @Inject constructor(
     /** Ctrl+Tab / Ctrl+Shift+Tab and the tab swipe. */
     fun stepTab(delta: Int) = sessions.stepActive(delta)
 
+    /** Ctrl+Shift+[ / ] (spec C22): the previous or next group with tabs, at the tab it last had on stage. */
+    fun stepGroup(delta: Int) = sessions.stepGroup(delta)
+
     /** Ctrl+1…9. */
     fun activateTabAt(index: Int) = sessions.activateAt(index)
 

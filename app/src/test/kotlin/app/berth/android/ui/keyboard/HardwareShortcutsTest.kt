@@ -12,12 +12,14 @@ import android.view.KeyEvent.KEYCODE_EQUALS
 import android.view.KeyEvent.KEYCODE_ESCAPE
 import android.view.KeyEvent.KEYCODE_F
 import android.view.KeyEvent.KEYCODE_K
+import android.view.KeyEvent.KEYCODE_LEFT_BRACKET
 import android.view.KeyEvent.KEYCODE_MINUS
 import android.view.KeyEvent.KEYCODE_NUMPAD_ADD
 import android.view.KeyEvent.KEYCODE_NUMPAD_SUBTRACT
 import android.view.KeyEvent.KEYCODE_O
 import android.view.KeyEvent.KEYCODE_P
 import android.view.KeyEvent.KEYCODE_Q
+import android.view.KeyEvent.KEYCODE_RIGHT_BRACKET
 import android.view.KeyEvent.KEYCODE_S
 import android.view.KeyEvent.KEYCODE_SLASH
 import android.view.KeyEvent.KEYCODE_T
@@ -72,6 +74,7 @@ class HardwareShortcutsTest {
         stage = object : StageShortcutActions {
             override fun newTab() { calls += "new" }
             override fun closeTab() { calls += "close" }
+            override fun stepGroup(delta: Int) { calls += "group $delta" }
             override fun tabSwitcher() { calls += "switcher" }
             override fun jumpToUnread() { calls += "unread" }
             override fun find() { calls += "find" }
@@ -163,6 +166,15 @@ class HardwareShortcutsTest {
         assertFalse(handle(KEYCODE_D, META_CTRL_ON))
         assertFalse(handle(KEYCODE_O, META_CTRL_ON))
         assertEquals(listOf("split", "other pane"), calls)
+    }
+
+    @Test
+    fun `Ctrl+Shift+brackets step the groups, and Ctrl+brackets stay the terminal's Escape and readline's character-search`() {
+        assertTrue(handle(KEYCODE_LEFT_BRACKET, META_CTRL_ON or META_SHIFT_ON))
+        assertTrue(handle(KEYCODE_RIGHT_BRACKET, META_CTRL_ON or META_SHIFT_ON))
+        assertFalse(handle(KEYCODE_LEFT_BRACKET, META_CTRL_ON))
+        assertFalse(handle(KEYCODE_RIGHT_BRACKET, META_CTRL_ON))
+        assertEquals(listOf("group -1", "group 1"), calls)
     }
 
     @Test

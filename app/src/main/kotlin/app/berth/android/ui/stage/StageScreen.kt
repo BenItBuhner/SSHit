@@ -229,6 +229,7 @@ fun StageScreen(
         val stage = object : StageShortcutActions {
             override fun newTab() { actions.newTab() }
             override fun closeTab() { vm.activeTabId.value?.let(actions::close) }
+            override fun stepGroup(delta: Int) { vm.stepGroup(delta) }
             override fun tabSwitcher() { actions.openSwitcher() }
             override fun jumpToUnread() { vm.jumpToUnread() }
             override fun find() { if (session != null) tools.openSearch() }

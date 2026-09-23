@@ -72,6 +72,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -156,6 +157,14 @@ class SessionManager @Inject constructor(
     private val carrierByHost = HashMap<String, String>()
 
     private val _currentWorkspaceId = MutableStateFlow<String?>(null)
+
+    /**
+     * The tab each group last had on stage, by group id, for a jump to the group to bring back. For
+     * this process only: a relaunch comes back to its one active tab, and a group's first tab is
+     * the jump's answer until one of its tabs has been on stage again. An entry can name a tab that
+     * has since closed or moved group; [setCurrentWorkspace] checks it against the strip.
+     */
+    private val lastActiveByGroup = ConcurrentHashMap<String, String>()
 
     /** The current group: the active tab's group, or the group last chosen in the drawer when no tab is active. */
     val currentWorkspaceId: StateFlow<String?> = _currentWorkspaceId.asStateFlow()
@@ -1085,7 +1094,10 @@ class SessionManager @Inject constructor(
 
     /** The current group and the persisted active id follow the tab that just took the stage. */
     private fun follow(tab: ManagedTab?) {
-        tab?.record?.value?.workspaceId?.let { group -> if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false) }
+        tab?.record?.value?.workspaceId?.let { group ->
+            lastActiveByGroup[group] = tab.id
+            if (_currentWorkspaceId.value != group) setCurrentWorkspace(group, activate = false)
+        }
         scope.launch { settings.setLastActiveSessionId(tab?.id) }
     }
 
@@ -1247,7 +1259,24 @@ class SessionManager @Inject constructor(
         if (!activate) return
         val activeGroup = activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId }
         if (activeGroup == id) return
-        stripNow().firstOrNull { it.workspaceId == id }?.let { setActive(it.id) }
+        val group = stripNow().filter { it.workspaceId == id }
+        val target = lastActiveByGroup[id]?.let { last -> group.firstOrNull { it.id == last } } ?: group.firstOrNull()
+        target?.let { setActive(it.id) }
+    }
+
+    /**
+     * Ctrl+Shift+[ and ] (spec C22, "Previous / next group"): the group before or after the current
+     * one among those with tabs, in strip order and wrapping, comes on stage at the tab it last had
+     * there ([setCurrentWorkspace]). A collapsed group is a stop like any other: collapsing folds
+     * its tabs out of the strip's way, and the chip still stands for the group, as the drawer's row
+     * does. A group with no tabs is passed over, since there is nothing of it to put on stage.
+     */
+    fun stepGroup(delta: Int) {
+        val groups = stripNow().map { it.workspaceId }.distinct()
+        if (groups.isEmpty()) return
+        val current = groups.indexOf(activeTabId.value?.let { tabNow(it)?.record?.value?.workspaceId } ?: _currentWorkspaceId.value)
+        val next = if (current < 0) (if (delta >= 0) 0 else groups.lastIndex) else Math.floorMod(current + delta, groups.size)
+        setCurrentWorkspace(groups[next])
     }
 
     // ---- reorder, rename, groups ------------------------------------------------------------------

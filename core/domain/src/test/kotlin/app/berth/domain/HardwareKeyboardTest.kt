@@ -37,7 +37,10 @@ class HardwareKeyboardTest {
         assertEquals("Ctrl+Shift+/", table.chord(ChordAction.SHORTCUT_SHEET).label())
         assertEquals("Ctrl+Shift+=", table.chord(ChordAction.FONT_LARGER).label())
         assertEquals("Ctrl+Shift+\u2212", table.chord(ChordAction.FONT_SMALLER).label())
-        // Sixteen actions, sixteen distinct chords: no two defaults collide.
+        // Spec C22's "[ / ] Previous / next group", on the brackets themselves.
+        assertEquals("Ctrl+Shift+[", table.chord(ChordAction.PREVIOUS_GROUP).label())
+        assertEquals("Ctrl+Shift+]", table.chord(ChordAction.NEXT_GROUP).label())
+        // Eighteen actions, eighteen distinct chords: no two defaults collide.
         assertEquals(ChordAction.entries.size, table.chords.values.toSet().size)
         for (action in ChordAction.entries) assertEquals(action, table.actionFor(table.chord(action)))
     }
@@ -50,6 +53,7 @@ class HardwareKeyboardTest {
         assertEquals(ChordKey("T", leader = true), leader.chord(ChordAction.NEW_TAB))
         assertEquals("Leader T", leader.chord(ChordAction.NEW_TAB).label())
         assertEquals(ChordAction.NEW_TAB, leader.actionFor(ChordKey("T", leader = true)))
+        assertEquals(ChordAction.NEXT_GROUP, leader.actionFor(ChordKey("RIGHT_BRACKET", leader = true)))
         assertNull(leader.actionFor(ChordKey("F", ctrl = true, shift = true)), "Ctrl+Shift+F is nobody's under the Leader")
         // The browser conventions take no prefix, so the table never lists them; the strip keeps them whatever the prefix.
         assertNull(leader.actionFor(ChordKey("TAB", ctrl = true)))
