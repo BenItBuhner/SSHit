@@ -295,6 +295,27 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `resetModes keeps the history the host's cap left and the cap with it, and the next shell's lines still drop the oldest`() {
+        val (t, _) = term(cols = 5, rows = 2)
+        t.maxScrollback = 4
+        for (i in 1..8) t.write("l$i\r\n")
+        assertEquals(4, t.scrollbackSize)
+        val dropped = t.linesDropped
+        t.write("\u001b[?1049hvim\r\nvim\r\nvim\r\n")
+
+        t.resetModes()
+        assertEquals(4, t.maxScrollback)
+        assertEquals(4, t.scrollbackSize)
+        assertEquals(dropped, t.linesDropped)
+        assertEquals(listOf("l4", "l5", "l6", "l7"), (0 until 4).map { t.bufferLine(it).toText() })
+        assertEquals("l8", t.text(0))
+        t.write("new\r\n")
+        assertEquals(4, t.scrollbackSize)
+        assertEquals(dropped + 1, t.linesDropped)
+        assertEquals("l5", t.bufferLine(0).toText())
+    }
+
+    @Test
     fun `alternate screen never writes scrollback`() {
         val (t, _) = term(cols = 5, rows = 2)
         t.write("\u001b[?1049h")
