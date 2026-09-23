@@ -97,6 +97,7 @@ class TerminalInputAltGrTest {
         stage = object : StageShortcutActions {
             override fun newTab() {}
             override fun closeTab() {}
+            override fun stepGroup(delta: Int) {}
             override fun tabSwitcher() {}
             override fun jumpToUnread() {}
             override fun find() { calls += "find" }

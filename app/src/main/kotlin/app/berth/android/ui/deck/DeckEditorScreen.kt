@@ -75,6 +75,7 @@ import app.berth.android.ui.stage.Deck
 import app.berth.android.ui.stage.DeckEditing
 import app.berth.android.ui.stage.ModifierLatch
 import app.berth.android.ui.stage.StageInput
+import app.berth.android.ui.stage.deckKeyHeightNote
 import app.berth.android.ui.stage.usableLayers
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -350,7 +351,7 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 SegmentedControl(listOf("Nub", "Four keys", "Both"), DeckArrows.entries.indexOf(draft.arrows), onSelect = { edit(draft.copy(arrows = DeckArrows.entries[it])) })
                 Row(Modifier.fillMaxWidth().padding(top = 14.dp)) {
                     Caption("Height", modifier = Modifier.weight(1f))
-                    Text("${draft.heightDp} dp", style = BerthType.caption, color = c.text3)
+                    Text("${draft.heightDp} dp" + deckKeyHeightNote(draft.heightDp, Berth.density)?.let { ", $it" }.orEmpty(), style = BerthType.caption, color = c.text3)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("40", style = BerthType.caption, color = c.text3)

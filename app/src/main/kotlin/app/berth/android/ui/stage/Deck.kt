@@ -91,10 +91,15 @@ import app.berth.android.ui.a11y.keyPressable
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
+import app.berth.android.ui.components.BerthMenu
+import app.berth.android.ui.components.BerthMenuItem
+import app.berth.android.ui.components.BerthMenuToggle
 import app.berth.android.ui.components.BerthPopup
+import app.berth.android.ui.components.CoachMark
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.theme.JetBrainsMono
 import app.berth.android.ui.theme.MonoFontFeatures
 import app.berth.domain.model.DeckAction
@@ -112,6 +117,7 @@ import app.berth.domain.model.isEmpty
 import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** Layers that can be shown: a layer that is only the snippets slot needs pinned snippets to show. */
 fun DeckLayout.usableLayers(hasSnippets: Boolean = false): List<DeckLayer> =
@@ -157,6 +163,10 @@ class DeckEditing(
  * to one key per snippet, and a key bound to a snippet through [DeckAction.Snippet] shows its name.
  * [DeckLayout.reach] mirrors the row for the left thumb, [DeckLayout.arrows] swaps the Nub for
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
+ * [onPredictiveTextChange], where the Stage gives one, puts the tab's [predictiveText] in the
+ * layer picker; [echoOff] puts the grip's dot up while the shell is not echoing (spec C2).
+ * [nubCoachMark], where the Stage gives one, hangs the Nub's one-time coach mark over the first
+ * row's Nub while the Deck is in reach and not being edited, and is what its dismissal calls.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -168,6 +178,9 @@ fun Deck(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     predictiveText: Boolean = false,
+    onPredictiveTextChange: ((Boolean) -> Unit)? = null,
+    echoOff: Boolean = false,
+    nubCoachMark: (() -> Unit)? = null,
     settings: DeckSettings = DeckSettings(),
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
@@ -185,12 +198,19 @@ fun Deck(
     val layer = layers[index]
     var strip by remember { mutableStateOf<List<DeckKeyCode>?>(null) }
     val haptics = LocalHapticFeedback.current
-    // The setting is the key height (A9: 44, range 40 to 52); each row adds the 4 dp gap above and below.
-    val keyHeight = layout.heightDp.coerceIn(40, 52).dp
+    // Each row adds the 4 dp gap above and below the key.
+    val keyHeight = deckKeyHeight(layout.heightDp, Berth.density)
     val rowHeight = keyHeight + DeckGap * 2
     // The second row keeps its own layer and starts on Nav/Fn when the layout has one (spec C4).
     var secondIndex by rememberSaveable(layers.size) {
         mutableIntStateOf(layers.indexOfFirst { it.name.equals("Nav/Fn", ignoreCase = true) }.takeIf { it >= 0 } ?: 1)
+    }
+    // The picker reads in the interface's direction; left reach mirrors the row, not the words.
+    val direction = LocalLayoutDirection.current
+    fun pickerFor(shown: Int, taken: Int?, onSelect: (Int) -> Unit) =
+        LayerPicker(layers, shown, taken, onSelect, predictiveText, onPredictiveTextChange, direction)
+    val nubMark: (@Composable () -> Unit)? = nubCoachMark?.takeIf { enabled && editing == null }?.let { dismiss ->
+        { CompositionLocalProvider(LocalLayoutDirection provides direction) { CoachMark(NubCoachMarkText, onDismiss = dismiss) } }
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides if (layout.reach == DeckReach.LEFT) LayoutDirection.Rtl else LayoutDirection.Ltr) {
@@ -233,16 +253,18 @@ fun Deck(
                 haptics = haptics,
                 height = rowHeight,
                 settings = settings,
-                grip = { Grip(accent = predictiveText, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
+                grip = { Grip(accent = predictiveText, echoOff = echoOff, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
                 // A layer step leaves the F-strip where it is, in either row: the strip belongs to the
                 // key whose hold raised it and that hold closes it, and a strip that fell with the
                 // step would drop a row of Deck under the finger and reflow the terminal (#20 review).
                 onNext = { onLayerIndexChange((index + 1) % layers.size) },
                 onPrevious = { onLayerIndexChange((index - 1 + layers.size) % layers.size) },
+                picker = pickerFor(index, taken = null, onLayerIndexChange),
                 onLayerHold = onOpenDeckEditor,
                 onStrip = { held -> strip = if (strip == held) null else held },
                 editing = editing,
                 snippets = snippets,
+                nubMark = nubMark,
             )
             if (layout.rows >= 2 && layers.size > 1) {
                 val second = secondIndex.coerceIn(0, layers.lastIndex).let { if (it == index) (it + 1) % layers.size else it }
@@ -259,10 +281,13 @@ fun Deck(
                     grip = null,
                     onNext = { secondIndex = (second + 1) % layers.size },
                     onPrevious = { secondIndex = (second - 1 + layers.size) % layers.size },
+                    // The first row's layer is not offered here: this row would step past it the moment it took it.
+                    picker = pickerFor(second, taken = index) { secondIndex = it },
                     onLayerHold = onOpenDeckEditor,
                     onStrip = { held -> strip = if (strip == held) null else held },
                     editing = null,
                     snippets = snippets,
+                    nubMark = null,
                 )
             }
         }
@@ -289,7 +314,8 @@ private fun DeckKey.withSnippetName(snippets: List<Snippet>): DeckKey {
 
 /**
  * A key's text sized from the key rather than from the system's font size (spec A11 at the
- * interface's 1.3× cap): the key stands 44 dp whatever the font size, so a label in sp outgrows it,
+ * interface's 1.3× cap): the key stands as tall as it is set (44 dp, 40 under Compact) whatever the
+ * font size, so a label in sp outgrows it,
  * and at the cap the alternate's hint at the top right ran into the label under it (`S-Tab` into
  * `Tab`, `^C` into `Ctrl`). Font size and line height are read as dp, the way a terminal's cell text
  * is sized, so the two texts sit where they sit at 1×; what a reader hears is not affected, and the
@@ -310,6 +336,26 @@ private fun TextStyle.keySized(): TextStyle = with(LocalDensity.current) {
  * would fuse them into.
  */
 private fun TextStyle.inMono(): TextStyle = copy(fontFamily = JetBrainsMono, fontFeatureSettings = MonoFontFeatures)
+
+/** The key heights the setting offers (spec A9: 44, from 40 to 52). */
+private const val MIN_KEY_DP = 40
+private const val MAX_KEY_DP = 52
+
+/**
+ * A Deck key's height: the setting (spec A9) less the step [density] takes off the Deck (A12: 44
+ * to 40 under Compact), and never under the setting's own least, so Compact brings each height one
+ * step down and leaves 40 where it is.
+ */
+fun deckKeyHeight(setting: Int, density: DensityTokens): Dp {
+    val step = DensityTokens.Comfortable.deckKey - density.deckKey
+    return (setting.coerceIn(MIN_KEY_DP, MAX_KEY_DP).dp - step).coerceAtLeast(MIN_KEY_DP.dp)
+}
+
+/** What [density] makes of the height [setting], to say beside the setting (`40 dp under Compact`); null where the keys stand as set. */
+fun deckKeyHeightNote(setting: Int, density: DensityTokens): String? {
+    val height = deckKeyHeight(setting, density)
+    return if (height < setting.coerceIn(MIN_KEY_DP, MAX_KEY_DP).dp) "${height.value.roundToInt()} dp under Compact" else null
+}
 
 /** Gap between Deck keys and between the keys and the strip's edges (A11). */
 private val DeckGap = 4.dp
@@ -347,10 +393,12 @@ private fun DeckRow(
     grip: (@Composable () -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    picker: LayerPicker,
     onLayerHold: (() -> Unit)?,
     onStrip: (List<DeckKeyCode>) -> Unit,
     editing: DeckEditing?,
     snippets: List<Snippet>,
+    nubMark: (@Composable () -> Unit)?,
 ) {
     val c = Berth.colors
     val patterns = rememberDeckHaptics(haptics)
@@ -410,6 +458,7 @@ private fun DeckRow(
                         onLayerStep = onLayerStep,
                         onStrip = onStrip,
                         snippets = snippets,
+                        nubMark = nubMark,
                     )
                     if (editing != null && key.isEmpty) {
                         Text("empty", style = BerthType.caption.keySized(), color = c.text3)
@@ -428,15 +477,21 @@ private fun DeckRow(
             }
         }
         if (layerCount > 1) {
-            LayerKey(
-                enabled = enabled,
-                haptics = haptics,
-                layerName = layer.name,
-                modifier = Modifier.width(40.dp).fillMaxHeight(),
-                onNext = onNext,
-                onPrevious = onPrevious,
-                onHold = onLayerHold,
-            )
+            var picking by remember { mutableStateOf(false) }
+            // The picker hangs from the key: the menu is placed from the box that holds it.
+            Box(Modifier.width(40.dp).fillMaxHeight()) {
+                LayerKey(
+                    enabled = enabled,
+                    haptics = haptics,
+                    layerName = layer.name,
+                    modifier = Modifier.fillMaxSize(),
+                    onNext = onNext,
+                    onPrevious = onPrevious,
+                    onPick = { picking = true },
+                    onHold = onLayerHold,
+                )
+                LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
+            }
         } else {
             DeckEditorKey(
                 enabled = enabled,
@@ -465,6 +520,7 @@ private fun SlotContent(
     onLayerStep: ((Int) -> Unit)?,
     onStrip: (List<DeckKeyCode>) -> Unit,
     snippets: List<Snippet>,
+    nubMark: (@Composable () -> Unit)?,
 ) {
     @Composable
     fun arrowKeys(modifier: Modifier) {
@@ -486,10 +542,10 @@ private fun SlotContent(
     }
     when {
         key.nub -> when (arrows) {
-            DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, onArrow = { input.onKey(it) })
+            DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
             DeckArrows.FOUR_KEYS -> arrowKeys(Modifier.fillMaxSize())
             DeckArrows.BOTH -> Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, onArrow = { input.onKey(it) })
+                Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
                 arrowKeys(Modifier.weight(3f).fillMaxHeight())
             }
         }
@@ -638,10 +694,12 @@ private fun Modifier.editableSlot(
  * unread tab. The vertical gestures
  * are decided at release, from where the finger is then, so a finger can come back to a tap; a hold
  * that fires swallows the release, and a finger that has moved past the slop is a swipe in the
- * making, never a hold.
+ * making, never a hold. The pill is `accent` while the tab has predictive text on ([accent]), and
+ * a 4 dp dot stands over it while the shell is not echoing ([echoOff], spec C2: a password prompt,
+ * whose typing the command history leaves out); a reader hears both as the grip's state.
  */
 @Composable
-private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
+private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
@@ -697,6 +755,7 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
             // A button that opens the session sheet; the swipe and the hold are its actions.
             .semantics {
                 contentDescription = "Grip, opens the session sheet"
+                gripState(accent, echoOff)?.let { stateDescription = it }
                 role = Role.Button
                 onClick { onTap(); true }
                 customActions = listOf(
@@ -712,8 +771,25 @@ private fun Grip(accent: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, on
                 .clip(CircleShape)
                 .background(color),
         )
+        if (echoOff) {
+            Box(
+                Modifier
+                    // Centred over the pill's top: half the pill, a 2 dp gap, half the dot.
+                    .offset(y = -(24 / 2 + 2 + 4 / 2).dp)
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(c.text2),
+            )
+        }
     }
 }
+
+/** What the grip's marks say to a reader: the pill's predictive text and the dot's echo, or nothing when neither is up. */
+internal fun gripState(predictiveText: Boolean, echoOff: Boolean): String? =
+    listOfNotNull("predictive text on".takeIf { predictiveText }, "echo off, history paused".takeIf { echoOff })
+        .joinToString()
+        .ifEmpty { null }
+        ?.replaceFirstChar { it.uppercaseChar() }
 
 /** A swipe on a key or the grip is 24 dp of travel (spec C4, D2); the way across a key for the layer is twice that. */
 private val SwipeThreshold = 24.dp
@@ -910,11 +986,11 @@ fun DeckKeyView(
             )
             if (secondary != null && !previewUp) {
                 // A8: text alternates in Caption, symbols in Mono; the swipe-up's at the top right in text.3.
-                AlternateHint(secondary, secondaryColor, Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp))
+                AlternateHint(secondary, secondaryColor, Modifier.align(Alignment.TopEnd).hintInset(top = true).padding(end = 6.dp))
             }
             if (tertiary != null && !previewDown) {
                 // The swipe-down's at the bottom right (spec D2), the way the swipe-up's sits at the top.
-                AlternateHint(tertiary, secondaryColor, Modifier.align(Alignment.BottomEnd).padding(bottom = 3.dp, end = 6.dp))
+                AlternateHint(tertiary, secondaryColor, Modifier.align(Alignment.BottomEnd).hintInset(top = false).padding(end = 6.dp))
             }
             popover?.let { chips -> AlternatesPopover(chips, hovered, onPlaced = { left, width -> touch.machine?.chipsAt(left, width) }) }
             if (latchState == LatchState.LOCKED) {
@@ -934,6 +1010,24 @@ fun DeckKeyView(
 
 /** Label-centre to lock-bar-centre distance: half the 13 sp label's cap height plus the 3 dp gap plus half the bar. */
 private val LockBarOffset = 9.dp
+
+/** An alternate's inset from the key's top or bottom edge on a key [HintHeight] tall or taller. */
+private val HintInset = 3.dp
+private const val HintHeight = 44
+
+/**
+ * An alternate's inset from its edge of the key, the top ([top]) or the bottom: [HintInset] on a
+ * key [HintHeight] dp tall or taller, and on a shorter one less by as much as the centred label
+ * comes nearer that edge, so the hint keeps the distance from the label it has at 44. On a 40 dp
+ * key (Compact's, and the setting's least) that is 1 dp in; at 3 the `S-Tab` hint's baseline met
+ * the `Tab` label's ink (the design audit's S10). Read from the key's own height, whole dp.
+ */
+private fun Modifier.hintInset(top: Boolean): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0))
+    val keyDp = if (constraints.hasBoundedHeight) (constraints.maxHeight / density).roundToInt() else HintHeight
+    val inset = (HintInset - ((HintHeight - keyDp).coerceAtLeast(0) / 2f).dp).coerceAtLeast(0.dp).roundToPx()
+    layout(placeable.width, placeable.height + inset) { placeable.place(0, if (top) inset else 0) }
+}
 
 /** The [DeckKeyGesture] of the touch on a key while there is one; what the popover reports its chips to. */
 private class TouchInProgress {
@@ -1019,13 +1113,17 @@ private fun String.isSymbolLabel(): Boolean =
 
 private val FunctionKeyLabel = Regex("F\\d{1,2}")
 
-/** The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed. */
+/**
+ * The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed.
+ * [mark] is the coach mark that hangs from it, where the Deck has one up.
+ */
 @Composable
 fun Nub(
     enabled: Boolean,
     haptics: HapticFeedback,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
+    mark: (@Composable () -> Unit)? = null,
     onArrow: (TerminalKey) -> Unit,
 ) {
     val c = Berth.colors
@@ -1140,13 +1238,18 @@ fun Nub(
             chevron(TerminalKey.LEFT, -1f, 0f)
             chevron(TerminalKey.RIGHT, 1f, 0f)
         }
+        mark?.invoke()
     }
 }
 
+/** What the Nub's coach mark says (product vision, the Nub): the gesture, its spatial speed, and the tap. */
+internal const val NubCoachMarkText = "This is the Nub, your arrow keys. Drag from it in any direction; the further you drag, the faster it repeats. A tap sends Up."
+
 /**
- * The trailing layer key: tap for the next layer, swipe up for the previous one, hold for the Deck
- * editor. To a reader it is the `Layer` button in the state [layerName], whose activation is
- * `Next layer` and whose actions are the previous layer and the editor.
+ * The trailing layer key (spec C4): tap for the next layer, swipe up for the layer picker
+ * ([LayerPickerMenu]), hold for the Deck editor. To a reader it is the `Layer` button in the state
+ * [layerName], whose activation is `Next layer` and whose actions are the previous layer, the
+ * picker and the editor; the swipe across a key (spec D2) is the finger's way back a layer.
  */
 @Composable
 private fun LayerKey(
@@ -1156,6 +1259,7 @@ private fun LayerKey(
     modifier: Modifier = Modifier,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onPick: () -> Unit,
     onHold: (() -> Unit)? = null,
 ) {
     val c = Berth.colors
@@ -1165,6 +1269,7 @@ private fun LayerKey(
     // rather than the ones captured when the key first composed (those hold that moment's layer index).
     val currentOnNext by rememberUpdatedState(onNext)
     val currentOnPrevious by rememberUpdatedState(onPrevious)
+    val currentOnPick by rememberUpdatedState(onPick)
     val currentOnHold by rememberUpdatedState(onHold)
     val interaction = remember { MutableInteractionSource() }
     val focused = interaction.showsFocus()
@@ -1181,6 +1286,7 @@ private fun LayerKey(
                     onClick(label = "Next layer") { patterns.keyTap(); currentOnNext(); true }
                     customActions = buildList {
                         add(CustomAccessibilityAction("Previous layer") { patterns.keyTap(); currentOnPrevious(); true })
+                        add(CustomAccessibilityAction("Layers") { patterns.keyTap(); currentOnPick(); true })
                         if (onHold != null) add(CustomAccessibilityAction("Deck editor") { patterns.hold(); currentOnHold?.invoke(); true })
                     }
                 } else {
@@ -1209,7 +1315,7 @@ private fun LayerKey(
                             if (!change.pressed) {
                                 if (!held) {
                                     patterns.keyTap()
-                                    if (up) currentOnPrevious() else currentOnNext()
+                                    if (up) currentOnPick() else currentOnNext()
                                 }
                                 break
                             }
@@ -1224,6 +1330,43 @@ private fun LayerKey(
         contentAlignment = Alignment.Center,
     ) {
         BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
+    }
+}
+
+/**
+ * What a row's layer picker offers: the Deck's [layers] with the row's [shown] one selected, less
+ * the one the other row [taken] shows, and the tab's predictive text when the Stage lets the Deck
+ * switch it ([onPredictiveTextChange]). The picker reads in [direction], the interface's.
+ */
+private class LayerPicker(
+    val layers: List<DeckLayer>,
+    val shown: Int,
+    val taken: Int?,
+    val onSelect: (Int) -> Unit,
+    val predictiveText: Boolean,
+    val onPredictiveTextChange: ((Boolean) -> Unit)?,
+    val direction: LayoutDirection,
+)
+
+/**
+ * The layer picker the layer key's swipe up opens (spec C4): a menu of the row's layers, where a
+ * choice shows that layer and closes it, then the Predictive text switch for the tab on stage
+ * (product vision, the IME: the Session sheet's and the picker's), which leaves it open.
+ */
+@Composable
+private fun LayerPickerMenu(picker: LayerPicker, expanded: Boolean, onDismiss: () -> Unit) {
+    CompositionLocalProvider(LocalLayoutDirection provides picker.direction) {
+        BerthMenu(expanded = expanded, onDismiss = onDismiss) {
+            picker.layers.forEachIndexed { i, layer ->
+                if (i != picker.taken) {
+                    BerthMenuItem(layer.name, selected = i == picker.shown, onClick = {
+                        picker.onSelect(i)
+                        onDismiss()
+                    })
+                }
+            }
+            picker.onPredictiveTextChange?.let { change -> BerthMenuToggle("Predictive text", picker.predictiveText, change) }
+        }
     }
 }
 

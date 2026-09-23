@@ -6,15 +6,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.session.TerminalSession
+import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
@@ -42,7 +47,8 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Predictive text as a flag of the tab's (spec C6, C4): the Deck key spec C5 lets a user give the
  * action to flips the same flag the Session sheet's row does, on the tab on stage and no other,
- * and a tab that closes takes its flag with it, so nothing about a shell outlives the shell.
+ * and a tab that closes takes its flag with it, so nothing about a shell outlives the shell. Where
+ * a tab starts is Settings' (C20): off as the app comes.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -137,5 +143,59 @@ class PredictiveTextTest {
         compose.waitUntil(5_000) { compose.waitForIdle(); "s-pihole" !in flags() }
         assertEquals("the closed tab's flag went with it; the other's stands", setOf("s-build"), flags())
         assertFalse("s-homelab" in flags())
+    }
+
+    /**
+     * Settings › Predictive text on (spec C20): every terminal tab this process sees starts with
+     * suggestions, those restored at launch as well, since the stored default is read before any
+     * tab is decided; a Files tab has no keyboard to tell and is left off.
+     */
+    @Test
+    fun `with the default on, the terminal tabs restored at launch start with suggestions and a Files tab does not`() {
+        runBlocking { graph.settings.setPredictiveTextDefault(true) }
+        StageFixture.seed(graph)
+        val vm = graph.viewModel
+        compose.waitUntil(5_000) { compose.waitForIdle(); flags().size == 3 }
+        assertEquals(setOf("s-homelab", "s-pihole", "s-build"), flags())
+
+        val files = runBlocking { graph.sessions.openFiles("s-homelab") }!!
+        compose.waitUntil(5_000) { compose.waitForIdle(); vm.tabs.value.any { it.id == files.id } }
+        compose.waitForIdle()
+        assertEquals("no keyboard on a Files tab to tell", setOf("s-homelab", "s-pihole", "s-build"), flags())
+    }
+
+    /**
+     * The default is where a tab starts, not a switch over the open ones: turned on, it leaves the
+     * tabs already open as they are and the next tab starts on; turned off again, that tab keeps
+     * its suggestions until its own toggle says otherwise.
+     */
+    @Test
+    fun `a change of the default leaves the open tabs as they are and the next tab starts from it`() {
+        StageFixture.seed(graph)
+        val vm = graph.viewModel
+        compose.waitUntil(5_000) { compose.waitForIdle(); vm.tabs.value.size == 3 }
+        vm.setPredictiveTextDefault(true)
+        compose.waitUntil(5_000) { compose.waitForIdle(); vm.predictiveTextDefault.value }
+        assertTrue("the open tabs keep theirs", flags().isEmpty())
+
+        val twin = runBlocking { graph.sessions.duplicate("s-pihole") }!!.also { sessions += it as TerminalSession }
+        compose.waitUntil(5_000) { compose.waitForIdle(); twin.id in flags() }
+        assertEquals(setOf(twin.id), flags())
+
+        vm.setPredictiveTextDefault(false)
+        compose.waitUntil(5_000) { compose.waitForIdle(); !vm.predictiveTextDefault.value }
+        assertEquals("the new tab keeps what it started with", setOf(twin.id), flags())
+    }
+
+    /** The row itself (spec C20, Input): off as the app comes, and a tap stores the default. */
+    @Test
+    fun `the Settings row is off as the app comes and a tap turns the default on`() {
+        compose.setContent {
+            BerthTheme(InterfaceTheme.DEFAULT) { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        }
+        compose.onNodeWithText("On for new tabs").performScrollTo().assertIsOff()
+        compose.onNodeWithText("On for new tabs").performClick()
+        compose.waitUntil(5_000) { graph.settings.predictiveDefault.value }
+        compose.onNodeWithText("On for new tabs").assertIsOn()
     }
 }

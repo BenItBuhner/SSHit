@@ -800,6 +800,7 @@ class TerminalSession(
             withContext(Dispatchers.IO) {
                 sh.output().collect { chunk ->
                     noteOutput()
+                    echo.output()
                     emulator.write(chunk)
                 }
             }
@@ -944,6 +945,7 @@ class TerminalSession(
         closeTunnels()
         shell?.let { runCatching { it.close() } }
         shell = null
+        echo.ended()
         connection?.let { c -> c.onDisconnected = null; runCatching { c.close() } }
         connection = null
     }
@@ -1002,6 +1004,7 @@ class TerminalSession(
     fun sendText(text: String, modifiers: Int = 0, base: Int = 0) {
         noteActivity()
         trackTyped(text, modifiers and Mod.SHIFT.inv())
+        watchEcho(text, modifiers and Mod.SHIFT.inv())
         if (modifiers == 0) {
             send(text.toByteArray(Charsets.UTF_8))
             return
@@ -1021,19 +1024,52 @@ class TerminalSession(
     fun sendKey(key: TerminalKey, modifiers: Int = 0) {
         noteActivity()
         trackKey(key, modifiers)
+        if (key == TerminalKey.ENTER) echo.ended()
         send(emulator.encodeKey(key, modifiers))
     }
 
     fun paste(text: String) {
         noteActivity()
         trackPaste(text)
+        watchEcho(text, 0)
         send(emulator.encodePaste(text))
     }
 
     fun sendControl(char: Char) {
         noteActivity()
         trackTyped(char.toString(), Mod.CTRL)
+        watchEcho(char.toString(), Mod.CTRL)
         send(emulator.encodeText(char.code, Mod.CTRL))
+    }
+
+    // ---- echo (spec C2, a password prompt) -------------------------------------------------------
+
+    private val echo = EchoWatch(scope)
+
+    /**
+     * Whether the shell has stopped echoing what is typed, as far as what came back says
+     * ([EchoWatch]): the grip's dot, since nothing typed then lands in the command history.
+     */
+    val echoOff: StateFlow<Boolean> get() = echo.off
+
+    /**
+     * Printable text that reaches a shell on the primary screen asks [echo] to watch for its echo;
+     * a line break, Ctrl+C or Ctrl+D ends the line. With no shell the text went nowhere, and there
+     * is no echo to wait for.
+     */
+    private fun watchEcho(text: String, modifiers: Int) {
+        if (modifiers and Mod.CTRL != 0) {
+            val c = text.singleOrNull()?.lowercaseChar()
+            if (c == 'c' || c == 'd') echo.ended()
+            return
+        }
+        if (text.indexOfAny(LINE_BREAKS) >= 0) {
+            echo.ended()
+            return
+        }
+        if (modifiers != 0 || shell == null || text.all { it.isISOControl() }) return
+        if (synchronized(emulator.lock) { emulator.isAlternateScreen }) return
+        echo.typed()
     }
 
     // ---- the network under the socket, and idleness (vision §4.4) --------------------------------

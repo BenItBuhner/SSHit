@@ -113,6 +113,49 @@ class SessionManagerTest {
     }
 
     /**
+     * Ctrl+Shift+] and [ (spec C22, "Previous / next group"): the groups with tabs in strip order,
+     * wrapping, the empty Homelab group passed over since it has nothing to put on stage.
+     */
+    @Test
+    fun `the group chords walk the groups with tabs in strip order and wrap, passing over an empty one`() {
+        seed(currentGroup = Workspace.DEFAULT_ID, lastActive = "s-homelab")
+        restore()
+        awaitStrip()
+        graph.sessions.stepGroup(1)
+        assertEquals("Work's first tab, none of its tabs on stage before", "f-build", graph.sessions.activeTabId.value)
+        assertEquals("ws-work", graph.sessions.currentWorkspaceId.value)
+        graph.sessions.stepGroup(1)
+        assertEquals("past the empty group and round to Home", "s-homelab", graph.sessions.activeTabId.value)
+        assertEquals(Workspace.DEFAULT_ID, graph.sessions.currentWorkspaceId.value)
+        graph.sessions.stepGroup(-1)
+        assertEquals("back round to Work", "f-build", graph.sessions.activeTabId.value)
+    }
+
+    /**
+     * A jump to a group, from the chord or the drawer's row, puts on stage the tab the group last
+     * had there (the drawer's KDoc said so; the jump took the group's first tab whatever had been on
+     * stage), and a collapsed group is a stop like any other.
+     */
+    @Test
+    fun `a jump to a group brings back the tab it last had on stage, collapsed or not`() {
+        seed(currentGroup = Workspace.DEFAULT_ID, lastActive = "s-homelab")
+        restore()
+        awaitStrip()
+        graph.sessions.setActive("s-build")
+        graph.sessions.setActive("s-pihole")
+        graph.sessions.setCurrentWorkspace("ws-work")
+        assertEquals("Work's terminal, not its first tab", "s-build", graph.sessions.activeTabId.value)
+        graph.sessions.stepGroup(-1)
+        assertEquals("Home's pi-hole, not its first tab", "s-pihole", graph.sessions.activeTabId.value)
+
+        graph.sessions.setWorkspaceCollapsed("ws-work", true)
+        await("Work collapsed") { graph.sessions.workspaces.value.first { it.id == "ws-work" }.collapsed }
+        graph.sessions.stepGroup(1)
+        assertEquals("into the collapsed group, at its tab", "s-build", graph.sessions.activeTabId.value)
+        assertEquals("ws-work", graph.sessions.currentWorkspaceId.value)
+    }
+
+    /**
      * Duplicate (spec C3) opens a second tab on the host directly after the source, in its group: a
      * terminal after a terminal. After a Tunnels tab it opens the host's shell, not a second Tunnels
      * login, which would bind the same local ports again and fail by construction (#13 opened the
@@ -196,6 +239,11 @@ class SessionManagerTest {
     private fun restore() = runBlocking {
         graph.sessions.restore()
         assertTrue("restore reports itself done", graph.sessions.restored.value)
+    }
+
+    /** The strip is read against the groups, which the manager collects a step behind the restore. */
+    private fun awaitStrip() = await("the strip over three groups") {
+        graph.sessions.workspaces.value.size == 3 && graph.sessions.tabs.value.map { it.id } == listOf("s-homelab", "s-pihole", "f-build", "s-build")
     }
 
     /** The fallback is written back on the manager's scope; give it a moment to land. */

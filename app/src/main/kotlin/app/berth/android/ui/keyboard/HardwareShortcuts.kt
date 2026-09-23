@@ -16,6 +16,9 @@ interface StageShortcutActions {
     /** [ChordAction.CLOSE_TAB], and plain Ctrl+W while the strip has it: the active tab closes. */
     fun closeTab()
 
+    /** [ChordAction.PREVIOUS_GROUP] and [ChordAction.NEXT_GROUP]: the group before or after the current one, wrapping. */
+    fun stepGroup(delta: Int)
+
     /** [ChordAction.TAB_SWITCHER]: the switcher sheet. */
     fun tabSwitcher()
 
@@ -142,6 +145,8 @@ class HardwareShortcuts(
         when (action) {
             ChordAction.NEW_TAB -> stage.newTab()
             ChordAction.CLOSE_TAB -> stage.closeTab()
+            ChordAction.PREVIOUS_GROUP -> stage.stepGroup(-1)
+            ChordAction.NEXT_GROUP -> stage.stepGroup(1)
             ChordAction.TAB_SWITCHER -> stage.tabSwitcher()
             ChordAction.JUMP_TO_UNREAD -> stage.jumpToUnread()
             ChordAction.FIND -> stage.find()
@@ -182,6 +187,8 @@ data class ShortcutGroup(val title: String, val entries: List<ShortcutEntry>, va
 fun chordTitle(action: ChordAction): String = when (action) {
     ChordAction.NEW_TAB -> "New tab"
     ChordAction.CLOSE_TAB -> "Close tab"
+    ChordAction.PREVIOUS_GROUP -> "Previous group"
+    ChordAction.NEXT_GROUP -> "Next group"
     ChordAction.TAB_SWITCHER -> "Tab switcher"
     ChordAction.JUMP_TO_UNREAD -> "Jump to the tab that needs you"
     ChordAction.FIND -> "Find in scrollback"
@@ -249,6 +256,8 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
         ShortcutEntry("Ctrl+9", "Last tab"),
         entry(ChordAction.NEW_TAB, also = "Ctrl+T".takeUnless { readline }),
         entry(ChordAction.CLOSE_TAB, also = "Ctrl+W".takeUnless { readline }),
+        entry(ChordAction.PREVIOUS_GROUP),
+        entry(ChordAction.NEXT_GROUP),
         entry(ChordAction.TAB_SWITCHER),
         entry(ChordAction.JUMP_TO_UNREAD),
     )

@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -37,6 +36,7 @@ import app.berth.android.screenshots.FIXED_INSTALL
 import app.berth.android.screenshots.FIXED_NOW
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
+import app.berth.android.screenshots.assertDeckHintsClearOfLabels
 import app.berth.android.screenshots.assertNoBrokenWords
 import app.berth.android.screenshots.assertNoTextCut
 import app.berth.android.screenshots.captureAudited
@@ -160,7 +160,7 @@ class FontScaleScreenshotTest {
         assertEquals("a font that follows takes the system's scale, uncapped", 2f, following)
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(DeckKeyTag)).fetchSemanticsNodes().isNotEmpty() }
         capture("stage-font-scale-2x")
-        assertDeckHintsClearOfLabels()
+        compose.assertDeckHintsClearOfLabels()
     }
 
     @Test
@@ -173,42 +173,6 @@ class FontScaleScreenshotTest {
         compose.waitUntil(5_000) { graph.viewModel.terminalFont.value.followSystemScale }
         capture("settings-font-scale-2x")
         compose.assertNoTextCut("the Settings screen at the interface's font cap")
-    }
-
-    /**
-     * A Deck key's texts are sized from the key, not the system, so its swipe alternate at the top
-     * right never runs into the label under it: the hint's baseline stays above the label's tallest
-     * ink by at least a dp, at this scale as at 1×. The label's ink top is taken as 0.76 of its font
-     * size above its baseline, an ascender's height in Inter, Roboto and JetBrains Mono (a capital
-     * stops lower, at about 0.73). Each text's pixels come from the density its layout was made
-     * with, the interface's at its cap, not the system's.
-     */
-    private fun assertDeckHintsClearOfLabels() {
-        val keys = compose.onAllNodes(hasTestTag(DeckKeyTag), useUnmergedTree = true).fetchSemanticsNodes()
-        var checked = 0
-        for (key in keys) {
-            val texts = key.textDescendants().mapNotNull { node -> node.textLayout()?.let { node to it } }
-            if (texts.size < 2) continue
-            val (hintNode, hint) = texts.minBy { it.first.boundsInRoot.top }
-            val (labelNode, label) = texts.maxBy { it.first.boundsInRoot.top }
-            val hintBaseline = hintNode.boundsInRoot.top + hint.lastBaseline
-            val labelFontPx = with(label.layoutInput.density) { label.layoutInput.style.fontSize.toPx() }
-            val labelInkTop = labelNode.boundsInRoot.top + label.firstBaseline - 0.76f * labelFontPx
-            val gapDp = (labelInkTop - hintBaseline) / label.layoutInput.density.density
-            assertTrue(
-                "'${hint.layoutInput.text}' over '${label.layoutInput.text}': the hint's baseline is ${"%.1f".format(gapDp)} dp above the label's ink, less than the 1 dp it keeps",
-                gapDp >= 1f,
-            )
-            checked++
-        }
-        assertTrue("keys with a hint over a label were on the Deck", checked > 0)
-    }
-
-    private fun SemanticsNode.textDescendants(): List<SemanticsNode> = buildList {
-        for (child in children) {
-            if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)
-            addAll(child.textDescendants())
-        }
     }
 
     /**

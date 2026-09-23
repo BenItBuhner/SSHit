@@ -87,6 +87,6 @@ class DeckEditorKeyTest {
         val node = compose.onNode(layerKey()).fetchSemanticsNode()
         assertEquals("Symbols", node.config.getOrNull(SemanticsProperties.StateDescription))
         val actions = node.config.getOrNull(SemanticsActions.CustomActions).orEmpty().map { it.label }
-        assertEquals(listOf("Previous layer", "Deck editor"), actions)
+        assertEquals(listOf("Previous layer", "Layers", "Deck editor"), actions)
     }
 }

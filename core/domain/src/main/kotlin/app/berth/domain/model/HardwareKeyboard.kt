@@ -57,6 +57,8 @@ enum class LeaderKey { RIGHT_CTRL, RIGHT_ALT }
 enum class ChordAction(val defaultKey: String) {
     NEW_TAB("T"),
     CLOSE_TAB("W"),
+    PREVIOUS_GROUP("LEFT_BRACKET"),
+    NEXT_GROUP("RIGHT_BRACKET"),
     TAB_SWITCHER("A"),
     JUMP_TO_UNREAD("U"),
     FIND("F"),
@@ -249,7 +251,7 @@ sealed interface ChordConflict {
 /**
  * The app's chords as the dispatcher and the sheet read them: each action's chord under the
  * settings, the action a pressed chord is, and what a chord would take from the shell. Built once
- * per settings document; [actionFor] is a lookup over sixteen entries.
+ * per settings document; [actionFor] is a lookup over eighteen entries.
  */
 class ChordTable(
     val settings: HardwareKeyboardSettings,

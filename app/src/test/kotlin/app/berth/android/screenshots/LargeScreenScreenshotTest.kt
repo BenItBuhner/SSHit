@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -65,12 +66,14 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
@@ -142,6 +145,7 @@ class LargeScreenScreenshotTest {
     @After
     fun tearDown() {
         graph.close()
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -174,6 +178,30 @@ class LargeScreenScreenshotTest {
         split("s-pihole", PaneSide.RIGHT)
         pane("s-homelab", PaneSide.LEFT).assertIsDisplayed()
         capture("phone-landscape-split")
+    }
+
+    /**
+     * The strip at the interface's font cap (spec A11): a tab's title and a chip's label stand in a
+     * box as tall as their line, so pi-hole keeps the foot of its p where the room between the
+     * tab's paddings cut it.
+     */
+    @Test
+    fun `phone upright at the font cap, the strip's titles and chips stand whole`() {
+        RuntimeEnvironment.setFontScale(2f)
+        mountApp()
+        assertStripLinesWhole("the strip upright at the font cap")
+        capture("phone-portrait-stage-font-scale-2x")
+    }
+
+    /** The shorter strip at the cap: its 28 dp tabs and 20 dp chips, where Caption's line alone is taller than the chip. */
+    @Test
+    @Config(qualifiers = PHONE_LANDSCAPE)
+    fun `phone on its side at the font cap, the shorter strip's titles and chips stand whole`() {
+        RuntimeEnvironment.setFontScale(2f)
+        mountApp()
+        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertStripLinesWhole("the shorter strip on its side at the font cap")
+        capture("phone-landscape-stage-font-scale-2x")
     }
 
     // ---- the foldable ----------------------------------------------------------------------------
@@ -642,6 +670,20 @@ class LargeScreenScreenshotTest {
             moveBy(Offset(usable * fraction, 0f))
             up()
         }
+    }
+
+    /**
+     * No text in the strip stands in a box shorter than its line, the cut that takes a descender's
+     * foot. Width is not read: a title too wide for its tab ends in the strip's own ellipsis.
+     */
+    private fun assertStripLinesWhole(where: String) {
+        val texts = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(hasContentDescription("Tabs, ", substring = true)), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .mapNotNull { it.textLayout() }
+        val read = texts.map { it.layoutInput.text.text }
+        assertTrue("the strip's titles and chip read: $read", read.containsAll(listOf("homelab", "pi-hole", "HOME")))
+        val short = texts.filter { it.size.height < it.multiParagraph.height }.map { "${it.layoutInput.text.text}, ${it.size.height} px of ${it.multiParagraph.height}" }
+        assertTrue("a line taller than its box on $where: $short", short.isEmpty())
     }
 
     /** The strip's height in dp: the style's height, since Robolectric's window has no status-bar inset to reach into. */

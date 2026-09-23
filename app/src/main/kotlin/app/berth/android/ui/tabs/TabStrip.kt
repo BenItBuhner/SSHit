@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -102,9 +103,11 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import app.berth.android.session.PaneSide
@@ -251,7 +254,8 @@ fun rememberTabStripState(): TabStripState {
  * gutter, then the fixed [trailing] slots (count tile, Overflow). Owns the status-bar inset and
  * the chrome chosen by the style: a flat toolbar on its [TabStripStyle.headerFill], or an island
  * inset from the edges. Over a flat toolbar the strip's items reach [TabStripStyle.topReach] into
- * the inset as touch target, so a 40 dp row answers a 44 dp target without moving anything.
+ * the inset as touch target ([reachUnder]), so a 40 dp row answers a 48 dp target without moving
+ * anything, and a 28 dp row stepped down under Compact the same.
  */
 @Composable
 fun TabHeader(
@@ -267,8 +271,7 @@ fun TabHeader(
 ) {
     val resolved = rememberResolvedTabStyle(style)
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    // The island's clip would cut a target that reached past its edge, so only the toolbar lends the inset.
-    val reach = if (style.chrome == StripChrome.FLAT) minOf(statusTop, style.topReach) else 0.dp
+    val reach = style.reachUnder(statusTop)
     val row: @Composable (Modifier) -> Unit = { rowModifier ->
         Row(rowModifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
             TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, entry = entry)
@@ -953,7 +956,9 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.TabItem(
                         drawRoundRect(bar, Offset(s.tabPadding.toPx(), size.height - h), Size(size.width - s.tabPadding.toPx() * 2, h), CornerRadius(h / 2))
                     }
                 }
-                .padding(s.tabPadding),
+                // Across only: the title's line at the interface's font cap is taller than the room
+                // between a padding above and below would be, and cut there it loses its descenders.
+                .padding(horizontal = s.tabPadding),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TabSwatch(
@@ -1025,19 +1030,35 @@ private fun CloseGlyph(onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused = interaction.showsFocus()
-    Box(
-        Modifier
-            .size(24.dp)
-            .clip(CircleShape)
-            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .clearAndSetSemantics {
-                contentDescription = "Close tab"
-                role = Role.Button
-            },
-        contentAlignment = Alignment.Center,
-    ) {
+    // The glyph centres in the tab's height beside its target, not inside it: nested in a target an
+    // odd number of pixels tall (24 dp at 2.625), two half-pixels round the same way and set it one low.
+    Box(Modifier.width(24.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .clearAndSetSemantics {
+                    contentDescription = "Close tab"
+                    role = Role.Button
+                },
+        )
         BerthIcon(BerthIcons.close, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 16.dp)
     }
+}
+
+/**
+ * The monogram in a swatch [size] across: as set for the default swatch, or in proportion in a
+ * smaller one (Compact's 16 dp), where the two letters at the interface's font cap would otherwise
+ * stand as wide as the swatch and meet its edges.
+ */
+internal fun TextStyle.scaledTo(size: Dp): TextStyle {
+    val scale = size / TabStripStyle.Default.swatchSize
+    if (scale >= 1f) return this
+    return copy(
+        fontSize = if (fontSize.isSpecified) fontSize * scale else fontSize,
+        lineHeight = if (lineHeight.isSpecified) lineHeight * scale else lineHeight,
+    )
 }
 
 /**
@@ -1109,7 +1130,7 @@ internal fun TabSwatch(
     ) {
         Text(
             monogram.take(2),
-            style = style.monogramStyle,
+            style = style.monogramStyle.scaledTo(size),
             color = style.monogramColor,
             maxLines = 1,
         )
@@ -1253,7 +1274,7 @@ internal fun ChipPill(
     val s = style.style
     Box(
         modifier
-            .height(s.chipHeight)
+            .heightIn(min = s.chipHeight)
             .drawBehind {
                 if (attention) {
                     val out = 2.dp.toPx()

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -42,6 +44,7 @@ import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -52,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -103,6 +107,7 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.CoachMarkId
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.components.Pill
@@ -128,10 +133,12 @@ import app.berth.android.ui.snippets.PendingSnippet
 import app.berth.android.ui.snippets.SnippetRunSheet
 import app.berth.android.ui.tabs.CountTile
 import app.berth.android.ui.tabs.LocalBottomEdge
+import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabHeader
 import app.berth.android.ui.tabs.TabShortcuts
 import app.berth.android.ui.tabs.rememberTabStripState
+import app.berth.android.ui.tabs.atDensity
 import app.berth.android.ui.terminal.TerminalCanvas
 import app.berth.android.ui.terminal.TerminalViewport
 import app.berth.android.ui.terminal.cursorShapeOf
@@ -228,6 +235,7 @@ fun StageScreen(
         val stage = object : StageShortcutActions {
             override fun newTab() { actions.newTab() }
             override fun closeTab() { vm.activeTabId.value?.let(actions::close) }
+            override fun stepGroup(delta: Int) { vm.stepGroup(delta) }
             override fun tabSwitcher() { actions.openSwitcher() }
             override fun jumpToUnread() { vm.jumpToUnread() }
             override fun find() { if (session != null) tools.openSearch() }
@@ -314,84 +322,89 @@ fun StageScreen(
     // kinds); the body writes them, the header reads them, and only while a Files tab is on stage.
     var lentRows by remember { mutableStateOf<OverflowRows?>(null) }
 
-    Column(
-        modifier
-            .fillMaxSize()
-            .background(c.surface0)
-            // The header absorbs the status bar and the bottom chrome the navigation bar and IME; in
-            // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-            .then(if (ownWindow != null) Modifier.windowFocus(ownWindow) else Modifier)
-            .onPreviewKeyEvent { shortcuts.handle(it, table) },
-    ) {
-        StageToolbar(tools, tab as? TerminalSession, focus) {
-            TabHeader(
-                slots = slots,
-                groups = groups,
-                activeId = activeId,
-                actions = actions,
-                modifier = Modifier.stageRegion(focus, StageRegion.Strip),
-                state = strip,
-                // Ctrl+Shift+S lands on the active tab, or the first in view, in or out of touch mode.
-                entry = focus.entry(StageRegion.Strip),
-                trailing = {
-                    // Pass-through's one sign (spec C22, A46), and its touch way out.
-                    if (passThroughMode) PassThroughPill(onEnd = { passThroughMode = false })
-                    if (slots.isNotEmpty()) {
-                        // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
-                        val lit by vm.attentionTabIds.collectAsState()
-                        val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
-                        CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
-                    }
-                    StageOverflow(
-                        tab = tab,
-                        deckVisible = deckVisible,
-                        onToggleDeck = { deckVisible = !deckVisible },
-                        onOpenSessionSheet = onOpenSessionSheet,
-                        onEditHost = onEditHost,
-                        onOpenDrawer = onOpenDrawer,
-                        actions = actions,
-                        extra = if (tab is FilesTab) lentRows else null,
-                        onFind = { tools.openSearch() },
-                        onHistory = { tools.historyOpen = true },
-                        onShareScreen = { (tab as? TerminalSession)?.let { tools.shareScreen(context, it) } },
-                        onSplit = onSplit,
-                        onUnsplit = onUnsplit,
-                        onGroups = onGroups,
-                    )
-                },
-            )
-        }
-        val body = Modifier.weight(1f).fillMaxWidth()
-        // The one body is the keyboard's body region; a layer marks the region itself, on each pane (spec C23).
-        val oneBody = body.stageRegion(focus, StageRegion.Body)
-        val bodies = StageBodies(
-            vm = vm,
-            holder = holder,
-            focus = focus,
-            deckVisible = deckVisible,
-            onDeckVisibleChange = { deckVisible = it },
-            layerIndex = layerIndex,
-            onLayerIndexChange = { layerIndex = it },
-            onLendOverflow = { lentRows = it },
-            onOpenSessionSheet = onOpenSessionSheet,
-            onEditHost = onEditHost,
-            onOpenDeckEditor = onOpenDeckEditor,
-            actions = actions,
-        )
-        when {
-            tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, oneBody)
-            // The tab flows run a frame behind the manager: while an active id is set but its tab has not
-            // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
-            // that has them (spec C3, Persistence: restore is instant).
-            activeId != null || !restored -> Spacer(body)
-            slots.isNotEmpty() -> {
-                // Tabs but no active id: never the empty state; the first tab goes on stage (the manager
-                // ignores an id that no longer resolves, so a strip a frame old cannot re-stage a closed tab).
-                Spacer(body)
-                LaunchedEffect(slots) { vm.setActive(slots.first().id) }
+    // The Stage's chrome at the density in force (spec A12): the strip, the bars that stand in
+    // for it and the panes' headers, on whatever style the shell hands the Stage.
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    CompositionLocalProvider(LocalTabStripStyle provides LocalTabStripStyle.current.atDensity(Berth.density.header, statusTop)) {
+        Column(
+            modifier
+                .fillMaxSize()
+                .background(c.surface0)
+                // The header absorbs the status bar and the bottom chrome the navigation bar and IME; in
+                // landscape the navigation bar and a cutout sit on a side, which nothing below takes.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .then(if (ownWindow != null) Modifier.windowFocus(ownWindow) else Modifier)
+                .onPreviewKeyEvent { shortcuts.handle(it, table) },
+        ) {
+            StageToolbar(tools, tab as? TerminalSession, focus) {
+                TabHeader(
+                    slots = slots,
+                    groups = groups,
+                    activeId = activeId,
+                    actions = actions,
+                    modifier = Modifier.stageRegion(focus, StageRegion.Strip),
+                    state = strip,
+                    // Ctrl+Shift+S lands on the active tab, or the first in view, in or out of touch mode.
+                    entry = focus.entry(StageRegion.Strip),
+                    trailing = {
+                        // Pass-through's one sign (spec C22, A46), and its touch way out.
+                        if (passThroughMode) PassThroughPill(onEnd = { passThroughMode = false })
+                        if (slots.isNotEmpty()) {
+                            // The ring says a tab the user cannot see needs them (spec C3): lit, not active, and not wholly in the strip's view.
+                            val lit by vm.attentionTabIds.collectAsState()
+                            val offScreen = lit.any { it != activeId && it !in strip.visibleTabIds }
+                            CountTile(count = slots.size, attention = offScreen, onClick = actions::openSwitcher, onLongClick = { vm.jumpToUnread() })
+                        }
+                        StageOverflow(
+                            tab = tab,
+                            deckVisible = deckVisible,
+                            onToggleDeck = { deckVisible = !deckVisible },
+                            onOpenSessionSheet = onOpenSessionSheet,
+                            onEditHost = onEditHost,
+                            onOpenDrawer = onOpenDrawer,
+                            actions = actions,
+                            extra = if (tab is FilesTab) lentRows else null,
+                            onFind = { tools.openSearch() },
+                            onHistory = { tools.historyOpen = true },
+                            onShareScreen = { (tab as? TerminalSession)?.let { tools.shareScreen(context, it) } },
+                            onSplit = onSplit,
+                            onUnsplit = onUnsplit,
+                            onGroups = onGroups,
+                        )
+                    },
+                )
             }
-            else -> EmptyStage(onNewTab = actions::newTab, modifier = oneBody)
+            val body = Modifier.weight(1f).fillMaxWidth()
+            // The one body is the keyboard's body region; a layer marks the region itself, on each pane (spec C23).
+            val oneBody = body.stageRegion(focus, StageRegion.Body)
+            val bodies = StageBodies(
+                vm = vm,
+                holder = holder,
+                focus = focus,
+                deckVisible = deckVisible,
+                onDeckVisibleChange = { deckVisible = it },
+                layerIndex = layerIndex,
+                onLayerIndexChange = { layerIndex = it },
+                onLendOverflow = { lentRows = it },
+                onOpenSessionSheet = onOpenSessionSheet,
+                onEditHost = onEditHost,
+                onOpenDeckEditor = onOpenDeckEditor,
+                actions = actions,
+            )
+            when {
+                tab != null -> if (layer != null) layer(bodies, tab, body) else bodies.TabBody(tab, tools, oneBody)
+                // The tab flows run a frame behind the manager: while an active id is set but its tab has not
+                // arrived, or nothing has been restored yet, compose nothing rather than "No tabs" over a strip
+                // that has them (spec C3, Persistence: restore is instant).
+                activeId != null || !restored -> Spacer(body)
+                slots.isNotEmpty() -> {
+                    // Tabs but no active id: never the empty state; the first tab goes on stage (the manager
+                    // ignores an id that no longer resolves, so a strip a frame old cannot re-stage a closed tab).
+                    Spacer(body)
+                    LaunchedEffect(slots) { vm.setActive(slots.first().id) }
+                }
+                else -> EmptyStage(onNewTab = actions::newTab, modifier = oneBody)
+            }
         }
     }
 }
@@ -679,6 +692,11 @@ private fun StageBody(
         vm.sharedPasteTaken(waiting)
         paste(waiting.text)
     }
+    // The input outlives recompositions (keyed on the tab), so what its app actions act on is read
+    // when a key is pressed: the layer on show now, and the split the Stage has now (a one-pane
+    // Stage offers none; a split one offers the way back to one).
+    val currentLayer by rememberUpdatedState(layerIndex)
+    val paneActions by rememberUpdatedState(LocalPaneActions.current)
     val input = remember(session.id) {
         StageInput(
             session = { session },
@@ -698,13 +716,15 @@ private fun StageBody(
                     DeckAppAction.PREVIOUS_SESSION -> vm.stepTab(-1)
                     DeckAppAction.DETACH -> vm.detach(session.id)
                     DeckAppAction.OPEN_SESSION_SHEET -> onOpenSessionSheet()
-                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(layerIndex + 1)
-                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
+                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(currentLayer + 1)
+                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(currentLayer - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     DeckAppAction.JUMP_TO_UNREAD -> vm.jumpToUnread()
                     // The Deck key for C5's "Toggle predictive text" flips the same flag the Session sheet's row does.
                     DeckAppAction.TOGGLE_PREDICTIVE_TEXT -> vm.setPredictiveText(session.id, session.id !in vm.predictiveTextTabIds.value)
-                    else -> Unit
+                    // The Overflow's Split and Ctrl+Shift+D's (spec C5, C22): two panes on a medium or wider
+                    // window, one again when split. A phone upright has no room for a second pane, so the key says so.
+                    DeckAppAction.SPLIT -> paneActions.split?.invoke() ?: run { tools.notice = SPLIT_NEEDS_WIDTH }
                 }
             },
         )
@@ -739,6 +759,9 @@ private fun StageBody(
     // Predictive text is the tab's own (spec C6, the Session sheet's row): the keyboard is told, and the grip lit, from the one flag.
     val predictiveTabIds by vm.predictiveTextTabIds.collectAsState()
     val predictiveText = session.id in predictiveTabIds
+    val echoOff by session.echoOff.collectAsState()
+    val coachMarksSeen by vm.coachMarksSeen.collectAsState()
+    val nubCoachMark: (() -> Unit)? = if (coachMarksSeen?.contains(CoachMarkId.NUB.key) == false) ({ vm.dismissCoachMark(CoachMarkId.NUB) }) else null
 
     val live = record.state == SessionState.LIVE
     val frameAlpha = when (record.state) {
@@ -877,6 +900,9 @@ private fun StageBody(
                         snippets = pinnedSnippets,
                         onOpenDeckEditor = onOpenDeckEditor,
                         predictiveText = predictiveText,
+                        onPredictiveTextChange = { vm.setPredictiveText(session.id, it) },
+                        echoOff = echoOff,
+                        nubCoachMark = nubCoachMark,
                     )
                 }
                 if (!deckVisible && deckStateOk) {
@@ -1142,6 +1168,9 @@ internal fun FailedPanel(
 internal fun editHopLabel(name: String): String = if (name.length <= MAX_HOP_LABEL_CHARS) "Edit $name" else "Edit jump host"
 
 private const val MAX_HOP_LABEL_CHARS = 16
+
+/** What a Deck key given Split says on a window too narrow for two panes (spec C22: medium and expanded widths). */
+internal const val SPLIT_NEEDS_WIDTH = "Split needs a wider window"
 
 /** "4 min ago" style ages; re-evaluated by callers each minute through [ageTicker]. */
 fun ageText(since: Long?, now: Long = System.currentTimeMillis()): String {

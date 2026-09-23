@@ -42,7 +42,10 @@ import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.ConnectionAnnouncer
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.CoachMarkCover
+import app.berth.android.ui.components.CoachMarkSlot
 import app.berth.android.ui.components.EmptyState
+import app.berth.android.ui.components.LocalCoachMarkSlot
 import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.diagnostics.CrashReportHost
@@ -139,11 +142,13 @@ private enum class ShellNotice { REOPEN, LINK, BACK, LANDED }
 
 /**
  * The strip on a phone lying on its side (spec C23): 32 dp with 28 dp tabs, the swatch at 20 in 4 dp
- * of padding, so the terminal keeps the rows the row would have taken. Only the sizes change; the
+ * of padding, so the terminal keeps the rows the row would have taken, and 16 dp of reach into the
+ * status bar, so its targets stand the 48 dp the 40 dp row's do. Only the sizes change; the
  * style they change on is the one in force (the direction's skin, through [LocalTabStripStyle]),
- * so a phone turning does not turn the strip back to the default skin.
+ * so a phone turning does not turn the strip back to the default skin. Under Compact the Stage
+ * steps it down again, to the density's 28 ([app.berth.android.ui.tabs.within]).
  */
-private fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 2.dp, chipHeight = 20.dp)
+internal fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 16.dp, chipHeight = 20.dp)
 
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
@@ -155,8 +160,14 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val windowFocus = remember { WindowFocus() }
     // What the notice bars and the Stage's bottom chrome hold at the window's bottom edge, so the state pill stands clear of a bar by construction.
     val bottomEdge = remember { BottomEdge() }
+    val coachMarks = remember { CoachMarkSlot() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus, LocalBottomEdge provides bottomEdge) {
+        CompositionLocalProvider(
+            LocalHapticLevel provides hapticLevel,
+            LocalWindowFocus provides windowFocus,
+            LocalBottomEdge provides bottomEdge,
+            LocalCoachMarkSlot provides coachMarks,
+        ) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
@@ -469,6 +480,8 @@ private fun Shell(vm: AppViewModel) {
                 Box(Modifier.weight(1f).fillMaxHeight().padding(start = RailGutter)) { screens() }
             }
         } else {
+            // The drawer is drawn in this window and a coach mark is a window over it.
+            if (drawer.currentValue == DrawerValue.Open || drawer.targetValue == DrawerValue.Open) CoachMarkCover()
             ModalNavigationDrawer(
                 drawerState = drawer,
                 gesturesEnabled = onStage || drawer.isOpen,

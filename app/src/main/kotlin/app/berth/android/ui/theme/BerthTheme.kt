@@ -95,8 +95,9 @@ object BerthRadius {
  * header 40 → 28 and Deck keys 44 → 40 under Compact. A row loses its 8 dp from its vertical
  * padding ([rowPadding], 10 → 6) as well as its floor, so a row with a caption, which stands above
  * the floor, shrinks as much as one without. [BerthTheme] provides the interface theme's as
- * [Berth.density]. The Stage header and the Deck still draw at [Comfortable]'s until the Stage
- * chrome reads the current tokens; each place that does so names [Comfortable] outright.
+ * [Berth.density]. The Stage steps its strip's style down to [header], and the Deck takes the
+ * step between the two [deckKey]s off its key height setting; a strip style and that setting are
+ * in [Comfortable]'s figures.
  */
 @Immutable
 data class DensityTokens(

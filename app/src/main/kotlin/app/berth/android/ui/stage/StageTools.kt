@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +41,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -69,9 +73,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.BerthMotion
+import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.touchTarget
@@ -94,6 +100,7 @@ import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.StripChrome
+import app.berth.android.ui.tabs.reachUnder
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
 import app.berth.android.ui.terminal.LinkTap
 import app.berth.android.ui.terminal.TerminalSearch
@@ -225,7 +232,8 @@ fun StageToolbar(tools: StageTools, session: TerminalSession?, focus: StageFocus
  * gives one Confirm tick and a passing "Copied" pill; the overflow holds Select all, Rectangular
  * and, when the selection is a link, Open. Paste is there only while the session is Live: on a
  * frozen frame there is nothing to paste into, and its absence says so. Same height and fill as
- * the header so nothing below moves. Where the row is too narrow for all of them (a phone at the
+ * the header so nothing below moves, and the same reach above its row ([reachUnder]), which its
+ * actions take as target as the header's controls do. Where the row is too narrow for all of them (a phone at the
  * interface's font cap), Share and then Search step into the overflow rather than squeeze the
  * buttons after them under their 48 dp: the bar measures what its actions need against the width
  * it has, so nothing is cut and nothing is guessed from the scale.
@@ -262,8 +270,10 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
         selection.clear()
         if (t.isNotEmpty()) share(context, t)
     }
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val reach = style.reachUnder(statusTop)
     val row: @Composable (Modifier) -> Unit = { m ->
-        BoxWithConstraints(m.height(style.height)) {
+        BoxWithConstraints(m.height(style.height + reach)) {
             val kept = barActionsThatFit(constraints.maxWidth, selection.summary, listOfNotNull("Copy", if (live) "Paste" else null), listOf("Search", "Share"))
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -272,7 +282,7 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
                     color = c.text2,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = SUMMARY_PAD_START, end = SUMMARY_PAD_END).semantics { contentDescription = "Selection, ${selection.summary}" },
+                    modifier = Modifier.padding(start = SUMMARY_PAD_START, end = SUMMARY_PAD_END, top = reach).semantics { contentDescription = "Selection, ${selection.summary}" },
                 )
                 Spacer(Modifier.weight(1f))
                 BarAction("Copy", onClick = ::copy)
@@ -317,23 +327,25 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
             }
         }
     }
-    when (style.chrome) {
-        StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).statusBarsPadding())
-        StripChrome.ISLAND -> Box(
-            Modifier
-                .fillMaxWidth()
-                .background(resolved.headerFill)
-                .statusBarsPadding()
-                .padding(start = style.islandInset, end = style.islandInset, top = style.islandInset),
-        ) {
-            row(Modifier.fillMaxWidth().clip(RoundedCornerShape(resolved.islandRadius)).background(resolved.islandFill))
+    CompositionLocalProvider(LocalTargetReach provides reach) {
+        when (style.chrome) {
+            StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
+            StripChrome.ISLAND -> Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(resolved.headerFill)
+                    .statusBarsPadding()
+                    .padding(start = style.islandInset, end = style.islandInset, top = style.islandInset),
+            ) {
+                row(Modifier.fillMaxWidth().clip(RoundedCornerShape(resolved.islandRadius)).background(resolved.islandFill))
+            }
         }
     }
 }
 
-/** A text action in a bar: accent Label, 44 dp tall, one tonal step when pressed. */
+/** A text action in a bar: accent Label, the row's height and [reach] above it, one tonal step on the row when pressed. */
 @Composable
-private fun BarAction(label: String, onClick: () -> Unit) {
+private fun BarAction(label: String, reach: Dp = LocalTargetReach.current, onClick: () -> Unit) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -341,10 +353,12 @@ private fun BarAction(label: String, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(BerthRadius.row))
-            .background(if (pressed || focused) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { role = Role.Button }
+            // The target is the whole box, reach included; the pressed step is the row's beneath it.
+            .padding(top = reach)
+            .clip(RoundedCornerShape(BerthRadius.row))
+            .background(if (pressed || focused) c.surface3 else androidx.compose.ui.graphics.Color.Transparent)
             // A short word (Copy) still answers to a 48 dp column; the longer ones set their own width.
             .defaultMinSize(minWidth = TouchTargetSize)
             .padding(horizontal = BAR_ACTION_PAD),

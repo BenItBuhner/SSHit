@@ -41,7 +41,11 @@ enum class StripChrome { FLAT, ISLAND }
  */
 @Immutable
 data class TabStripStyle(
-    /** Header row height; the terminal starts beneath it, so it must not grow past the ribbon it replaces. */
+    /**
+     * Header row height; the terminal starts beneath it, so it must not grow past the ribbon it
+     * replaces. The skin's own is Comfortable's; the Stage steps it to the density's where the
+     * status bar takes the step ([atDensity]).
+     */
     val height: Dp = DensityTokens.Comfortable.header,
     val chrome: StripChrome = StripChrome.FLAT,
     /** Island only: inset from the header's edges and the island's own radius. */
@@ -74,11 +78,16 @@ data class TabStripStyle(
      * How far a tab's touch target reaches up into the status-bar inset above a flat toolbar, so a
      * 40 dp row gives a 48 dp target (spec C3, Header row, at the accessibility pass's 48 dp floor
      * rather than the spec's 44); the visual does not move. The header's fixed slots reach with it.
+     * A strip stepped [within] a shorter header reaches the height it gave up further.
      */
     val topReach: Dp = 8.dp,
     val tabHeight: Dp = 32.dp,
     /** Null follows `BerthRadius.key` (10 dp at the default scale). */
     val tabRadius: Dp? = null,
+    /**
+     * Inset at either end of a tab. Its contents centre in [tabHeight], which at these sizes sets
+     * the swatch the same inset in from the top and bottom, and a title's taller line has the rest.
+     */
     val tabPadding: Dp = 6.dp,
     val tabMinWidth: Dp = 88.dp,
     val tabMaxWidth: Dp = 160.dp,
@@ -106,7 +115,10 @@ data class TabStripStyle(
     /** The monogram on the swatch; null is Label at 9 sp in white at 92 %. */
     val monogramStyle: TextStyle? = null,
     val monogramColor: Color? = null,
-    /** Group chip height, corner radius (null is a full pill) and the padding either side of its label. */
+    /**
+     * Group chip height, at least (a label's line at the interface's font cap may stand taller),
+     * corner radius (null is a full pill) and the padding either side of its label.
+     */
     val chipHeight: Dp = 22.dp,
     val chipRadius: Dp? = null,
     val chipPadding: Dp = 8.dp,
@@ -125,6 +137,53 @@ data class TabStripStyle(
         /** The spec's own treatment: raised active block, titled tabs everywhere, flat toolbar. */
         val Default = TabStripStyle()
     }
+}
+
+/**
+ * The strip in a header [header] tall, the height density sets (spec A12: 40, and 28 under
+ * Compact). A style no taller is itself. A taller one steps down to it: tabs 4 dp under the header
+ * in at most 4 dp of padding, the swatch as far in from a tab's top and bottom as from its start
+ * (so its attention ring, 3.5 dp outside it, stays inside the tab), and the chip with 4 dp above
+ * and below it. The height given up goes to [TabStripStyle.topReach], so a tab's target stands
+ * as tall as it did wherever the inset has that reach to lend ([atDensity]). Only sizes change,
+ * so the skin holds.
+ */
+fun TabStripStyle.within(header: Dp): TabStripStyle {
+    if (height <= header) return this
+    val tab = minOf(tabHeight, header - 4.dp)
+    val padding = minOf(tabPadding, 4.dp)
+    return copy(
+        height = header,
+        tabHeight = tab,
+        tabPadding = padding,
+        swatchSize = minOf(swatchSize, tab - padding * 2),
+        chipHeight = minOf(chipHeight, header - 8.dp),
+        topReach = topReach + (height - header),
+    )
+}
+
+/**
+ * The strip at the density's [header] (spec A12, ribbon 40 → 28) under a status bar [statusTop]
+ * tall: stepped [within] it where a flat toolbar's inset holds the stepped strip's whole reach,
+ * the phone's own status bar upright or on its side, so every target stands as tall as the skin's
+ * does and the terminal has the rows. Anywhere else (the lower window of a split screen, a
+ * freeform or desktop window, a tablet's, an island's header, which lends nothing) the step
+ * would come out of the targets or stand as empty band, so the skin's own strip stands there whole.
+ */
+fun TabStripStyle.atDensity(header: Dp, statusTop: Dp): TabStripStyle {
+    val stepped = within(header)
+    return if (chrome == StripChrome.FLAT && statusTop >= stepped.topReach) stepped else this
+}
+
+/**
+ * How far the header's row reaches above [TabStripStyle.height] under a status bar [statusTop]
+ * tall: over a flat toolbar the inset lends [TabStripStyle.topReach] as far as it goes, and
+ * whatever of the inset that leaves stands above the row. An island's clip would cut a target
+ * reaching past its edge, so an island lends nothing.
+ */
+fun TabStripStyle.reachUnder(statusTop: Dp): Dp = when (chrome) {
+    StripChrome.FLAT -> minOf(statusTop, topReach)
+    StripChrome.ISLAND -> 0.dp
 }
 
 /** The strip style in force; the Stage provides it once, so a direction change is a single edit. */

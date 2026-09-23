@@ -1,6 +1,7 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import androidx.activity.ComponentDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -46,10 +47,12 @@ import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.CoachMarkId
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.LocalDeckFit
+import app.berth.android.ui.stage.NubCoachMarkText
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.TwoRowDeckFit
@@ -66,6 +69,7 @@ import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.ssh.SshSecurity
+import app.berth.terminal.TerminalKey
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -76,8 +80,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -138,6 +144,7 @@ class DeckRailScreenshotTest {
     @After
     fun tearDown() {
         graph.close()
+        RuntimeEnvironment.setFontScale(1f)
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -355,6 +362,37 @@ class DeckRailScreenshotTest {
     }
 
     /**
+     * The layer key's swipe up (spec C4): the layer picker hangs over the Deck from the key, the
+     * row's layers with Base selected and the tab's Predictive text switch at the foot (product
+     * vision, the IME), every line whole.
+     */
+    @Test
+    fun `the layer key's swipe up opens the layer picker over the Deck`() = layerPicker("deck-layer-picker")
+
+    /** The same picker at the interface's 1.3× cap (spec A11): the menu is a window of its own, capped again. */
+    @Test
+    fun `the layer picker at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        layerPicker("deck-layer-picker-font-scale-2x")
+    }
+
+    private fun layerPicker(name: String) {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed { Stage(live) }
+        awaitDeck()
+        compose.onNode(hasContentDescription("Layer") and hasStateDescription("Base")).performTouchInput { down(center); moveBy(Offset(0f, -40.dp.px())); up() }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Predictive text") and hasAnyAncestor(isPopup())).fetchSemanticsNodes().isNotEmpty() }
+        for (layer in listOf("Base", "Symbols", "Nav/Fn", "tmux")) compose.onNode(hasText(layer) and hasAnyAncestor(isPopup())).assertIsDisplayed()
+        compose.onNode(hasText("Base") and hasAnyAncestor(isPopup())).assertIsSelected()
+        compose.assertNoTextCut("the layer picker", within = isPopup())
+        compose.assertNoBrokenWords("the layer picker", within = isPopup())
+        settle(400)
+        capture(name)
+    }
+
+    /**
      * The same hand against the local sshd, through the shell: what each gesture sends is what the
      * terminal echoes. The swipe down on `-` lands `_`, the hold on `/` and a slide onto its second
      * chip lands `?`, and the swipe across steps the layer without sending a thing.
@@ -413,6 +451,105 @@ class DeckRailScreenshotTest {
 
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
     }
+
+    /**
+     * The grip's dot against the local sshd (spec C2): at `read -s` what is typed is not echoed,
+     * and the dot stands over the grip's pill, the grip saying so to a reader, until Enter.
+     */
+    @Test
+    fun `live, a password prompt puts the grip's dot up until Enter`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        seedTestBox()
+        compose.setContent { AppRoot(graph.viewModel) }
+        val session = connectTestBox()
+        settle(1_200)
+        session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear\n")
+        settle(1_000)
+        awaitDeck()
+        val grip = hasContentDescription("Grip", substring = true)
+        val paused = grip and hasStateDescription("Echo off, history paused")
+
+        session.sendText("read -rsp 'Password: ' pw; echo\r")
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.startsWith("Password:") } }
+        for (ch in "hunter2") session.sendText(ch.toString())
+        compose.waitUntil(5_000) { compose.onAllNodes(paused).fetchSemanticsNodes().isNotEmpty() }
+        settle(400)
+        capture("deck-grip-echo-off-live")
+
+        session.sendKey(TerminalKey.ENTER)
+        compose.waitUntil(5_000) { compose.onAllNodes(paused).fetchSemanticsNodes().isEmpty() }
+        compose.onNode(grip).assertIsDisplayed()
+        graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+    }
+
+    // ---- the Nub's coach mark (spec A9, product vision: the Nub) --------------------------------------
+
+    /** A first run: the Nub's one-time mark hangs over the Nub on `surface.3`, its one action under its lines, every line whole. */
+    @Test
+    fun `a first run hangs the Nub's coach mark over the Nub`() = nubCoachMark("stage-nub-coach-mark")
+
+    /** The same mark at the interface's 1.3× cap (spec A11): a window of its own, capped again. */
+    @Test
+    fun `the Nub's coach mark at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        nubCoachMark("stage-nub-coach-mark-font-scale-2x")
+    }
+
+    private fun nubCoachMark(name: String) {
+        graph.settings.coachMarks.value = emptySet()
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed { Stage(live) }
+        awaitDeck()
+        compose.waitUntil(5_000) { compose.onAllNodes(nubMark).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasText("Got it") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+        compose.assertNoTextCut("the Nub's coach mark", within = isPopup())
+        compose.assertNoBrokenWords("the Nub's coach mark", within = isPopup())
+        settle(400)
+        capture(name)
+    }
+
+    /**
+     * The same first run through the shell against the local sshd: the mark is up once the tab is
+     * live, waits under the drawer and under the Session sheet (a mark is a window, and would float
+     * over both) and is back after each, and Got it puts it away for good.
+     */
+    @Test
+    fun `live, the Nub's coach mark waits under the drawer and the Session sheet, and Got it puts it away`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        graph.settings.coachMarks.value = emptySet()
+        seedTestBox()
+        compose.setContent { AppRoot(graph.viewModel) }
+        connectTestBox()
+        awaitDeck()
+        fun marks() = compose.onAllNodes(nubMark).fetchSemanticsNodes().size
+        compose.waitUntil(5_000) { marks() == 1 }
+        settle(400)
+        capture("stage-nub-coach-mark-live")
+
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Library").performClick()
+        waitForText("GROUPS")
+        compose.waitForIdle()
+        assertEquals("no mark over the drawer", 0, marks())
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { marks() == 1 }
+
+        compose.onNode(hasContentDescription("Grip", substring = true)).performTouchInput { down(center); up() }
+        waitForText("Look")
+        compose.waitForIdle()
+        assertEquals("no mark over the Session sheet", 0, marks())
+        compose.runOnUiThread { (ShadowDialog.getLatestDialog() as ComponentDialog).onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { marks() == 1 }
+
+        compose.onNode(hasText("Got it") and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { marks() == 0 }
+        compose.waitUntil(5_000) { CoachMarkId.NUB.key in graph.settings.coachMarks.value }
+        graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+    }
+
+    private val nubMark = hasText(NubCoachMarkText) and hasAnyAncestor(isPopup())
 
     // ---- the Session sheet's Look row (spec C6) -------------------------------------------------------
 
