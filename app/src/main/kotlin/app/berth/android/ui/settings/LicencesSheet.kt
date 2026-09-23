@@ -36,30 +36,45 @@ import kotlinx.coroutines.withContext
  * One thing Berth ships that came under terms of its own: its name, those terms in a few words,
  * and the licence files under `assets/licenses/` that carry them, verbatim from upstream. A
  * palette whose upstream has no licence file ([files] empty) is credited in [terms] alone.
+ * [origin] names where the files were taken from, at the version pinned, as the sheet shows it.
  */
-internal data class ShippedNotice(val name: String, val terms: String, val files: List<String> = emptyList())
+internal data class ShippedNotice(val name: String, val terms: String, val files: List<String> = emptyList(), val origin: String? = null)
 
 private const val OFL = "SIL Open Font License 1.1"
 
 /** What Settings › Licences lists, by kind, in the order the About line used to name them. */
 internal val SHIPPED_NOTICES: List<Pair<String, List<ShippedNotice>>> = listOf(
     "Fonts" to listOf(
-        ShippedNotice("IBM Plex Sans", OFL, listOf("ibm-plex-sans-OFL.txt")),
-        ShippedNotice("IBM Plex Mono", OFL, listOf("ibm-plex-mono-OFL.txt")),
-        ShippedNotice("JetBrains Mono", OFL, listOf("jetbrains-mono-OFL.txt")),
-        ShippedNotice("Fira Code", OFL, listOf("fira-code-OFL.txt")),
-        ShippedNotice("Source Code Pro", OFL, listOf("source-code-pro-OFL.txt")),
-        ShippedNotice("Hack", "MIT and the Bitstream Vera License", listOf("hack-LICENSE.txt")),
+        ShippedNotice("IBM Plex Sans", OFL, listOf("ibm-plex-sans-OFL.txt"), "github.com/IBM/plex at @ibm/plex-sans@1.1.0: packages/plex-sans/LICENSE.txt"),
+        ShippedNotice("IBM Plex Mono", OFL, listOf("ibm-plex-mono-OFL.txt"), "github.com/google/fonts at 633f320: ofl/ibmplexmono/OFL.txt"),
+        ShippedNotice("JetBrains Mono", OFL, listOf("jetbrains-mono-OFL.txt"), "github.com/JetBrains/JetBrainsMono at v2.304: OFL.txt"),
+        ShippedNotice("Fira Code", OFL, listOf("fira-code-OFL.txt"), "github.com/tonsky/FiraCode at 6.2: LICENSE"),
+        ShippedNotice("Source Code Pro", OFL, listOf("source-code-pro-OFL.txt"), "github.com/adobe-fonts/source-code-pro at 2.042R-u/1.062R-i/1.026R-vf: LICENSE.md"),
+        ShippedNotice("Hack", "MIT and the Bitstream Vera License", listOf("hack-LICENSE.txt"), "github.com/source-foundry/Hack at v3.003: LICENSE.md"),
         ShippedNotice(
             "Symbols Nerd Font Mono, from Nerd Fonts",
             "MIT; its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, " +
                 "Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT",
             listOf("nerd-fonts-symbols-MIT.txt", "nerd-fonts-symbols-icon-sets.txt"),
+            "github.com/ryanoasis/nerd-fonts at v3.5.1: patched-fonts/NerdFontsSymbolsOnly/LICENSE; the icon sets' table is Berth's own",
         ),
     ),
     "Libraries" to listOf(
-        ShippedNotice("sshj, the SSH transport", "Apache License 2.0"),
-        ShippedNotice("Public Suffix List, for link captions", "Mozilla Public License 2.0"),
+        ShippedNotice(
+            "sshj, the SSH transport",
+            "Apache License 2.0, with its NOTICE",
+            listOf("sshj-Apache-2.0.txt", "sshj-NOTICE.txt"),
+            "github.com/hierynomus/sshj at v0.40.0: LICENSE and NOTICE",
+        ),
+        ShippedNotice("asn-one, sshj's ASN.1 coding", "Apache License 2.0", listOf("asn-one-Apache-2.0.txt"), "github.com/hierynomus/asn-one at v0.6.0: LICENSE"),
+        ShippedNotice("Bouncy Castle, the cryptography", "MIT", listOf("bouncycastle-MIT.txt"), "github.com/bcgit/bc-java at r1rv86 (1.86): LICENSE.md"),
+        ShippedNotice("SLF4J, the transport's logging", "MIT", listOf("slf4j-MIT.txt"), "github.com/qos-ch/slf4j at v_2.0.17: LICENSE.txt"),
+        ShippedNotice(
+            "Public Suffix List, for link captions",
+            "Mozilla Public License 2.0",
+            listOf("public-suffix-list-MPL-2.0.txt"),
+            "github.com/publicsuffix/list at 17cb0fe, the list's own commit: LICENSE",
+        ),
     ),
     "Terminal palettes" to listOf(
         ShippedNotice("Catppuccin Mocha and Latte", "MIT", listOf("theme-catppuccin-MIT.txt")),
@@ -144,6 +159,7 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
         IconAction(onClick = onBack, description = "Back to Licences") { BerthIcon(BerthIcons.back) }
         Column(Modifier.padding(start = 4.dp)) { SheetTitle(notice.name, notice.terms) }
     }
+    if (notice.origin != null) Text("From ${notice.origin}", style = BerthType.caption, color = c.text2)
     for (p in paragraphs.orEmpty()) Text(p, style = BerthType.body, color = c.text2)
 }
 
@@ -151,29 +167,40 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
  * A licence file's paragraphs with its hard wraps joined, so its words flow to the sheet's width
  * rather than breaking twice a line. A line of 48 characters or more runs on into the next; a
  * shorter one (a heading, a title block, an address) keeps its break, as does a rule of dashes.
- * A table's row (three or more cells padded apart) is a paragraph of its own, its cells set apart
- * by [TABLE_CELL_SEPARATOR], since proportional type cannot keep the padding's columns.
+ * A table's row is a paragraph of its own, its cells set apart by [TABLE_CELL_SEPARATOR], since
+ * proportional type cannot keep the padding's columns: three or more cells padded apart, the
+ * first and the last holding a letter or a digit, standing in the columns of a neighbouring row.
+ * A justified text's padding falls somewhere else on every line, so it reads as prose, its runs
+ * of spaces set as one. A box drawn in stars (the MPL's disclaimers) loses its drawing: a rule of
+ * ten or more stars ends a paragraph, and a line inside keeps only what stands between its edge
+ * stars, so the words read as prose too.
  */
 internal fun licenceParagraphs(text: String): List<String> {
+    val lines = text.lines().map(String::trimEnd)
     val out = mutableListOf<String>()
     val paragraph = StringBuilder()
     var runsOn = false
+    var boxed = false
     fun endParagraph() {
         if (paragraph.isNotEmpty()) out += paragraph.toString()
         paragraph.clear()
         runsOn = false
     }
-    for (raw in text.lines()) {
-        val line = raw.trim()
+    for ((index, raw) in lines.withIndex()) {
+        var line = raw.trim()
+        if (line.matches(BOX_RULE)) {
+            boxed = !boxed
+            endParagraph()
+            continue
+        }
+        if (boxed && line.length >= 2 && line.startsWith('*') && line.endsWith('*')) line = line.substring(1, line.length - 1).trim()
         if (line.isEmpty()) {
             endParagraph()
             continue
         }
-        // One gap of two spaces is a sentence's end in older texts; two make a table's row.
-        val cells = line.split(COLUMN_GAP)
-        if (cells.size >= 3) {
+        if (lines.isTableRow(index)) {
             endParagraph()
-            out += cells.joinToString(TABLE_CELL_SEPARATOR)
+            out += line.split(COLUMN_GAP).joinToString(TABLE_CELL_SEPARATOR)
             continue
         }
         val words = line.any(Char::isLetter)
@@ -182,13 +209,33 @@ internal fun licenceParagraphs(text: String): List<String> {
             runsOn && words -> paragraph.append(' ')
             else -> paragraph.append('\n')
         }
-        paragraph.append(line)
+        paragraph.append(line.replace(COLUMN_GAP, " "))
         runsOn = words && line.length >= 48
     }
     endParagraph()
     return out
 }
 
+private fun List<String>.isTableRow(index: Int): Boolean {
+    val columns = cellStarts(this[index]) ?: return false
+    return listOf(index - 1, index + 1).any { it in indices && cellStarts(this[it]) == columns }
+}
+
+/**
+ * Where a line's cells start, if it could be a table's row: three or more cells padded apart
+ * (one gap of two spaces is a sentence's end in older texts), the first and the last holding a
+ * letter or a digit. Null for any other line.
+ */
+private fun cellStarts(line: String): List<Int>? {
+    val indent = line.length - line.trimStart().length
+    val body = line.trim()
+    val cells = body.split(COLUMN_GAP)
+    if (cells.size < 3 || !cells.first().any(Char::isLetterOrDigit) || !cells.last().any(Char::isLetterOrDigit)) return null
+    return listOf(indent) + COLUMN_GAP.findAll(body).map { indent + it.range.last + 1 }
+}
+
 internal const val TABLE_CELL_SEPARATOR = " \u00B7 "
 
 private val COLUMN_GAP = Regex(" {2,}")
+
+private val BOX_RULE = Regex("\\*{10,}")

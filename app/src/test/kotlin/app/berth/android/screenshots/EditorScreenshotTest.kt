@@ -22,6 +22,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasStateDescription
@@ -327,7 +328,33 @@ class EditorScreenshotTest {
         compose.onNodeWithText(codicons).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Weather Icons \u00B7 https://github.com/erikflowers/weather-icons \u00B7 2.0.10 (1.100) \u00B7 OFL 1.1").performScrollTo()
         capture("settings-licence-table$suffix")
-        compose.onNodeWithContentDescription("Back to Licences").performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo()
+        capture("settings-licences-libraries$suffix")
+        for (library in listOf("sshj, the SSH transport", "asn-one, sshj's ASN.1 coding", "Bouncy Castle, the cryptography", "SLF4J, the transport's logging", "Public Suffix List, for link captions")) {
+            compose.onNode(hasText(library) and hasClickAction()).assertExists()
+        }
+
+        compose.onNodeWithText("sshj, the SSH transport").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("sshj - SSHv2 library for Java", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("From github.com/hierynomus/sshj at v0.40.0: LICENSE and NOTICE").assertIsDisplayed()
+        capture("settings-licence-sshj$suffix")
+        compose.onNodeWithText("sshj - SSHv2 library for Java", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo().performClick()
+        val disclaimer = "6. Disclaimer of Warranty\n"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(disclaimer, substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(disclaimer, substring = true).performScrollTo()
+        val warranty = compose.onNodeWithText("Covered Software is provided under this License on an \"as is\" basis, without warranty", substring = true)
+        warranty.performScrollTo()
+        capture("settings-licence-disclaimer$suffix")
+        warranty.assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test

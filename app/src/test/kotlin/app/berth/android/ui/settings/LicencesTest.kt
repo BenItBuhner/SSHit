@@ -74,9 +74,60 @@ class LicencesTest {
         )
         val sentences = "      the brackets!)  The text should be enclosed in the appropriate\n      comment syntax for the file format."
         assertEquals(
-            listOf("the brackets!)  The text should be enclosed in the appropriate comment syntax for the file format."),
+            listOf("the brackets!) The text should be enclosed in the appropriate comment syntax for the file format."),
             licenceParagraphs(sentences),
         )
+    }
+
+    @Test
+    fun `a justified text reads as prose, though its lines hold three padded runs each`() {
+        val justified = """
+            |THE  SOFTWARE IS  PROVIDED  "AS  IS", WITHOUT  WARRANTY  OF ANY  KIND,
+            |EXPRESS OR  IMPLIED, INCLUDING  BUT NOT LIMITED  TO THE  WARRANTIES OF
+            |MERCHANTABILITY,    FITNESS    FOR    A   PARTICULAR    PURPOSE    AND
+            |NONINFRINGEMENT.
+        """.trimMargin()
+        assertEquals(
+            listOf("THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT."),
+            licenceParagraphs(justified),
+        )
+    }
+
+    @Test
+    fun `a box drawn in stars loses its drawing and its words read as prose, while a bullet outside keeps its star`() {
+        val boxed = """
+            |* A bullet outside any box keeps its star.
+            |
+            |************************************************************************
+            |*                                                                      *
+            |*  6. Disclaimer of Warranty                                           *
+            |*  -------------------------                                           *
+            |*                                                                      *
+            |*  Covered Software is provided under this License on an "as is"       *
+            |*  basis, without warranty of any kind, either expressed, implied, or  *
+            |*  statutory.                                                          *
+            |*                                                                      *
+            |************************************************************************
+            |
+            |8. Litigation
+        """.trimMargin()
+        assertEquals(
+            listOf(
+                "* A bullet outside any box keeps its star.",
+                "6. Disclaimer of Warranty\n-------------------------",
+                "Covered Software is provided under this License on an \"as is\" basis, without warranty of any kind, either expressed, implied, or statutory.",
+                "8. Litigation",
+            ),
+            licenceParagraphs(boxed),
+        )
+    }
+
+    @Test
+    fun `every font's and library's text names where it came from`() {
+        for ((section, notices) in SHIPPED_NOTICES.filter { (section, _) -> section == "Fonts" || section == "Libraries" }) {
+            for (notice in notices) assertTrue("$section: ${notice.name} names no origin", !notice.origin.isNullOrBlank() && notice.origin.startsWith("github.com/"))
+        }
+        assertEquals(listOf("Fonts", "Libraries"), SHIPPED_NOTICES.map { it.first }.filter { it == "Fonts" || it == "Libraries" })
     }
 
     @Test
@@ -91,7 +142,7 @@ class LicencesTest {
     fun `every shipped text keeps every word it has, and adds none but a table's separators`() {
         for (file in shipped.listFiles().orEmpty()) {
             val text = file.readText()
-            val words = { s: String -> s.split(Regex("[ \t\r\n]+")).filter { it.isNotEmpty() } }
+            val words = { s: String -> s.split(Regex("[ \t\r\n]+")).filter { it.isNotEmpty() && !it.all { c -> c == '*' } } }
             val shown = licenceParagraphs(text).flatMap { words(it.replace(TABLE_CELL_SEPARATOR, " ")) }
             assertEquals(file.name, words(text), shown)
         }
