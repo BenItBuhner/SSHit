@@ -50,7 +50,12 @@ internal val SHIPPED_NOTICES: List<Pair<String, List<ShippedNotice>>> = listOf(
         ShippedNotice("Fira Code", OFL, listOf("fira-code-OFL.txt")),
         ShippedNotice("Source Code Pro", OFL, listOf("source-code-pro-OFL.txt")),
         ShippedNotice("Hack", "MIT and the Bitstream Vera License", listOf("hack-LICENSE.txt")),
-        ShippedNotice("Powerline symbols from Nerd Fonts", "MIT", listOf("nerd-fonts-symbols-MIT.txt")),
+        ShippedNotice(
+            "Symbols Nerd Font Mono, from Nerd Fonts",
+            "MIT; its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, " +
+                "Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT",
+            listOf("nerd-fonts-symbols-MIT.txt", "nerd-fonts-symbols-icon-sets.txt"),
+        ),
     ),
     "Libraries" to listOf(
         ShippedNotice("sshj, the SSH transport", "Apache License 2.0"),
@@ -116,7 +121,8 @@ private fun NoticeList(onOpen: (ShippedNotice) -> Unit) {
                     notice.name,
                     subtitle = notice.terms,
                     titleMaxLines = 2,
-                    subtitleMaxLines = 3,
+                    // Terms are never ellipsised: the sheet scrolls.
+                    subtitleMaxLines = Int.MAX_VALUE,
                     onClick = if (notice.files.isEmpty()) null else ({ onOpen(notice) }),
                     trailing = if (notice.files.isEmpty()) null else ({ BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }),
                 )
