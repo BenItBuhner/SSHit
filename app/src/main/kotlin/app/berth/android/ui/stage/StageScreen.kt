@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -679,6 +680,11 @@ private fun StageBody(
         vm.sharedPasteTaken(waiting)
         paste(waiting.text)
     }
+    // The input outlives recompositions (keyed on the tab), so what its app actions act on is read
+    // when a key is pressed: the layer on show now, and the split the Stage has now (a one-pane
+    // Stage offers none; a split one offers the way back to one).
+    val currentLayer by rememberUpdatedState(layerIndex)
+    val paneActions by rememberUpdatedState(LocalPaneActions.current)
     val input = remember(session.id) {
         StageInput(
             session = { session },
@@ -698,13 +704,15 @@ private fun StageBody(
                     DeckAppAction.PREVIOUS_SESSION -> vm.stepTab(-1)
                     DeckAppAction.DETACH -> vm.detach(session.id)
                     DeckAppAction.OPEN_SESSION_SHEET -> onOpenSessionSheet()
-                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(layerIndex + 1)
-                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(layerIndex - 1)
+                    DeckAppAction.NEXT_LAYER -> onLayerIndexChange(currentLayer + 1)
+                    DeckAppAction.PREVIOUS_LAYER -> onLayerIndexChange(currentLayer - 1)
                     DeckAppAction.OPEN_DECK_EDITOR -> onOpenDeckEditor()
                     DeckAppAction.JUMP_TO_UNREAD -> vm.jumpToUnread()
                     // The Deck key for C5's "Toggle predictive text" flips the same flag the Session sheet's row does.
                     DeckAppAction.TOGGLE_PREDICTIVE_TEXT -> vm.setPredictiveText(session.id, session.id !in vm.predictiveTextTabIds.value)
-                    else -> Unit
+                    // The Overflow's Split and Ctrl+Shift+D's (spec C5, C22): two panes on a medium or wider
+                    // window, one again when split. A phone upright has no room for a second pane, so the key says so.
+                    DeckAppAction.SPLIT -> paneActions.split?.invoke() ?: run { tools.notice = SPLIT_NEEDS_WIDTH }
                 }
             },
         )
@@ -1142,6 +1150,9 @@ internal fun FailedPanel(
 internal fun editHopLabel(name: String): String = if (name.length <= MAX_HOP_LABEL_CHARS) "Edit $name" else "Edit jump host"
 
 private const val MAX_HOP_LABEL_CHARS = 16
+
+/** What a Deck key given Split says on a window too narrow for two panes (spec C22: medium and expanded widths). */
+internal const val SPLIT_NEEDS_WIDTH = "Split needs a wider window"
 
 /** "4 min ago" style ages; re-evaluated by callers each minute through [ageTicker]. */
 fun ageText(since: Long?, now: Long = System.currentTimeMillis()): String {

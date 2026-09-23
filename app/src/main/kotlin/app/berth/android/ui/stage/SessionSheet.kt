@@ -39,6 +39,7 @@ import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.components.Swatch
 import app.berth.android.ui.components.ToggleRow
+import app.berth.android.ui.layout.windowLayout
 import app.berth.android.ui.rail.SessionRow
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
@@ -48,10 +49,12 @@ import app.berth.domain.model.SessionState
 /**
  * The session sheet from the Grip, its tap or its drag up (spec C4), or the ribbon title: the tab's
  * facts and actions, then the host's look and the tab's Predictive text toggle (C6's order), then
- * the other tabs in the group for a quick switch. A terminal tab offers Detach or Reconnect, Files
- * (the host's Files tab, opened or brought on stage), Snippets and History, and under the pills the
- * Look row (the host's theme, font and size over a live Stage, [LookSheet]) once its host is saved;
- * a Files tab offers Connect or Reconnect for the terminal it rides and Terminal to go there. The
+ * the other tabs in the group for a quick switch. Every tab offers Split first on a window with
+ * room for two panes (Unsplit once split), as the Overflow does. A terminal tab offers Detach or
+ * Reconnect, Files (the host's Files tab, opened or brought on stage), Snippets and History, and
+ * under the pills the Look row (the host's theme, font and size over a live Stage, [LookSheet])
+ * once its host is saved; a Files tab offers Connect or Reconnect for the terminal it rides and
+ * Terminal to go there. The
  * sheet opens at its content height and scrolls when the window is shorter (spec C6 as ruled for
  * #19 and #20: its content is a fixed set of controls, not a list, so there is no fold to hide a row
  * of pills or the Look row under), and the actions are pills at their own width that wrap as they
@@ -98,6 +101,10 @@ fun SessionSheet(
     val defaultTheme by vm.defaultTerminalTheme.collectAsState()
     val fontSetting by vm.terminalFont.collectAsState()
     val workspaces by vm.workspaces.collectAsState()
+    // Split is the window's to offer (spec C6: hidden in portrait on phones; C23: two panes from a
+    // medium width), and once split the pill is the way back to one, as the Overflow's is.
+    val splitRoom = windowLayout().panes
+    val panes by vm.panes.collectAsState()
     fun lookOf(hostId: String): TerminalLook =
         resolveLook(themes, defaultTheme, fontSetting, hosts.firstOrNull { it.id == hostId } ?: host, workspaces.byId(record.workspaceId))
 
@@ -162,6 +169,11 @@ fun SessionSheet(
             // out (four of them at the interface cap); a pill given a share of the row instead cut its label.
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (splitRoom) {
+                        val two = panes
+                        if (two == null) BerthButton("Split", onClick = { vm.splitActive(); onDismiss() })
+                        else BerthButton("Unsplit", onClick = { vm.closePane(two.focused.other); onDismiss() })
+                    }
                     if (session != null) {
                         if (record.state.isActive) BerthButton("Detach", onClick = { vm.detach(session.id); onDismiss() })
                         else BerthButton("Reconnect", kind = ButtonKind.PRIMARY, onClick = { vm.reconnect(session.id); onDismiss() })
