@@ -289,7 +289,7 @@ object TerminalRenderer {
     }
 
     private fun isSimple(cp: Int, line: TerminalLine, x: Int): Boolean =
-        cp in 0x20..0x7E || (cp in 0xA0..0x24FF && line.attrs[x] and Attr.WIDE == 0 && line.combining?.containsKey(x) != true)
+        line.combining?.containsKey(x) != true && (cp in 0x20..0x7E || (cp in 0xA0..0x24FF && line.attrs[x] and Attr.WIDE == 0))
 
     private fun opaque(rgb: Int): Int = 0xFF000000.toInt() or (rgb and 0xFFFFFF)
 
