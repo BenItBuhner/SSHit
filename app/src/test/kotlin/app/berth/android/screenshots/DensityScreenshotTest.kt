@@ -224,10 +224,11 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     }
 
     /**
-     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). The
-     * window has no status bar to lend the strip Compact's step, so under Compact the skin's strip
-     * stands whole, a 40 dp row of 32 dp tabs, and the panes' headers stay 40 with it, never cut at
-     * the cap either; every target in the header stands 40 dp, which the audit of each frame holds.
+     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). With
+     * no status bar to lend the strip Compact's step, the skin's strip stands whole under Compact, a
+     * 40 dp row of 32 dp tabs, and the panes' headers stay 40 with it. Under a status bar the strip
+     * steps to 28 and a pane's header with it, or to its title's line at the cap where that is
+     * taller; never cut either way, and the audit of each frame holds the header's targets.
      */
     @Test
     @Config(qualifiers = "w1280dp-h800dp-land-320dpi")
@@ -246,6 +247,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertEquals("its swatch the skin's 20", 20f, swatchDp(), 0.5f)
         assertEquals("the panes' headers the strip's 40", 40f, paneHeaderDp(), 0.5f)
         assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
+
+        statusBar(24)
+        capture("density-panes-compact-status-bar")
+        assertEquals("under a status bar the strip steps to 28", 28f, stripRowDp(), 1f)
+        // Body's 22 sp line at the capped scale, rounded up to a whole pixel as the text's box is.
+        val line = kotlin.math.ceil(22f * minOf(systemFontScale, 1.3f) * compose.density.density) / compose.density.density
+        assertEquals("and a pane's header with it, or its title's line where taller", maxOf(28f, line), paneHeaderDp(), 0.5f)
+        assertLinesWhole("the stepped panes' headers", hasContentDescription(" pane", substring = true))
     }
 
     /**
