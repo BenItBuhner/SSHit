@@ -2,6 +2,7 @@ package app.berth.android.screenshots
 
 import android.app.Application
 import android.content.Context
+import androidx.activity.ComponentDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyChild
 import androidx.compose.ui.test.hasClickAction
@@ -39,6 +41,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
@@ -97,6 +100,7 @@ import org.robolectric.ParameterizedRobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -183,6 +187,24 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
 
     private fun pressBack() {
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
+    /** Back as the system hands it to an open sheet: to the sheet window's own dispatcher, where M3's sheet listens. */
+    private fun pressBackOnSheet() {
+        compose.runOnUiThread { (ShadowDialog.getLatestDialog() as ComponentDialog).onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
+    /** Taps the modal sheet's scrim near the top of the screen, where the sheet itself is not. */
+    private fun tapSheetScrim() {
+        compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(width / 2f, 60f)) }
+        compose.waitForIdle()
+    }
+
+    /** Drags the open sheet down by [title], further than the sheet is tall. */
+    private fun swipeSheetDown(title: String) {
+        inSheet(title).performTouchInput { swipeDown(startY = centerY, endY = centerY + 900f, durationMillis = 250) }
         compose.waitForIdle()
     }
 
@@ -276,6 +298,37 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         inSheet("Discard").performClick()
         compose.waitUntil(5_000) { done == 1 }
         assertEquals("Discard leaves once, by the editor's own way out", 0, popped)
+        assertEquals("the saved host keeps its user", "ben", graph.hosts.items.value.first { it.id == "homelab" }.user)
+    }
+
+    /**
+     * The sheet's own ways out keep editing (spec C10): Back while it is up, a tap on the scrim and a
+     * swipe down each put it away with the editor open and the edit standing, and the next Back asks again.
+     */
+    @Test
+    fun `Back, the scrim and a swipe on the discard question each keep editing`() {
+        seedLibrary()
+        var done = 0
+        var popped = 0
+        editor("homelab", onDone = { done++ }, onPopped = { popped++ })
+        editorField("ben").performTextReplacement("root")
+        editorField("root")
+        val ways = listOf<Pair<String, () -> Unit>>(
+            "Back" to { pressBackOnSheet() },
+            "the scrim" to { tapSheetScrim() },
+            "a swipe down" to { swipeSheetDown("Discard changes?") },
+        )
+        for ((way, putAway) in ways) {
+            pressBack()
+            waitForText("Discard changes?")
+            putAway()
+            waitForNoText("Discard changes?")
+            assertEquals("$way keeps the editor open", 0, done + popped)
+            editorField("root")
+        }
+        pressBack()
+        waitForText("Discard changes?")
+        assertEquals(0, done + popped)
         assertEquals("the saved host keeps its user", "ben", graph.hosts.items.value.first { it.id == "homelab" }.user)
     }
 
