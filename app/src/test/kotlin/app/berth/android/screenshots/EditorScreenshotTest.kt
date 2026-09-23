@@ -262,7 +262,7 @@ class EditorScreenshotTest {
         scrollToEnd()
         capture("settings-about$suffix")
         compose.onNodeWithText("Tokyo Night (folke) under Apache 2.0", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("colours from gruvbox by Pavel Pertsev, github.com/morhetz/gruvbox", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("colours from gruvbox by Pavel Pertsev (github.com/morhetz/gruvbox) under the MIT/X11 licence its README states", substring = true).assertIsDisplayed()
     }
 
     @Test
