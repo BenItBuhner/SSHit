@@ -195,7 +195,7 @@ object TerminalRenderer {
                             line.attrs[next] and Attr.WIDE_TAIL == 0 &&
                             cellBg(line.fg[next], line.bg[next], line.attrs[next], palette, screenFg, screenBg) == bg &&
                             !(showCursor && frame.offset == 0 && frame.cursorVisible && frame.cursorY == y && frame.cursorX == next)
-                        drawPrivateUse(nc, glyph, cp, x * cw, top, cw, ch, if (roomy) 2 else 1, paints.baseline, paint)
+                        drawPrivateUse(nc, glyph.chars, glyph.length, cp, x * cw, top, cw, ch, if (roomy) 2 else 1, paints.baseline, paint)
                     } else {
                         nc.drawText(glyph.chars, 0, glyph.length, x * cw, top + paints.baseline, paint)
                     }
@@ -260,7 +260,7 @@ object TerminalRenderer {
                             val paint = paints.forAttrs(line.attrs[cx])
                             paint.color = opaque(theme.cursorText)
                             glyph.of(line, cx)
-                            if (!wide && isPrivateUse(cp)) drawPrivateUse(nc, glyph, cp, left, top, cw, ch, 1, paints.baseline, paint)
+                            if (!wide && isPrivateUse(cp)) drawPrivateUse(nc, glyph.chars, glyph.length, cp, left, top, cw, ch, 1, paints.baseline, paint)
                             else nc.drawText(glyph.chars, 0, glyph.length, left, top + paints.baseline, paint)
                         }
                     }
@@ -307,11 +307,11 @@ object TerminalRenderer {
 
     private val fits = WeakHashMap<Paint, HashMap<Int, GlyphFit>>()
 
-    private fun fitOf(paint: Paint, cp: Int, glyph: CellGlyph): GlyphFit = synchronized(fits) {
+    private fun fitOf(paint: Paint, cp: Int, chars: CharArray, length: Int): GlyphFit = synchronized(fits) {
         fits.getOrPut(paint) { HashMap() }.getOrPut(cp) {
             val ink = Rect()
-            paint.getTextBounds(glyph.chars, 0, glyph.length, ink)
-            GlyphFit(paint.measureText(glyph.chars, 0, glyph.length), ink)
+            paint.getTextBounds(chars, 0, length, ink)
+            GlyphFit(paint.measureText(chars, 0, length), ink)
         }
     }
 
@@ -327,11 +327,11 @@ object TerminalRenderer {
      * than keeps them in it. Either is clipped to its row: the ink measured is whole pixels at the
      * paint's size, and a glyph drawn scaled can reach a fraction of one past it into the next.
      */
-    private fun drawPrivateUse(nc: Canvas, glyph: CellGlyph, cp: Int, left: Float, top: Float, cw: Float, ch: Float, room: Int, baseline: Float, paint: Paint) {
-        val fit = fitOf(paint, cp, glyph)
+    private fun drawPrivateUse(nc: Canvas, chars: CharArray, length: Int, cp: Int, left: Float, top: Float, cw: Float, ch: Float, room: Int, baseline: Float, paint: Paint) {
+        val fit = fitOf(paint, cp, chars, length)
         val ink = fit.ink
         if (fit.advance <= cw * 1.05f || ink.isEmpty) {
-            nc.drawText(glyph.chars, 0, glyph.length, left, top + baseline, paint)
+            nc.drawText(chars, 0, length, left, top + baseline, paint)
             return
         }
         nc.save()
@@ -352,7 +352,7 @@ object TerminalRenderer {
             nc.translate(left + avail / 2f - s * cx, y - s * cy)
             nc.scale(s, s)
         }
-        nc.drawText(glyph.chars, 0, glyph.length, 0f, 0f, paint)
+        nc.drawText(chars, 0, length, 0f, 0f, paint)
         nc.restore()
     }
 
