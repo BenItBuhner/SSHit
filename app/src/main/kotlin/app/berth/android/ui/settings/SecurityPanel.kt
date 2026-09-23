@@ -77,14 +77,15 @@ fun SecurityPanel(vm: AppViewModel, onKnownHosts: () -> Unit) {
 /**
  * The host editor's row: this host's answer to remote clipboard writes, over the app-wide switch.
  * Editor state like its siblings: the editor holds [value], Save commits it. With no [hostId] yet
- * (a host not saved) the row is disabled and says so; the override keys on the host's id.
+ * (a host not saved) the row is disabled and its caption says so, with no value beside it to
+ * narrow the caption at the font cap; the override keys on the host's id.
  */
 @Composable
 fun HostRemoteClipboardPicker(vm: AppViewModel, hostId: String?, value: RemoteClipboardPolicy, onSelect: (RemoteClipboardPolicy) -> Unit) {
     val settings by vm.security.settings.collectAsState()
     val s = settings ?: return
     if (hostId == null) {
-        PickerRow("Remote clipboard", "Save the host first", onClick = {}, caption = HOST_REMOTE_CLIPBOARD_CAPTION, captionLines = 2, enabled = false)
+        PickerRow("Remote clipboard", "", onClick = {}, caption = UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION, captionLines = 3, enabled = false)
         return
     }
     CyclePicker("Remote clipboard", RemoteClipboardPolicy.entries, value, { remoteClipboardLabel(it, s.remoteClipboard) }, caption = HOST_REMOTE_CLIPBOARD_CAPTION, captionLines = 2, onSelect = onSelect)
@@ -92,6 +93,8 @@ fun HostRemoteClipboardPicker(vm: AppViewModel, hostId: String?, value: RemoteCl
 
 /** Two lines beside the row's value; the Settings row carries the rest of the explanation. */
 private const val HOST_REMOTE_CLIPBOARD_CAPTION = "Clipboard writes from this server (OSC 52)"
+
+internal const val UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION = "Save the host first; then set clipboard writes from this server (OSC 52)"
 
 fun lockTimeoutLabel(timeout: LockTimeout): String = when (timeout) {
     LockTimeout.IMMEDIATELY -> "Immediately"

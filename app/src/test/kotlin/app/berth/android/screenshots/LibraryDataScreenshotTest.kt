@@ -53,6 +53,7 @@ import app.berth.android.ui.settings.HOSTS_EXPORT_NOTE
 import app.berth.android.ui.settings.ImportBundleSheet
 import app.berth.android.ui.settings.KnownHostsScreen
 import app.berth.android.ui.settings.PickedFile
+import app.berth.android.ui.settings.UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION
 import app.berth.android.ui.settings.hardwareNote
 import app.berth.android.ui.settings.keysLine
 import app.berth.android.ui.settings.leftBehindNote
@@ -306,6 +307,19 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         inSheet("Discard").performClick()
         compose.waitUntil(5_000) { done == 1 }
         assertTrue("nothing was saved", graph.hosts.items.value.isEmpty())
+    }
+
+    /** A new host's Remote clipboard row waits for the host to be saved and says so in its caption, which is whole at the font cap. */
+    @Test
+    fun `a new host's Remote clipboard row says in its caption that the host is saved first`() {
+        editor(null, onDone = {}, onPopped = {})
+        waitForText("Remote clipboard")
+        compose.onNodeWithText("Remote clipboard").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText(UNSAVED_HOST_REMOTE_CLIPBOARD_CAPTION).assertIsDisplayed()
+        hasNoText("Clipboard writes from this server (OSC 52)")
+        capture("host-editor-new-remote-clipboard")
+        assertNoTextCut("a new host's Remote clipboard row")
     }
 
     // ---- the host editor's Scrollback and Ciphers (C2, C10 Advanced) ------------------------------

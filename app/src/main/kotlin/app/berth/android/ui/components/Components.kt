@@ -462,7 +462,8 @@ private fun SelectionDotLayout(selected: Boolean, modifier: Modifier, content: @
 /**
  * Row that opens a picker; the value sits at the trailing edge followed by a chevron. The [caption]
  * has up to two lines ([ListRow]), or what [captionLines] says. Not [enabled], the row says its
- * [value] (the reason nothing can be picked) and opens nothing.
+ * [value] (the reason nothing can be picked), or with an empty value its caption does, and opens
+ * nothing.
  */
 @Composable
 fun PickerRow(
@@ -487,7 +488,7 @@ fun PickerRow(
         enabled = enabled,
         role = Role.DropdownList,
         trailing = {
-            Text(value, style = BerthType.body, color = c.text2.copy(alpha = c.text2.alpha * alpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (value.isNotEmpty()) Text(value, style = BerthType.body, color = c.text2.copy(alpha = c.text2.alpha * alpha), maxLines = 1, overflow = TextOverflow.Ellipsis)
             BerthIcon(BerthIcons.chevronRight, tint = c.text3.copy(alpha = c.text3.alpha * alpha), size = 20.dp)
         },
     )
