@@ -200,11 +200,38 @@ object TerminalThemes {
 
     // ---- iTerm2 .itermcolors (an XML property list) ---------------------------------------------------
 
-    private val ITERM_ENTRY = Regex("<key>([^<]+)</key>\\s*<dict>(.*?)</dict>", RegexOption.DOT_MATCHES_ALL)
     private val ITERM_FIELD = Regex("<key>([^<]+)</key>\\s*<(real|integer|string)>([^<]*)</\\2>")
 
+    /**
+     * Each `<key>…</key>` followed by a `<dict>`, with the dictionary's body up to the first `</dict>`,
+     * found by one forward walk: a lazy regex over the same shape rescans to the end of the text from
+     * every unclosed `<dict>`, and a doctored file of them held the parse for minutes.
+     */
+    private fun iTermEntries(text: String): Map<String, String> {
+        val entries = HashMap<String, String>()
+        var at = 0
+        while (true) {
+            val open = text.indexOf("<key>", at)
+            if (open < 0) break
+            val keyStart = open + "<key>".length
+            val keyEnd = text.indexOf('<', keyStart)
+            if (keyEnd < 0) break
+            at = keyStart
+            if (keyEnd == keyStart || !text.startsWith("</key>", keyEnd)) continue
+            var body = keyEnd + "</key>".length
+            while (body < text.length && text[body].isWhitespace()) body++
+            at = body
+            if (!text.startsWith("<dict>", body)) continue
+            val close = text.indexOf("</dict>", body + "<dict>".length)
+            if (close < 0) break
+            entries[text.substring(keyStart, keyEnd).trim()] = text.substring(body + "<dict>".length, close)
+            at = close + "</dict>".length
+        }
+        return entries
+    }
+
     private fun fromITerm(text: String): TerminalTheme? {
-        val entries = ITERM_ENTRY.findAll(text).associate { it.groupValues[1].trim() to iTermColor(it.groupValues[2]) }
+        val entries = iTermEntries(text).mapValues { (_, body) -> iTermColor(body) }
         // A profile with separate light and dark colours writes `Ansi 0 Color (Dark)` and `(Light)` instead; the dark set stands in.
         fun colors(key: String): Int? = entries[key] ?: entries["$key (Dark)"] ?: entries["$key (Light)"]
         val ansi = (0..15).map { colors("Ansi $it Color") ?: return null }
@@ -281,7 +308,9 @@ object TerminalThemes {
 
     // ---- Ghostty theme files (key = value) ------------------------------------------------------------
 
-    private val GHOSTTY_PALETTE = Regex("^\\s*palette\\s*=\\s*\\d+\\s*=", RegexOption.MULTILINE)
+    // The line patterns below take `[ \t]*` where the whitespace stays on one line: a `\s*` after `^`
+    // crosses newlines, so every line start of a long blank run rescans the rest of the run.
+    private val GHOSTTY_PALETTE = Regex("^[ \\t]*palette[ \\t]*=[ \\t]*\\d+[ \\t]*=", RegexOption.MULTILINE)
 
     private fun fromGhostty(text: String): TerminalTheme? {
         val palette = arrayOfNulls<Int>(16)
@@ -328,9 +357,11 @@ object TerminalThemes {
 
     // ---- base16 YAML (tinted-theming's `palette:` layout and the flat original) -----------------------
 
-    private val BASE16_KEY = Regex("^\\s*base0[0-9A-Fa-f]\\s*:", RegexOption.MULTILINE)
-    private val BASE16_ENTRY = Regex("^\\s*(base0[0-9A-Fa-f])\\s*:\\s*[\"']?#?([0-9A-Fa-f]{6})[\"']?", RegexOption.MULTILINE)
-    private val BASE16_NAME = Regex("^(?:name|scheme)\\s*:\\s*[\"']?([^\"'#\\n]+?)[\"']?\\s*(?:#.*)?$", RegexOption.MULTILINE)
+    private val BASE16_KEY = Regex("^[ \\t]*base0[0-9A-Fa-f][ \\t]*:", RegexOption.MULTILINE)
+    private val BASE16_ENTRY = Regex("^[ \\t]*(base0[0-9A-Fa-f])[ \\t]*:[ \\t]*[\"']?#?([0-9A-Fa-f]{6})[\"']?", RegexOption.MULTILINE)
+    // Greedy up to a quote, a comment or the line's end, trimmed after: a lazy capture ahead of optional
+    // spaces backtracks over every split of a long run of them.
+    private val BASE16_NAME = Regex("^(?:name|scheme)[ \\t]*:[ \\t]*[\"']?([^\"'#\\r\\n]*)", RegexOption.MULTILINE)
 
     /**
      * base16's roles on the terminal, as base16-shell sets them: the background and foreground
@@ -345,7 +376,7 @@ object TerminalThemes {
         val ansi = BASE16_ANSI.map { base.getValue(it) }
         return TerminalTheme(
             id = "",
-            name = BASE16_NAME.find(text)?.groupValues?.get(1)?.trim() ?: "",
+            name = BASE16_NAME.findAll(text).map { it.groupValues[1].trim() }.firstOrNull { it.isNotEmpty() } ?: "",
             ansi = ansi,
             background = base.getValue(0x00),
             foreground = base.getValue(0x05),
@@ -358,7 +389,7 @@ object TerminalThemes {
 
     // ---- Termux colors.properties ---------------------------------------------------------------------
 
-    private val TERMUX_COLOR = Regex("^\\s*color\\d{1,2}\\s*[=:]", RegexOption.MULTILINE)
+    private val TERMUX_COLOR = Regex("^[ \\t]*color\\d{1,2}[ \\t]*[=:]", RegexOption.MULTILINE)
 
     private fun fromTermux(text: String): TerminalTheme? {
         val values = HashMap<String, Int>()

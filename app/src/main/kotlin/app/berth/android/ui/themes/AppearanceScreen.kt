@@ -45,7 +45,9 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
-import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.PickedText
+import app.berth.android.ui.io.TEXT_DOCUMENT_TYPES
+import app.berth.android.ui.io.rememberOpenNamedTextFile
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
 import app.berth.android.ui.stage.Deck
@@ -85,9 +87,13 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     val deck by vm.deckLayout.collectAsState()
     var note by remember { mutableStateOf<String?>(null) }
     val saver = rememberSaveTextFile()
-    val openFile = rememberOpenTextFile { text ->
-        val imported = runCatching { InterfaceTheme.fromJson(text) }.getOrNull()
-        note = if (imported == null) "That file is not an interface theme." else { vm.setInterfaceTheme(imported); "Imported." }
+    val openFile = rememberOpenNamedTextFile(TEXT_DOCUMENT_TYPES) { picked ->
+        val imported = (picked as? PickedText.Read)?.let { runCatching { InterfaceTheme.fromJson(it.text) }.getOrNull() }
+        note = when {
+            picked !is PickedText.Read -> picked.refusal("an interface theme")
+            imported == null -> "That file is not an interface theme."
+            else -> { vm.setInterfaceTheme(imported); "Imported." }
+        }
     }
     var pasteSheet by remember { mutableStateOf(false) }
     fun set(t: InterfaceTheme) = vm.setInterfaceTheme(t)

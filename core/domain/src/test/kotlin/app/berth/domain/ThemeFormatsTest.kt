@@ -268,4 +268,64 @@ class ThemeFormatsTest {
             assertEquals(emptyList(), TerminalThemes.importAll(junk), "'$junk'")
         }
     }
+
+    /** About 2 MB, the most a picked file may hold, of [unit] repeated after [head]. */
+    private fun twoMegabytes(head: String, unit: String): String = buildString(TWO_MB + head.length) {
+        append(head)
+        while (length < TWO_MB) append(unit)
+    }
+
+    /** Detects and imports [text] once, and fails when that takes more than [HOSTILE_BOUND_MS]. */
+    private fun importTimed(label: String, text: String): TerminalTheme? {
+        TerminalThemes.detect(text)
+        val start = System.nanoTime()
+        val detected = TerminalThemes.detect(text)
+        val theme = TerminalThemes.importAll(text, name = "Hostile").firstOrNull()
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertTrue(ms < HOSTILE_BOUND_MS, "$label ($detected) took $ms ms")
+        return theme
+    }
+
+    @Test
+    fun `two megabytes of hostile text are refused or read in linear time, for every format`() {
+        val blankLines = listOf("\n", " \n", "\t\r\n")
+        for (blank in blankLines) {
+            val shown = blank.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+            assertNull(importTimed("prose over blank lines '$shown'", twoMegabytes("x", blank)))
+            assertNull(importTimed("Ghostty over blank lines '$shown'", twoMegabytes("palette = 0=#000000\n", blank)))
+            assertNull(importTimed("base16 over blank lines '$shown'", twoMegabytes("base00: \"000000\"\n", blank)))
+            assertNull(importTimed("Termux over blank lines '$shown'", twoMegabytes("color0=#000000\n", blank)))
+        }
+        assertNull(importTimed("Ghostty with a line of spaces", twoMegabytes("palette = 0=#000000\npalette", " ")))
+        assertNull(importTimed("Termux with a line of spaces", twoMegabytes("color0=#000000\ncolor1", " ")))
+
+        // A base16 file whose name is a line of spaces reads, and takes the file's name instead.
+        val base16 = text("base16/default-dark.yaml").lines().filterNot { it.startsWith("scheme:") }.joinToString("\n")
+        val spacedName = twoMegabytes("scheme: \"", " ") + "\"\n" + base16
+        assertEquals("Hostile", assertNotNull(importTimed("base16 with a name of spaces", spacedName)).name)
+        assertEquals("Hostile", assertNotNull(importTimed("base16 with an unquoted name of spaces", twoMegabytes("scheme:", " ") + "\n" + base16)).name)
+
+        // iTerm2: unclosed colour dictionaries, keys that never close, and keys with no dictionary after them.
+        assertNull(importTimed("iTerm2 with unclosed dictionaries", twoMegabytes("<plist><dict><key>Ansi 0 Color</key>", "<key>Ansi 0 Color</key><dict>")))
+        assertNull(importTimed("iTerm2 with unclosed keys", twoMegabytes("<plist>Ansi 0 Color", "<key>")))
+        assertNull(importTimed("iTerm2 with keys and blank lines", twoMegabytes("<plist>Ansi 0 Color", "<key>k</key>\n\n\n\n")))
+
+        // JSON: nesting too deep to recurse through, and a document of nothing but whitespace after its brace.
+        assertNull(importTimed("JSON nested two million deep", twoMegabytes("", "[")))
+        assertNull(importTimed("JSON of blank lines", twoMegabytes("{", "\n")))
+        assertNull(importTimed("Windows Terminal scheme with a name of spaces", twoMegabytes("{\"black\": \"#000000\", \"brightBlack\": \"#000000\", \"name\": \"", " ")))
+    }
+
+    @Test
+    fun `an iTerm2 file of many colour dictionaries still reads each one`() {
+        val file = text("iterm2/Dracula.itermcolors")
+        // Padding keys between the real entries: a key with no dictionary, and a dictionary under an empty key.
+        val padded = file.replace("<key>Ansi 1 Color</key>", "<key>Padding</key>\n<string>x</string>\n<key></key><dict></dict>\n<key>Ansi 1 Color</key>")
+        assertEquals(assertNotNull(TerminalThemes.import(file, name = "Dracula")), TerminalThemes.import(padded, name = "Dracula"))
+    }
 }
+
+private const val TWO_MB = 2 shl 20
+
+/** Linear work over 2 MB takes milliseconds; the quadratic patterns this guards against took seconds to minutes. */
+private const val HOSTILE_BOUND_MS = 3_000L

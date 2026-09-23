@@ -29,6 +29,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +50,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetTitle
+import app.berth.android.ui.io.PickedText
 import app.berth.android.ui.io.rememberOpenNamedTextFile
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
@@ -63,7 +65,10 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TerminalThemes
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The terminal theme gallery (UX spec C19): every theme as a tile that is a live mini-render of
@@ -101,22 +106,27 @@ fun ThemesScreen(
         }
     }
 
+    val scope = rememberCoroutineScope()
     // iTerm2, Ghostty and Termux files carry no name of their own; the file's name stands in.
     fun importText(text: String, fileName: String? = null) {
-        val imported = TerminalThemes.importAll(text, TerminalThemes.nameFromFile(fileName))
-        importNote = when {
-            imported.isEmpty() -> "That text is not a terminal theme Berth can read."
-            else -> {
-                imported.forEach { t ->
-                    // Never overwrite a stock theme on import; a clash gets a fresh id.
-                    val id = if (themes.any { it.id == t.id && it.builtIn }) AppViewModel.newThemeId() else t.id
-                    vm.saveTerminalTheme(t.copy(id = id))
+        scope.launch {
+            val imported = withContext(Dispatchers.Default) { TerminalThemes.importAll(text, TerminalThemes.nameFromFile(fileName)) }
+            importNote = when {
+                imported.isEmpty() -> "That text is not a terminal theme Berth can read."
+                else -> {
+                    imported.forEach { t ->
+                        // Never overwrite a stock theme on import; a clash gets a fresh id.
+                        val id = if (themes.any { it.id == t.id && it.builtIn }) AppViewModel.newThemeId() else t.id
+                        vm.saveTerminalTheme(t.copy(id = id))
+                    }
+                    if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
                 }
-                if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
             }
         }
     }
-    val openFile = rememberOpenNamedTextFile(onFile = ::importText)
+    val openFile = rememberOpenNamedTextFile { picked ->
+        if (picked is PickedText.Read) importText(picked.text, picked.name) else importNote = picked.refusal("a theme")
+    }
 
     fun newTheme() {
         val id = AppViewModel.newThemeId()
