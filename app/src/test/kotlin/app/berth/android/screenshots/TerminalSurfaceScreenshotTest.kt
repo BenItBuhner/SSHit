@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -31,9 +32,11 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.onAllNodesWithText
@@ -65,8 +68,13 @@ import app.berth.android.ui.terminal.TerminalPaints
 import app.berth.android.ui.terminal.TerminalPaintsCache
 import app.berth.android.ui.terminal.TypefaceCache
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.PinchAction
+import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -96,8 +104,9 @@ import java.io.File
  * the drag-for-arrows switch), the font picker sheet with every family set in its own face and an
  * import landing through the document picker's result, the sheet a tap on an OSC 8 link opens in
  * its two postures, rectangular selection from the selection bar's overflow, and the Session
- * sheet's Predictive text row (C6) with the grip it lights and the keyboard attributes it changes.
- * Every capture is an accessibility audit, and the screens at the cap are held to no text cut and
+ * sheet's Predictive text row (C6) with the grip it lights and the keyboard attributes it changes,
+ * and the bundled Nerd Font symbols drawing what starship, powerlevel10k, lsd and eza print, with the
+ * Settings caption and About line that name them. Every capture is an accessibility audit, and the screens at the cap are held to no text cut and
  * no button pushed past the sheet's edge. The gestures are driven for real on the canvas.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -305,7 +314,96 @@ class TerminalSurfaceScreenshotTest {
         compose.onNodeWithText("Drag for arrow keys").performClick()
         compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.horizontalDragArrows }
         assertEquals("the other terminal settings stand", 20_000, graph.viewModel.terminalSettings.value.scrollbackLines)
+
+        // A mouse's right click pastes unless it is turned off here; the program's mouse mode takes it either way.
+        compose.onNodeWithText("Right-click pastes").performScrollTo()
+        compose.waitForIdle()
+        assertTrue(graph.viewModel.terminalSettings.value.rightClickPaste)
+        settle(200)
+        capture("settings-gestures-right-click-paste$suffix")
+        compose.assertNoTextCut("the Settings screen's Gestures rows${if (cap) " at the interface's font cap" else ""}")
+        compose.onNodeWithText("Right-click pastes").performClick()
+        compose.waitUntil(5_000) { !graph.viewModel.terminalSettings.value.rightClickPaste }
+        assertTrue("the other gestures stand", graph.viewModel.terminalSettings.value.horizontalDragArrows)
     }
+
+    // ---- Settings › Gestures (spec D1) ---------------------------------------------------------------------------
+
+    /** The picker row titled [title], read as one node: its title, its caption if any, and its value. */
+    private fun gestureRow(title: String) = compose.onNode(hasText(title) and hasClickAction())
+
+    /** Opens [title]'s choices, checks they are [options] in order, and picks [pick]. */
+    private fun pickGesture(title: String, options: List<String>, pick: String, capture: String? = null) {
+        gestureRow(title).performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasAnyAncestor(isPopup())).fetchSemanticsNodes().isNotEmpty() }
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals("$title's choices, the default first", options, rows)
+        if (capture != null) {
+            settle(200)
+            capture(capture)
+            compose.assertNoTextCut("$title's choices", within = isPopup())
+        }
+        compose.onNode(hasText(pick) and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasAnyAncestor(isPopup())).fetchSemanticsNodes().isEmpty() }
+    }
+
+    private fun settingsGestureRows(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        StageFixture.seed(graph)
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        gestureRow("Switch tabs").performScrollTo()
+        compose.waitForIdle()
+        // D1's gestures in its order with their defaults, the tap's caption saying what else it does.
+        val defaults = listOf(
+            "Tap" to "Show keyboard",
+            "Double-tap" to "Select word",
+            "Two-finger tap" to "Paste",
+            "Three-finger tap" to "Toggle Deck",
+            "Pinch" to "Font size",
+            "Switch tabs" to "Two-finger swipe",
+        )
+        for ((title, value) in defaults) gestureRow(title).assertIsDisplayed().assert(hasText(value))
+        gestureRow("Tap").assert(hasText("Also clicks where the program has the mouse"))
+        val tops = defaults.map { (title, _) -> gestureRow(title).fetchSemanticsNode().boundsInRoot.top }
+        assertEquals("the rows stand in D1's order", tops.sorted(), tops)
+        assertEquals(TerminalSettings(), graph.viewModel.terminalSettings.value)
+        settle(200)
+        capture("settings-gestures-per-gesture$suffix")
+        compose.assertNoTextCut("the Gestures panel's rows${if (cap) " at the interface's font cap" else ""}")
+
+        // Each picked in turn lands in the one terminal document, the others standing.
+        pickGesture("Three-finger tap", listOf("Toggle Deck", "Share screen text", "Nothing"), "Share screen text", capture = "settings-gestures-three-finger-menu$suffix")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.threeFingerTap == ThreeFingerTapAction.SHARE_SCREEN_TEXT }
+        pickGesture("Double-tap", listOf("Select word", "Send Tab", "Nothing"), "Send Tab")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.doubleTap == DoubleTapAction.SEND_TAB }
+        pickGesture("Two-finger tap", listOf("Paste", "New tab", "Nothing"), "New tab")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.twoFingerTap == TwoFingerTapAction.NEW_TAB }
+        pickGesture("Pinch", listOf("Font size", "Nothing"), "Nothing")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.pinch == PinchAction.NOTHING }
+        // The tap's Nothing takes the soft keyboard's one way up away, and its caption says so.
+        pickGesture("Tap", listOf("Show keyboard", "Nothing"), "Nothing")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.tap == TapAction.NOTHING }
+        gestureRow("Tap").performScrollTo()
+        gestureRow("Tap").assert(hasText("Nothing")).assert(hasText("No keyboard and no click; type from a hardware keyboard"))
+        assertEquals(
+            TerminalSettings(tap = TapAction.NOTHING, doubleTap = DoubleTapAction.SEND_TAB, twoFingerTap = TwoFingerTapAction.NEW_TAB, threeFingerTap = ThreeFingerTapAction.SHARE_SCREEN_TEXT, pinch = PinchAction.NOTHING),
+            graph.viewModel.terminalSettings.value,
+        )
+        for ((title, value) in listOf("Double-tap" to "Send Tab", "Two-finger tap" to "New tab", "Three-finger tap" to "Share screen text", "Pinch" to "Nothing")) {
+            gestureRow(title).assert(hasText(value))
+        }
+        settle(200)
+        capture("settings-gestures-alternatives$suffix")
+        compose.assertNoTextCut("the Gestures panel with every alternative picked${if (cap) " at the interface's font cap" else ""}")
+        // The gestures with no alternative are named under the panel.
+        compose.onNodeWithText("Long-press always selects", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `settings gesture rows`() = settingsGestureRows(cap = false)
+
+    @Test
+    fun `settings gesture rows at the 1,3 cap`() = settingsGestureRows(cap = true)
 
     @Test
     fun `settings terminal rows`() = settingsTerminalRows(cap = false)
@@ -731,4 +829,142 @@ class TerminalSurfaceScreenshotTest {
 
     @Test
     fun `predictive text row and grip at the 1,3 cap`() = predictiveText(cap = true)
+
+    // ---- the bundled Nerd Font symbols (vision §7, spec C20) ----------------------------------------------------
+
+    private fun g(codePoint: Int): String = String(Character.toChars(codePoint))
+
+    private fun sgr(codes: String): String = "\u001b[${codes}m"
+
+    /**
+     * The glyphs four tools print, in the default family with nothing imported, each as the tool
+     * lays it out: starship's Nerd Font preset over a Kotlin project and a Rust one, lsd's one-a-line
+     * listing, powerlevel10k's rainbow segments with its nerdfont-v3 icons, and eza's grid.
+     */
+    private fun nerdGlyphs(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        StageFixture.seed(graph)
+        val session = StageFixture.liveHomelab().also { sessions += it }
+        val tools = StageTools()
+        var settings by mutableStateOf(false)
+        themed { if (settings) SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) else Stage(session, tools) }
+        awaitGrid(session)
+        val prompt = "${sgr("1;32")}\u276F${sgr("0")} "
+        val dir = sgr("1;34")
+        val off = sgr("0")
+        session.emulator.write("\u001b[H\u001b[2J")
+        session.emulator.write("${sgr("1;36")}~/src/berth$off on ${sgr("1;35")}\uF418 main$off via ${sgr("1;34")}\uE634 v2.1.0$off\r\n")
+        session.emulator.write("${prompt}lsd -1\r\n")
+        session.emulator.write("$dir\uF115 app$off\r\n$dir\uE5FB .git$off\r\n\uE634 build.gradle.kts\r\n\uE609 README.md\r\n\uE60A LICENSE\r\n\uF489 install.sh\r\n")
+        session.emulator.write("${sgr("30;47")} \uF31B ${sgr("37;44")}\uE0B0${sgr("97;44")} \uF07C ~/src/berth ${sgr("34;42")}\uE0B0${sgr("30;42")} \uF126 main \uF06A1 \uF0592 ${sgr("0;32")}\uE0B0$off\r\n")
+        session.emulator.write("${prompt}eza --icons\r\n")
+        session.emulator.write("$dir\uE5FF app$off  $dir\uE5FB .git$off  \uE660 build.gradle.kts\r\n${g(0xF00BA)} README.md  \uF02D LICENSE  \uF023 gradle.lock\r\n")
+        session.emulator.write("${sgr("1;36")}~/sshit$off on ${sgr("1;35")}\uF418 main$off is ${sgr("1;38;5;208")}${g(0xF03D7)} v0.2.0$off via ${sgr("1;31")}${g(0xF1617)} v1.81$off\r\n")
+        session.emulator.write(prompt)
+        compose.waitUntil(5_000) { session.emulator.screenText().any { it.contains("v1.81") } }
+        // Nothing wrapped: every line the tools print is one row at a phone's width.
+        val rows = session.emulator.screenText()
+        assertTrue(rows.toString(), rows.any { it.startsWith("\uE5FF app  \uE5FB .git  \uE660 build.gradle.kts") })
+        assertTrue(rows.toString(), rows.any { it.contains("\uF126 main \uF06A1 \uF0592 \uE0B0") })
+        settle(400)
+        capture("terminal-nerd-font-glyphs$suffix")
+
+        // Settings › About names the symbols font and its icon sets' licences beside the other fonts.
+        settings = true
+        waitForText("Nerd Font fallback")
+        compose.onNodeWithText("Nerd Font fallback").performScrollTo()
+        compose.onNodeWithText("Icons and separators the family lacks", substring = true).assertIsDisplayed()
+        settle(200)
+        capture("settings-nerd-font-fallback$suffix")
+        compose.assertNoTextCut("the Nerd Font fallback's caption${if (cap) " at the interface's font cap" else ""}")
+        compose.onNodeWithText("Symbols Nerd Font Mono", substring = true).performScrollTo()
+        compose.onNodeWithText("Font Logos the Unlicense", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Weather Icons and Pomicons under the SIL Open Font License,", substring = true).assertIsDisplayed()
+        settle(200)
+        capture("settings-about-fonts$suffix")
+        compose.assertNoTextCut("Settings › About${if (cap) " at the interface's font cap" else ""}")
+    }
+
+    @Test
+    fun `the prompts' and listings' Nerd Font icons on the stage, and their licences in About`() = nerdGlyphs(cap = false)
+
+    @Test
+    fun `nerd font icons on the stage and About at the 1,3 cap`() = nerdGlyphs(cap = true)
+
+    // ---- Overflow › Share screen text (spec C3) ---------------------------------------------------------------------
+
+    /** The text the share sheet was handed by the last Share, the chooser's own intent read open. */
+    private fun sharedText(): String {
+        compose.waitUntil(5_000) { shadowOf(application).peekNextStartedActivity() != null }
+        val chooser = shadowOf(application).nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
+        val send = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("text/plain", send.type)
+        return send.getStringExtra(Intent.EXTRA_TEXT)!!
+    }
+
+    private fun shareFromOverflow() {
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Share screen text")
+        compose.onNodeWithText("Share screen text").performClick()
+        waitForNoText("Share screen text")
+    }
+
+    /**
+     * Share screen text in a terminal tab's Overflow, after History: the rows in view go to the
+     * system's share sheet as they read, with no selection made first; scrolled back, the history in
+     * view does; and over a blank screen the notice says there is nothing to share and no sheet opens.
+     */
+    private fun shareScreenText(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        val (session, tools) = stageLiveHomelab()
+        compose.onNodeWithContentDescription("More").performClick()
+        waitForText("Share screen text")
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals(
+            listOf("Detach", "Hide Deck", "Find", "History", "Share screen text", "Session", "Host settings", "Tabs", "Groups", "Library", "Close"),
+            rows,
+        )
+        settle(200)
+        capture("stage-overflow-share-screen-text$suffix")
+        compose.assertNoTextCut("the Stage's Overflow${if (cap) " at the interface's font cap" else ""}", within = isPopup())
+        compose.onNodeWithText("Share screen text").performClick()
+        val shown = sharedText()
+        assertEquals(tools.screenText(session.emulator), shown)
+        assertTrue(shown, shown.startsWith("ben@homelab:~/srv$ docker compose ps\n"))
+        assertTrue(shown, shown.lines().any { it == "gitea       gitea/gitea:1.22    Up 3 days     3000/tcp" })
+        assertEquals("the prompt's trailing blank is not shared", "ben@homelab:~/srv$", shown.lines().last())
+
+        // Output pushes the listing into history: the share is what is in view, and scrolled back to the top it is the listing again.
+        val screen = session.emulator.rows
+        session.emulator.write("\r\n" + (1..screen + 4).joinToString("\r\n") { "output $it" })
+        compose.waitUntil(5_000) { session.emulator.screenText().any { it == "output ${screen + 4}" } }
+        shareFromOverflow()
+        val now = sharedText()
+        assertEquals((5..screen + 4).joinToString("\n") { "output $it" }, now)
+        tools.viewport.scrollOffset = session.emulator.scrollbackSize
+        settle(200)
+        shareFromOverflow()
+        assertTrue(sharedText().startsWith("ben@homelab:~/srv$ docker compose ps\n"))
+
+        // A blank screen with no history: the notice, and no sheet.
+        tools.viewport.scrollOffset = 0
+        session.emulator.write("\u001b[3J\u001b[H\u001b[2J")
+        compose.waitUntil(5_000) { session.emulator.screenText().all { it.isBlank() } }
+        shareFromOverflow()
+        waitForText(StageTools.NOTHING_ON_SCREEN)
+        assertNull("nothing to share opens nothing", shadowOf(application).nextStartedActivity)
+        settle(100)
+        capture("stage-share-screen-text-nothing$suffix")
+        // The strip cuts its tab titles at the cap on purpose; the notice is whole at either size.
+        val cut = compose.cutTexts()
+        assertFalse("the notice is cut${if (cap) " at the interface's font cap" else ""}: $cut", StageTools.NOTHING_ON_SCREEN in cut)
+    }
+
+    @Test
+    fun `share screen text from the overflow hands the rows in view to the share sheet`() = shareScreenText(cap = false)
+
+    @Test
+    fun `share screen text from the overflow at the 1,3 cap`() = shareScreenText(cap = true)
 }

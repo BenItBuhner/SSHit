@@ -245,6 +245,77 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `resetModes hands the frame to a new shell with none of the last program's modes, the main screen and its history kept`() {
+        val (t, _) = term(cols = 10, rows = 3)
+        t.write("history\r\nmain\r\n\r\n\u001b[2;2H")
+        val history = t.scrollbackSize
+        t.write("\u001b[>1u\u001b[>4;2m")
+        t.write("\u001b[?1049h\u001b[>5u\u001b[?1003h\u001b[?1006h\u001b[?1004h\u001b[?2004h\u001b[?1h\u001b=\u001b[?25l\u001b[?5h\u001b[20h\u001b[1;31m\u001b[Halt")
+        // The connection dropped halfway through a sequence.
+        t.write("\u001b[5")
+        assertTrue(t.isAlternateScreen)
+        assertEquals(KeyboardProtocol(modifyOtherKeys = 2, kittyFlags = 5), t.keyboardProtocol)
+
+        t.resetModes()
+        assertFalse(t.isAlternateScreen)
+        assertEquals(history, t.scrollbackSize)
+        assertEquals("main", t.text(0))
+        assertEquals(1 to 1, t.cursorX to t.cursorY, "1049 saved the cursor, and leaving hands it back")
+        assertEquals(KeyboardProtocol.LEGACY, t.keyboardProtocol)
+        assertContentEquals(byteArrayOf(0x03), t.encodeText('c'.code, Mod.CTRL))
+        assertEquals(MouseTracking.NONE, t.mouseTracking)
+        assertFalse(t.mouseSgrEncoding)
+        assertFalse(t.focusEvents)
+        assertFalse(t.bracketedPaste)
+        assertFalse(t.applicationCursorKeys)
+        assertFalse(t.applicationKeypad)
+        assertFalse(t.reverseVideo)
+        assertFalse(t.lineFeedNewLine)
+        assertTrue(t.cursorVisible)
+        // The half sequence is gone: the next shell's first character is its own, in the default pen.
+        t.write("ok")
+        assertEquals(" ok", t.text(1))
+        assertEquals(TermColor.COLOR_DEFAULT, t.line(1).fg[1])
+        assertEquals(0, t.line(1).attrs[1])
+        // A program's stack on the main screen goes too, and the alternate one starts empty on entry.
+        t.write("\u001b[?1049h")
+        assertEquals(KeyboardProtocol.LEGACY, t.keyboardProtocol)
+    }
+
+    @Test
+    fun `resetModes leaves an alternate screen entered by 47 where its cursor was, and empties it`() {
+        val (t, _) = term(cols = 10, rows = 3)
+        t.write("main\u001b[?47h\u001b[3;4Hx")
+        t.resetModes()
+        assertFalse(t.isAlternateScreen)
+        assertEquals("main", t.text(0))
+        assertEquals(4 to 2, t.cursorX to t.cursorY, "47 saved no cursor")
+        t.write("\u001b[?47h")
+        assertEquals("", t.text(2))
+    }
+
+    @Test
+    fun `resetModes keeps the history the host's cap left and the cap with it, and the next shell's lines still drop the oldest`() {
+        val (t, _) = term(cols = 5, rows = 2)
+        t.maxScrollback = 4
+        for (i in 1..8) t.write("l$i\r\n")
+        assertEquals(4, t.scrollbackSize)
+        val dropped = t.linesDropped
+        t.write("\u001b[?1049hvim\r\nvim\r\nvim\r\n")
+
+        t.resetModes()
+        assertEquals(4, t.maxScrollback)
+        assertEquals(4, t.scrollbackSize)
+        assertEquals(dropped, t.linesDropped)
+        assertEquals(listOf("l4", "l5", "l6", "l7"), (0 until 4).map { t.bufferLine(it).toText() })
+        assertEquals("l8", t.text(0))
+        t.write("new\r\n")
+        assertEquals(4, t.scrollbackSize)
+        assertEquals(dropped + 1, t.linesDropped)
+        assertEquals("l5", t.bufferLine(0).toText())
+    }
+
+    @Test
     fun `alternate screen never writes scrollback`() {
         val (t, _) = term(cols = 5, rows = 2)
         t.write("\u001b[?1049h")

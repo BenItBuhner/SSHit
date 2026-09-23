@@ -778,6 +778,10 @@ class TerminalSession(
         shell = sh
         val firstShell = !everLive
         everLive = true
+        // The last shell's programs died with it, and so do their modes, before this shell's first
+        // byte: otherwise a fresh prompt gets Ctrl+C as CSI u and mouse reports as typing. Tmux,
+        // attached again, asks for its own once more.
+        if (!firstShell) emulator.resetModes()
         if (isReconnect) marker("reconnected")
         if (agent != null) {
             BerthLog.i(LOG_TAG, "[${h.name}] agent forwarding ${if (sh.agentForwarded) "on" else "refused by the server"}; the agent holds ${agent.key?.keyType ?: "no key"}")
@@ -969,7 +973,11 @@ class TerminalSession(
      */
     private val writer = Dispatchers.IO.limitedParallelism(1)
 
+    /** Handed every write [send] is given, before the shell is; how a test reads what a gesture or a key sent. */
+    internal var sendObserver: ((ByteArray) -> Unit)? = null
+
     fun send(bytes: ByteArray) {
+        sendObserver?.invoke(bytes)
         val sh = shell
         if (sh == null) {
             // A detached tab does not eat what is typed into it: the first key reconnects, as the pill
@@ -986,9 +994,14 @@ class TerminalSession(
         scope.launch(writer) { runCatching { sh.write(bytes) } }
     }
 
-    fun sendText(text: String, modifiers: Int = 0) {
+    /**
+     * [modifiers] may hold Shift with the glyph already shifted: it is the chord's for a program that
+     * asked for CSI u, and nothing to the legacy encoding. [base] is the key's unshifted character
+     * where [text] is the one character a hardware key typed, else 0.
+     */
+    fun sendText(text: String, modifiers: Int = 0, base: Int = 0) {
         noteActivity()
-        trackTyped(text, modifiers)
+        trackTyped(text, modifiers and Mod.SHIFT.inv())
         if (modifiers == 0) {
             send(text.toByteArray(Charsets.UTF_8))
             return
@@ -998,7 +1011,8 @@ class TerminalSession(
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
-            out.write(emulator.encodeText(cp, modifiers, altSendsMeta))
+            val key = if (Character.charCount(cp) == text.length) base else 0
+            out.write(emulator.encodeText(cp, modifiers, altSendsMeta, key))
             i += Character.charCount(cp)
         }
         send(out.toByteArray())

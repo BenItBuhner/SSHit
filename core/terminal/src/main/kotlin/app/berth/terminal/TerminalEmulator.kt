@@ -123,6 +123,27 @@ class TerminalEmulator(
     var focusEvents = false
         private set
 
+    /** xterm's modifyOtherKeys (XTMODKEYS `CSI > 4 ; n m`), 0 to 2; a level above 2 is kept as 2, which is what keys send there. */
+    private var modifyOtherKeys = 0
+
+    /** xterm's formatOtherKeys (XTFMTKEYS `CSI > 4 ; n f`), 0 or 1. */
+    private var formatOtherKeys = 0
+
+    /** The kitty keyboard protocol's flags; each screen has its own stack, and the alternate one starts empty. */
+    private val kittyMain = KittyKeyFlags()
+    private val kittyAlt = KittyKeyFlags()
+    private val kittyKeys: KittyKeyFlags get() = if (isAlternateScreen) kittyAlt else kittyMain
+
+    /** What keys are encoded with: legacy until the program asks for xterm's modifyOtherKeys or kitty's flags. */
+    val keyboardProtocol: KeyboardProtocol get() = synchronized(lock) { protocolNow() }
+
+    private fun protocolNow(): KeyboardProtocol =
+        if (modifyOtherKeys == 0 && kittyKeys.flags == 0) {
+            KeyboardProtocol.LEGACY
+        } else {
+            KeyboardProtocol(modifyOtherKeys, formatOtherKeys, kittyKeys.flags)
+        }
+
     /**
      * The cursor as drawn: the application's DECSCUSR choice while it has made one, else
      * [defaultCursorStyle], the user's setting. DECSCUSR 0 and a reset hand the cursor back.
@@ -161,6 +182,9 @@ class TerminalEmulator(
     private val savedMain = SavedCursor()
     private val savedAlt = SavedCursor()
 
+    /** Whether the alternate screen in force was entered by 1049, which saved the main screen's cursor for leaving it. */
+    private var alternateSavedCursor = false
+
     /** Palette as 0xRRGGBB, mutable through OSC 4 / 104. */
     val palette: IntArray = Palette.defaultPalette()
 
@@ -175,6 +199,34 @@ class TerminalEmulator(
     private var dirty = false
 
     private enum class Charset { ASCII, DEC_GRAPHICS }
+
+    /** One screen's kitty keyboard flags: the ones in force and the ones pushes put aside. */
+    private class KittyKeyFlags {
+        var flags = 0
+        private val saved = ArrayDeque<Int>()
+
+        fun push(newFlags: Int) {
+            if (saved.size == KITTY_STACK_DEPTH) saved.removeFirst()
+            saved.addLast(flags)
+            flags = newFlags
+        }
+
+        /** Popping more than was pushed empties the stack, which resets the flags. */
+        fun pop(count: Int) {
+            repeat(count) {
+                if (saved.isEmpty()) {
+                    flags = 0
+                    return
+                }
+                flags = saved.removeLast()
+            }
+        }
+
+        fun clear() {
+            flags = 0
+            saved.clear()
+        }
+    }
 
     private class SavedCursor {
         var x = 0
@@ -244,11 +296,13 @@ class TerminalEmulator(
     }
 
     fun encodeKey(key: TerminalKey, modifiers: Int = 0): ByteArray = synchronized(lock) {
-        KeyEncoder.encode(key, modifiers, applicationCursorKeys, applicationKeypad)
+        KeyEncoder.encode(key, modifiers, applicationCursorKeys, applicationKeypad, protocolNow())
     }
 
-    fun encodeText(codePoint: Int, modifiers: Int = 0, altSendsMeta: Boolean = false): ByteArray =
-        KeyEncoder.encodeText(codePoint, modifiers, altSendsMeta)
+    /** [base] is the key's unshifted character where a hardware key typed [codePoint], else 0; see [KeyEncoder.encodeText]. */
+    fun encodeText(codePoint: Int, modifiers: Int = 0, altSendsMeta: Boolean = false, base: Int = 0): ByteArray = synchronized(lock) {
+        KeyEncoder.encodeText(codePoint, modifiers, altSendsMeta, protocolNow(), base)
+    }
 
     /**
      * Encodes a mouse event for the application's tracking mode, or returns null when the
@@ -495,7 +549,8 @@ class TerminalEmulator(
             " " -> if (final == 'q') { appCursorStyle = params.zeroBased(0).let { if (it == 0) null else CursorStyle.fromDecscusr(it) } }
             "$" -> if (final == 'p') reportMode(params.zeroBased(0), private = false)
             "?$" -> if (final == 'p') reportMode(params.zeroBased(0), private = true)
-            "=" -> Unit
+            "=" -> if (final == 'u') setKittyFlags(params)
+            "<" -> if (final == 'u') kittyKeys.pop(params.oneBased(0))
             "\"" -> Unit // DECSCA, DECSCL: not implemented
             else -> Unit
         }
@@ -551,6 +606,9 @@ class TerminalEmulator(
             'J' -> eraseInDisplay(p.zeroBased(0))
             'K' -> eraseInLine(p.zeroBased(0))
             'n' -> deviceStatus(p.zeroBased(0), private = true)
+            'u' -> respond("\u001b[?${kittyKeys.flags}u")
+            'm' -> for (i in 0 until p.size) queryModifyKeys(p[i])
+            'g' -> for (i in 0 until p.size) queryFormatKeys(p[i])
             else -> Unit
         }
     }
@@ -559,9 +617,61 @@ class TerminalEmulator(
         when (final) {
             'c' -> respond(SECONDARY_DA)
             'q' -> respond("\u001bP>|${TERMINAL_NAME}(${TERMINAL_VERSION})\u001b\\")
-            'm' -> Unit // XTMODKEYS: modifyOtherKeys is not implemented; keys are sent in legacy form.
-            'n', 'p', 't' -> Unit
+            'm' -> setModifyKeys(p)
+            'f' -> setFormatKeys(p)
+            // XTMODKEYS' "disable": modifyOtherKeys off is level 0 here.
+            'n' -> if (p[0] == MODIFY_OTHER_KEYS) modifyOtherKeys = 0
+            'u' -> kittyKeys.push(p.zeroBased(0) and KeyboardProtocol.KITTY_SUPPORTED)
+            'p', 't' -> Unit
             else -> Unit
+        }
+    }
+
+    /** XTMODKEYS: no parameter resets every resource, a resource with no value resets it, and only modifyOtherKeys is settable. */
+    private fun setModifyKeys(p: CsiParams) {
+        if (p.size == 0) {
+            modifyOtherKeys = 0
+            return
+        }
+        if (p[0] == MODIFY_OTHER_KEYS) modifyOtherKeys = p[1].coerceIn(0, 2)
+    }
+
+    private fun setFormatKeys(p: CsiParams) {
+        if (p.size == 0) {
+            formatOtherKeys = 0
+            return
+        }
+        if (p[0] == MODIFY_OTHER_KEYS) formatOtherKeys = if (p[1] == 1) 1 else 0
+    }
+
+    /** XTQMODKEYS: cursor and function keys are modified the way xterm's default 2 does it, the keypad not at all. */
+    private fun queryModifyKeys(resource: Int) {
+        val value = when (resource) {
+            1, 2 -> 2
+            MODIFY_OTHER_KEYS -> modifyOtherKeys
+            0, 3, 6, 7 -> 0
+            else -> return
+        }
+        respond("\u001b[>$resource;${value}m")
+    }
+
+    private fun queryFormatKeys(resource: Int) {
+        val value = when (resource) {
+            MODIFY_OTHER_KEYS -> formatOtherKeys
+            0, 1, 2, 3 -> 0
+            else -> return
+        }
+        respond("\u001b[>$resource;${value}f")
+    }
+
+    /** `CSI = flags ; mode u`: mode 1 sets the flags, 2 adds them, 3 takes them away. */
+    private fun setKittyFlags(p: CsiParams) {
+        val flags = p.zeroBased(0) and KeyboardProtocol.KITTY_SUPPORTED
+        val k = kittyKeys
+        when (p.oneBased(1)) {
+            1 -> k.flags = flags
+            2 -> k.flags = k.flags or flags
+            3 -> k.flags = k.flags and flags.inv()
         }
     }
 
@@ -937,7 +1047,12 @@ class TerminalEmulator(
             12 -> appCursorStyle = cursorStyle.copy(blinking = enable)
             25 -> cursorVisible = enable
             47, 1047 -> {
-                if (enable) switchToAlternate(clear = false) else switchToMain(clearAltFirst = mode == 1047)
+                if (enable) {
+                    if (!isAlternateScreen) alternateSavedCursor = false
+                    switchToAlternate(clear = false)
+                } else {
+                    switchToMain(clearAltFirst = mode == 1047)
+                }
             }
             1000 -> mouseTracking = if (enable) MouseTracking.NORMAL else MouseTracking.NONE
             1002 -> mouseTracking = if (enable) MouseTracking.BUTTON_EVENT else MouseTracking.NONE
@@ -948,6 +1063,7 @@ class TerminalEmulator(
             1048 -> if (enable) saveCursor() else restoreCursor()
             1049 -> {
                 if (enable) {
+                    if (!isAlternateScreen) alternateSavedCursor = true
                     saveCursor()
                     switchToAlternate(clear = true)
                 } else {
@@ -966,6 +1082,7 @@ class TerminalEmulator(
 
     private fun switchToAlternate(clear: Boolean) {
         if (isAlternateScreen) return
+        kittyAlt.clear()
         buffer = altBuffer
         if (clear) altBuffer.clearAll(TermColor.COLOR_DEFAULT)
         scrollTop = 0
@@ -1042,6 +1159,10 @@ class TerminalEmulator(
         lineFeedNewLine = false
         reverseVideo = false
         synchronizedOutput = false
+        modifyOtherKeys = 0
+        formatOtherKeys = 0
+        kittyMain.clear()
+        kittyAlt.clear()
         tabStops = BooleanArray(cols) { it % TAB_WIDTH == 0 }
         if (isAlternateScreen) switchToMain(clearAltFirst = true)
         mainBuffer.clearAll(TermColor.COLOR_DEFAULT)
@@ -1055,12 +1176,49 @@ class TerminalEmulator(
         listener.onTitleChanged(title)
     }
 
-    /** Resets the emulator as if it were freshly created; used when a session reconnects. */
+    /**
+     * Resets the emulator as if it were freshly created, the screen and its history with it, as the
+     * terminal preview does to draw its sample again. A reconnect keeps its frame and calls
+     * [resetModes] instead.
+     */
     fun reset() {
         synchronized(lock) {
             parser.reset()
             decoder.reset()
             fullReset()
+            markDirty()
+        }
+        flushChanges()
+    }
+
+    /**
+     * Hands the frame to a new shell: what the last shell's programs asked of the terminal ends
+     * with them, as their exit would have ended it, and the main screen and its history stay. The
+     * alternate screen is left (its cursor handed back when 1049 saved it); mouse reporting, focus
+     * events, bracketed paste, synchronized output, LNM, reverse video, modifyOtherKeys,
+     * formatOtherKeys, both kitty stacks and DECSTR's modes go back to their defaults; and a
+     * sequence the old connection cut off halfway is dropped.
+     */
+    fun resetModes() {
+        synchronized(lock) {
+            parser.reset()
+            decoder.reset()
+            if (isAlternateScreen) {
+                switchToMain(clearAltFirst = true)
+                if (alternateSavedCursor) restoreCursor()
+            }
+            softReset()
+            bracketedPaste = false
+            mouseTracking = MouseTracking.NONE
+            mouseSgrEncoding = false
+            focusEvents = false
+            lineFeedNewLine = false
+            reverseVideo = false
+            synchronizedOutput = false
+            modifyOtherKeys = 0
+            formatOtherKeys = 0
+            kittyMain.clear()
+            kittyAlt.clear()
             markDirty()
         }
         flushChanges()
@@ -1302,6 +1460,12 @@ class TerminalEmulator(
 
         /** Report as xterm patch 354; applications treat that as a modern xterm. */
         private const val SECONDARY_DA = "\u001b[>41;354;0c"
+
+        /** XTMODKEYS' and XTFMTKEYS' resource number for the other keys. */
+        private const val MODIFY_OTHER_KEYS = 4
+
+        /** Entries a kitty flags stack keeps; a push onto a full one drops the oldest. */
+        internal const val KITTY_STACK_DEPTH = 8
 
         private val BRACKET_START = "\u001b[200~".toByteArray(Charsets.US_ASCII)
         private val BRACKET_END = "\u001b[201~".toByteArray(Charsets.US_ASCII)

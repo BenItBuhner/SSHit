@@ -176,8 +176,11 @@ private fun modifiersOf(event: KeyEvent): Int {
     return m
 }
 
-/** Maps an Android key code to the terminal; returns false when the event is not for the terminal. */
-fun handleKeyDown(keyCode: Int, unicodeChar: Int, modifiers: Int, sink: TerminalInputSink): Boolean {
+/**
+ * Maps an Android key code to the terminal; returns false when the event is not for the terminal.
+ * [base] is the key's character with no modifier held, 0 where it is not known.
+ */
+fun handleKeyDown(keyCode: Int, unicodeChar: Int, modifiers: Int, sink: TerminalInputSink, base: Int = 0): Boolean {
     val key = when (keyCode) {
         KeyEvent.KEYCODE_DPAD_UP -> TerminalKey.UP
         KeyEvent.KEYCODE_DPAD_DOWN -> TerminalKey.DOWN
@@ -211,8 +214,10 @@ fun handleKeyDown(keyCode: Int, unicodeChar: Int, modifiers: Int, sink: Terminal
         sink.onKey(key, modifiers)
         return true
     }
-    if (keyCode == KeyEvent.KEYCODE_SPACE && modifiers and Mod.CTRL != 0) {
-        sink.onText("\u0000")
+    // Ctrl+Space is NUL to the legacy encoding and a chord of its own to a program that asked for
+    // CSI u; Shift+Space is one too, at modifyOtherKeys 2. Either way the session encodes it.
+    if (keyCode == KeyEvent.KEYCODE_SPACE && modifiers != 0) {
+        if (sink is ModifierAwareSink) sink.onCodePoint(' '.code, modifiers, ' '.code) else sink.onText(if (modifiers and Mod.CTRL != 0) "\u0000" else " ")
         return true
     }
     // Ctrl and Alt strip the shift-only unicode; get the plain character back for the control mapping.
@@ -224,18 +229,22 @@ fun handleKeyDown(keyCode: Int, unicodeChar: Int, modifiers: Int, sink: Terminal
     if (modifiers and (Mod.CTRL or Mod.ALT or Mod.META) == 0) {
         sink.onText(String(Character.toChars(cp)))
     } else {
-        sink.onKeyWithModifiers(cp, modifiers)
+        sink.onKeyWithModifiers(cp, modifiers, base)
     }
     return true
 }
 
 /** A printable character typed with Ctrl or Alt held; the sink encodes it. */
-fun TerminalInputSink.onKeyWithModifiers(codePoint: Int, modifiers: Int) {
-    if (this is ModifierAwareSink) onCodePoint(codePoint, modifiers) else onText(String(Character.toChars(codePoint)))
+fun TerminalInputSink.onKeyWithModifiers(codePoint: Int, modifiers: Int, base: Int = 0) {
+    if (this is ModifierAwareSink) onCodePoint(codePoint, modifiers, base) else onText(String(Character.toChars(codePoint)))
 }
 
 interface ModifierAwareSink : TerminalInputSink {
-    fun onCodePoint(codePoint: Int, modifiers: Int)
+    /**
+     * [codePoint] typed with [modifiers], Shift among them where it was held; [base] is the key's
+     * unshifted character (the `1` of a Ctrl+Shift+1 that typed `!`), 0 where no key is known.
+     */
+    fun onCodePoint(codePoint: Int, modifiers: Int, base: Int = 0)
 }
 
 /**
@@ -283,7 +292,9 @@ fun handleComposeKeyEvent(event: androidx.compose.ui.input.key.KeyEvent, sink: T
         val base = native.getUnicodeChar(native.metaState and KeyEvent.META_SHIFT_MASK)
         if (base > 0) base else event.utf16CodePoint
     } else event.utf16CodePoint
-    return handleKeyDown(native.keyCode, unicode, mods, sink)
+    // The kitty protocol names a chord's key by its unshifted character: Ctrl+Shift+1 is 1, not !.
+    val plain = native.getUnicodeChar(0).takeIf { it > 0 && it and KeyCharacterMap.COMBINING_ACCENT == 0 } ?: 0
+    return handleKeyDown(native.keyCode, unicode, mods, sink, plain)
 }
 
 /**

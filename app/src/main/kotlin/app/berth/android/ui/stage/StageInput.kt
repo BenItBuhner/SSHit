@@ -18,6 +18,8 @@ import app.berth.terminal.TerminalKey
 
 enum class LatchState { NONE, ONE_SHOT, LOCKED }
 
+private const val CHORD = Mod.CTRL or Mod.ALT or Mod.META
+
 /** The Deck's Ctrl / Alt / Shift latches: one-shot clears after the next character, locked stays. */
 class ModifierLatch {
     var ctrl by mutableStateOf(LatchState.NONE)
@@ -92,8 +94,9 @@ class StageInput(
             s.sendText(text)
         } else {
             // Shift on a latch applies to letters; the keyboard already produced the shifted glyph otherwise.
+            // It goes with a chord, which a program that asked for CSI u tells apart; alone it is the glyph's.
             val shifted = if (bits and Mod.SHIFT != 0) text.uppercase() else text
-            s.sendText(shifted, bits and Mod.SHIFT.inv())
+            s.sendText(shifted, if (bits and CHORD != 0) bits else bits and Mod.SHIFT.inv())
             latch.consumeOneShots()
         }
     }
@@ -104,11 +107,12 @@ class StageInput(
         latch.consumeOneShots()
     }
 
-    override fun onCodePoint(codePoint: Int, modifiers: Int) {
+    override fun onCodePoint(codePoint: Int, modifiers: Int, base: Int) {
         val s = session() ?: return
         val bits = modifiers or latch.bits
+        val glyph = if (latch.bits and Mod.SHIFT != 0 && modifiers and Mod.SHIFT == 0) Character.toUpperCase(codePoint) else codePoint
         // Through the session, not the encoder: it applies the host's Alt behaviour and tells the history tracker the line was edited by a chord.
-        s.sendText(String(Character.toChars(codePoint)), bits and Mod.SHIFT.inv())
+        s.sendText(String(Character.toChars(glyph)), bits, base)
         latch.consumeOneShots()
     }
 
@@ -144,7 +148,7 @@ class StageInput(
             target.isNotEmpty() -> {
                 val cp = target.codePointAt(0)
                 val glyph = if (bits and Mod.SHIFT != 0) Character.toUpperCase(cp) else cp
-                if (bits and Mod.SHIFT.inv() == 0) onText(String(Character.toChars(glyph))) else onCodePoint(glyph, bits and Mod.SHIFT.inv())
+                if (bits and Mod.SHIFT.inv() == 0) onText(String(Character.toChars(glyph))) else onCodePoint(glyph, bits)
             }
         }
     }

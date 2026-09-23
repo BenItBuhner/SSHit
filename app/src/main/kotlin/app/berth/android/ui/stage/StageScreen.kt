@@ -71,6 +71,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -141,11 +142,14 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.ChordTable
 import app.berth.domain.model.DeckAppAction
 import app.berth.domain.model.Host
+import app.berth.domain.model.PinchAction
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.TabKind
 import app.berth.domain.model.TabSwipeGesture
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import app.berth.terminal.CursorStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -204,6 +208,7 @@ fun StageScreen(
     // Pass-through (spec C22, A46) is the Stage's across its tabs, until its chord or its pill ends it.
     var passThroughMode by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val haptics = rememberDeckHaptics()
     // The pane layer's split and focus move, when one is over this Stage; the empty value on a phone.
     val panes = LocalPaneActions.current
@@ -349,6 +354,7 @@ fun StageScreen(
                         extra = if (tab is FilesTab) lentRows else null,
                         onFind = { tools.openSearch() },
                         onHistory = { tools.historyOpen = true },
+                        onShareScreen = { (tab as? TerminalSession)?.let { tools.shareScreen(context, it) } },
                         onSplit = onSplit,
                         onUnsplit = onUnsplit,
                         onGroups = onGroups,
@@ -448,6 +454,7 @@ class StageBodies internal constructor(
                     onOpenSessionSheet = onOpenSessionSheet,
                     onEditHost = onEditHost,
                     onOpenDeckEditor = onOpenDeckEditor,
+                    onNewTab = actions::newTab,
                     modifier = modifier,
                     chrome = chrome,
                     focusRequester = focusRequester,
@@ -503,11 +510,11 @@ private fun EmptyStage(onNewTab: () -> Unit, modifier: Modifier = Modifier) {
 typealias OverflowRows = @Composable ColumnScope.(dismiss: () -> Unit) -> Unit
 
 /**
- * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Session, Host settings, Tabs, Groups
- * (the overview, spec C8), Library, Close. A Files tab has no Deck and no connection of its own, so
- * it offers Connect (no terminal on the host) or Reconnect (its terminal is down) and Terminal in
- * their place, and its body lends the folder rows as a leading section over an 8 dp break,
- * [extra]. Without a tab it offers New tab, Groups and Library.
+ * Overflow (spec C3): Reconnect or Detach, Show or Hide Deck, Find, History, Share screen text,
+ * Session, Host settings, Tabs, Groups (the overview, spec C8), Library, Close. A Files tab has no
+ * Deck and no connection of its own, so it offers Connect (no terminal on the host) or Reconnect
+ * (its terminal is down) and Terminal in their place, and its body lends the folder rows as a
+ * leading section over an 8 dp break, [extra]. Without a tab it offers New tab, Groups and Library.
  */
 @Composable
 private fun StageOverflow(
@@ -521,6 +528,7 @@ private fun StageOverflow(
     extra: OverflowRows? = null,
     onFind: () -> Unit = {},
     onHistory: () -> Unit = {},
+    onShareScreen: () -> Unit = {},
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
     onGroups: () -> Unit = {},
@@ -563,6 +571,7 @@ private fun StageOverflow(
                         item(if (deckVisible) "Hide Deck" else "Show Deck", action = onToggleDeck)
                         item("Find", action = onFind)
                         item("History", action = onHistory)
+                        item("Share screen text", action = onShareScreen)
                     }
                 }
                 // Split (spec C3 overflow, landscape and larger): a second tab on this host beside this one; Unsplit while two are up.
@@ -605,11 +614,13 @@ private fun StageBody(
     onOpenSessionSheet: () -> Unit,
     onEditHost: (String) -> Unit,
     onOpenDeckEditor: () -> Unit,
+    onNewTab: () -> Unit,
     modifier: Modifier = Modifier,
     chrome: StageChromeHost? = null,
     focusRequester: FocusRequester? = null,
 ) {
     val c = Berth.colors
+    val context = LocalContext.current
     // Only what the body shows of the record. The title, directory and command the shell reports are
     // the strip's and the sheet's to show, and each lands as a new record; read whole, every one
     // re-ran this body and, through it, every parameter the canvas and the Deck are handed.
@@ -658,6 +669,7 @@ private fun StageBody(
     val accessibility = remember(session.id) { TerminalAccessibility() }
     // Every paste (Deck key, keyboard menu, two-finger tap, selection bar) goes through the preview (spec C18).
     val paste: (String) -> Unit = { tools.paste(session, it, patterns) }
+    val pasteClipboard: () -> Unit = { clipboard.getText()?.text?.let(paste) }
     // A share's text (spec C24) is one more paste: it waits in the view model for this session's
     // Stage and comes through the same gate, so a note of several lines meets the preview here.
     val shared by vm.sharedPaste.collectAsState()
@@ -755,23 +767,38 @@ private fun StageBody(
                     .fillMaxSize()
                     .padding(start = 4.dp, top = 4.dp, end = 4.dp)
                     .alpha(frameAlpha),
+                // Each D1 gesture as Settings › Gestures assigns it; a gesture set to nothing is wired to nothing.
                 onFontSizeStep = { step ->
-                    patterns.fontStep()
-                    vm.stepFontSize(record.hostId, step)
+                    if (terminalSettings.pinch == PinchAction.FONT_SIZE) {
+                        patterns.fontStep()
+                        vm.stepFontSize(record.hostId, step)
+                    }
                 },
                 onTwoFingerSwipe = if (swipeGesture == TabSwipeGesture.TWO_FINGER) { forward -> vm.stepTab(if (forward) 1 else -1) } else null,
-                onTwoFingerTap = { clipboard.getText()?.text?.let(paste) },
+                onTwoFingerTap = when (terminalSettings.twoFingerTap) {
+                    TwoFingerTapAction.PASTE -> pasteClipboard
+                    TwoFingerTapAction.NEW_TAB -> onNewTab
+                    TwoFingerTapAction.NOTHING -> null
+                },
                 // The D1 gestures the canvas reports and the Stage owns: the font back to the host's default,
                 // the Deck shown or hidden (its own state lives here, not in Deck.kt), arrows for a drag when asked.
                 onTwoFingerDoubleTap = {
                     patterns.fontStep()
                     vm.resetFontSize(record.hostId)
                 },
-                onTwoFingerTapArmed = { patterns.twoFingerTapArmed() },
-                onThreeFingerTap = { if (deckStateOk) onDeckVisibleChange(!deckVisible) },
+                // Told only when the tap will become something once the window passes.
+                onTwoFingerTapArmed = if (terminalSettings.twoFingerTap != TwoFingerTapAction.NOTHING) ({ patterns.twoFingerTapArmed() }) else null,
+                onThreeFingerTap = when (terminalSettings.threeFingerTap) {
+                    ThreeFingerTapAction.TOGGLE_DECK -> ({ if (deckStateOk) onDeckVisibleChange(!deckVisible) })
+                    ThreeFingerTapAction.SHARE_SCREEN_TEXT -> ({ tools.shareScreen(context, session) })
+                    ThreeFingerTapAction.NOTHING -> null
+                },
                 horizontalDragArrows = terminalSettings.horizontalDragArrows,
+                tap = terminalSettings.tap,
+                doubleTap = terminalSettings.doubleTap,
                 // An OSC 8 link goes through its sheet (spec A60): the address is the remote's and is looked at first.
                 onLinkTap = { tools.pendingLink = it },
+                onSecondaryClick = if (terminalSettings.rightClickPaste) pasteClipboard else null,
                 selection = tools.selection,
                 search = tools.search,
                 onSelectionStarted = { patterns.selectionStarted() },

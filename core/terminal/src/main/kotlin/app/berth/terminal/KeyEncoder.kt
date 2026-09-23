@@ -17,14 +17,57 @@ object Mod {
 }
 
 /**
- * Produces the xterm byte sequences for keys and printable text. Pure and stateless; the emulator
- * supplies the current application-cursor/keypad modes.
+ * How the chords the legacy encoding folds together are told apart, as the program asked for it.
+ * [LEGACY] is xterm's default: Ctrl+Shift+A is Ctrl+A, Ctrl+Space is NUL, Ctrl+I is Tab and Alt+X
+ * is ESC x. xterm's modifyOtherKeys (XTMODKEYS, `CSI > 4 ; n m`) sends such a chord as
+ * `CSI 27 ; mod ; code ~`, or `CSI code ; mod u` under formatOtherKeys (XTFMTKEYS, `CSI > 4 ; 1 f`);
+ * the kitty keyboard protocol's flags (`CSI > flags u`) send it as `CSI key ; mod u`, and win when
+ * both are set.
+ */
+data class KeyboardProtocol(
+    /** 0 off; 1 the chords beyond the usual Shift and Ctrl; 2 every modifier, but Shift alone on a character. Kept at 0 to 2. */
+    val modifyOtherKeys: Int = 0,
+    /** 0 for `CSI 27 ; mod ; code ~`, 1 for `CSI code ; mod u`. */
+    val formatOtherKeys: Int = 0,
+    /** The kitty keyboard protocol's progressive enhancements, of those in [KITTY_SUPPORTED]. */
+    val kittyFlags: Int = 0,
+) {
+    companion object {
+        val LEGACY = KeyboardProtocol()
+        const val KITTY_DISAMBIGUATE = 1
+        const val KITTY_ALTERNATE_KEYS = 4
+
+        /**
+         * Key-release events (2), every key as an escape (8) and the text a key made (16) all need
+         * a key behind every character, which a soft keyboard's committed text does not have; a
+         * program that asks for them is told, by the flags it reads back, that it has only these.
+         */
+        const val KITTY_SUPPORTED = KITTY_DISAMBIGUATE or KITTY_ALTERNATE_KEYS
+    }
+}
+
+/**
+ * Produces the byte sequences for keys and printable text. Pure and stateless; the emulator
+ * supplies the current application-cursor/keypad modes and the [KeyboardProtocol] the program asked for.
  */
 object KeyEncoder {
     private const val ESC = 0x1B
+    private const val ALL_MODS = Mod.SHIFT or Mod.ALT or Mod.CTRL or Mod.META
+    private const val CHORD = Mod.ALT or Mod.CTRL or Mod.META
 
-    fun encode(key: TerminalKey, modifiers: Int, applicationCursorKeys: Boolean, applicationKeypad: Boolean): ByteArray {
-        val mod = modifiers and (Mod.SHIFT or Mod.ALT or Mod.CTRL or Mod.META)
+    fun encode(
+        key: TerminalKey,
+        modifiers: Int,
+        applicationCursorKeys: Boolean,
+        applicationKeypad: Boolean,
+        protocol: KeyboardProtocol = KeyboardProtocol.LEGACY,
+    ): ByteArray {
+        val mod = modifiers and ALL_MODS
+        if (protocol.kittyFlags and KeyboardProtocol.KITTY_DISAMBIGUATE != 0) {
+            kittyKey(key, mod)?.let { return it }
+        } else if (protocol.modifyOtherKeys > 0) {
+            xtermOtherKey(key, mod, protocol)?.let { return it }
+        }
         return when (key) {
             TerminalKey.UP -> cursorKey('A', mod, applicationCursorKeys)
             TerminalKey.DOWN -> cursorKey('B', mod, applicationCursorKeys)
@@ -52,10 +95,7 @@ object KeyEncoder {
                 val base = if (applicationKeypad && mod == 0) ascii(ESC, 'O'.code, 'M'.code) else ascii('\r'.code)
                 withAlt(base, mod)
             }
-            TerminalKey.TAB -> when {
-                mod and Mod.SHIFT != 0 -> csi("Z")
-                else -> withAlt(ascii('\t'.code), mod)
-            }
+            TerminalKey.TAB -> withAlt(if (mod and Mod.SHIFT != 0) csi("Z") else ascii('\t'.code), mod)
             TerminalKey.BACKSPACE -> withAlt(ascii(if (mod and Mod.CTRL != 0) 0x08 else 0x7F), mod)
             TerminalKey.ESCAPE -> withAlt(ascii(ESC), mod)
         }
@@ -65,9 +105,34 @@ object KeyEncoder {
      * Encodes a printable code point typed with [modifiers]. Ctrl maps letters and the usual
      * punctuation onto C0 controls; Alt prefixes ESC (xterm's `metaSendsEscape`), or with
      * [altSendsMeta] sets the eighth bit of an ASCII result instead (`eightBitInput`); Shift is
-     * assumed to be already applied to the code point by the keyboard.
+     * assumed to be already applied to the code point by the keyboard, and a capital typed with a
+     * chord counts as Shift held. Under a [protocol] the program asked for, a chord the legacy
+     * encoding folds together is sent as the protocol's own sequence instead, which overrides
+     * [altSendsMeta] the way xterm's modifyOtherKeys overrides metaSendsEscape. [base] is the
+     * key's character with no modifier (`1` for a Shift+1 that typed `!`), 0 where no key is
+     * known; kitty's sequences name the key by it.
      */
-    fun encodeText(codePoint: Int, modifiers: Int, altSendsMeta: Boolean = false): ByteArray {
+    fun encodeText(
+        codePoint: Int,
+        modifiers: Int,
+        altSendsMeta: Boolean = false,
+        protocol: KeyboardProtocol = KeyboardProtocol.LEGACY,
+        base: Int = 0,
+    ): ByteArray {
+        val kitty = protocol.kittyFlags and KeyboardProtocol.KITTY_DISAMBIGUATE != 0
+        if (kitty || protocol.modifyOtherKeys > 0) {
+            var mod = modifiers and ALL_MODS
+            if (mod and CHORD != 0 && Character.isUpperCase(codePoint) && Character.toLowerCase(codePoint) != codePoint) mod = mod or Mod.SHIFT
+            if (kitty) {
+                if (mod and CHORD != 0) return kittyText(codePoint, mod, protocol.kittyFlags, base)
+            } else {
+                val reported = xtermTextModifiers(codePoint, mod, protocol.modifyOtherKeys)
+                if (reported != 0) {
+                    val code = if (reported and Mod.SHIFT != 0) Character.toUpperCase(codePoint) else codePoint
+                    return otherKey(code, reported, protocol.formatOtherKeys)
+                }
+            }
+        }
         var cp = codePoint
         if (modifiers and Mod.CTRL != 0) {
             val ctrl = controlFor(cp)
@@ -86,11 +151,81 @@ object KeyEncoder {
         '['.code, '3'.code -> 0x1B
         '\\'.code, '4'.code -> 0x1C
         ']'.code, '5'.code -> 0x1D
-        '^'.code, '6'.code -> 0x1E
-        '_'.code, '7'.code, '-'.code -> 0x1F
+        '^'.code, '6'.code, '~'.code -> 0x1E
+        '_'.code, '7'.code, '-'.code, '/'.code -> 0x1F
         '?'.code, '8'.code -> 0x7F
         else -> -1
     }
+
+    /**
+     * The kitty protocol's disambiguated form of a key, or null where it is the legacy one. Esc is
+     * `CSI 27 u`; Enter, Tab and Backspace keep their legacy bytes unmodified, so a shell a program
+     * left in this mode by crashing still takes `reset` and Enter; F3 is `CSI 13 ~` because
+     * `CSI 1 ; mod R` reads as a cursor position report.
+     */
+    private fun kittyKey(key: TerminalKey, mod: Int): ByteArray? = when (key) {
+        TerminalKey.ESCAPE -> csiU(27, mod)
+        TerminalKey.ENTER -> if (mod == 0) ascii('\r'.code) else csiU(13, mod)
+        TerminalKey.TAB -> if (mod == 0) ascii('\t'.code) else csiU(9, mod)
+        TerminalKey.BACKSPACE -> if (mod == 0) ascii(0x7F) else csiU(127, mod)
+        TerminalKey.F3 -> if (mod == 0) null else csi("13;${modParam(mod)}~")
+        else -> null
+    }
+
+    /**
+     * `CSI key ; mod u`, the key named by its unshifted character; with the alternate-keys flag, a
+     * chord with Shift names the shifted character too, as `key:shifted`.
+     */
+    private fun kittyText(cp: Int, mod: Int, flags: Int, base: Int): ByteArray {
+        val key = if (base > 0) base else Character.toLowerCase(cp)
+        val shifted = if (cp == key) Character.toUpperCase(cp) else cp
+        val alternate = flags and KeyboardProtocol.KITTY_ALTERNATE_KEYS != 0 && mod and Mod.SHIFT != 0 && shifted != key
+        return csi(if (alternate) "$key:$shifted;${modParam(mod)}u" else "$key;${modParam(mod)}u")
+    }
+
+    /**
+     * xterm's modifyOtherKeys for the keys with a legacy byte of their own. At level 1 the usual
+     * Shift and Ctrl keep their meaning (Shift+Tab is back-tab's `CSI Z`, Backspace is left
+     * alone, Ctrl+Escape is ESC) and other modifiers encode the key; at level 2 every modifier
+     * applies, Shift+Tab included.
+     */
+    private fun xtermOtherKey(key: TerminalKey, mod: Int, protocol: KeyboardProtocol): ByteArray? {
+        if (mod == 0) return null
+        val all = protocol.modifyOtherKeys >= 2
+        val code = when (key) {
+            TerminalKey.ENTER -> 13
+            TerminalKey.TAB -> if (!all && mod == Mod.SHIFT) return null else 9
+            TerminalKey.BACKSPACE -> if (!all) return null else 127
+            TerminalKey.ESCAPE -> if (!all && mod and (Mod.ALT or Mod.META) == 0) return null else 27
+            else -> return null
+        }
+        return otherKey(code, mod, protocol.formatOtherKeys)
+    }
+
+    /**
+     * The modifiers modifyOtherKeys reports a character typed with, or 0 where it goes in its
+     * legacy form. At level 2 every modifier applies but Shift alone, which is the character's
+     * (Shift+Space, which has no character of its own, is told apart). Level 1 follows xterm's
+     * `input.c` by kind of key: Ctrl alone or Shift alone keeps a letter's legacy form, and
+     * `@ [ \ ] ^ _` and the rest of 0x40 to 0x7E with it; a key Ctrl makes a C0 control of (Space,
+     * the digits 2 to 8, `/ ? -`) keeps it under any mix of Ctrl and Shift; any other character
+     * is Shift's own unless Ctrl is held too.
+     */
+    private fun xtermTextModifiers(cp: Int, mod: Int, level: Int): Int {
+        if (mod == 0) return 0
+        if (level >= 2) return if (mod == Mod.SHIFT && cp != ' '.code) 0 else mod
+        return when {
+            cp in 0x40..0x7E -> if (mod == Mod.CTRL || mod == Mod.SHIFT) 0 else mod
+            controlFor(cp) >= 0 -> if (mod and (Mod.ALT or Mod.META) == 0) 0 else mod
+            mod and Mod.CTRL == 0 -> mod and Mod.SHIFT.inv()
+            else -> mod
+        }
+    }
+
+    private fun otherKey(code: Int, mod: Int, format: Int): ByteArray =
+        if (format == 1) csi("$code;${modParam(mod)}u") else csi("27;${modParam(mod)};$code~")
+
+    private fun csiU(code: Int, mod: Int): ByteArray = if (mod == 0) csi("${code}u") else csi("$code;${modParam(mod)}u")
 
     private fun cursorKey(final: Char, mod: Int, application: Boolean): ByteArray = when {
         mod != 0 -> csi("1;${modParam(mod)}$final")

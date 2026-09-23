@@ -55,12 +55,17 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
+import app.berth.domain.model.PinchAction
 import app.berth.domain.model.TabSwipeGesture
+import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import kotlinx.coroutines.delay
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
@@ -181,7 +186,7 @@ fun SettingsScreen(
                 ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
                 CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
                 ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
-                ToggleRow("Nerd Font fallback", font.nerdFontFallback, { vm.setTerminalFont(font.copy(nerdFontFallback = it)) }, caption = "Prompt separators when the family has none; import a Nerd Font for icons")
+                ToggleRow("Nerd Font fallback", font.nerdFontFallback, { vm.setTerminalFont(font.copy(nerdFontFallback = it)) }, caption = "Icons and separators the family lacks, from the bundled Symbols Nerd Font")
                 ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
                 // The cursor the user chose stands until the program on the other end asks for its own (DECSCUSR).
                 Text("Cursor", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
@@ -208,9 +213,16 @@ fun SettingsScreen(
             }
 
             Panel(label = "Gestures") {
+                // Spec D1's gestures on the terminal, each with its default first and its alternatives after.
+                CyclePicker("Tap", TapAction.entries, terminal.tap, ::tapLabel, caption = tapCaption(terminal.tap)) { a -> vm.updateTerminalSettings { it.copy(tap = a) } }
+                CyclePicker("Double-tap", DoubleTapAction.entries, terminal.doubleTap, ::doubleTapLabel) { a -> vm.updateTerminalSettings { it.copy(doubleTap = a) } }
+                CyclePicker("Two-finger tap", TwoFingerTapAction.entries, terminal.twoFingerTap, ::twoFingerTapLabel) { a -> vm.updateTerminalSettings { it.copy(twoFingerTap = a) } }
+                CyclePicker("Three-finger tap", ThreeFingerTapAction.entries, terminal.threeFingerTap, ::threeFingerTapLabel) { a -> vm.updateTerminalSettings { it.copy(threeFingerTap = a) } }
+                CyclePicker("Pinch", PinchAction.entries, terminal.pinch, ::pinchLabel) { a -> vm.updateTerminalSettings { it.copy(pinch = a) } }
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
                 // Spec D1's optional drag: off, a sideways drag on the terminal does nothing, as it always has.
                 ToggleRow("Drag for arrow keys", terminal.horizontalDragArrows, { on -> vm.updateTerminalSettings { it.copy(horizontalDragArrows = on) } }, caption = "A one-finger sideways drag on the terminal sends Left and Right, one per cell")
+                ToggleRow("Right-click pastes", terminal.rightClickPaste, { on -> vm.updateTerminalSettings { it.copy(rightClickPaste = on) } }, caption = "With a mouse or trackpad, unless the program has the mouse")
                 // The Deck's hand (spec D2): the swipe down is off by default, the swipe across on.
                 ToggleRow(
                     "Swipe down on a Deck key",
@@ -224,7 +236,7 @@ fun SettingsScreen(
                     { vm.setDeckSettings(deckSettings.copy(layerSwipe = it)) },
                     caption = "Steps the row's layer: left for the one before, right for the next",
                 )
-                PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
+                PanelNote("Long-press always selects, and a two-finger double-tap resets the font size. One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
             HardwareKeyboardPanel(vm)
@@ -265,7 +277,7 @@ fun SettingsScreen(
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
                 Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
                 Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text3)
-                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack and the Powerline symbols from Nerd Fonts under the MIT licence. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
+                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack under the MIT licence; Symbols Nerd Font Mono from Nerd Fonts under the MIT licence, its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
             }
         }
     }
@@ -299,4 +311,38 @@ private fun swipeLabel(gesture: TabSwipeGesture): String = when (gesture) {
     TabSwipeGesture.TWO_FINGER -> "Two-finger swipe"
     TabSwipeGesture.RIGHT_EDGE -> "Right edge swipe"
     TabSwipeGesture.NONE -> "Off"
+}
+
+private fun tapLabel(action: TapAction): String = when (action) {
+    TapAction.SHOW_KEYBOARD -> "Show keyboard"
+    TapAction.NOTHING -> "Nothing"
+}
+
+/** The one gesture whose alternative takes something away: the tap is the soft keyboard's only way up. */
+private fun tapCaption(action: TapAction): String = when (action) {
+    TapAction.SHOW_KEYBOARD -> "Also clicks where the program has the mouse"
+    TapAction.NOTHING -> "No keyboard and no click; type from a hardware keyboard"
+}
+
+private fun doubleTapLabel(action: DoubleTapAction): String = when (action) {
+    DoubleTapAction.SELECT_WORD -> "Select word"
+    DoubleTapAction.SEND_TAB -> "Send Tab"
+    DoubleTapAction.NOTHING -> "Nothing"
+}
+
+private fun twoFingerTapLabel(action: TwoFingerTapAction): String = when (action) {
+    TwoFingerTapAction.PASTE -> "Paste"
+    TwoFingerTapAction.NEW_TAB -> "New tab"
+    TwoFingerTapAction.NOTHING -> "Nothing"
+}
+
+private fun threeFingerTapLabel(action: ThreeFingerTapAction): String = when (action) {
+    ThreeFingerTapAction.TOGGLE_DECK -> "Toggle Deck"
+    ThreeFingerTapAction.SHARE_SCREEN_TEXT -> "Share screen text"
+    ThreeFingerTapAction.NOTHING -> "Nothing"
+}
+
+private fun pinchLabel(action: PinchAction): String = when (action) {
+    PinchAction.FONT_SIZE -> "Font size"
+    PinchAction.NOTHING -> "Nothing"
 }

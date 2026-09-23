@@ -104,9 +104,14 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.domain.model.SessionState
+import app.berth.terminal.CellPos
+import app.berth.terminal.CellRange
+import app.berth.terminal.GridGeometry
 import app.berth.terminal.PasteAnalysis
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.ScrollbackSearch
+import app.berth.terminal.TerminalEmulator
+import app.berth.terminal.TerminalText
 import kotlinx.coroutines.delay
 import java.util.EnumSet
 /**
@@ -159,7 +164,31 @@ class StageTools {
         search.close()?.let { viewport.scrollOffset = it }
     }
 
+    /**
+     * The rows in view as they read on screen: history's when the view is scrolled back, rows that
+     * soft-wrap joined into the lines the host printed as a copy joins them, and the blank rows
+     * above and below the text left out. Empty when nothing in view has text.
+     */
+    fun screenText(emulator: TerminalEmulator): String = synchronized(emulator.lock) {
+        val grid = emulator.grid
+        val offset = viewport.scrollOffset.coerceIn(0, emulator.scrollbackSize)
+        var top = GridGeometry.bufferRow(0, emulator.scrollbackSize, offset)
+        var bottom = minOf(top + emulator.rows, emulator.bufferRows) - 1
+        while (top <= bottom && grid.line(top).isBlank()) top++
+        while (bottom > top && grid.line(bottom).isBlank()) bottom--
+        if (top > bottom) "" else TerminalText.extract(grid, CellRange(CellPos(top, 0), CellPos(bottom, emulator.cols - 1)))
+    }
+
+    /** Hands the rows in view to the system's share sheet (spec C3's Overflow, D1's three-finger alternative), or says there is nothing to share. */
+    fun shareScreen(context: android.content.Context, session: TerminalSession) {
+        val text = screenText(session.emulator)
+        if (text.isEmpty()) notice = NOTHING_ON_SCREEN else share(context, text)
+    }
+
     companion object {
+        /** The notice for Share screen text over a view with no text in it. */
+        const val NOTHING_ON_SCREEN = "Nothing on screen to share"
+
         /** The notice for a paste into a session without a shell. */
         const val NOT_CONNECTED = "Not connected"
 

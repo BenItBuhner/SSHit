@@ -78,7 +78,7 @@ class TerminalInputAltGrTest {
         val sent = ArrayList<String>()
         override fun onText(text: String) { sent += "text:$text" }
         override fun onKey(key: TerminalKey, modifiers: Int) { sent += "key:$key" + modifiers.named() }
-        override fun onCodePoint(codePoint: Int, modifiers: Int) { sent += "chord:" + modifiers.named().removePrefix("+") + "+" + String(Character.toChars(codePoint)) }
+        override fun onCodePoint(codePoint: Int, modifiers: Int, base: Int) { sent += "chord:" + modifiers.named().removePrefix("+") + "+" + String(Character.toChars(codePoint)) }
 
         private fun Int.named(): String = buildString {
             if (this@named and Mod.CTRL != 0) append("+Ctrl")

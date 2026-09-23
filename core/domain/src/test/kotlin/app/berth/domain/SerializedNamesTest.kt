@@ -1,11 +1,17 @@
 package app.berth.domain
 
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.Host
+import app.berth.domain.model.PinchAction
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
+import app.berth.domain.model.TapAction
+import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
@@ -20,8 +26,9 @@ import kotlin.test.assertTrue
  * `"files"`, `"tunnels"`) and the class's own name where there is not (the auth methods), fixed by the compiler
  * plugin as a string in the serializer, so a build must read what an earlier one wrote whatever R8
  * renames the classes to. The kinds are listed from the sealed serializers' own descriptors, not
- * written out here, so a kind added later is covered as soon as it exists. `./gradlew testR8` runs
- * this class over R8's output with the app's release rules, which is the proof for the phone.
+ * written out here, so a kind added later is covered as soon as it exists. The terminal document's
+ * gesture choices (spec D1) are stored the same way, under their constants' names. `./gradlew testR8`
+ * runs this class over R8's output with the app's release rules, which is the proof for the phone.
  */
 class SerializedNamesTest {
     /** The data layer's configuration (Mappers.dataJson): defaults written, unknown keys read past. */
@@ -123,5 +130,31 @@ class SerializedNamesTest {
             .replace(""""ciphers":[],""", "")
         assertTrue("scrollbackLines" !in older && "ciphers" !in older, older)
         assertEquals(host, json.decodeFromString(Host.serializer(), older))
+    }
+
+    @Test
+    fun `a terminal document from before the gestures reads back with D1's defaults, and every choice under its own name`() {
+        // What a build before Settings › Gestures' alternatives wrote: its three fields and none of the five.
+        val earlier = json.decodeFromString(TerminalSettings.serializer(), """{"scrollbackLines":20000,"horizontalDragArrows":true,"rightClickPaste":false}""")
+        assertEquals(TerminalSettings(scrollbackLines = 20_000, horizontalDragArrows = true, rightClickPaste = false), earlier)
+        assertEquals(TapAction.SHOW_KEYBOARD, earlier.tap)
+        assertEquals(DoubleTapAction.SELECT_WORD, earlier.doubleTap)
+        assertEquals(TwoFingerTapAction.PASTE, earlier.twoFingerTap)
+        assertEquals(ThreeFingerTapAction.TOGGLE_DECK, earlier.threeFingerTap)
+        assertEquals(PinchAction.FONT_SIZE, earlier.pinch)
+
+        // The names are the constants' as the compiler plugin fixed them, so R8 renaming the enums changes nothing stored.
+        val choices = listOf(
+            TerminalSettings(tap = TapAction.NOTHING, doubleTap = DoubleTapAction.SEND_TAB, twoFingerTap = TwoFingerTapAction.NEW_TAB, threeFingerTap = ThreeFingerTapAction.SHARE_SCREEN_TEXT, pinch = PinchAction.NOTHING)
+                to listOf(""""tap":"NOTHING"""", """"doubleTap":"SEND_TAB"""", """"twoFingerTap":"NEW_TAB"""", """"threeFingerTap":"SHARE_SCREEN_TEXT"""", """"pinch":"NOTHING""""),
+            TerminalSettings(doubleTap = DoubleTapAction.NOTHING, twoFingerTap = TwoFingerTapAction.NOTHING, threeFingerTap = ThreeFingerTapAction.NOTHING)
+                to listOf(""""tap":"SHOW_KEYBOARD"""", """"doubleTap":"NOTHING"""", """"twoFingerTap":"NOTHING"""", """"threeFingerTap":"NOTHING"""", """"pinch":"FONT_SIZE""""),
+            TerminalSettings() to listOf(""""doubleTap":"SELECT_WORD"""", """"twoFingerTap":"PASTE"""", """"threeFingerTap":"TOGGLE_DECK""""),
+        )
+        for ((settings, names) in choices) {
+            val text = json.encodeToString(TerminalSettings.serializer(), settings)
+            for (name in names) assertTrue(name in text, text)
+            assertEquals(settings, json.decodeFromString(TerminalSettings.serializer(), text))
+        }
     }
 }

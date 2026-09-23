@@ -2,6 +2,7 @@ package app.berth.android.ui.terminal
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.Attr
 import app.berth.terminal.CellRange
@@ -9,6 +10,7 @@ import app.berth.terminal.CursorShape
 import app.berth.terminal.TermColor
 import app.berth.terminal.TerminalEmulator
 import app.berth.terminal.TerminalLine
+import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 /**
@@ -34,8 +36,9 @@ class FrameOverlay {
     var currentFg: Int = 0
 
     /**
-     * The OSC 8 link a finger is down on, by id, underlined in [linkColor] (the theme's `links`)
-     * for as long as it is held (spec A60; links are underlined on hover or press only). 0 for none.
+     * The OSC 8 link a finger is down on or a mouse is over, by id, underlined in [linkColor] (the
+     * theme's `links`) for as long as it is (spec A60; links are underlined on hover or press only).
+     * 0 for none.
      */
     var pressedLink: Int = 0
     var linkColor: Int = 0
@@ -185,7 +188,17 @@ object TerminalRenderer {
                 } else {
                     glyph.of(line, x)
                     val wide = attrs and Attr.WIDE != 0
-                    nc.drawText(glyph.chars, 0, glyph.length, x * cw, top + paints.baseline, paint)
+                    if (!wide && isPrivateUse(cp)) {
+                        val bg = cellBg(line.fg[x], line.bg[x], attrs, palette, screenFg, screenBg)
+                        val next = x + 1
+                        val roomy = next < lineCols && (line.chars[next] == 0 || line.chars[next] == 0x20) &&
+                            line.attrs[next] and Attr.WIDE_TAIL == 0 &&
+                            cellBg(line.fg[next], line.bg[next], line.attrs[next], palette, screenFg, screenBg) == bg &&
+                            !(showCursor && frame.offset == 0 && frame.cursorVisible && frame.cursorY == y && frame.cursorX == next)
+                        drawPrivateUse(nc, glyph.chars, glyph.length, cp, x * cw, top, cw, ch, if (roomy) 2 else 1, paints.baseline, paint)
+                    } else {
+                        nc.drawText(glyph.chars, 0, glyph.length, x * cw, top + paints.baseline, paint)
+                    }
                     end = x + if (wide) 2 else 1
                 }
                 if (attrs and Attr.UNDERLINE != 0) {
@@ -247,7 +260,8 @@ object TerminalRenderer {
                             val paint = paints.forAttrs(line.attrs[cx])
                             paint.color = opaque(theme.cursorText)
                             glyph.of(line, cx)
-                            nc.drawText(glyph.chars, 0, glyph.length, left, top + paints.baseline, paint)
+                            if (!wide && isPrivateUse(cp)) drawPrivateUse(nc, glyph.chars, glyph.length, cp, left, top, cw, ch, 1, paints.baseline, paint)
+                            else nc.drawText(glyph.chars, 0, glyph.length, left, top + paints.baseline, paint)
                         }
                     }
                     shape == CursorShape.UNDERLINE -> nc.drawRect(left, top + ch - paints.line.strokeWidth * 2, left + w, top + ch, paints.fill)
@@ -286,6 +300,60 @@ object TerminalRenderer {
         if (b < a) return
         paints.fill.color = color
         nc.drawRect(a * cw, top, (b + 1).coerceAtMost(cols) * cw, top + ch, paints.fill)
+    }
+
+    /** A glyph's advance and ink at a paint's size, measured once per paint and code point. */
+    private class GlyphFit(val advance: Float, val ink: Rect)
+
+    private val fits = WeakHashMap<Paint, HashMap<Int, GlyphFit>>()
+
+    private fun fitOf(paint: Paint, cp: Int, chars: CharArray, length: Int): GlyphFit = synchronized(fits) {
+        fits.getOrPut(paint) { HashMap() }.getOrPut(cp) {
+            val ink = Rect()
+            paint.getTextBounds(chars, 0, length, ink)
+            GlyphFit(paint.measureText(chars, 0, length), ink)
+        }
+    }
+
+    private fun isPrivateUse(cp: Int): Boolean = cp in 0xE000..0xF8FF || cp in 0xF0000..0xFFFFD || cp in 0x100000..0x10FFFD
+
+    /**
+     * Draws a private-use glyph into its cell. A family's own (a patched Nerd Font's, JetBrains
+     * Mono's Powerline arrows) is a cell wide and draws as it is. The symbols fallback's are an em
+     * wide, most of two cells, and would cover the next glyph: its Powerline dividers are stretched
+     * over the cell, one pixel past each side so a segment meets the next without a seam, and its
+     * icons are scaled down about their centre to fit [room] cells, two when the next is a blank
+     * of the same background, as kitty lets them, and the row's height, moved up or down no more
+     * than keeps them in it. Either is clipped to its row: the ink measured is whole pixels at the
+     * paint's size, and a glyph drawn scaled can reach a fraction of one past it into the next.
+     */
+    private fun drawPrivateUse(nc: Canvas, chars: CharArray, length: Int, cp: Int, left: Float, top: Float, cw: Float, ch: Float, room: Int, baseline: Float, paint: Paint) {
+        val fit = fitOf(paint, cp, chars, length)
+        val ink = fit.ink
+        if (fit.advance <= cw * 1.05f || ink.isEmpty) {
+            nc.drawText(chars, 0, length, left, top + baseline, paint)
+            return
+        }
+        nc.save()
+        if (cp in 0xE0B0..0xE0D7) {
+            nc.clipRect(left - 1f, top, left + cw + 1f, top + ch)
+            val sx = (cw + 2f) / ink.width()
+            val sy = ch / ink.height()
+            nc.translate(left - 1f - ink.left * sx, top - ink.top * sy)
+            nc.scale(sx, sy)
+        } else {
+            val avail = cw * room
+            nc.clipRect(left - 1f, top, left + avail + 1f, top + ch)
+            val s = minOf(1f, avail / maxOf(fit.advance, ink.width().toFloat()), ch / ink.height())
+            val cx = ink.exactCenterX()
+            val cy = ink.exactCenterY()
+            val half = s * ink.height() / 2f
+            val y = (top + baseline + cy).coerceIn(top + half, top + ch - half)
+            nc.translate(left + avail / 2f - s * cx, y - s * cy)
+            nc.scale(s, s)
+        }
+        nc.drawText(chars, 0, length, 0f, 0f, paint)
+        nc.restore()
     }
 
     private fun isSimple(cp: Int, line: TerminalLine, x: Int): Boolean =
