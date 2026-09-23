@@ -1,10 +1,16 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.net.Uri
 import android.os.Looper
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -43,11 +49,14 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.isDialog
+import androidx.core.app.ActivityOptionsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
+import app.berth.android.ui.io.MAX_TEXT_BYTES
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorRequest
@@ -786,6 +795,53 @@ class EditorScreenshotTest {
         compose.settle(500)
         capture("deck-editor-presets-font-scale-2x")
         compose.assertSheetAtContentHeight("Preset Default", "Preset Vim", "Preset tmux", "Preset Minimal")
+    }
+
+    @Test
+    fun `a Deck file over the limit is refused in the import sheet, which names the limit`() = oversizedDeckFile("")
+
+    @Test
+    fun `a Deck file over the limit is refused in the import sheet at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        oversizedDeckFile("-font-scale-2x")
+    }
+
+    /** The import sheet's Open file answered with a file one byte over what a picked document may hold. */
+    private fun oversizedDeckFile(suffix: String) {
+        val file = File.createTempFile("deck", ".json").apply {
+            deleteOnExit()
+            writeBytes(ByteArray(MAX_TEXT_BYTES + 1) { ' '.code.toByte() })
+        }
+        val picker = PickedDocument(Uri.fromFile(file))
+        themed { CompositionLocalProvider(LocalActivityResultRegistryOwner provides picker) { DeckEditorScreen(graph.viewModel, onBack = {}) } }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Slot 3").fetchSemanticsNodes().isNotEmpty() }
+        val before = graph.viewModel.deckLayout.value
+        compose.onNodeWithText("Import").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Import a Deck")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Open file").performClick()
+        val refusal = "That file is over 2 MB, too big for a Deck."
+        awaitOnMain("the refusal") { compose.onAllNodesWithText(refusal).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(500)
+        capture("deck-editor-import-too-big$suffix")
+        compose.onNodeWithText(refusal).assertIsDisplayed()
+        compose.onNode(hasText("Import a Deck")).assertIsDisplayed()
+        assertEquals(1, picker.launches)
+        assertEquals(before, graph.viewModel.deckLayout.value)
+        compose.assertNoTextCut("the Deck import's refusal$suffix", within = isDialog())
+        compose.assertNoBrokenWords("the Deck import's refusal$suffix", within = isDialog())
+    }
+
+    /** Answers every launch at once with [uri], as the system's picker does when a file is chosen. */
+    private class PickedDocument(private val uri: Uri) : ActivityResultRegistryOwner {
+        var launches = 0
+            private set
+
+        override val activityResultRegistry = object : ActivityResultRegistry() {
+            override fun <I, O> onLaunch(requestCode: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
+                launches++
+                dispatchResult(requestCode, uri)
+            }
+        }
     }
 
     /**

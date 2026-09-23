@@ -68,7 +68,9 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.SheetTitle
-import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.PickedText
+import app.berth.android.ui.io.TEXT_DOCUMENT_TYPES
+import app.berth.android.ui.io.rememberOpenNamedTextFile
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
 import app.berth.android.ui.stage.Deck
@@ -189,7 +191,10 @@ fun DeckEditorScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
         importError = null
         note = "Imported ${parsed.layers.size} ${if (parsed.layers.size == 1) "layer" else "layers"}."
     }
-    val openFile = rememberOpenTextFile { text -> importing = true; importText(text) }
+    val openFile = rememberOpenNamedTextFile(TEXT_DOCUMENT_TYPES) { picked ->
+        importing = true
+        if (picked is PickedText.Read) importText(picked.text) else importError = picked.refusal("a Deck")
+    }
 
     val usable = draft.usableLayers(hasSnippets = pinned.isNotEmpty())
     val previewIndex = current?.let { usable.indexOf(it) } ?: -1

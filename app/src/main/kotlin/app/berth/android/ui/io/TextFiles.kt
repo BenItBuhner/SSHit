@@ -84,13 +84,6 @@ fun displayName(context: Context, uri: Uri): String? = runCatching {
 /** The picker's types for Berth's JSON and plain-text documents. */
 val TEXT_DOCUMENT_TYPES = arrayOf("application/json", "text/*", "application/octet-stream")
 
-/** Opens the system file picker for text or JSON documents and reports the file's text; a file it cannot read gives nothing. */
-@Composable
-fun rememberOpenTextFile(onText: (String) -> Unit): () -> Unit {
-    val current by rememberUpdatedState(onText)
-    return rememberOpenNamedTextFile(TEXT_DOCUMENT_TYPES) { picked -> if (picked is PickedText.Read) current(picked.text) }
-}
-
 /**
  * Opens the system file picker for any of [mimeTypes] and reports what reading the file gave: its
  * text with its display name, for formats whose files are named after what they hold, or that it
