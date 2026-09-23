@@ -8,7 +8,8 @@ import java.io.File
 /**
  * Settings › Licences against what ships: every licence file under `assets/licenses/` is opened by
  * exactly one row and every row's file is there, so a text added or renamed cannot go unlisted;
- * and a file's hard wraps are joined while its headings, title block, rules and table rows keep their lines.
+ * and a file's hard wraps are joined while its headings, title block and rules keep their lines, and a
+ * table's rows stand as paragraphs of their own.
  */
 class LicencesTest {
     private val shipped = File("src/main/assets/licenses")
@@ -53,11 +54,10 @@ class LicencesTest {
     }
 
     @Test
-    fun `a table's rows keep their lines, while one sentence's double space still runs on`() {
+    fun `a table's rows are paragraphs with their cells set apart, while one sentence's double space still runs on`() {
         val table = """
             |The font as a whole is under the MIT licence (nerd-fonts-symbols-MIT.txt). The icon sets it
             |collects keep their own licences:
-            |
             |Codicons                https://github.com/microsoft/vscode-codicons           0.0.45           CC BY 4.0
             |extraglyphs             https://github.com/source-foundry/Hack                 -                MIT
             |Font Logos              https://github.com/lukas-w/font-logos                  1.3.0            The Unlicense
@@ -65,7 +65,9 @@ class LicencesTest {
         assertEquals(
             listOf(
                 "The font as a whole is under the MIT licence (nerd-fonts-symbols-MIT.txt). The icon sets it collects keep their own licences:",
-                table.lines().drop(3).joinToString("\n"),
+                "Codicons \u00B7 https://github.com/microsoft/vscode-codicons \u00B7 0.0.45 \u00B7 CC BY 4.0",
+                "extraglyphs \u00B7 https://github.com/source-foundry/Hack \u00B7 - \u00B7 MIT",
+                "Font Logos \u00B7 https://github.com/lukas-w/font-logos \u00B7 1.3.0 \u00B7 The Unlicense",
             ),
             licenceParagraphs(table),
         )
@@ -77,11 +79,12 @@ class LicencesTest {
     }
 
     @Test
-    fun `every shipped text keeps every word it has`() {
+    fun `every shipped text keeps every word it has, and adds none but a table's separators`() {
         for (file in shipped.listFiles().orEmpty()) {
             val text = file.readText()
             val words = { s: String -> s.split(Regex("[ \t\r\n]+")).filter { it.isNotEmpty() } }
-            assertEquals(file.name, words(text), licenceParagraphs(text).flatMap(words))
+            val shown = licenceParagraphs(text).flatMap { words(it.replace(TABLE_CELL_SEPARATOR, " ")) }
+            assertEquals(file.name, words(text), shown)
         }
     }
 }

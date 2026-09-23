@@ -150,33 +150,45 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
 /**
  * A licence file's paragraphs with its hard wraps joined, so its words flow to the sheet's width
  * rather than breaking twice a line. A line of 48 characters or more runs on into the next; a
- * shorter one (a heading, a title block, an address) keeps its break, as does a rule of dashes,
- * and so does a table's row (three or more columns padded apart with spaces), whose padding stays.
+ * shorter one (a heading, a title block, an address) keeps its break, as does a rule of dashes.
+ * A table's row (three or more cells padded apart) is a paragraph of its own, its cells set apart
+ * by [TABLE_CELL_SEPARATOR], since proportional type cannot keep the padding's columns.
  */
 internal fun licenceParagraphs(text: String): List<String> {
     val out = mutableListOf<String>()
     val paragraph = StringBuilder()
     var runsOn = false
+    fun endParagraph() {
+        if (paragraph.isNotEmpty()) out += paragraph.toString()
+        paragraph.clear()
+        runsOn = false
+    }
     for (raw in text.lines()) {
         val line = raw.trim()
         if (line.isEmpty()) {
-            if (paragraph.isNotEmpty()) out += paragraph.toString()
-            paragraph.clear()
-            runsOn = false
+            endParagraph()
             continue
         }
-        val prose = line.any(Char::isLetter) && COLUMN_GAP.findAll(line).count() < 2
+        // One gap of two spaces is a sentence's end in older texts; two make a table's row.
+        val cells = line.split(COLUMN_GAP)
+        if (cells.size >= 3) {
+            endParagraph()
+            out += cells.joinToString(TABLE_CELL_SEPARATOR)
+            continue
+        }
+        val words = line.any(Char::isLetter)
         when {
             paragraph.isEmpty() -> Unit
-            runsOn && prose -> paragraph.append(' ')
+            runsOn && words -> paragraph.append(' ')
             else -> paragraph.append('\n')
         }
         paragraph.append(line)
-        runsOn = prose && line.length >= 48
+        runsOn = words && line.length >= 48
     }
-    if (paragraph.isNotEmpty()) out += paragraph.toString()
+    endParagraph()
     return out
 }
 
-/** Two spaces or more between words: one such gap is a sentence's end in older texts, two make a table's row. */
-private val COLUMN_GAP = Regex("(?<=\\S) {2,}(?=\\S)")
+internal const val TABLE_CELL_SEPARATOR = " \u00B7 "
+
+private val COLUMN_GAP = Regex(" {2,}")
