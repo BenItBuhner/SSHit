@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
@@ -267,7 +268,13 @@ private fun ThemeTile(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 // The eighteen stock tiles fill whole rows and the two stock names that wrap share one; a
                 // custom name could wrap beside a one-line tile and unbalance its row.
-                Text(theme.name, style = BerthType.label, color = fg, maxLines = if (theme.builtIn) 2 else 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    theme.name,
+                    style = BerthType.label.copy(lineBreak = LineBreak.Heading),
+                    color = fg,
+                    maxLines = if (theme.builtIn) 2 else 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     when {
                         isDefault -> "App default"
