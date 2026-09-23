@@ -82,7 +82,8 @@ import java.security.KeyPair
  * editor's switch and Signatures picker in the Identity panel, the signature request sheet for
  * each thing a request can be (a login bound to the next server's key, one that is not, an
  * `ssh-keygen -Y` signature, data Berth cannot read) and the biometric sheet a forwarded
- * signature raises, each answered through its own buttons; and, against the two local sshds, a
+ * signature raises, each open at its content's height and answered through its own buttons, the
+ * bound login once more in a window shorter than it; and, against the two local sshds, a
  * tab off stage whose remote `ssh` asks: its ring lit in the strip, the sheet over the tab on
  * stage, Allow once letting the hop through and Deny letting it fall through.
  */
@@ -337,6 +338,31 @@ class AgentForwardingScreenshotTest {
         sheets("-font-cap")
     }
 
+    /**
+     * The bound login, the tallest request sheet (775 dp at the cap), in a 640 dp window, shorter
+     * than it: a smaller phone, or this one with the keyboard up. The sheet stands at the window's
+     * top and its column scrolls, so Deny is whole as it opens and the two allows are one scroll
+     * away, each measured to a size (A9).
+     */
+    @Test
+    @Config(qualifiers = "w411dp-h640dp-420dpi")
+    fun `signature request for a login in a short window at the font cap`() {
+        atTheCap()
+        seed()
+        themed {
+            HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {})
+            PromptHost(graph.prompts)
+        }
+        val login = ask(AgentSignPurpose.Login("git", "ssh-connection", nextServerKey))
+        compose.onNodeWithText("It is logging in to the server whose key is above.").assertExists()
+        compose.settle(400)
+        capture("agent-request-login-short-window-font-cap")
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
+        assertWhole("the signature request sheet for a login in a short window", isDialog())
+        compose.onNodeWithText("Allow once").performScrollTo().performClick()
+        assertEquals(AgentAnswer.ALLOW_ONCE, answered(login))
+    }
+
     private fun sheets(suffix: String) {
         seed()
         themed {
@@ -353,6 +379,7 @@ class AgentForwardingScreenshotTest {
         assertTrue(top("Deny") < top("Allow once") && top("Allow once") < top("Allow for this session"))
         compose.settle(400)
         capture("agent-request-login$suffix")
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the signature request sheet for a login")
         compose.onNodeWithText("Allow once").performScrollTo().performClick()
         assertEquals(AgentAnswer.ALLOW_ONCE, answered(login))
@@ -363,6 +390,7 @@ class AgentForwardingScreenshotTest {
         compose.onNodeWithText("It is logging in to another server; the request does not say which.").assertExists()
         compose.settle(400)
         capture("agent-request-login-unbound$suffix")
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the signature request sheet for an unbound login")
         compose.onNodeWithText("Allow for this session").performScrollTo().performClick()
         assertEquals(AgentAnswer.ALLOW_FOR_SESSION, answered(unbound))
@@ -372,6 +400,7 @@ class AgentForwardingScreenshotTest {
         compose.onNodeWithText("It is signing for git, as git does for a signed commit or tag.").assertExists()
         compose.settle(400)
         capture("agent-request-sshsig$suffix")
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the signature request sheet for an SSHSIG")
         compose.onNodeWithText("Deny").performScrollTo().performClick()
         assertEquals(AgentAnswer.DENY, answered(sshSig))
@@ -379,6 +408,7 @@ class AgentForwardingScreenshotTest {
         // Any other namespace need not be a file: the line says only what the namespace row shows.
         val otherSig = ask(AgentSignPurpose.SshSig("file"))
         compose.onNodeWithText("It is signing data under the namespace above, as ssh-keygen -Y sign does.").assertExists()
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the signature request sheet for an SSHSIG in another namespace")
         compose.onNodeWithText("Deny").performScrollTo().performClick()
         assertEquals(AgentAnswer.DENY, answered(otherSig))
@@ -388,6 +418,7 @@ class AgentForwardingScreenshotTest {
         compose.onNodeWithText("It sent 1,234 bytes Berth cannot read, so it cannot say what they are for.").assertExists()
         compose.settle(400)
         capture("agent-request-unknown$suffix")
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the signature request sheet for unread data")
         compose.onNodeWithContentDescription("Close sheet").performTouchInput { click(Offset(width / 2f, 60f)) }
         assertEquals(AgentAnswer.DENY, answered(unknown))
@@ -400,6 +431,7 @@ class AgentForwardingScreenshotTest {
         ).assertExists()
         compose.settle(400)
         capture("agent-unlock-forwarded$suffix")
+        compose.assertSheetAtContentHeight("Cancel")
         assertWhole("the forwarded unlock sheet")
         compose.onNodeWithText("Cancel").performClick()
         compose.waitUntil(5_000) { unlock.isCompleted && graph.prompts.current.value == null }
@@ -475,6 +507,7 @@ class AgentForwardingScreenshotTest {
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("needs attention", substring = true)).fetchSemanticsNodes().isNotEmpty() }
         compose.settle(800)
         capture(name)
+        compose.assertSheetAtContentHeight("Deny", "Allow once", "Allow for this session")
         assertWhole("the live signature request", isDialog())
 
         compose.onNodeWithText("Allow once").performScrollTo().performClick()
