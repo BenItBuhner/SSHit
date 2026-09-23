@@ -15,6 +15,8 @@ import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
@@ -34,8 +36,8 @@ import org.robolectric.annotation.Config
 /**
  * Hosts › Export (spec C9) as the sheet calls it, through the view model: the file is the bundle's
  * own container at the bundle's own cost, opens with its passphrase and no other, and holds the
- * hosts, the passwords they log in with and the public record of each key they log in with, with
- * nothing of the rest of the library and no private half.
+ * hosts, the passwords they log in with, the tunnels defined on them and the public record of
+ * each key they log in with, with nothing of the rest of the library and no private half.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -52,7 +54,7 @@ class HostsExportTest {
     fun tearDown() = graph.close()
 
     @Test
-    fun `the hosts export opens with its passphrase alone and holds the hosts, their passwords and their keys' public records`(): Unit = runBlocking {
+    fun `the hosts export opens with its passphrase alone and holds the hosts, their passwords and tunnels, and their keys' public records`(): Unit = runBlocking {
         val pair = SshKeys.generate(KeyAlgorithm.ED25519)
         val pem = SshKeys.openSshPrivate(pair, "ben@laptop").toByteArray()
         val laptop = Identity(
@@ -65,6 +67,8 @@ class HostsExportTest {
         graph.hosts.upsert(web)
         graph.hosts.upsert(nas)
         graph.secrets.put(AuthResolver.passwordSecretId("nas"), "hunter2".toByteArray())
+        val forward = Tunnel(id = "t-web", hostId = "web", type = TunnelType.LOCAL, bindPort = 8080, destinationPort = 80)
+        graph.tunnels.upsert(forward)
         graph.snippets.upsert(Snippet("s-disk", "disk", "df -h"))
         graph.knownHosts.upsert(KnownHostKey("kh-web", "203.0.113.10", 22, "ssh-ed25519", "AAAAweb", "SHA256:web", 4, 5))
 
@@ -83,6 +87,7 @@ class HostsExportTest {
         assertEquals(laptop.fingerprintSha256, named.identity.fingerprintSha256)
         assertNull("the private half stays on this phone", named.privateKey)
         assertFalse("the key file is nowhere in the document", Base64Codec.encode(pem) in bundle.toJson())
+        assertEquals(listOf(forward), bundle.tunnels)
         assertTrue(bundle.snippets.isEmpty())
         assertTrue(bundle.knownHosts.isEmpty())
         assertTrue(bundle.workspaces.isEmpty())

@@ -99,20 +99,23 @@ class BerthBundles(
     }
 
     /**
-     * The hosts alone (spec C9, Hosts › Export): every host and the passwords it logs in with, and
-     * each key a host logs in with as its public record only, no private half whatever its kind.
-     * The phone that opens it points a host at the same key where it holds one ([plan]'s
-     * [BundleImportPlan.identitiesHere]); elsewhere the host asks each time and the report names
-     * the key. Nothing else goes in, so the import leaves the rest of that phone as it is.
+     * The hosts alone (spec C9, Hosts › Export): every host, the passwords it logs in with and the
+     * tunnels defined on it, and each key a host logs in with as its public record only, no
+     * private half whatever its kind. The phone that opens it points a host at the same key where
+     * it holds one ([plan]'s [BundleImportPlan.identitiesHere]); elsewhere the host asks each time
+     * and the report names the key. A tunnel bound to every interface comes in switched off, as
+     * from any bundle. Nothing else goes in, so the import leaves the rest of that phone as it is.
      */
     suspend fun collectHosts(exportedAt: Long, appVersion: String = ""): BerthBundle {
         val hostList = hosts.observeAll().first()
+        val hostIds = hostList.map { it.id }.toSet()
         val used = hostList.mapNotNull { (it.auth as? AuthMethod.Key)?.identityId }.toSet()
         return BerthBundle(
             exportedAt = exportedAt,
             appVersion = appVersion,
             hosts = hostList,
             identities = identities.observeAll().first().filter { it.id in used }.map { BundledIdentity.of(it, null) },
+            tunnels = tunnels.observeAll().first().filter { it.hostId in hostIds },
             passwords = passwordsOf(hostList),
         )
     }

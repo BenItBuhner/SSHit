@@ -8,6 +8,8 @@ import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.RecreateNotice
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -105,15 +107,21 @@ class BundleSheetsTest {
     }
 
     @Test
-    fun `the hosts-only export counts the hosts and their saved passwords, and a named key's row says whether this phone has it`() {
+    fun `the hosts-only export counts the hosts, their saved passwords and tunnels, and a named key's row says whether this phone has it`() {
         fun host(id: String, auth: AuthMethod) = Host(id = id, name = id, color = SwatchColor.COPPER, monogram = "HO", address = "$id.local", user = "ben", auth = auth, createdAt = 0)
-        assertEquals("1 host", hostsExportContents(listOf(host("web", AuthMethod.Key("id-laptop")))))
+        assertEquals("1 host", hostsExportContents(listOf(host("web", AuthMethod.Key("id-laptop"))), emptyList()))
         assertEquals(
             "a password asked each time is not a saved one",
             "3 hosts \u00B7 2 saved passwords",
-            hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.Password("s-b")), host("c", AuthMethod.Password(null)))),
+            hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.Password("s-b")), host("c", AuthMethod.Password(null))), emptyList()),
         )
-        assertEquals("2 hosts \u00B7 1 saved password", hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.AskEachTime))))
+        assertEquals("2 hosts \u00B7 1 saved password", hostsExportContents(listOf(host("a", AuthMethod.Password("s-a")), host("b", AuthMethod.AskEachTime)), emptyList()))
+        val forward = Tunnel(id = "t-web", hostId = "web", type = TunnelType.LOCAL, bindPort = 8080, destinationPort = 80)
+        assertEquals(
+            "a tunnel on no host in the file is not counted",
+            "1 host \u00B7 2 tunnels",
+            hostsExportContents(listOf(host("web", AuthMethod.AskEachTime)), listOf(forward, forward.copy(id = "t-socks", type = TunnelType.DYNAMIC, bindPort = 1080), forward.copy(id = "t-gone", hostId = "gone"))),
+        )
 
         // The keys a bundle carries, and the hardware keys it names: never `0 keys and`.
         assertEquals("2 keys", keysLine(carried = 2, hardware = 0))

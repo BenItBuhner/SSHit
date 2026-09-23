@@ -533,14 +533,15 @@ class BerthBundlesTest {
     // ---- the hosts alone (Hosts › Export) ----------------------------------------------------------
 
     @Test
-    fun `a hosts-only export carries the hosts and their passwords, and each key a host logs in with by its public record alone`() = runTest {
+    fun `a hosts-only export carries the hosts, their passwords and tunnels, and each key a host logs in with by its public record alone`() = runTest {
         fillOldPhone()
-        // A key no host logs in with is not the hosts' business.
+        // A key no host logs in with is not the hosts' business, nor a tunnel left from a host deleted since.
         val sparePair = SshKeys.generate(KeyAlgorithm.ED25519)
         old.identities.insert(
             laptop.copy(id = "id-spare", name = "spare", publicKeyOpenSsh = SshKeys.openSshPublic(sparePair.public), fingerprintSha256 = SshKeys.fingerprintSha256(sparePair.public)),
             SshKeys.openSshPrivate(sparePair).toByteArray(),
         )
+        old.tunnels.upsert(forward.copy(id = "t-gone", hostId = "h-gone", bindPort = 8081))
         val bundle = old.bundles.collectHosts(exportedAt = 5, appVersion = "1.2")
 
         assertEquals(5, bundle.exportedAt)
@@ -558,10 +559,10 @@ class BerthBundlesTest {
         val text = bundle.toJson()
         assertFalse(Base64Codec.encode(laptopKey) in text, "no private half is in the document")
         assertFalse("berth.identity.id-phone" in text)
+        assertEquals(setOf(forward, socks), bundle.tunnels.toSet(), "the tunnels defined on the hosts go with them")
         // Nothing else goes in, so an import leaves the rest of the other phone as it is.
         assertTrue(bundle.workspaces.isEmpty())
         assertTrue(bundle.snippets.isEmpty())
-        assertTrue(bundle.tunnels.isEmpty())
         assertTrue(bundle.knownHosts.isEmpty())
         assertTrue(bundle.terminalThemes.isEmpty())
         assertNull(bundle.deck)
@@ -593,7 +594,8 @@ class BerthBundlesTest {
         assertEquals(listOf("id-other"), new.identities.observeAll().first().map { it.id }, "no key is written")
         assertEquals(0, report.identities)
         assertEquals(listOf(RecreateNotice("Phone key", KeyAlgorithm.ECDSA_P256, listOf("db-primary"), hardware = true)), report.needsRecreation)
-        assertEquals("Imported 3 hosts.", report.summary)
+        assertEquals("Imported 3 hosts and 2 tunnels.", report.summary)
+        assertEquals(setOf(forward, socks), new.tunnels.observeAll().first().toSet())
         assertEquals(listOf(mySnippet), new.snippets.observeAll().first())
         assertEquals(myDeck, new.settings.deckLayout.first())
         assertFalse(report.deck)

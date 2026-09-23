@@ -77,6 +77,8 @@ import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.Tunnel
+import app.berth.domain.model.TunnelType
 import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
@@ -618,14 +620,15 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
 
     /**
      * The overflow has Export hosts after the imports and before Known hosts, as C9 orders it, and
-     * its sheet is the bundle export's: the contents line counts the hosts and their saved
-     * passwords, the line under it says the keys stay and what a key-login host does on the other
-     * phone, no hardware key is named as staying since every key does, and Export waits on two
-     * matching passphrases of length.
+     * its sheet is the bundle export's: the contents line counts the hosts, their saved passwords
+     * and their tunnels, the line under it says the tunnels go with them, the keys stay and what a
+     * key-login host does on the other phone, no hardware key is named as staying since every key
+     * does, and Export waits on two matching passphrases of length.
      */
     @Test
     fun `the Hosts overflow has Export hosts, whose sheet seals the hosts alone`() {
         seedLibrary()
+        runBlocking { graph.tunnels.upsert(Tunnel(id = "t-lab", hostId = "homelab", type = TunnelType.LOCAL, bindPort = 8080, destinationPort = 80)) }
         hostsScreen()
         waitForText("prod-api")
         compose.onNodeWithContentDescription("More").performClick()
@@ -638,7 +641,7 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("Export hosts").performClick()
         waitForText("The host list alone, in one .berth file")
         inSheet("Export hosts").assertExists()
-        waitForText("3 hosts \u00B7 1 saved password")
+        waitForText("3 hosts \u00B7 1 saved password \u00B7 1 tunnel")
         waitForText(HOSTS_EXPORT_NOTE)
         compose.onAllNodes(hasText("is hardware-backed and stays on this phone", substring = true)).assertCountEquals(0)
         inSheet("Export").assertIsNotEnabled()

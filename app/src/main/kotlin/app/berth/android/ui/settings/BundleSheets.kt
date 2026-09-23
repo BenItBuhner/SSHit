@@ -59,6 +59,7 @@ import app.berth.domain.model.Identity
 import app.berth.domain.model.KnownHostKey
 import app.berth.domain.model.KnownHostStanding
 import app.berth.domain.model.RecreateNotice
+import app.berth.domain.model.Tunnel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -78,9 +79,9 @@ const val MIN_BUNDLE_PASSPHRASE = 8
  * a cancelled picker costs nothing but the seal. A hardware-backed key is named here, before the
  * export, since it stays on this phone by construction and the other phone will ask for a new one.
  *
- * [hostsOnly] is Hosts › Export (spec C9): the same sheet and the same file, holding the hosts
- * and their saved passwords alone ([app.berth.data.bundle.BerthBundles.collectHosts]), every
- * key staying here; the sheet says what a key-login host does on the other phone.
+ * [hostsOnly] is Hosts › Export (spec C9): the same sheet and the same file, holding the hosts,
+ * their saved passwords and their tunnels alone ([app.berth.data.bundle.BerthBundles.collectHosts]),
+ * every key staying here; the sheet says what a key-login host does on the other phone.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,7 +127,7 @@ fun ExportBundleSheet(vm: AppViewModel, onDismiss: () -> Unit, onNotice: (String
     }
 
     val contents = remember(hosts, identities, workspaces, snippets, tunnels, knownHosts, themes, hostsOnly) {
-        if (hostsOnly) return@remember hostsExportContents(hosts)
+        if (hostsOnly) return@remember hostsExportContents(hosts, tunnels)
         buildList {
             add(BundleImportReport.count(hosts.size, "host"))
             add(BundleImportReport.count(identities.size, "key"))
@@ -616,15 +617,21 @@ private fun RecreatePanel(label: String, notices: List<RecreateNotice>, note: St
     Text(note, style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
 }
 
-/** The export sheet's contents line in its hosts-only mode: the hosts, and the saved passwords they log in with. */
-internal fun hostsExportContents(hosts: List<Host>): String {
+/** The export sheet's contents line in its hosts-only mode: the hosts, the saved passwords they log in with, and the tunnels defined on them. */
+internal fun hostsExportContents(hosts: List<Host>, tunnels: List<Tunnel>): String {
     val passwords = hosts.mapNotNull { (it.auth as? AuthMethod.Password)?.secretId }.distinct().size
-    return BundleImportReport.count(hosts.size, "host") + if (passwords > 0) " \u00B7 " + BundleImportReport.count(passwords, "saved password") else ""
+    val ids = hosts.map { it.id }.toSet()
+    val carried = tunnels.count { it.hostId in ids }
+    return listOfNotNull(
+        BundleImportReport.count(hosts.size, "host"),
+        if (passwords > 0) BundleImportReport.count(passwords, "saved password") else null,
+        if (carried > 0) BundleImportReport.count(carried, "tunnel") else null,
+    ).joinToString(" \u00B7 ")
 }
 
 /** The export sheet's line in its hosts-only mode: what goes in, what stays, and what a key-login host does on the other phone. */
 internal const val HOSTS_EXPORT_NOTE =
-    "Saved passwords go in, sealed. Keys stay on this phone: the file names each host's key by its public half, and a phone that has the same key logs in with it. The file opens only with this passphrase; there is no other way in."
+    "Saved passwords go in, sealed, with the hosts' tunnels. Keys stay on this phone: the file names each host's key by its public half, and a phone that has the same key logs in with it. Snippets and known hosts stay too. The file opens only with this passphrase; there is no other way in."
 
 /** The contents row for the keys a bundle carries: `2 keys`, `1 key and 1 hardware key to make again`, or the hardware keys alone. */
 internal fun keysLine(carried: Int, hardware: Int): String {
