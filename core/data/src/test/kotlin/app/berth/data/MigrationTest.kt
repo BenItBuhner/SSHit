@@ -10,6 +10,7 @@ import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.SecretCrypto
 import app.berth.data.db.BerthDatabase
 import app.berth.data.db.BerthDatabase_Impl
+import app.berth.data.db.StockThemeIdsFreed
 import app.berth.data.repo.EncryptedSecretStore
 import app.berth.data.repo.RoomCommandHistoryRepository
 import app.berth.data.repo.RoomHostRepository
@@ -191,6 +192,17 @@ class MigrationTest {
         } finally {
             db.close()
         }
+    }
+
+    /** Version 9 keeps doing what it did: it frees its own build's eighteen ids, each to an id pinned here. */
+    @Test
+    fun `version 9 frees the eighteen stock ids of its build, each to an id that does not change`() {
+        assertEquals(
+            TerminalTheme.builtIns.map { it.id }.toSet(),
+            StockThemeIdsFreed.STOCK_IDS,
+            "a stock theme added since version 9 needs a database step of its own, not an entry in version 9's list",
+        )
+        assertEquals("theme-21baec72", TerminalTheme.freedId("dracula"), "phones moved themes to this id; bundles made before must land on it")
     }
 
     @Test

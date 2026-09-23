@@ -113,6 +113,7 @@ class EditorDomainTest {
                 "One Dark", "Ayu", "GitHub Dark High Contrast", "GitHub Light High Contrast",
             ),
             TerminalTheme.builtIns.map { it.name },
+            "a new stock id may already name a stored custom theme: it needs a database step of its own, as version 9 freed these eighteen",
         )
         val light = setOf(
             TerminalTheme.BERTH_LIGHT_ID, TerminalTheme.CATPPUCCIN_LATTE_ID, TerminalTheme.GRUVBOX_LIGHT_ID,

@@ -434,8 +434,9 @@ data class TerminalTheme(
         /**
          * Stock themes, in the gallery's order (spec A10). They cannot be deleted, only duplicated.
          * A stock id added here may already name a stored custom theme (an older build saved an
-         * imported scheme with no id under a slug of its name); the database step that frees those
-         * reads this list, so a phone upgrading past it moves them, and a later addition needs a step of its own.
+         * imported scheme with no id under a slug of its name). The database step that freed those
+         * under the eighteen here (version 9) holds its own copy of their ids, so it does not see a
+         * later addition: that needs a step of its own, moving its customs to [freedId] the same way.
          */
         val builtIns: List<TerminalTheme> = listOf(
             BERTH_DARK, BERTH_LIGHT,
@@ -454,7 +455,8 @@ data class TerminalTheme(
         /**
          * The id a custom theme stored under stock id [id] moves to, so the stock theme no longer
          * shadows it. The same id always moves to the same place: a bundle made before the move
-         * lands on the theme the move made instead of beside it.
+         * lands on the theme the move made instead of beside it. Phones have moved themes with it
+         * since database version 9, so the derivation stays as it is.
          */
         fun freedId(id: String): String = "theme-" + UUID.nameUUIDFromBytes("stock-clash:$id".toByteArray(Charsets.UTF_8)).toString().take(8)
     }

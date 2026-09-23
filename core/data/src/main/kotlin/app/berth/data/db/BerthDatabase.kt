@@ -152,8 +152,11 @@ class PersistenceInherits : AutoMigrationSpec {
  * it follows: the app default, each group's theme, each host's appearance and each tab's host
  * snapshot. A reference to a stock id no custom sat under still names the stock theme.
  *
- * The step runs on the JSON as stored rather than through the model, so a later change to the
- * model cannot change what it did.
+ * The step runs on the JSON as stored rather than through the model, and against its own copy of
+ * the eighteen ids stock at this version, [STOCK_IDS], so neither a later change to the model's
+ * fields nor a stock theme added later changes what it did; a later addition needs a step of its
+ * own. Where a theme moves to is [TerminalTheme.freedId], shared with bundle import so a bundle
+ * made before the upgrade lands on the moved theme, which is why that derivation never changes.
  */
 class StockThemeIdsFreed : AutoMigrationSpec {
     override fun onPostMigrate(connection: SQLiteConnection) {
@@ -161,7 +164,7 @@ class StockThemeIdsFreed : AutoMigrationSpec {
         val moved = HashMap<String, String>()
         val themes = stored.map { element ->
             val theme = element as? JsonObject ?: return@map element
-            val id = theme.stringField("id")?.takeIf(TerminalTheme::isStockId) ?: return@map element
+            val id = theme.stringField("id")?.takeIf { it in STOCK_IDS } ?: return@map element
             val to = TerminalTheme.freedId(id)
             moved[id] = to
             JsonObject(theme + ("id" to JsonPrimitive(to)))
@@ -208,9 +211,20 @@ class StockThemeIdsFreed : AutoMigrationSpec {
         }
     }
 
-    private companion object {
-        const val CUSTOM_THEMES = "terminal_themes_custom"
-        const val DEFAULT_THEME = "terminal_theme_default"
+    internal companion object {
+        private const val CUSTOM_THEMES = "terminal_themes_custom"
+        private const val DEFAULT_THEME = "terminal_theme_default"
+
+        /** The stock ids at version 9, as they were then; this list does not follow the gallery. */
+        internal val STOCK_IDS: Set<String> = setOf(
+            "berth-dark", "berth-light",
+            "catppuccin-mocha", "catppuccin-latte",
+            "gruvbox-dark", "gruvbox-light",
+            "nord",
+            "solarized-dark", "solarized-light",
+            "rose-pine", "tokyo-night", "kanagawa", "everforest", "dracula", "one-dark", "ayu",
+            "github-dark-high-contrast", "github-light-high-contrast",
+        )
     }
 }
 
