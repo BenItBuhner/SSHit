@@ -86,6 +86,7 @@ import app.berth.domain.model.TunnelType
 import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshKeys
 import app.berth.ssh.SshSecurity
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -344,6 +345,56 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         pressBack()
         compose.waitUntil(5_000) { popped == 1 }
         hasNoText("Discard changes?")
+    }
+
+    /**
+     * Agent forwarding switched on is an edit Back asks about. Always allow chosen under it and then
+     * hidden by switching forwarding off again saves nothing, as Save keeps it, so Back leaves.
+     */
+    @Test
+    fun `Agent forwarding alone asks, and a Signatures choice it hides again does not`() {
+        seedLibrary()
+        var done = 0
+        var popped = 0
+        editor("build-box", onDone = { done++ }, onPopped = { popped++ })
+        waitForText("Agent forwarding")
+        compose.onNodeWithText("Agent forwarding").performScrollTo().performClick()
+        waitForText("Signatures")
+        pressBack()
+        waitForText("Discard changes?")
+        inSheet("Keep editing").performClick()
+        waitForNoText("Discard changes?")
+
+        compose.onNodeWithText("Signatures").performScrollTo().performClick()
+        waitForText("Always allow")
+        compose.onNodeWithText("Always allow").performClick()
+        waitForTextContaining("Anything on build box, root included, can sign as you without asking")
+        compose.onNodeWithText("Agent forwarding").performScrollTo().performClick()
+        waitForNoText("Signatures")
+        pressBack()
+        compose.waitUntil(5_000) { popped == 1 }
+        hasNoText("Discard changes?")
+        assertEquals(0, done)
+    }
+
+    /** On a host that forwards its agent, the Signatures choice alone asks, and Discard keeps it as it was. */
+    @Test
+    fun `a Signatures choice alone asks before it is dropped`() {
+        seedLibrary()
+        runBlocking { graph.hosts.upsert(graph.hosts.items.value.first { it.id == "prod-api" }.copy(agentForwarding = true)) }
+        var done = 0
+        editor("prod-api", onDone = { done++ }, onPopped = {})
+        waitForText("Signatures")
+        compose.onNodeWithText("Signatures").performScrollTo().performClick()
+        waitForText("Always allow")
+        compose.onNodeWithText("Always allow").performClick()
+        waitForTextContaining("Anything on prod-api, root included, can sign as you without asking")
+        pressBack()
+        waitForText("Discard changes?")
+        inSheet("The edits to prod-api are not saved yet.").assertExists()
+        inSheet("Discard").performClick()
+        compose.waitUntil(5_000) { done == 1 }
+        assertFalse(runBlocking { graph.settings.securitySettings.first() }.signsAgentSilently("prod-api"))
     }
 
     /** A new host with anything typed asks too, and says it is the new host that would go. */

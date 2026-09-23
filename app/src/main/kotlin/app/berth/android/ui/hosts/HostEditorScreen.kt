@@ -159,8 +159,10 @@ fun HostEditorScreen(
     var colorPicker by remember { mutableStateOf(false) }
     var discardPrompt by remember { mutableStateOf(false) }
 
+    // Signatures counts only while forwarding is on, as Save keeps it: chosen and then hidden, it saves nothing.
     fun draft() = HostDraft(
-        name, monogramEdited, monogram, color, address, port, user, auth, password, keepalive, reconnectMinutes, tmux, tmuxPrefix,
+        name, monogramEdited, monogram, color, address, port, user, auth, password, agentForwarding, agentForwarding && agentSilent,
+        keepalive, reconnectMinutes, tmux, tmuxPrefix,
         themeId, fontFamily, fontSize, startupCommand, terminalType, compression, addressFamily, remoteClipboard, jumpHostIds,
         tunnelsOnly, altKey, tags, environment, muteBell, scrollbackLines, ciphers, leftOut,
     )
@@ -505,6 +507,8 @@ private data class HostDraft(
     val user: String,
     val auth: AuthMethod,
     val password: String,
+    val agentForwarding: Boolean,
+    val agentSilent: Boolean,
     val keepalive: Int?,
     val reconnectMinutes: Int?,
     val tmux: TmuxMode,
