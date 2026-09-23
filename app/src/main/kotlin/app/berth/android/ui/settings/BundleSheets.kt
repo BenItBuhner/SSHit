@@ -374,7 +374,8 @@ fun ImportBundleSheet(
  * names what they open in now); a tunnel that would listen on every interface has its own row
  * under the tunnels, saying it comes in switched off. A key a hosts-only bundle names without
  * carrying it has a row of its own, saying whether this phone has it ([BundleImportPlan.identitiesHere])
- * and so whether its hosts log in with it or ask each time. The known hosts take the `known_hosts`
+ * and so whether its hosts log in with it or ask each time; so has a hardware key this phone
+ * holds, which is no key to make again. The known hosts take the `known_hosts`
  * import's shape (spec A16, C13) once [plan] has been read: one count row for the keys that need
  * no decision, a bundle being a restore and a new key routine; then the decisions, a row each, a
  * key that differs from one this phone trusts for its endpoint as an unticked [TickRow], its line
@@ -391,9 +392,12 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         Text("Nothing: the phone it came from had no hosts, keys or settings of its own.", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(horizontal = 4.dp))
         return
     }
-    val hardware = bundle.hardwareIdentities
+    val here = plan?.identitiesHere.orEmpty()
+    // A hardware key this phone holds (a bundle made on this phone) is not one to make again: it is named like a hosts-only file's key.
+    val (hardwareHere, hardware) = bundle.hardwareIdentities.partition { it.id in here }
     val leftBehind = bundle.leftBehindIdentities
-    val carried = bundle.identities.size - hardware.size - leftBehind.size
+    val named = bundle.identities.map { it.identity }.filter { it in leftBehind || it in hardwareHere }
+    val carried = bundle.identities.size - hardware.size - named.size
     Panel(label = "In this bundle") {
         @Composable
         fun row(title: String, subtitle: String) {
@@ -409,16 +413,16 @@ private fun BundleContents(bundle: BerthBundle, plan: BundleImportPlan?, options
         }
         row(bundle.hosts.size, "host", bundle.hosts.map { it.name })
         if (carried + hardware.size > 0) {
-            row(keysLine(carried, hardware.size), bundle.identities.map { it.identity }.filter { it !in leftBehind }.map { it.name })
+            row(keysLine(carried, hardware.size), bundle.identities.map { it.identity }.filter { it !in named }.map { it.name })
         }
-        // A hosts-only bundle's keys, named and not carried: a row each, saying whether this phone has the key and so what its hosts do.
-        for (identity in leftBehind) {
+        // Keys named and not carried, a hosts-only bundle's or a hardware key this phone holds: a row each, saying whether this phone has the key and so what its hosts do.
+        for (identity in named) {
             ListRow(
                 identity.name,
                 subtitle = namedKeyLine(
                     identity.name,
                     identity.algorithm.displayName,
-                    hereAs = plan?.identitiesHere?.get(identity.id),
+                    hereAs = here[identity.id],
                     hosts = bundle.hosts.filter { (it.auth as? AuthMethod.Key)?.identityId == identity.id }.map { it.name },
                 ),
                 subtitleMaxLines = 3,

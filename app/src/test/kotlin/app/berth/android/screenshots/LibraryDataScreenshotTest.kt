@@ -733,6 +733,41 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         assertEquals(7, hosts.size)
     }
 
+    /**
+     * A bundle opened on the phone that made it: its hardware key is this phone's own, so the sheet
+     * names it as a key this phone has, on which its host logs in, and counts no key to make again
+     * and says nothing of making one; the import leaves the host on that key.
+     */
+    @Test
+    fun `a bundle opened on the phone that made it lists no hardware key to make again`() {
+        seedLibrary()
+        runBlocking { graph.hosts.upsert(host("db-primary", "db-primary", "db.internal", "postgres", SwatchColor.SLATE, AuthMethod.Key("id-phone"))) }
+        val blob = runBlocking {
+            BerthBundles(graph.hosts, graph.identities, graph.workspaces, graph.snippets, graph.tunnels, graph.knownHosts, graph.settings, graph.secrets, BundleCodec())
+                .export(OTHER_PASSPHRASE.toCharArray(), exportedAt = now - TimeUnit.DAYS.toMillis(1), appVersion = "0.2.0", cost = BundleKdf(memoryKiB = 1024, iterations = 1, parallelism = 1))
+        }
+        var notice: String? = null
+        themed {
+            ImportBundleSheet(graph.viewModel, onDismiss = {}, onNotice = { notice = it }, initialFile = PickedFile("berth-2026-09-21.berth", blob), onMakeKey = {})
+        }
+        waitForTextContaining("berth-2026-09-21.berth \u00B7 ")
+        sheetFieldUnder("Passphrase").performTextInput(OTHER_PASSPHRASE)
+        inSheet("Open").performClick()
+        waitForText("IN THIS BUNDLE")
+        waitForText(keysLine(carried = 2, hardware = 0))
+        waitForText(namedKeyLine("this phone", KeyAlgorithm.ECDSA_P256.displayName, hereAs = "this phone", hosts = listOf("db-primary")))
+        compose.onAllNodes(hasText("to make again", substring = true)).assertCountEquals(0)
+        compose.onAllNodes(hasText("hardware-backed on the other phone", substring = true)).assertCountEquals(0)
+        capture("bundle-import-same-phone")
+        assertNoTextCut("a bundle opened on the phone that made it")
+
+        // With no key to make again the sheet closes on a notice rather than a list.
+        inSheet("Import").performScrollTo().performClick()
+        compose.waitUntil(5_000) { notice != null }
+        assertTrue("$notice", notice!!.startsWith("Imported"))
+        assertEquals(AuthMethod.Key("id-phone"), graph.hosts.items.value.single { it.id == "db-primary" }.auth)
+    }
+
     // ---- Known hosts: swipe to forget, with Undo (C13) ------------------------------------------------
 
     private fun knownHostsScreen() = themed { KnownHostsScreen(graph.viewModel, onBack = {}) }
