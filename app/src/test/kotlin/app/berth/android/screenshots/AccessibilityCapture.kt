@@ -34,7 +34,7 @@ import kotlin.math.abs
  * over every Compose root on screen, so a sheet or a menu is audited along with the screen under
  * it, and a result at the ERROR level fails the test that took the picture. `BERTH_A11Y_LEVEL`
  * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. A few findings
- * are exempt by what they are, never by lowering the bar: a Deck key's width, a row cut at the
+ * are exempt by what they are, never by lowering the bar: a full-height Deck key's width, a row cut at the
  * window's edge on its way in or out of a list or under a half-open sheet, a whole control cut by
  * the reach of a row the list beside it has scrolled past, the strip of scrim a tall sheet leaves
  * above itself, and the contrast of a disabled control's text.
@@ -52,7 +52,7 @@ fun ComposeTestRule.captureAudited(file: File) {
         val rootNode = root.fetchSemanticsNode()
         val sheet = rootNode.holdsDialog()
         val nodes = onAllNodes(isRoot(), useUnmergedTree = true).fetchSemanticsNodes().first { it.id == rootNode.id }.flatten()
-        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, UnderAScrolledRowsReach(nodes, minTarget)))
+        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, UnderAScrolledRowsReach(nodes, minTarget), DeckKeyTargets(minTarget)))
     }
 }
 
@@ -86,31 +86,37 @@ private val Level = RoborazziATFAccessibilityChecker.CheckLevel.valueOf(System.g
  * yet shown nor the strip of scrim a tall sheet leaves above itself is a finding there.
  */
 @OptIn(ExperimentalRoborazziApi::class)
-private fun auditOptions(sheet: Boolean, reach: UnderAScrolledRowsReach) = RoborazziATFAccessibilityCheckOptions(
+private fun auditOptions(sheet: Boolean, reach: UnderAScrolledRowsReach, keys: DeckKeyTargets) = RoborazziATFAccessibilityCheckOptions(
     checker = RoborazziATFAccessibilityChecker(
         preset = AccessibilityCheckPreset.LATEST,
         suppressions = if (sheet) {
-            anyOf(DeckKeyTargets, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, reach, DisabledControlContrast)
+            anyOf(keys, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, reach, DisabledControlContrast)
         } else {
-            anyOf(DeckKeyTargets, ScrolledPastTheEdge, reach, DisabledControlContrast)
+            anyOf(keys, ScrolledPastTheEdge, reach, DisabledControlContrast)
         },
     ),
     failureLevel = Level,
 )
 
 /**
- * One exemption: the Deck's keys ([DeckKeyTag], published as their resource id) are a keyboard's
- * keys, seven or more to a row, 43 dp wide on a phone by the spec's 44 tall, and cannot each be a
- * 48 dp square; the framework's own scanner exempts a keyboard's keys the same way. Every other
- * check still runs on them, so a key with no name or no role still fails.
+ * One exemption: a Deck key's width. The Deck's keys ([DeckKeyTag], published as their resource
+ * id) are a keyboard's keys, seven or more to a row, 43 dp wide on a phone, and cannot each be
+ * 48 dp across; the framework's own scanner exempts a keyboard's keys the same way. Their height
+ * is held: a key's target stands [minTarget] tall at every height the setting and density give it
+ * (a 40 dp key takes the 4 dp gaps above and below it), so a finding on a key whose target is
+ * short is not exempt. Every other check still runs on them, so a key with no name or no role
+ * still fails.
  */
-private object DeckKeyTargets : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+private class DeckKeyTargets(private val minTarget: Float) : TypeSafeMatcher<AccessibilityViewCheckResult>() {
     override fun describeTo(description: Description) {
-        description.appendText("a touch-target finding on a Deck key")
+        description.appendText("a touch-target finding on a Deck key's width, its target full height")
     }
 
-    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean =
-        result.accessibilityHierarchyCheck == TouchTargetSizeCheck::class.java && result.element?.resourceName == DeckKeyTag
+    override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
+        if (result.accessibilityHierarchyCheck != TouchTargetSizeCheck::class.java) return false
+        val element = result.element ?: return false
+        return element.resourceName == DeckKeyTag && element.boundsInScreen.height >= minTarget - 1
+    }
 }
 
 /**

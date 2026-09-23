@@ -9,10 +9,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
@@ -25,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -246,9 +249,10 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     }
 
     /**
-     * The Deck (spec A12, Deck 44 → 40): its keys a step down under Compact, each key's swipe hint
-     * clear of its label at either height, and no status bar here, so the strip above it is the
-     * skin's 40.
+     * The Deck (spec A12, Deck 44 → 40; lines 102 and 186, 40 × 44 as the target): its keys a step
+     * down under Compact and still 48 dp targets, the 4 dp gaps above and below a 40 dp key being
+     * the key's to a finger; each key's swipe hint clear of its label at either height; and no
+     * status bar here, so the strip above it is the skin's 40.
      */
     @Test
     fun `the deck`() {
@@ -266,6 +270,20 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertEquals(40f, ctrlKeyDp(), 0.5f)
         compose.assertDeckHintsClearOfLabels()
         assertEquals(40f, stripRowDp(), 1f)
+
+        val ctrl = compose.onNode(ctrlKey)
+        assertTrue("a Compact key is a 48 dp target: ${ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp()} dp", ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp() >= 47.5f)
+        // A finger 3 dp into the gap above the key, then below it: one-shot, then locked; the key's middle lets go.
+        val gap = 3 * compose.density.density
+        ctrl.performTouchInput { down(Offset(centerX, -gap)); up() }
+        compose.waitForIdle()
+        ctrl.assertContentDescriptionEquals("Ctrl, one-shot")
+        ctrl.performTouchInput { down(Offset(centerX, height + gap)); up() }
+        compose.waitForIdle()
+        ctrl.assertContentDescriptionEquals("Ctrl, locked")
+        ctrl.performTouchInput { down(center); up() }
+        compose.waitForIdle()
+        ctrl.assertContentDescriptionEquals("Ctrl")
     }
 
     /** The shell as it mounts, on the Stage fixture's three detached tabs with homelab on stage. */
@@ -329,10 +347,12 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         .first { it.layoutInput.text.text == "HO" }
         .layoutInput.constraints.maxWidth.toFloat().inDp()
 
-    private fun ctrlKeyDp(): Float = compose.onNode(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNode().size.height.toFloat().inDp()
+    private val ctrlKey = hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)
+
+    private fun ctrlKeyDp(): Float = compose.onNode(ctrlKey).fetchSemanticsNode().size.height.toFloat().inDp()
 
     private fun awaitDeck() {
-        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(ctrlKey).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
     }
 
