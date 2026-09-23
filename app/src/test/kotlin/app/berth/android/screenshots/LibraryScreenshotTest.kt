@@ -1092,6 +1092,27 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
     }
 
     /**
+     * The cards stand level (C8): a group with three tabs, the most a card lists, beside a group of
+     * one and the New group card, at 1× and at the interface's 1.3 cap. At the cap a card's four
+     * Caption lines are 83.2 dp as the text lays them out, where the density's own sp-to-dp makes
+     * 64 dp of their 64 sp, and the card of three tabs stood 19 dp taller than its neighbours.
+     */
+    @Test
+    fun `the groups overview's cards stand level with three tabs on one`() {
+        seedLibrary()
+        seedTabs(prodInHome = true)
+        themed { GroupsScreen(graph.viewModel, RecordingTabActions(), onBack = {}, onOpenGroup = {}, onNewGroup = {}) }
+        waitForText("3 tabs")
+        compose.onNodeWithText("prod-api").assertExists()
+        val heights = listOf("Home", "Work", "New group").associateWith { card ->
+            compose.onNode(hasText(card) and hasClickAction()).fetchSemanticsNode().size.height / compose.density.density
+        }
+        for ((card, height) in heights) assertEquals("the $card card level with Home's, of three tabs: $heights", heights.getValue("Home"), height, 0.5f)
+        capture("groups-three-tabs")
+        assertNoTextCut("the groups overview with three tabs on a card")
+    }
+
+    /**
      * The overview's second door (C8, "from the rail ... and from the Overflow"): the Stage's ⋮ has
      * Groups, after Tabs and before Library, with a tab on stage and without one, so a window whose
      * drawer stands as a column with no GROUPS label (C7, C23) still reaches the screen.
@@ -1461,8 +1482,8 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         graph.knownHosts.upsert(KnownHostKey("kh-1", "203.0.113.10", 22, "ssh-ed25519", SshKeys.openSshPublic(server).split(" ")[1], SshKeys.fingerprintSha256(server), now - TimeUnit.DAYS.toMillis(90), now - TimeUnit.HOURS.toMillis(2)))
     }
 
-    /** Three detached tabs, two in Home and one in Work, restored so the manager holds them. */
-    private fun seedTabs() = runBlocking {
+    /** Three detached tabs, two in Home and one in Work, restored so the manager holds them; [prodInHome] puts a third in Home. */
+    private fun seedTabs(prodInHome: Boolean = false) = runBlocking {
         val hosts = graph.hosts.items.value.associateBy { it.id }
         fun record(id: String, hostId: String, ws: String, order: Int, lastLiveMinutesAgo: Long, cwd: String, lastCommand: String) = SessionRecord(
             id = id, workspaceId = ws, hostId = hostId, hostSnapshot = hosts.getValue(hostId), state = SessionState.DETACHED, layer = PersistenceLayer.LOCAL_FRAME, title = hosts.getValue(hostId).name,
@@ -1474,8 +1495,13 @@ class LibraryScreenshotTest(private val systemFontScale: Float) {
         graph.sessionRecords.saveFrame("s-homelab", frame(listOf("ben@homelab:~/srv$ docker compose ps", "ben@homelab:~/srv$ ")))
         graph.sessionRecords.saveFrame("s-pihole", frame(listOf("pi@pi-hole:/etc/pihole$ tail -f pihole.log")))
         graph.sessionRecords.saveFrame("s-build", frame(listOf("ci@build:~/work/berth$ ./gradlew assembleDebug", "BUILD SUCCESSFUL in 1m 12s")))
+        if (prodInHome) {
+            graph.sessionRecords.upsert(record("s-prod", "prod-api", Workspace.DEFAULT_ID, 2, 30, "~", "uptime"))
+            graph.sessionRecords.saveFrame("s-prod", frame(listOf("deploy@prod-api:~$ uptime")))
+        }
         graph.sessions.restore()
-        compose.waitUntil(10_000) { graph.sessions.restored.value && graph.sessions.records.value.size == 3 }
+        val tabs = if (prodInHome) 4 else 3
+        compose.waitUntil(10_000) { graph.sessions.restored.value && graph.sessions.records.value.size == tabs }
     }
 
     /**

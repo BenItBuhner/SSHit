@@ -111,12 +111,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -425,14 +425,19 @@ private val SelectionDotGap = 8.dp
 private val TitleLineCentre = HorizontalAlignmentLine { a, b -> minOf(a, b) }
 
 /**
- * The title's [TitleLineCentre]: half its style's line height, the first line's own box under
- * `LineHeightStyle.Trim.None` whether the title runs to one line or two; half the measured
- * height for a style that gives no line height.
+ * The title's [TitleLineCentre]: half its first line's own box, whether the title runs to one line
+ * or two, as the text lays that line out. Not the style's line height through the density: its
+ * sp-to-dp scales large sizes less than the text's line does (22 sp at the 1.3 cap is 25 dp to it,
+ * 28.6 to the text), and would sit the dot high of the line.
  */
-private fun Modifier.publishTitleLineCentre(style: TextStyle): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val line = if (style.lineHeight.isSpecified) style.lineHeight.roundToPx() else placeable.height
-    layout(placeable.width, placeable.height, mapOf(TitleLineCentre to line / 2)) { placeable.place(0, 0) }
+@Composable
+private fun Modifier.publishTitleLineCentre(style: TextStyle): Modifier {
+    val measurer = rememberTextMeasurer()
+    val line = measurer.measure(" ", style, maxLines = 1).size.height
+    return layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        layout(placeable.width, placeable.height, mapOf(TitleLineCentre to line / 2)) { placeable.place(0, 0) }
+    }
 }
 
 /**

@@ -26,13 +26,15 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
  * A selected row's 4 dp accent dot sits beside the title (A6; #16 review, nit 11): its centre is the
  * centre of the title's first line, which on a one-line row is the row's own centre and on a row
- * whose caption runs to a second and a third line is well above it. The content keeps the 12 dp
+ * whose caption runs to a second and a third line is well above it, at 1× and at the interface's
+ * font cap, where the line is the text's and not the density's conversion of it. The content keeps the 12 dp
  * the dot and its gap take, as it did when the dot was the row's first child. Read from the
  * pixels, since the dot has no semantics of its own: the accent in the dot's 4 dp column, inside
  * the row's 12 dp padding, against the title node's bounds.
@@ -121,5 +123,33 @@ class ListRowTest {
         assertEquals(titleCentreY(), dotCentreY(), 1.5f)
         // Padding 12, the dot and its gap 12, the 32 dp swatch and its 12 dp gap: the title at 68 dp, as before.
         assertEquals(68 * density, title().left, 1.5f)
+    }
+
+    /**
+     * At the interface's 1.3 cap the title's line is the text's, 28.6 dp for Body Medium's 22 sp,
+     * not the 25 the density's own sp-to-dp makes of 22 sp; the dot sits on the line the text lays
+     * out, on a three-line row and on a one-line one.
+     */
+    @Test
+    fun `at the interface's font cap the dot stays on the title's line`() = atTheCap {
+        row(subtitle = "abc -> => != ...\nThe terminal's own face", subtitleMaxLines = 3)
+        assertEquals("the title's line at the cap", 28.6f, title().height / density, 0.5f)
+        assertEquals(titleCentreY(), dotCentreY(), 1.5f)
+    }
+
+    @Test
+    fun `at the interface's font cap a one-line row's dot is at the title's centre`() = atTheCap {
+        row(subtitle = null)
+        assertEquals(titleCentreY(), dotCentreY(), 1.5f)
+    }
+
+    /** The system's largest font size, 2×, which the interface takes to its 1.3 cap; set before the row composes. */
+    private fun atTheCap(block: () -> Unit) {
+        RuntimeEnvironment.setFontScale(2f)
+        try {
+            block()
+        } finally {
+            RuntimeEnvironment.setFontScale(1f)
+        }
     }
 }
