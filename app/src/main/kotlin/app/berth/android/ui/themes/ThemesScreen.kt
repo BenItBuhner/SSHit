@@ -275,7 +275,7 @@ private fun ThemeTile(
                         else -> "Custom"
                     },
                     style = BerthType.caption,
-                    color = fg.copy(alpha = if (isDefault) 0.85f else 0.6f),
+                    color = fg,
                 )
             }
         }
