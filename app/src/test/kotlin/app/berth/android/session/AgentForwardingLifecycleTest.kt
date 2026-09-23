@@ -185,6 +185,54 @@ class AgentForwardingLifecycleTest {
         assertEquals(2, asked.size)
     }
 
+    /**
+     * A request lights a tab already lit, by a bell nobody has seen yet: once answered, the bell is
+     * back as it was, ring and shade, reason and time. A bell that rings while a request waits is
+     * newer than the question and stays after it; a tab the user looked at meanwhile stays dark.
+     */
+    @Test
+    fun `a request over a bell puts the bell back once answered, and newer news is kept`(): Unit = runBlocking {
+        val session = openLive(box)
+        val sh = remote(session)
+        assertEquals(0, sh.run("printf '\\a'").second)
+        await(5_000, "the bell lights the tab") { session.record.value.attentionReason == "Bell" }
+        val bellAt = session.attentionAt!!
+        await(5_000, "and the shade") { attentionPosted(session) }
+
+        val first = sh.start(hop("hop-ok"))
+        awaitValue(20_000, "the sign request") { asked.firstOrNull() }.let { ask ->
+            assertEquals(TerminalSession.AGENT_REQUEST_REASON, session.record.value.attentionReason)
+            ask.allowOnce()
+        }
+        assertEquals(0, first.await().second)
+        await(5_000, "the bell's reason is back") { session.record.value.attentionReason == "Bell" }
+        assertTrue(session.record.value.needsAttention)
+        assertEquals("and its time", bellAt, session.attentionAt)
+        assertTrue("and the shade still carries it", attentionPosted(session))
+
+        val second = sh.start(hop("not-run"))
+        awaitValue(20_000, "the second request") { asked.getOrNull(1) }.let { ask ->
+            delay(20)
+            session.emulator.write("\u0007")
+            assertEquals("the new bell is the news now", "Bell", session.record.value.attentionReason)
+            ask.deny()
+        }
+        assertEquals(255, second.await().second)
+        assertEquals("Bell", session.record.value.attentionReason)
+        assertNotEquals("the newer bell's time, not the first one's", bellAt, session.attentionAt)
+
+        val third = sh.start(hop("hop-ok"))
+        awaitValue(20_000, "the third request") { asked.getOrNull(2) }.let { ask ->
+            graph.process.start()
+            await(5_000, "the tab in front of the user") { session.onStage }
+            assertFalse("seen", session.record.value.needsAttention)
+            ask.allowOnce()
+        }
+        assertEquals(0, third.await().second)
+        assertFalse("nothing comes back once seen", session.record.value.needsAttention)
+        assertEquals(null, session.attentionAt)
+    }
+
     @Test
     fun `Allow for this session answers the tab's later requests, and a new tab asks again`(): Unit = runBlocking {
         val session = openLive(box)

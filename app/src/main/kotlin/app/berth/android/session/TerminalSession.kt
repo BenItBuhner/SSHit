@@ -776,7 +776,8 @@ class TerminalSession(
      * Decides the sign requests of one connection's agent, one at a time, so a second request waits
      * for the answer to the first and Allow for this session answers it too; that answer lasts as
      * long as the connection, and a reconnect asks again. While the question is up the tab is lit
-     * off stage (the ring, and the shade while the app is away), and it goes dark once answered.
+     * off stage (the ring, and the shade while the app is away), and once answered it goes dark, or
+     * back to what lit it before (a bell the user has not seen yet).
      */
     private fun agentApprover(h: Host): AgentApprover {
         val turn = Mutex()
@@ -784,11 +785,11 @@ class TerminalSession(
         return AgentApprover { request ->
             turn.withLock {
                 if (allowedForSession || env.agentSignsSilently(h)) return@withLock true
-                attention(AGENT_REQUEST_REASON)
+                val earlier = attentionOver(AGENT_REQUEST_REASON)
                 val answer = try {
                     env.approveAgentRequest(h, request)
                 } finally {
-                    settle(AGENT_REQUEST_REASON)
+                    settle(AGENT_REQUEST_REASON, earlier)
                 }
                 val what = when (request.purpose) {
                     is AgentSignPurpose.Login -> "a login"
@@ -1138,13 +1139,30 @@ class TerminalSession(
         }
     }
 
-    /** Takes down the attention [reason] raised once what it was about is over, unless something else has lit the tab since. */
-    private fun settle(reason: String) {
+    /** What a tab was lit for: the reason, when, and the problem behind it, as [attentionOver] hands it to [settle] to put back. */
+    private class Lit(val reason: String?, val at: Long?, val problem: SessionProblem?)
+
+    /**
+     * Raises attention for [reason] as [attention] does, over whatever the tab was already lit for,
+     * and hands that back, read in the same step, so [settle] can put it back once [reason] is over.
+     */
+    private fun attentionOver(reason: String): Lit? = synchronized(attentionLock) {
+        val before = _record.value.takeIf { it.needsAttention }?.let { Lit(it.attentionReason, attentionAt, attentionProblem) }
+        attention(reason)
+        before
+    }
+
+    /**
+     * Takes down the attention [reason] raised once what it was about is over, unless something else
+     * has lit the tab since or the user has seen it. What the tab was lit for before [reason]
+     * ([earlier]) comes back as it was, since nobody has seen it yet.
+     */
+    private fun settle(reason: String, earlier: Lit? = null) {
         synchronized(attentionLock) {
             if (!_record.value.needsAttention || _record.value.attentionReason != reason) return
-            attentionAt = null
-            attentionProblem = null
-            patch { copy(needsAttention = false, attentionReason = null) }
+            attentionAt = earlier?.at
+            attentionProblem = earlier?.problem
+            patch { copy(needsAttention = earlier != null, attentionReason = earlier?.reason) }
         }
     }
 
