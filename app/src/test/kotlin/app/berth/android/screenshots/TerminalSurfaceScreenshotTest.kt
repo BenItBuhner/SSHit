@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -67,8 +68,13 @@ import app.berth.android.ui.terminal.TerminalPaints
 import app.berth.android.ui.terminal.TerminalPaintsCache
 import app.berth.android.ui.terminal.TypefaceCache
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.PinchAction
+import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -320,6 +326,84 @@ class TerminalSurfaceScreenshotTest {
         compose.waitUntil(5_000) { !graph.viewModel.terminalSettings.value.rightClickPaste }
         assertTrue("the other gestures stand", graph.viewModel.terminalSettings.value.horizontalDragArrows)
     }
+
+    // ---- Settings › Gestures (spec D1) ---------------------------------------------------------------------------
+
+    /** The picker row titled [title], read as one node: its title, its caption if any, and its value. */
+    private fun gestureRow(title: String) = compose.onNode(hasText(title) and hasClickAction())
+
+    /** Opens [title]'s choices, checks they are [options] in order, and picks [pick]. */
+    private fun pickGesture(title: String, options: List<String>, pick: String, capture: String? = null) {
+        gestureRow(title).performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasAnyAncestor(isPopup())).fetchSemanticsNodes().isNotEmpty() }
+        val rows = compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes().map { it.config[SemanticsProperties.Text].joinToString() }
+        assertEquals("$title's choices, the default first", options, rows)
+        if (capture != null) {
+            settle(200)
+            capture(capture)
+            compose.assertNoTextCut("$title's choices", within = isPopup())
+        }
+        compose.onNode(hasText(pick) and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasAnyAncestor(isPopup())).fetchSemanticsNodes().isEmpty() }
+    }
+
+    private fun settingsGestureRows(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        StageFixture.seed(graph)
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        gestureRow("Switch tabs").performScrollTo()
+        compose.waitForIdle()
+        // D1's gestures in its order with their defaults, the tap's caption saying what else it does.
+        val defaults = listOf(
+            "Tap" to "Show keyboard",
+            "Double-tap" to "Select word",
+            "Two-finger tap" to "Paste",
+            "Three-finger tap" to "Toggle Deck",
+            "Pinch" to "Font size",
+            "Switch tabs" to "Two-finger swipe",
+        )
+        for ((title, value) in defaults) gestureRow(title).assertIsDisplayed().assert(hasText(value))
+        gestureRow("Tap").assert(hasText("And a click where the program has the mouse"))
+        val tops = defaults.map { (title, _) -> gestureRow(title).fetchSemanticsNode().boundsInRoot.top }
+        assertEquals("the rows stand in D1's order", tops.sorted(), tops)
+        assertEquals(TerminalSettings(), graph.viewModel.terminalSettings.value)
+        settle(200)
+        capture("settings-gestures-per-gesture$suffix")
+        compose.assertNoTextCut("the Gestures panel's rows${if (cap) " at the interface's font cap" else ""}")
+
+        // Each picked in turn lands in the one terminal document, the others standing.
+        pickGesture("Three-finger tap", listOf("Toggle Deck", "Share screen text", "Nothing"), "Share screen text", capture = "settings-gestures-three-finger-menu$suffix")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.threeFingerTap == ThreeFingerTapAction.SHARE_SCREEN_TEXT }
+        pickGesture("Double-tap", listOf("Select word", "Send Tab", "Nothing"), "Send Tab")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.doubleTap == DoubleTapAction.SEND_TAB }
+        pickGesture("Two-finger tap", listOf("Paste", "New tab", "Nothing"), "New tab")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.twoFingerTap == TwoFingerTapAction.NEW_TAB }
+        pickGesture("Pinch", listOf("Font size", "Nothing"), "Nothing")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.pinch == PinchAction.NOTHING }
+        // The tap's Nothing takes the soft keyboard's one way up away, and its caption says so.
+        pickGesture("Tap", listOf("Show keyboard", "Nothing"), "Nothing")
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value.tap == TapAction.NOTHING }
+        gestureRow("Tap").performScrollTo()
+        gestureRow("Tap").assert(hasText("Nothing")).assert(hasText("No keyboard and no click; type from a hardware keyboard"))
+        assertEquals(
+            TerminalSettings(tap = TapAction.NOTHING, doubleTap = DoubleTapAction.SEND_TAB, twoFingerTap = TwoFingerTapAction.NEW_TAB, threeFingerTap = ThreeFingerTapAction.SHARE_SCREEN_TEXT, pinch = PinchAction.NOTHING),
+            graph.viewModel.terminalSettings.value,
+        )
+        for ((title, value) in listOf("Double-tap" to "Send Tab", "Two-finger tap" to "New tab", "Three-finger tap" to "Share screen text", "Pinch" to "Nothing")) {
+            gestureRow(title).assert(hasText(value))
+        }
+        settle(200)
+        capture("settings-gestures-alternatives$suffix")
+        compose.assertNoTextCut("the Gestures panel with every alternative picked${if (cap) " at the interface's font cap" else ""}")
+        // The gestures with no alternative are named under the panel.
+        compose.onNodeWithText("Long-press always selects", substring = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `settings gesture rows`() = settingsGestureRows(cap = false)
+
+    @Test
+    fun `settings gesture rows at the 1,3 cap`() = settingsGestureRows(cap = true)
 
     @Test
     fun `settings terminal rows`() = settingsTerminalRows(cap = false)

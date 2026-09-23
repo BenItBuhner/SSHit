@@ -1,7 +1,10 @@
 package app.berth.android.ui.terminal
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.view.ViewConfiguration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,8 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.moveBy
+import androidx.compose.ui.test.moveTo
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -36,14 +42,20 @@ import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.PersistenceLayer
+import app.berth.domain.model.PinchAction
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalFont
+import app.berth.domain.model.TerminalSettings
 import app.berth.domain.model.TerminalTheme
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import app.berth.domain.model.Workspace
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
@@ -68,6 +80,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.util.concurrent.TimeUnit
@@ -84,7 +97,11 @@ import java.util.concurrent.TimeUnit
  * gesture lands: the three-finger tap hides the Deck and shows it again (the Deck's own state stays
  * in the Stage, not in Deck.kt), the two-finger double-tap takes a host's own font size away, and
  * the drag sends nothing while Settings has it off and arrows once it is on, which on a detached
- * tab is the first key that reconnects it (review #15). Against the local sshd the drag moves the
+ * tab is the first key that reconnects it (review #15). Settings › Gestures' alternatives (spec D1):
+ * on the canvas, a double tap that sends Tab or is two taps and selects nothing either way, and a
+ * tap that reports and clicks nothing yet still starts a double tap; on the Stage, a two-finger tap
+ * that opens the New tab sheet or does nothing, a three-finger tap that shares the rows in view or
+ * does nothing, and a pinch that leaves the size alone. Against the local sshd the drag moves the
  * shell's cursor a cell per cell of travel, left and back.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -171,18 +188,23 @@ class TerminalGesturesTest {
         val linkTaps = ArrayList<LinkTap>()
         val fontSteps = ArrayList<Int>()
         val swipes = ArrayList<Boolean>()
+        val keys = ArrayList<TerminalKey>()
         override fun toString() =
-            "three-finger taps $threeFingerTaps, two-finger double-taps $twoFingerDoubleTaps, two-finger taps $twoFingerTaps (armed $twoFingerTapsArmed), taps $taps, link taps $linkTaps, font steps $fontSteps, swipes $swipes"
+            "three-finger taps $threeFingerTaps, two-finger double-taps $twoFingerDoubleTaps, two-finger taps $twoFingerTaps (armed $twoFingerTapsArmed), taps $taps, link taps $linkTaps, font steps $fontSteps, swipes $swipes, keys $keys"
     }
 
     /**
      * The canvas on its own over [session] (homelab's live frame unless given), every gesture wired to
      * [heard]; [resetWired] false leaves the two-finger double-tap out, as a Stage without it would.
+     * [tap] and [doubleTap] are Settings › Gestures' choices, and a [selection] lets a double tap select.
      */
     private fun canvasAlone(
         heard: Heard,
         resetWired: Boolean = true,
         dragArrows: Boolean = false,
+        tap: TapAction = TapAction.SHOW_KEYBOARD,
+        doubleTap: DoubleTapAction = DoubleTapAction.SELECT_WORD,
+        selection: TerminalSelection? = null,
         session: TerminalSession = StageFixture.liveHomelab().also { sessions += it },
     ): TerminalSession {
         compose.setContent {
@@ -192,7 +214,7 @@ class TerminalGesturesTest {
                     val sink = remember {
                         object : TerminalInputSink {
                             override fun onText(text: String) = Unit
-                            override fun onKey(key: TerminalKey, modifiers: Int) = Unit
+                            override fun onKey(key: TerminalKey, modifiers: Int) { heard.keys += key }
                         }
                     }
                     TerminalCanvas(
@@ -210,7 +232,10 @@ class TerminalGesturesTest {
                         onTwoFingerTapArmed = { heard.twoFingerTapsArmed++ },
                         onThreeFingerTap = { heard.threeFingerTaps++ },
                         horizontalDragArrows = dragArrows,
+                        tap = tap,
+                        doubleTap = doubleTap,
                         onLinkTap = { heard.linkTaps += it },
+                        selection = selection,
                     )
                 }
             }
@@ -494,6 +519,122 @@ class TerminalGesturesTest {
         assertEquals(heard.toString(), 0, heard.threeFingerTaps)
     }
 
+    // ---- Settings › Gestures' alternatives (spec D1), on the canvas alone ------------------------------------
+
+    /** Every byte the session sends from here on, as text. */
+    private fun sentBy(session: TerminalSession): MutableList<String> = ArrayList<String>().also { sent -> session.sendObserver = { sent += String(it, Charsets.UTF_8) } }
+
+    private fun setMouseTracking(session: TerminalSession, on: Boolean) {
+        session.emulator.write(if (on) "\u001b[?1000h" else "\u001b[?1000l")
+        compose.waitUntil(5_000) { (synchronized(session.emulator.lock) { session.emulator.mouseTracking } != MouseTracking.NONE) == on }
+    }
+
+    @Test
+    fun `the default double tap selects the word, and a double tap that drags whole lines`() {
+        val heard = Heard()
+        val selection = TerminalSelection()
+        val session = canvasAlone(heard, selection = selection)
+        val (row, col) = cellOf(session, "docker")
+        val at = cellCenter(row, col + 1)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); click(at) }
+        compose.waitUntil(5_000) { selection.active }
+        assertEquals("docker", selection.text(session.emulator))
+        assertEquals("the first tap was a tap: $heard", 1, heard.taps)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(cellCenter(row + 4, 2)) }
+        compose.waitUntil(5_000) { !selection.active }
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); down(at); moveTo(cellCenter(row + 2, col)); up() }
+        compose.waitUntil(5_000) { selection.active && selection.summary == "3 lines" }
+        assertTrue(heard.toString(), heard.keys.isEmpty())
+    }
+
+    @Test
+    fun `with the double tap set to Send Tab the second tap is Tab through the input, and a double tap selects nothing`() {
+        val heard = Heard()
+        val selection = TerminalSelection()
+        val session = canvasAlone(heard, doubleTap = DoubleTapAction.SEND_TAB, selection = selection)
+        val (row, col) = cellOf(session, "docker")
+        val at = cellCenter(row, col + 1)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); click(at) }
+        compose.waitUntil(5_000) { heard.keys.isNotEmpty() }
+        windowPasses()
+        assertEquals(heard.toString(), listOf(TerminalKey.TAB), heard.keys)
+        assertEquals("the first tap was a tap, the second the Tab: $heard", 1, heard.taps)
+        assertFalse("no word selected", selection.active)
+        // The Tab spent the pair: a third tap is a tap, and a fourth close behind it Tab again.
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); click(at) }
+        compose.waitUntil(5_000) { heard.keys.size == 2 }
+        windowPasses()
+        assertEquals(heard.toString(), 2, heard.taps)
+        // A second tap that drags is a drag like any other: no lines, and no Tab.
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); down(at); moveTo(cellCenter(row + 2, col)); up() }
+        windowPasses()
+        assertFalse("no lines selected", selection.active)
+        assertEquals(heard.toString(), 2, heard.keys.size)
+        assertEquals(heard.toString(), 3, heard.taps)
+    }
+
+    @Test
+    fun `with the double tap set to nothing two taps are two taps, and select nothing`() {
+        val heard = Heard()
+        val selection = TerminalSelection()
+        val session = canvasAlone(heard, doubleTap = DoubleTapAction.NOTHING, selection = selection)
+        val (row, col) = cellOf(session, "docker")
+        val at = cellCenter(row, col + 1)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); click(at) }
+        compose.waitUntil(5_000) { heard.taps == 2 }
+        windowPasses()
+        assertFalse("no word selected", selection.active)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); down(at); moveTo(cellCenter(row + 2, col)); up() }
+        windowPasses()
+        assertFalse("no lines selected", selection.active)
+        assertEquals("the tap before the drag was a tap: $heard", 3, heard.taps)
+        assertTrue(heard.toString(), heard.keys.isEmpty())
+        // A long-press still selects, whatever the double tap does.
+        compose.onNodeWithTag(TerminalTag).performTouchInput { longClick(at) }
+        compose.waitUntil(5_000) { selection.active }
+        assertEquals("docker", selection.text(session.emulator))
+    }
+
+    @Test
+    fun `with the tap set to nothing a tap reports nothing and clicks nothing, and a double tap still selects`() {
+        val heard = Heard()
+        val selection = TerminalSelection()
+        val session = canvasAlone(heard, tap = TapAction.NOTHING, selection = selection)
+        val (row, col) = cellOf(session, "docker")
+        val at = cellCenter(row, col + 1)
+        val sent = sentBy(session)
+
+        // The application has the mouse: the default tap would be its click; this one sends it nothing.
+        setMouseTracking(session, on = true)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(cellCenter(row + 4, 2)) }
+        windowPasses()
+        assertEquals(heard.toString(), 0, heard.taps)
+        assertTrue("no click reached the application: $sent", sent.isEmpty())
+        setMouseTracking(session, on = false)
+
+        // The tap is still a double tap's first, and a tap still lets a selection go.
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(at); click(at) }
+        compose.waitUntil(5_000) { selection.active }
+        assertEquals("docker", selection.text(session.emulator))
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(cellCenter(row + 4, 2)) }
+        compose.waitUntil(5_000) { !selection.active }
+        windowPasses()
+        assertEquals(heard.toString(), 0, heard.taps)
+        assertTrue(sent.toString(), sent.isEmpty())
+    }
+
+    @Test
+    fun `the default tap is the application's click while it has the mouse`() {
+        val heard = Heard()
+        val session = canvasAlone(heard)
+        val sent = sentBy(session)
+        setMouseTracking(session, on = true)
+        compose.onNodeWithTag(TerminalTag).performTouchInput { click(cellCenter(3, 2)) }
+        compose.waitUntil(5_000) { sent.size == 2 }
+        assertEquals(heard.toString(), 1, heard.taps)
+        assertEquals("a press and a release at column 3, row 4", listOf("\u001b[M #$", "\u001b[M##$"), sent)
+    }
+
     /** A detached tab on a host at a port nothing listens on, so a reconnect is refused at once rather than left to a timeout. */
     private fun detachedBox(): TerminalSession {
         val now = System.currentTimeMillis()
@@ -555,20 +696,137 @@ class TerminalGesturesTest {
     // ---- through the Stage -------------------------------------------------------------------------------
 
     @Composable
-    private fun Stage(session: TerminalSession, tools: StageTools) {
-        val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+    private fun Stage(session: TerminalSession, tools: StageTools, ui: TabUiState) {
+        val actions = remember { ShellTabActions(graph.viewModel, ui, onActivated = {}) }
         StageScreen(graph.viewModel, session, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}, tools = tools)
     }
 
-    private fun stage(session: TerminalSession): StageTools {
+    private fun stage(session: TerminalSession, ui: TabUiState = TabUiState()): StageTools {
         val tools = StageTools()
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
-                Box(Modifier.fillMaxSize()) { Stage(session, tools) }
+                Box(Modifier.fillMaxSize()) { Stage(session, tools, ui) }
             }
         }
         awaitGrid(session)
         return tools
+    }
+
+    /** Settings › Gestures changed as the screen would change it, and the Stage recomposed on the change. */
+    private fun gestures(change: (TerminalSettings) -> TerminalSettings) {
+        val wanted = change(graph.viewModel.terminalSettings.value)
+        runBlocking { graph.settings.updateTerminalSettings(change) }
+        compose.waitUntil(5_000) { graph.viewModel.terminalSettings.value == wanted }
+        compose.waitForIdle()
+    }
+
+    private fun pinchOut() {
+        val density = context.resources.displayMetrics.density
+        compose.onNodeWithTag(TerminalTag).performTouchInput {
+            down(0, cellCenter(5, 8))
+            down(1, cellCenter(5, 20))
+            updatePointerBy(0, Offset(-30 * density, 0f))
+            move()
+            updatePointerBy(1, Offset(30 * density, 0f))
+            move()
+            up(0)
+            up(1)
+        }
+    }
+
+    private fun homelabFontSize(): Int? = graph.hosts.items.value.first { it.id == "homelab" }.appearance.fontSizeSp
+
+    @Test
+    fun `on stage the two-finger tap is what Settings makes it, a paste, the New tab sheet, or nothing`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        val ui = TabUiState()
+        stage(live, ui)
+        val sent = sentBy(live)
+        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("test", "uptime"))
+
+        twoFingerTap()
+        compose.waitUntil(5_000) { sent.any { "uptime" in it } }
+        windowPasses()
+        assertEquals("the paste opened nothing", null, ui.newTab)
+
+        gestures { it.copy(twoFingerTap = TwoFingerTapAction.NEW_TAB) }
+        sent.clear()
+        twoFingerTap(row = 6)
+        compose.waitUntil(5_000) { ui.newTab != null }
+        windowPasses()
+        assertTrue("nothing was pasted: $sent", sent.isEmpty())
+
+        gestures { it.copy(twoFingerTap = TwoFingerTapAction.NOTHING) }
+        ui.newTab = null
+        twoFingerTap(row = 7)
+        windowPasses()
+        assertEquals(null, ui.newTab)
+        assertTrue("nothing was pasted: $sent", sent.isEmpty())
+        // The reset is no alternative's to give away: two two-finger taps still take the host's size back.
+        runBlocking {
+            val homelab = graph.hosts.items.value.first { it.id == "homelab" }
+            graph.hosts.upsert(homelab.copy(appearance = homelab.appearance.copy(fontSizeSp = 18)))
+        }
+        compose.onNodeWithTag(TerminalTag).performTouchInput {
+            down(0, cellCenter(5, 4))
+            down(1, cellCenter(5, 24))
+            up(0)
+            up(1)
+            advanceEventTime(120)
+            down(0, cellCenter(5, 4))
+            down(1, cellCenter(5, 24))
+            up(0)
+            up(1)
+        }
+        compose.waitUntil(5_000) { homelabFontSize() == null }
+    }
+
+    @Test
+    fun `on stage a three-finger tap shares the rows in view when Settings says so, and is nothing when it says nothing`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        val tools = stage(live)
+        compose.waitUntil(5_000) { deckKeys() > 0 }
+        val started = shadowOf(context as Application)
+
+        gestures { it.copy(threeFingerTap = ThreeFingerTapAction.SHARE_SCREEN_TEXT) }
+        threeFingerTap()
+        compose.waitUntil(5_000) { started.peekNextStartedActivity() != null }
+        val chooser = started.nextStartedActivity
+        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
+        val send = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals(tools.screenText(live.emulator), send.getStringExtra(Intent.EXTRA_TEXT))
+        assertTrue(send.getStringExtra(Intent.EXTRA_TEXT)!!.startsWith("ben@homelab:~/srv$ docker compose ps\n"))
+        windowPasses()
+        assertFalse("the Deck stays up", deckCollapsed())
+
+        gestures { it.copy(threeFingerTap = ThreeFingerTapAction.NOTHING) }
+        threeFingerTap(row = 6)
+        windowPasses()
+        assertEquals("no share", null, started.peekNextStartedActivity())
+        assertFalse("and no Deck toggled", deckCollapsed())
+        assertTrue(deckKeys() > 0)
+    }
+
+    @Test
+    fun `on stage a pinch set to nothing leaves the font size alone, and the default steps it`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        stage(live)
+        val appSize = runBlocking { graph.settings.terminalFont.first().sizeSp }
+
+        gestures { it.copy(pinch = PinchAction.NOTHING) }
+        pinchOut()
+        windowPasses()
+        assertEquals("the host keeps no size of its own", null, homelabFontSize())
+        assertEquals(appSize, runBlocking { graph.settings.terminalFont.first().sizeSp })
+
+        gestures { it.copy(pinch = PinchAction.FONT_SIZE) }
+        pinchOut()
+        compose.waitUntil(5_000) { runBlocking { graph.settings.terminalFont.first().sizeSp } == appSize + 1 }
+        assertEquals("a host with no size of its own steps the app's", null, homelabFontSize())
     }
 
     private fun deckKeys(): Int = compose.onAllNodes(hasTestTag(DeckKeyTag)).fetchSemanticsNodes().size

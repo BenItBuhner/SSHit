@@ -55,12 +55,17 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceVariant
+import app.berth.domain.model.PinchAction
 import app.berth.domain.model.TabSwipeGesture
+import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.ThreeFingerTapAction
+import app.berth.domain.model.TwoFingerTapAction
 import kotlinx.coroutines.delay
 
 /** Interface and terminal defaults. Panels, not a preference tree. */
@@ -208,6 +213,12 @@ fun SettingsScreen(
             }
 
             Panel(label = "Gestures") {
+                // Spec D1's gestures on the terminal, each with its default first and its alternatives after.
+                CyclePicker("Tap", TapAction.entries, terminal.tap, ::tapLabel, caption = tapCaption(terminal.tap)) { a -> vm.updateTerminalSettings { it.copy(tap = a) } }
+                CyclePicker("Double-tap", DoubleTapAction.entries, terminal.doubleTap, ::doubleTapLabel) { a -> vm.updateTerminalSettings { it.copy(doubleTap = a) } }
+                CyclePicker("Two-finger tap", TwoFingerTapAction.entries, terminal.twoFingerTap, ::twoFingerTapLabel) { a -> vm.updateTerminalSettings { it.copy(twoFingerTap = a) } }
+                CyclePicker("Three-finger tap", ThreeFingerTapAction.entries, terminal.threeFingerTap, ::threeFingerTapLabel) { a -> vm.updateTerminalSettings { it.copy(threeFingerTap = a) } }
+                CyclePicker("Pinch", PinchAction.entries, terminal.pinch, ::pinchLabel) { a -> vm.updateTerminalSettings { it.copy(pinch = a) } }
                 CyclePicker("Switch tabs", TabSwipeGesture.entries, tabSwipe, ::swipeLabel) { vm.setTabSwipeGesture(it) }
                 // Spec D1's optional drag: off, a sideways drag on the terminal does nothing, as it always has.
                 ToggleRow("Drag for arrow keys", terminal.horizontalDragArrows, { on -> vm.updateTerminalSettings { it.copy(horizontalDragArrows = on) } }, caption = "A one-finger sideways drag on the terminal sends Left and Right, one per cell")
@@ -225,7 +236,7 @@ fun SettingsScreen(
                     { vm.setDeckSettings(deckSettings.copy(layerSwipe = it)) },
                     caption = "Steps the row's layer: left for the one before, right for the next",
                 )
-                PanelNote("One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
+                PanelNote("Long-press always selects, and a two-finger double-tap resets the font size. One-finger drags always stay with the terminal, so programs that scroll or take touches are untouched.")
             }
 
             HardwareKeyboardPanel(vm)
@@ -300,4 +311,38 @@ private fun swipeLabel(gesture: TabSwipeGesture): String = when (gesture) {
     TabSwipeGesture.TWO_FINGER -> "Two-finger swipe"
     TabSwipeGesture.RIGHT_EDGE -> "Right edge swipe"
     TabSwipeGesture.NONE -> "Off"
+}
+
+private fun tapLabel(action: TapAction): String = when (action) {
+    TapAction.SHOW_KEYBOARD -> "Show keyboard"
+    TapAction.NOTHING -> "Nothing"
+}
+
+/** The one gesture whose alternative takes something away: the tap is the soft keyboard's only way up. */
+private fun tapCaption(action: TapAction): String = when (action) {
+    TapAction.SHOW_KEYBOARD -> "And a click where the program has the mouse"
+    TapAction.NOTHING -> "No keyboard and no click; type from a hardware keyboard"
+}
+
+private fun doubleTapLabel(action: DoubleTapAction): String = when (action) {
+    DoubleTapAction.SELECT_WORD -> "Select word"
+    DoubleTapAction.SEND_TAB -> "Send Tab"
+    DoubleTapAction.NOTHING -> "Nothing"
+}
+
+private fun twoFingerTapLabel(action: TwoFingerTapAction): String = when (action) {
+    TwoFingerTapAction.PASTE -> "Paste"
+    TwoFingerTapAction.NEW_TAB -> "New tab"
+    TwoFingerTapAction.NOTHING -> "Nothing"
+}
+
+private fun threeFingerTapLabel(action: ThreeFingerTapAction): String = when (action) {
+    ThreeFingerTapAction.TOGGLE_DECK -> "Toggle Deck"
+    ThreeFingerTapAction.SHARE_SCREEN_TEXT -> "Share screen text"
+    ThreeFingerTapAction.NOTHING -> "Nothing"
+}
+
+private fun pinchLabel(action: PinchAction): String = when (action) {
+    PinchAction.FONT_SIZE -> "Font size"
+    PinchAction.NOTHING -> "Nothing"
 }
