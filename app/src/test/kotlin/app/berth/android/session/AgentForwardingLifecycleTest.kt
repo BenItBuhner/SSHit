@@ -8,6 +8,7 @@ import app.berth.android.diagnostics.BerthLog
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.security.FakeAuthenticator
 import app.berth.android.security.FakeKeystore
+import app.berth.android.security.LockState
 import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Host
@@ -15,6 +16,8 @@ import app.berth.domain.model.Identity
 import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
+import app.berth.domain.model.LockTimeout
+import app.berth.domain.model.SecuritySettings
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TabKind
@@ -32,7 +35,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -52,7 +54,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * and `ssh` on to the second sshd, talk to it through the `SSH_AUTH_SOCK` sshd makes. The user's
  * answers go through [Prompt.AgentRequest], the object the sheet's buttons call; the app is away
  * throughout, so every tab is off stage and a waiting request lights the ring and the shade.
- * Skipped unless `SSH_TEST_*`, `SSH_TEST_JUMP_PORT` and `SSH_TEST_P256_KEY_FILE` are set.
+ * Skipped unless `SSH_TEST_*`, `SSH_TEST_JUMP_PORT` and `SSH_TEST_P256_KEY_FILE` are set; the
+ * server that refuses forwarding is `SSH_TEST_NO_AGENT_PORT`, and its one case skips without it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -60,6 +63,7 @@ class AgentForwardingLifecycleTest {
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
     private val jumpPort = System.getenv("SSH_TEST_JUMP_PORT").orEmpty().toIntOrNull() ?: 0
+    private val noAgentPort = System.getenv("SSH_TEST_NO_AGENT_PORT").orEmpty().toIntOrNull() ?: 0
     private val sshUser = System.getenv("SSH_TEST_USER").orEmpty()
     private val p256KeyFile = System.getenv("SSH_TEST_P256_KEY_FILE").orEmpty()
 
@@ -150,6 +154,8 @@ class AgentForwardingLifecycleTest {
         val session = openLive(box)
         val sh = remote(session)
         assertFalse("the app is away: no tab is on stage", session.onStage)
+        val destination = sh.hostKeys(jumpPort)
+        val firstHost = sh.hostKeys(sshPort)
 
         val hop = sh.start(hop("hop-ok"))
         val ask = awaitValue(20_000, "the sign request") { asked.firstOrNull() }
@@ -157,7 +163,9 @@ class AgentForwardingLifecycleTest {
         assertEquals("this phone", ask.keyName)
         val login = ask.purpose as AgentSignPurpose.Login
         assertEquals(sshUser, login.user)
-        assertNotNull("OpenSSH binds the login to the second sshd's key, which the sheet shows", login.serverFingerprint)
+        val fingerprint = login.serverFingerprint ?: throw AssertionError("OpenSSH binds the login to the next server's key, which the sheet shows")
+        assertEquals("the second sshd's own key, as ssh-keyscan reads it", destination[keyscanLabel(login.serverKeyType)], fingerprint)
+        assertFalse("not the first host's", fingerprint in firstHost.values)
         assertTrue(session.record.value.needsAttention)
         assertEquals(TerminalSession.AGENT_REQUEST_REASON, session.record.value.attentionReason)
         await(5_000, "the shade carries it while the app is away") { attentionPosted(session) }
@@ -261,6 +269,43 @@ class AgentForwardingLifecycleTest {
         assertEquals(null, session.attentionAt)
     }
 
+    /**
+     * Behind the app lock the question waits and the tab says so: the ring and the shade are lit,
+     * but no sheet comes up, the app away or back on the lock screen. The unlock brings the sheet,
+     * and its answer lets the hop through.
+     */
+    @Test
+    fun `behind the app lock a request lights the ring and the shade, and its sheet waits for the unlock`(): Unit = runBlocking {
+        val session = openLive(box)
+        val sh = remote(session)
+        graph.settings.security.value = SecuritySettings(appLock = true, lockTimeout = LockTimeout.IMMEDIATELY)
+        graph.appLock.onForeground()
+        assertEquals(LockState.LOCKED, graph.appLock.state.value)
+
+        val hop = sh.start(hop("hop-ok"))
+        await(20_000, "the ring lit for the request") { session.record.value.attentionReason == TerminalSession.AGENT_REQUEST_REASON }
+        await(5_000, "the shade carries it") { attentionPosted(session) }
+        assertEquals("signature request", graph.notifier.attentionText(session.record.value))
+        delay(500)
+        assertEquals("no sheet while locked", null, graph.prompts.current.value)
+
+        graph.process.start()
+        assertEquals(LockState.LOCKED, graph.appLock.state.value)
+        assertFalse("nothing is on stage behind the lock screen", session.onStage)
+        delay(300)
+        assertEquals("nor on the lock screen", null, graph.prompts.current.value)
+        assertTrue(asked.isEmpty())
+
+        graph.authenticator.queue(FakeAuthenticator.SUCCEEDED)
+        assertTrue(graph.appLock.unlock())
+        val ask = awaitValue(5_000, "the sheet at the unlock") { asked.firstOrNull() }
+        assertEquals(box.id, ask.host.id)
+        ask.allowOnce()
+        val (said, status) = hop.await()
+        assertEquals(said, 0, status)
+        assertTrue(said, said.contains("hop-ok on"))
+    }
+
     @Test
     fun `Allow for this session answers the tab's later requests, and a new tab asks again`(): Unit = runBlocking {
         val session = openLive(box)
@@ -279,6 +324,31 @@ class AgentForwardingLifecycleTest {
         val third = next.start(hop("hop-ok"))
         awaitValue(20_000, "the new tab's request") { asked.getOrNull(1) }.allowOnce()
         assertEquals(0, third.await().second)
+    }
+
+    /** Allow for this session lasts as long as the connection: the same tab, dropped and reconnected, asks again. */
+    @Test
+    fun `Allow for this session ends with the connection, so a reconnected tab asks again`(): Unit = runBlocking {
+        val session = openLive(box)
+        val sh = remote(session)
+        val first = sh.start(hop("hop-ok"))
+        awaitValue(20_000, "the sign request") { asked.firstOrNull() }.allowForSession()
+        assertEquals(0, first.await().second)
+        assertEquals(0, sh.run(hop("hop-ok")).second)
+        assertEquals("answered for the session", 1, asked.size)
+
+        // The server-side session process killed: the transport dies under the tab, which reconnects.
+        session.sendText("kill -9 \$PPID\n")
+        await(15_000, "the tab drops") { session.state != SessionState.LIVE }
+        await(45_000, "and reconnects") { session.state == SessionState.LIVE }
+        assertEquals("the same tab", session, graph.sessions.get(session.id))
+
+        val again = remote(session)
+        val next = again.start(hop("hop-ok"))
+        awaitValue(20_000, "the reconnected tab's request") { asked.getOrNull(1) }.allowOnce()
+        val (said, status) = next.await()
+        assertEquals(said, 0, status)
+        assertTrue(said, said.contains("hop-ok on"))
     }
 
     @Test
@@ -345,6 +415,26 @@ class AgentForwardingLifecycleTest {
         assertTrue(asked.isEmpty())
     }
 
+    /**
+     * A host set to forward, on a server that refuses it (the harness's third sshd, AllowAgentForwarding
+     * no): the tab comes up with a marker saying so, the log says the same, and the remote has no agent.
+     */
+    @Test
+    fun `a server that refuses forwarding leaves a marker in the tab, which has no agent`(): Unit = runBlocking {
+        assumeTrue("SSH_TEST_NO_AGENT_PORT not set", noAgentPort > 0)
+        val refusing = box.copy(id = "agent-refused", name = "agent-refused", port = noAgentPort)
+        graph.hosts.upsert(refusing)
+        val session = openLive(refusing)
+        await(5_000, "the marker") { session.emulator.screenText().any { it.contains("agent forwarding refused by the server") } }
+        assertTrue(BerthLog.ring.snapshot().any { it.contains("[agent-refused] agent forwarding refused by the server; the agent holds ecdsa-sha2-nistp256") })
+
+        val sh = remote(session)
+        assertEquals("[]", sh.run("printf '[%s]\\n' \"\$SSH_AUTH_SOCK\"").first)
+        assertEquals(2, sh.run("ssh-add -L").second)
+        assertEquals("the tab stays up", SessionState.LIVE, session.state)
+        assertTrue(asked.isEmpty())
+    }
+
     @Test
     fun `a Tunnels only tab has no agent, where a terminal on the same host has one`(): Unit = runBlocking {
         val carrier = box.copy(id = "agent-tunnels", name = "agent-tunnels", tunnelsOnly = true)
@@ -375,6 +465,22 @@ class AgentForwardingLifecycleTest {
         "ssh -n -p $jumpPort -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes " +
             "-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o IdentityFile=none -o LogLevel=ERROR " +
             "$sshUser@$sshHost 'echo ${word.take(3)}\"\"${word.drop(3)} on \$SSH_CONNECTION'"
+
+    /** The host keys the sshd on [port] presents, as OpenSSH's own ssh-keyscan and ssh-keygen -l read them: its label (ED25519, ECDSA, RSA) to fingerprint. */
+    private suspend fun Remote.hostKeys(port: Int): Map<String, String> =
+        run("ssh-keyscan -p $port $sshHost 2>/dev/null | ssh-keygen -lf -").first.lines().mapNotNull { line ->
+            val parts = line.trim().split(' ')
+            val fingerprint = parts.getOrNull(1)?.takeIf { it.startsWith("SHA256:") } ?: return@mapNotNull null
+            parts.last().removeSurrounding("(", ")") to fingerprint
+        }.toMap().also { assertTrue("the sshd on $port answered ssh-keyscan", it.isNotEmpty()) }
+
+    /** ssh-keygen -l's label for a host key of the wire type [type]. */
+    private fun keyscanLabel(type: String?): String = when {
+        type == "ssh-ed25519" -> "ED25519"
+        type == "ssh-rsa" -> "RSA"
+        type?.startsWith("ecdsa-sha2-") == true -> "ECDSA"
+        else -> throw AssertionError("a host key type the test does not map: $type")
+    }
 
     private fun attentionPosted(session: TerminalSession): Boolean =
         shadowOf(app.getSystemService(NotificationManager::class.java)).getNotification(SessionNotifier.attentionTag(session.id), 2) != null

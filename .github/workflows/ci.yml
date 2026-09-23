@@ -41,8 +41,9 @@ jobs:
           restore-keys: robolectric-${{ runner.os }}-
 
       # The live cases (sshj against a server, the SFTP client, the tunnels, the jump chain, the app's live screenshot
-      # flows) run against two sshds started in the job: the target on 2222 and the jump host on 2223 that the
-      # ProxyJump chain and the Tunnels cases go through (SSH_TEST_JUMP_PORT). The script exports SSH_TEST_* into
+      # flows) run against three sshds started in the job: the target on 2222, the jump host on 2223 that the
+      # ProxyJump chain and the Tunnels cases go through (SSH_TEST_JUMP_PORT), and on 2224 the target's twin that
+      # refuses agent forwarding (SSH_TEST_NO_AGENT_PORT). The script exports SSH_TEST_* into
       # this step's shell only, so the account's password is in the sshds' shadow entry and the test JVM's
       # environment and nowhere else; every module's test task forwards those variables (see app/build.gradle.kts).
       # Both variants' unit tests run: testDebugUnitTest and testReleaseUnitTest for the Android modules, test for

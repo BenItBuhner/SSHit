@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# The two sshds the test suite's live cases run against, and the SSH_TEST_* variables that point the tests at them:
-# the target on 127.0.0.1:2222, and the jump host on 127.0.0.1:2223 that the ProxyJump chain and Tunnels cases log
-# in through on the way to it (SSH_TEST_JUMP_PORT). Source this from the step that runs Gradle: it exports the
-# variables into the caller's shell, and the test account's password exists only there and in the sshd's shadow
-# entry, set through chpasswd and never written to a file, a log or the step's output. The same pair the
-# repository's build notes describe for a workstation: password and public-key authentication, the sftp subsystem,
-# TCP forwarding for the tunnel tests, one account on both, and the jump host with host keys of its own so a hop's
-# trust-on-first-use is its own decision.
+# The three sshds the test suite's live cases run against, and the SSH_TEST_* variables that point the tests at them:
+# the target on 127.0.0.1:2222, the jump host on 127.0.0.1:2223 that the ProxyJump chain and Tunnels cases log
+# in through on the way to it (SSH_TEST_JUMP_PORT), and on 127.0.0.1:2224 the target's twin that refuses agent
+# forwarding, as a server with AllowAgentForwarding no does (SSH_TEST_NO_AGENT_PORT). Source this from the step that
+# runs Gradle: it exports the variables into the caller's shell, and the test account's password exists only there
+# and in the sshd's shadow entry, set through chpasswd and never written to a file, a log or the step's output. The
+# first two are the pair the repository's build notes describe for a workstation (the twin's one test skips without
+# it): password and public-key authentication, the sftp subsystem, TCP forwarding for the tunnel tests, one account
+# on all three, and the jump host with host keys of its own so a hop's trust-on-first-use is its own decision.
 set -euo pipefail
 
 user="${SSH_TEST_ACCOUNT:-berth}"
 port=2222
 jump_port=2223
+no_agent_port=2224
 keys="${RUNNER_TEMP:-/tmp}/berth-test-keys"
 
 if [ ! -x /usr/sbin/sshd ]; then
@@ -37,10 +39,11 @@ sudo chmod 600 "/home/$user/.ssh/authorized_keys"
 sudo mkdir -p /run/sshd
 sudo ssh-keygen -A >/dev/null
 
-# One config per instance: the port, the host keys (the system's for the target; the jump host's own, made here, so
-# the two present different keys) and the pid file differ, the rest is the same.
+# One config per instance: the port, the host keys (the system's for the target and its twin; the jump host's own,
+# made here, so a hop presents different keys), the pid file and whether agent forwarding is allowed differ, the
+# rest is the same.
 write_config() {
-    local dir="$1" instance_port="$2" ed25519="$3" second="$4" pidfile="$5"
+    local dir="$1" instance_port="$2" ed25519="$3" second="$4" pidfile="$5" agent="${6:-yes}"
     sudo mkdir -p "$dir"
     sudo tee "$dir/sshd_config" >/dev/null <<EOF
 Port $instance_port
@@ -53,6 +56,7 @@ PubkeyAuthentication yes
 UsePAM no
 PermitRootLogin no
 AllowTcpForwarding yes
+AllowAgentForwarding $agent
 GatewayPorts no
 AcceptEnv LANG LC_* COLORTERM TERM_PROGRAM
 PrintLastLog no
@@ -86,12 +90,15 @@ start_instance /etc/ssh/sshd_test /tmp/sshd_test.pid
 write_config /etc/ssh/sshd_jump "$jump_port" /etc/ssh/sshd_jump/ssh_host_ed25519_key /etc/ssh/sshd_jump/ssh_host_ecdsa_key /tmp/sshd_jump.pid
 start_instance /etc/ssh/sshd_jump /tmp/sshd_jump.pid
 
+write_config /etc/ssh/sshd_noagent "$no_agent_port" /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key /tmp/sshd_noagent.pid no
+start_instance /etc/ssh/sshd_noagent /tmp/sshd_noagent.pid
+
 # Up, and answering the key, before any test asks; a server that is not is a failed step, not a skipped suite.
 ssh_check() {
     ssh -p "$1" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
         -i "$keys/ed25519" "$user@127.0.0.1" true
 }
-for instance_port in "$port" "$jump_port"; do
+for instance_port in "$port" "$jump_port" "$no_agent_port"; do
     for _ in $(seq 1 50); do ssh_check "$instance_port" 2>/dev/null && break; sleep 0.2; done
     ssh_check "$instance_port"
 done
@@ -99,11 +106,12 @@ done
 ssh -o ProxyCommand="ssh -p $jump_port -W %h:%p -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $keys/ed25519 $user@127.0.0.1" \
     -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     -i "$keys/ed25519" "$user@127.0.0.1" true
-echo "test sshd listening on 127.0.0.1:$port and jump host on 127.0.0.1:$jump_port for $user"
+echo "test sshd listening on 127.0.0.1:$port, jump host on 127.0.0.1:$jump_port and no-agent twin on 127.0.0.1:$no_agent_port for $user"
 
 export SSH_TEST_HOST=127.0.0.1
 export SSH_TEST_PORT="$port"
 export SSH_TEST_JUMP_PORT="$jump_port"
+export SSH_TEST_NO_AGENT_PORT="$no_agent_port"
 export SSH_TEST_USER="$user"
 export SSH_TEST_PASSWORD="$password"
 export SSH_TEST_KEY_FILE="$keys/ed25519"

@@ -377,11 +377,12 @@ androidComponents {
 tasks.withType<Test>().configureEach {
     // Screenshot tests that drive a live session read the same sshd variables as :core:ssh, plus the
     // P-256 key the Keystore stand-in signs with (its public half in the test user's authorized_keys)
-    // and the second sshd a jump chain goes through (SSH_TEST_JUMP_PORT). Each is an input of the
+    // the second sshd a jump chain goes through (SSH_TEST_JUMP_PORT), and the third that refuses agent
+    // forwarding (SSH_TEST_NO_AGENT_PORT). Each is an input of the
     // task as well as its environment: a run without them skips every live test, and with the build
     // cache on that result must not stand in for a run with them (the key differs, so it cannot).
     // The password's presence is the input, not its value, so no secret goes into a cache key.
-    for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD", "SSH_TEST_P256_KEY_FILE", "SSH_TEST_JUMP_PORT")) {
+    for (name in listOf("SSH_TEST_HOST", "SSH_TEST_PORT", "SSH_TEST_USER", "SSH_TEST_PASSWORD", "SSH_TEST_P256_KEY_FILE", "SSH_TEST_JUMP_PORT", "SSH_TEST_NO_AGENT_PORT")) {
         val value = System.getenv(name) ?: ""
         environment(name, value)
         inputs.property("env.$name", if (name == "SSH_TEST_PASSWORD") value.isNotEmpty().toString() else value)
