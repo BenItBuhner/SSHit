@@ -1030,17 +1030,19 @@ private fun CloseGlyph(onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused = interaction.showsFocus()
-    Box(
-        Modifier
-            .size(24.dp)
-            .clip(CircleShape)
-            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .clearAndSetSemantics {
-                contentDescription = "Close tab"
-                role = Role.Button
-            },
-        contentAlignment = Alignment.Center,
-    ) {
+    // The glyph centres in the tab's height beside its target, not inside it: nested in a target an
+    // odd number of pixels tall (24 dp at 2.625), two half-pixels round the same way and set it one low.
+    Box(Modifier.width(24.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick)
+                .clearAndSetSemantics {
+                    contentDescription = "Close tab"
+                    role = Role.Button
+                },
+        )
         BerthIcon(BerthIcons.close, tint = if (focused) c.accent else if (pressed) c.text1 else c.text2, size = 16.dp)
     }
 }
