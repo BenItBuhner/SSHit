@@ -12,6 +12,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.MouseButton
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.click
@@ -23,6 +25,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
@@ -101,8 +104,11 @@ import java.util.concurrent.TimeUnit
  * on the canvas, a double tap that sends Tab or is two taps and selects nothing either way, and a
  * tap that reports and clicks nothing yet still starts a double tap; on the Stage, a two-finger tap
  * that opens the New tab sheet or does nothing, a three-finger tap that shares the rows in view or
- * does nothing, and a pinch that leaves the size alone. Against the local sshd the drag moves the
- * shell's cursor a cell per cell of travel, left and back.
+ * does nothing, and a pinch that leaves the size alone. A right click on the Stage is the paste
+ * through its gate: the preview for a multi-line clipboard on a live tab, nothing with the paste
+ * turned off, the program's report while it has the mouse, and Not connected on a detached tab
+ * without reconnecting it. Against the local sshd the drag moves the shell's cursor a cell per cell
+ * of travel, left and back.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -896,6 +902,101 @@ class TerminalGesturesTest {
         dragLeft(5)
         compose.waitUntil(5_000) { box.state != SessionState.DETACHED }
         waitForText(reported)
+    }
+
+    // ---- a right click through the Stage -----------------------------------------------------------------
+
+    @OptIn(ExperimentalTestApi::class)
+    private fun rightClick(row: Int = 5, col: Int = 10) {
+        compose.onNodeWithTag(TerminalTag).performMouseInput {
+            moveTo(cellCenter(row, col))
+            press(MouseButton.Secondary)
+            release(MouseButton.Secondary)
+        }
+    }
+
+    private fun clip(text: String) = context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("test", text))
+
+    @Test
+    fun `on stage a right click on a live tab pastes through the gate, a multi-line clipboard opening the preview first`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        val tools = stage(live)
+        val sent = sentBy(live)
+        clip("uptime\ndf -h\n")
+        rightClick()
+        compose.waitUntil(5_000) { tools.pendingPaste != null }
+        assertEquals("uptime\ndf -h\n", tools.pendingPaste!!.text)
+        windowPasses()
+        assertTrue("nothing is sent before the preview says so: $sent", sent.isEmpty())
+        compose.runOnIdle { tools.pendingPaste = null }
+        windowPasses()
+
+        // One short line needs no preview, and goes as a paste.
+        clip("uptime")
+        rightClick(row = 6)
+        compose.waitUntil(5_000) { sent.any { "uptime" in it } }
+        assertEquals(null, tools.pendingPaste)
+    }
+
+    @Test
+    fun `on stage a right click with the paste turned off in Settings sends nothing and opens nothing`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        val tools = stage(live)
+        val sent = sentBy(live)
+        gestures { it.copy(rightClickPaste = false) }
+        clip("uptime\ndf -h\n")
+        rightClick()
+        windowPasses()
+        assertEquals(null, tools.pendingPaste)
+        clip("uptime")
+        rightClick(row = 6)
+        windowPasses()
+        assertTrue("nothing was pasted: $sent", sent.isEmpty())
+        assertEquals(null, tools.notice)
+    }
+
+    @Test
+    fun `on stage a right click while the program has the mouse under 1000 is its report, not a paste`() {
+        StageFixture.seed(graph)
+        val live = StageFixture.liveHomelab().also { sessions += it }
+        val tools = stage(live)
+        val sent = sentBy(live)
+        clip("uptime")
+        live.emulator.write("\u001b[?1000h\u001b[?1006h")
+        compose.waitUntil(5_000) { synchronized(live.emulator.lock) { live.emulator.mouseTracking } == MouseTracking.NORMAL }
+        rightClick(row = 5, col = 10)
+        compose.waitUntil(5_000) { sent.size >= 2 }
+        windowPasses()
+        assertEquals("the right button's press and release at column 11, row 6", listOf("\u001b[<2;11;6M", "\u001b[<2;11;6m"), sent)
+        assertEquals(null, tools.pendingPaste)
+    }
+
+    @Test
+    fun `on stage a right click on a detached tab says Not connected and does not reconnect it, whatever mode its frame was left in`() {
+        StageFixture.seed(graph)
+        val box = detachedBox()
+        val tools = stage(box)
+        val sent = sentBy(box)
+        clip("uptime")
+        rightClick()
+        compose.waitUntil(5_000) { tools.notice == StageTools.NOT_CONNECTED }
+        waitForText(StageTools.NOT_CONNECTED)
+        windowPasses()
+        assertEquals(SessionState.DETACHED, box.state)
+        assertTrue("nothing was sent: $sent", sent.isEmpty())
+
+        // Left in 1000 by the program that ran before the detach: still the paste's refusal, and no report.
+        compose.runOnIdle { tools.notice = null }
+        box.emulator.write("\u001b[?1000h\u001b[?1006h")
+        compose.waitUntil(5_000) { synchronized(box.emulator.lock) { box.emulator.mouseTracking } == MouseTracking.NORMAL }
+        rightClick(row = 6)
+        compose.waitUntil(5_000) { tools.notice == StageTools.NOT_CONNECTED }
+        windowPasses()
+        assertEquals(SessionState.DETACHED, box.state)
+        assertTrue("nothing was sent: $sent", sent.isEmpty())
+        assertEquals(null, tools.pendingPaste)
     }
 
     // ---- against the sshd --------------------------------------------------------------------------------
