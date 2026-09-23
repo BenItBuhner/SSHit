@@ -30,6 +30,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.InterfaceTheme
+import app.berth.domain.model.SessionState
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.MouseTracking
@@ -54,7 +55,9 @@ import kotlin.math.abs
  * triple click a line, a click dismisses a selection or opens the link under it, hovering a link
  * underlines it, and a right click is the paste the Stage wires. The application has the mouse:
  * each is its report, as its mode asks (drags under 1002 and 1003, hover under 1003 only, one
- * report a cell), and Shift keeps them the terminal's. Touches are the touch handler's, untouched.
+ * report a cell), and Shift keeps them the terminal's. A tab that is not connected hears nothing,
+ * whatever mode its frame was left in, and is not reconnected by it. Touches are the touch
+ * handler's, untouched.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -99,9 +102,15 @@ class TerminalMouseTest {
         compose.waitForIdle()
     }
 
-    /** The canvas alone over a live tab whose screen is cleared and given [text], shown once [until] is on it, every mouse hook wired to [heard]. */
-    private fun canvas(heard: Heard, text: String, until: String, secondaryWired: Boolean = true): Triple<TerminalSession, TerminalViewport, TerminalSelection> {
-        val session = StageFixture.liveHomelab().also { sessions += it }
+    /** The canvas alone over [session], a live tab by default, whose screen is cleared and given [text], shown once [until] is on it, every mouse hook wired to [heard]. */
+    private fun canvas(
+        heard: Heard,
+        text: String,
+        until: String,
+        secondaryWired: Boolean = true,
+        session: TerminalSession = StageFixture.liveHomelab(),
+    ): Triple<TerminalSession, TerminalViewport, TerminalSelection> {
+        sessions += session
         session.sendObserver = { sent += String(it, Charsets.UTF_8) }
         val viewport = TerminalViewport()
         val selection = TerminalSelection()
@@ -426,5 +435,58 @@ class TerminalMouseTest {
         compose.waitUntil(5_000) { sent.size == 2 }
         assertTrue(sent.toString(), sent.all { it.startsWith("\u001b[<64;") })
         assertEquals(0, viewport.scrollOffset)
+    }
+
+    @Test
+    fun `a detached tab left in 1003 hears nothing from the mouse and stays detached, the wheel and a swipe scrolling its history`() {
+        val heard = Heard()
+        val (session, viewport, _) = canvas(heard, lines, until = "line 120", session = StageFixture.detachedHomelab())
+        val node = compose.onNodeWithTag(TerminalTag)
+        mode(session, "\u001b[?1003h\u001b[?1006h", MouseTracking.ANY_EVENT)
+        node.performMouseInput {
+            moveTo(cellCenter(5, 10))
+            moveTo(cellCenter(5, 11))
+            moveTo(cellCenter(5, 12))
+            scroll(-1f)
+        }
+        compose.waitUntil(5_000) { viewport.scrollOffset == WHEEL_LINES }
+        trackpadSwipe(dy = -paints().cellHeight * 4f)
+        compose.waitUntil(5_000) { viewport.scrollOffset == 0 }
+        // A click is the terminal's own: a tap's focus and keyboard, and no report.
+        compose.mainClock.advanceTimeBy(1_000)
+        node.performMouseInput { click(cellCenter(6, 4)) }
+        compose.waitUntil(5_000) { heard.taps == 1 }
+        settle()
+        assertTrue("nothing went to the remote: $sent", sent.isEmpty())
+        assertEquals(SessionState.DETACHED, session.state)
+
+        // Left on the alternate screen, the wheel and a swipe are no arrows either.
+        session.emulator.write("\u001b[?1049h")
+        compose.waitUntil(5_000) { session.emulator.isAlternateScreen }
+        node.performMouseInput { scroll(-1f) }
+        trackpadSwipe(dy = paints().cellHeight * 3f)
+        settle()
+        assertTrue("nothing went to the remote: $sent", sent.isEmpty())
+        assertEquals(SessionState.DETACHED, session.state)
+    }
+
+    @Test
+    fun `a button the application heard go down before the tab detached is neither dragged nor released into it`() {
+        val heard = Heard()
+        val (session, _, _) = canvas(heard, lines, until = "line 120")
+        val node = compose.onNodeWithTag(TerminalTag)
+        mode(session, "\u001b[?1002h\u001b[?1006h", MouseTracking.BUTTON_EVENT)
+        node.performMouseInput { moveTo(cellCenter(5, 10)); press() }
+        compose.waitUntil(5_000) { sent.size == 1 }
+        session.detach()
+        compose.waitUntil(5_000) { session.state == SessionState.DETACHED }
+        sent.clear()
+        node.performMouseInput {
+            moveTo(cellCenter(5, 14))
+            release()
+        }
+        settle()
+        assertTrue("nothing went to the remote: $sent", sent.isEmpty())
+        assertEquals(SessionState.DETACHED, session.state)
     }
 }

@@ -45,6 +45,15 @@ object StageFixture {
         return session
     }
 
+    /** [liveHomelab]'s tab once detached: its kept frame, and nothing behind it until something reconnects it. */
+    fun detachedHomelab(now: Long = System.currentTimeMillis()): TerminalSession {
+        val homelab = host(now, "homelab", "homelab", "192.168.1.20", "ben", SwatchColor.VERDIGRIS, AuthMethod.Password(AuthResolver.passwordSecretId("homelab")))
+        val record = record(now, "s-homelab", homelab, Workspace.DEFAULT_ID, 0, 12, "~/srv", "docker compose ps")
+        val session = TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
+        session.restoreFrame(frame(HOMELAB_LINES))
+        return session
+    }
+
     /**
      * A tab as Quick connect opens one (spec C11), Live as [liveHomelab] is: its host is the spec's
      * address under a `quick-` id, as [app.berth.android.ui.AppViewModel.quickConnect] makes it, and

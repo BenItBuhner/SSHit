@@ -182,6 +182,9 @@ class TerminalEmulator(
     private val savedMain = SavedCursor()
     private val savedAlt = SavedCursor()
 
+    /** Whether the alternate screen in force was entered by 1049, which saved the main screen's cursor for leaving it. */
+    private var alternateSavedCursor = false
+
     /** Palette as 0xRRGGBB, mutable through OSC 4 / 104. */
     val palette: IntArray = Palette.defaultPalette()
 
@@ -1044,7 +1047,12 @@ class TerminalEmulator(
             12 -> appCursorStyle = cursorStyle.copy(blinking = enable)
             25 -> cursorVisible = enable
             47, 1047 -> {
-                if (enable) switchToAlternate(clear = false) else switchToMain(clearAltFirst = mode == 1047)
+                if (enable) {
+                    if (!isAlternateScreen) alternateSavedCursor = false
+                    switchToAlternate(clear = false)
+                } else {
+                    switchToMain(clearAltFirst = mode == 1047)
+                }
             }
             1000 -> mouseTracking = if (enable) MouseTracking.NORMAL else MouseTracking.NONE
             1002 -> mouseTracking = if (enable) MouseTracking.BUTTON_EVENT else MouseTracking.NONE
@@ -1055,6 +1063,7 @@ class TerminalEmulator(
             1048 -> if (enable) saveCursor() else restoreCursor()
             1049 -> {
                 if (enable) {
+                    if (!isAlternateScreen) alternateSavedCursor = true
                     saveCursor()
                     switchToAlternate(clear = true)
                 } else {
@@ -1167,12 +1176,49 @@ class TerminalEmulator(
         listener.onTitleChanged(title)
     }
 
-    /** Resets the emulator as if it were freshly created; used when a session reconnects. */
+    /**
+     * Resets the emulator as if it were freshly created, the screen and its history with it, as the
+     * terminal preview does to draw its sample again. A reconnect keeps its frame and calls
+     * [resetModes] instead.
+     */
     fun reset() {
         synchronized(lock) {
             parser.reset()
             decoder.reset()
             fullReset()
+            markDirty()
+        }
+        flushChanges()
+    }
+
+    /**
+     * Hands the frame to a new shell: what the last shell's programs asked of the terminal ends
+     * with them, as their exit would have ended it, and the main screen and its history stay. The
+     * alternate screen is left (its cursor handed back when 1049 saved it); mouse reporting, focus
+     * events, bracketed paste, synchronized output, LNM, reverse video, modifyOtherKeys,
+     * formatOtherKeys, both kitty stacks and DECSTR's modes go back to their defaults; and a
+     * sequence the old connection cut off halfway is dropped.
+     */
+    fun resetModes() {
+        synchronized(lock) {
+            parser.reset()
+            decoder.reset()
+            if (isAlternateScreen) {
+                switchToMain(clearAltFirst = true)
+                if (alternateSavedCursor) restoreCursor()
+            }
+            softReset()
+            bracketedPaste = false
+            mouseTracking = MouseTracking.NONE
+            mouseSgrEncoding = false
+            focusEvents = false
+            lineFeedNewLine = false
+            reverseVideo = false
+            synchronizedOutput = false
+            modifyOtherKeys = 0
+            formatOtherKeys = 0
+            kittyMain.clear()
+            kittyAlt.clear()
             markDirty()
         }
         flushChanges()

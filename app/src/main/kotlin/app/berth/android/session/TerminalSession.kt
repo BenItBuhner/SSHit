@@ -778,6 +778,10 @@ class TerminalSession(
         shell = sh
         val firstShell = !everLive
         everLive = true
+        // The last shell's programs died with it, and so do their modes, before this shell's first
+        // byte: otherwise a fresh prompt gets Ctrl+C as CSI u and mouse reports as typing. Tmux,
+        // attached again, asks for its own once more.
+        if (!firstShell) emulator.resetModes()
         if (isReconnect) marker("reconnected")
         if (agent != null) {
             BerthLog.i(LOG_TAG, "[${h.name}] agent forwarding ${if (sh.agentForwarded) "on" else "refused by the server"}; the agent holds ${agent.key?.keyType ?: "no key"}")

@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import app.berth.android.session.TerminalSession
+import app.berth.domain.model.SessionState
 import app.berth.terminal.CellPos
 import app.berth.terminal.Mod
 import app.berth.terminal.MouseButton
@@ -46,6 +47,10 @@ internal class MouseHooks(
  * Otherwise the wheel scrolls history three lines a notch (arrows on the alternate screen), a
  * left drag selects, a double click a word and a triple click a line, a click on an OSC 8 link opens
  * it, and a right click is [MouseHooks.onSecondaryClick]. Touches never come here.
+ *
+ * A tab that is not Live hears nothing from the mouse, whatever mode its frame was left in: a
+ * pointer drifting over a detached tab must not reconnect it the way a key does, so the wheel
+ * and a swipe move its history only and a click is a click of the terminal's own.
  */
 internal suspend fun PointerInputScope.terminalMouse(
     session: TerminalSession,
@@ -87,7 +92,9 @@ internal suspend fun PointerInputScope.terminalMouse(
         val row = (c.position.y / p.cellHeight).toInt().coerceAtLeast(0)
         val cell = pack(col, row)
         val mods = modifiersOf(event.keyboardModifiers)
-        val tracking = emulator.mouseTracking != MouseTracking.NONE && !event.keyboardModifiers.isShiftPressed
+        val live = session.state == SessionState.LIVE
+        if (!live) reported = 0
+        val tracking = live && emulator.mouseTracking != MouseTracking.NONE && !event.keyboardModifiers.isShiftPressed
         when (event.type) {
             PointerEventType.Scroll -> {
                 // Compose's delta is negative for a notch away from the user, which here is into history.
@@ -95,7 +102,7 @@ internal suspend fun PointerInputScope.terminalMouse(
                 val notches = wheel.toInt()
                 if (notches != 0) {
                     wheel -= notches
-                    wheelBy(session, viewport, notches, col, row, mods, tracking)
+                    if (live) wheelBy(session, viewport, notches, col, row, mods, tracking) else scrollHistory(viewport, emulator, notches * WHEEL_LINES)
                 }
                 c.consume()
                 continue
@@ -106,7 +113,7 @@ internal suspend fun PointerInputScope.terminalMouse(
                 val lines = (pan / p.cellHeight).toInt()
                 if (lines != 0) {
                     pan -= lines * p.cellHeight
-                    scrollBy(session, viewport, lines, col, row, report = tracking)
+                    if (live) scrollBy(session, viewport, lines, col, row, report = tracking) else scrollHistory(viewport, emulator, lines)
                 }
                 if (event.type == PointerEventType.PanEnd) pan = 0f
                 c.consume()
@@ -246,6 +253,11 @@ private fun wheelBy(session: TerminalSession, viewport: TerminalViewport, notche
         }
     }
     scrollBy(session, viewport, notches * WHEEL_LINES, col, row, report = false)
+}
+
+/** [lines] of history, positive toward it, and nothing sent: the wheel and a swipe on a tab that is not Live. */
+private fun scrollHistory(viewport: TerminalViewport, emulator: TerminalEmulator, lines: Int) {
+    viewport.scrollOffset = (viewport.scrollOffset + lines).coerceIn(0, emulator.scrollbackSize)
 }
 
 /** The held buttons as bits, in [BUTTONS] order. */
