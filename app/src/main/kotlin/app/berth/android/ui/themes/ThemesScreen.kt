@@ -93,17 +93,17 @@ fun ThemesScreen(
     val appTheme by vm.interfaceTheme.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var pasteSheet by remember { mutableStateOf(false) }
-    var importNote by remember { mutableStateOf<String?>(null) }
     var exporting by remember { mutableStateOf<TerminalTheme?>(null) }
     val saver = rememberSaveTextFile()
-    // The theme whose accent is on offer; the bar keeps showing the last one through its exit.
-    var accentOffer by remember { mutableStateOf<TerminalTheme?>(null) }
-    val shownOffer = remember { mutableStateOf<TerminalTheme?>(null) }
-    if (accentOffer != null) shownOffer.value = accentOffer
-    LaunchedEffect(accentOffer) {
-        if (accentOffer != null) {
+    // An import's answer or a new default's accent on offer, on the one bar at the foot, where an
+    // import started from the header menu can see it; the bar keeps the last one through its exit.
+    var notice by remember { mutableStateOf<GalleryNotice?>(null) }
+    val shownNotice = remember { mutableStateOf<GalleryNotice?>(null) }
+    if (notice != null) shownNotice.value = notice
+    LaunchedEffect(notice) {
+        if (notice != null) {
             delay(NOTICE_BAR_MS)
-            accentOffer = null
+            notice = null
         }
     }
 
@@ -112,7 +112,7 @@ fun ThemesScreen(
     fun importText(text: String, fileName: String? = null) {
         scope.launch {
             val imported = withContext(Dispatchers.Default) { TerminalThemes.importAll(text, TerminalThemes.nameFromFile(fileName)) }
-            importNote = when {
+            val note = when {
                 imported.isEmpty() -> "That text is not a terminal theme Berth can read."
                 else -> {
                     imported.forEach { t ->
@@ -123,10 +123,11 @@ fun ThemesScreen(
                     if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
                 }
             }
+            notice = GalleryNotice.Note(note)
         }
     }
     val openFile = rememberOpenNamedTextFile { picked ->
-        if (picked is PickedText.Read) importText(picked.text, picked.name) else importNote = picked.refusal("a theme")
+        if (picked is PickedText.Read) importText(picked.text, picked.name) else picked.refusal("a theme")?.let { notice = GalleryNotice.Note(it) }
     }
 
     fun newTheme() {
@@ -174,7 +175,8 @@ fun ThemesScreen(
                     onOpen = { onOpen(theme.id) },
                     onSetDefault = {
                         vm.setDefaultTerminalTheme(theme.id)
-                        accentOffer = theme.takeIf { t -> t.suggestedAccent?.let { AccentChoice.Colour(it) != appTheme.accentChoice } == true }
+                        theme.takeIf { t -> t.suggestedAccent?.let { AccentChoice.Colour(it) != appTheme.accentChoice } == true }
+                            ?.let { notice = GalleryNotice.AccentOffer(it) }
                     },
                     onDuplicate = {
                         val id = AppViewModel.newThemeId()
@@ -186,27 +188,28 @@ fun ThemesScreen(
                 )
             }
             item(span = { GridItemSpan(2) }) {
-                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BerthButton("Import file", onClick = openFile)
-                        BerthButton("Paste theme text", onClick = { pasteSheet = true })
-                    }
-                    val n = importNote
-                    if (n != null) Text(n, style = BerthType.caption, color = c.text1, modifier = Modifier.padding(start = 4.dp))
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Import file", onClick = openFile)
+                    BerthButton("Paste theme text", onClick = { pasteSheet = true })
                 }
             }
         }
     }
+    val shown = shownNotice.value
     NoticeBar(
-        visible = accentOffer != null,
-        text = "${shownOffer.value?.name ?: ""} is the app default",
-        action = "Use its accent",
+        visible = notice != null,
+        text = when (shown) {
+            is GalleryNotice.Note -> shown.text
+            is GalleryNotice.AccentOffer -> "${shown.theme.name} is the app default"
+            null -> ""
+        },
+        action = if (shown is GalleryNotice.AccentOffer) "Use its accent" else "OK",
         onAction = {
-            shownOffer.value?.suggestedAccent?.let { vm.setInterfaceTheme(appTheme.withAccent(AccentChoice.Colour(it))) }
-            accentOffer = null
+            (shown as? GalleryNotice.AccentOffer)?.theme?.suggestedAccent?.let { vm.setInterfaceTheme(appTheme.withAccent(AccentChoice.Colour(it))) }
+            notice = null
         },
         modifier = Modifier.align(Alignment.BottomCenter),
-        // A long theme name at the font cap would cut "app default" off; the line is read whole.
+        // A long theme name or a refusal at the font cap would be cut off; the line is read whole.
         maxLines = 2,
     )
     }
@@ -225,6 +228,12 @@ fun ThemesScreen(
         )
     }
     exporting?.let { theme -> ThemeExportSheet(theme, saver, onDismiss = { exporting = null }) }
+}
+
+/** What the gallery's notice bar says: a line to read, or a new app default whose accent it offers. */
+private sealed interface GalleryNotice {
+    data class Note(val text: String) : GalleryNotice
+    data class AccentOffer(val theme: TerminalTheme) : GalleryNotice
 }
 
 /**

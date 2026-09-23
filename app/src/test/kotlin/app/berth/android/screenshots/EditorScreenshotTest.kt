@@ -224,11 +224,16 @@ class EditorScreenshotTest {
         pastedImport("-font-scale-2x")
     }
 
-    /** The paste sheet names the formats it reads; a base16 scheme carries its name, which the note and the new last tile take. */
+    /**
+     * The paste sheet names the formats it reads; a base16 scheme carries its name, which the new
+     * last tile takes. Started from the header menu with the gallery at its top, the answer is on
+     * the notice bar there, not a screen below at the grid's foot.
+     */
     private fun pastedImport(suffix: String) {
         themed { ThemesScreen(graph.viewModel, onBack = {}, onOpen = {}) }
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Theme Berth Dark", substring = true)).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Paste theme text"))
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Paste theme text").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Paste theme text").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Berth JSON, iTerm2, Ghostty, Windows Terminal, base16 or Termux colours").fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasSetTextAction()).performTextInput(TomorrowNightBase16)
@@ -238,9 +243,11 @@ class EditorScreenshotTest {
         compose.onNodeWithText("Import").performClick()
         awaitOnMain("the import to reach the view model") { graph.viewModel.terminalThemes.value.lastOrNull()?.name == "Tomorrow Night" }
         compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Close sheet").fetchSemanticsNodes().isEmpty() }
-        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Imported Tomorrow Night."))
-        scrollToEnd()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Imported Tomorrow Night.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Imported Tomorrow Night.").assertIsDisplayed()
+        compose.onNode(hasContentDescription("Theme Berth Dark", substring = true)).assertIsDisplayed()
         capture("themes-imported$suffix")
+        scrollToEnd()
         compose.onNode(hasContentDescription("Theme Tomorrow Night", substring = true)).assertIsDisplayed()
         val imported = graph.viewModel.terminalThemes.value.last()
         assertEquals(0x1D1F21, imported.background)
