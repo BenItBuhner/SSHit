@@ -24,6 +24,7 @@ import android.os.Build
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeyAuthModel
+import app.berth.data.crypto.KeystoreSigning
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.BerthBundle
 import app.berth.domain.model.BundleImportOptions
@@ -119,6 +120,8 @@ class AppViewModel @Inject constructor(
     private val commandHistory: CommandHistoryRepository,
     /** The `.berth` bundle (spec C20, Data): Settings › Data's export and import talk to this through [exportBundle], [openBundle] and [importBundle]. */
     private val bundles: BerthBundles,
+    /** How a Keystore key signs, as the key unlocker reads it: [hardwareKeys] on a device, a fake in tests. */
+    private val keystore: KeystoreSigning,
 ) : ViewModel() {
     init {
         viewModelScope.launch {
@@ -903,12 +906,13 @@ class AppViewModel @Inject constructor(
 
     /**
      * How the Keystore key behind [identity] lets itself sign, or null for a software key or a
-     * Keystore entry that cannot be read (gone, or a fixture); the Keys screen names it on the row.
+     * Keystore entry that cannot be read (gone, or a fixture); the Keys screen names it on the row,
+     * and the host editor's agent forwarding note says whether the key still asks when it signs.
      */
     fun keyAuthModel(identity: Identity): KeyAuthModel? {
         if (identity.storage != KeyStorage.ANDROID_KEYSTORE) return null
         val alias = identity.keystoreAlias ?: HardwareKeys.aliasFor(identity.id)
-        return runCatching { hardwareKeys.authModel(alias) }.getOrNull()
+        return runCatching { keystore.authModel(alias) }.getOrNull()
     }
 
     suspend fun generateIdentity(name: String, algorithm: KeyAlgorithm, hardware: Boolean, protection: KeyProtection, comment: String, passphrase: CharArray?): KeyGenResult =

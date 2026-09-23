@@ -193,6 +193,7 @@ class AgentForwardingScreenshotTest {
      * names the one key offered; Always allow says who can then sign. Save keeps both.
      */
     private fun editor(name: String) {
+        graph.keystore = FakeKeystore(KeyAuthModel.PER_USE)
         seed()
         var done = 0
         themed { HostEditorScreen(graph.viewModel, hostId = bastion.id, onDone = { done++ }) }
@@ -218,9 +219,12 @@ class AgentForwardingScreenshotTest {
         compose.onNodeWithText("Signatures").performClick()
         waitForText("Always allow")
         compose.onNodeWithText("Always allow").performClick()
-        val silent = agentForwardingNote("bastion", "this phone", keyAuth = true, silent = true, tunnelsOnly = false)
+        val silent = agentForwardingNote("bastion", "this phone", keyAuth = true, silent = true, tunnelsOnly = false, keyModel = KeyAuthModel.PER_USE)
         assertEquals("Anything on bastion, root included, can sign as you without asking while a tab is connected.", silent.lead)
-        assertEquals("Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone.", silent.rest)
+        assertEquals(
+            "Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone. The key still asks for your fingerprint, face or screen lock for each signature.",
+            silent.rest,
+        )
         waitForText(silent.text)
         compose.onNodeWithText(silent.text).performScrollTo()
         val lead = noteRuns(silent).single()
@@ -262,6 +266,38 @@ class AgentForwardingScreenshotTest {
         val note = agentForwardingNote("homelab", null, keyAuth = false, silent = false, tunnelsOnly = false)
         waitForText(note.text)
         assertTrue(note.text, note.lead == null && note.rest.endsWith("so the agent has nothing to offer."))
+    }
+
+    /**
+     * Always allow skips Berth's question, not the key's own prompt: a key that needs the user for
+     * every use still asks for each signature, one with a timed window asks once the window has
+     * closed, and a key that needs nobody (or a software key, whose model is none) adds nothing.
+     */
+    @Test
+    fun `the Always allow note says when the key still asks for the user`() {
+        fun rest(model: KeyAuthModel?) = agentForwardingNote("bastion", "this phone", keyAuth = true, silent = true, tunnelsOnly = false, keyModel = model).rest
+        val offered = "Only the key \u201Cthis phone\u201D is offered, and only its signatures leave this phone."
+        assertEquals("$offered The key still asks for your fingerprint, face or screen lock for each signature.", rest(KeyAuthModel.PER_USE))
+        assertEquals(
+            "$offered The key signs silently while its 60 s unlock window is open, then asks for your fingerprint, face or screen lock again.",
+            rest(KeyAuthModel.TIMED_WINDOW),
+        )
+        assertEquals(offered, rest(KeyAuthModel.NONE))
+        assertEquals(offered, rest(null))
+        assertEquals(
+            "asking says nothing of the key's prompt, which follows the sheet",
+            agentForwardingNote("bastion", "this phone", keyAuth = true, silent = false, tunnelsOnly = false),
+            agentForwardingNote("bastion", "this phone", keyAuth = true, silent = false, tunnelsOnly = false, keyModel = KeyAuthModel.PER_USE),
+        )
+
+        graph.keystore = FakeKeystore(KeyAuthModel.TIMED_WINDOW)
+        seed()
+        themed { HostEditorScreen(graph.viewModel, hostId = bastion.id, onDone = {}) }
+        waitForText("Agent forwarding")
+        compose.onNodeWithText("Agent forwarding").performScrollTo().performClick()
+        compose.onNodeWithText("Signatures").performClick()
+        compose.onNodeWithText("Always allow").performClick()
+        waitForText(agentForwardingNote("bastion", "this phone", keyAuth = true, silent = true, tunnelsOnly = false, keyModel = KeyAuthModel.TIMED_WINDOW).text)
     }
 
     /** The colour runs of the note shown for [note]: its lead's, if it has one. */

@@ -64,6 +64,8 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.android.ui.tunnels.PendingTunnelRow
 import app.berth.android.ui.tunnels.TunnelsPanelContent
+import app.berth.data.crypto.HardwareKeys
+import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.AuthMethod
@@ -362,7 +364,8 @@ fun HostEditorScreen(
                 if (agentForwarding) {
                     CyclePicker("Signatures", listOf(false, true), agentSilent, { if (it) "Always allow" else "Ask each time" }) { agentSilent = it }
                     val key = identities.firstOrNull { it.id == (auth as? AuthMethod.Key)?.identityId }
-                    val note = agentForwardingNote(name.ifBlank { address }, key?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly)
+                    val keyModel = remember(key?.id, key?.protection) { key?.let { vm.keyAuthModel(it) } }
+                    val note = agentForwardingNote(name.ifBlank { address }, key?.name, auth is AuthMethod.Key, agentSilent, tunnelsOnly, keyModel)
                     PanelNote(
                         buildAnnotatedString {
                             note.lead?.let { withStyle(SpanStyle(color = c.text1)) { append(it) }; append(" ") }
@@ -481,14 +484,23 @@ data class AgentForwardingNote(val lead: String?, val rest: String) {
  * What forwarding [hostName]'s agent means, under the switch: which key it offers, that only
  * signatures leave, and who can ask. The agent holds only the key that logged in, so a host that
  * logs in with a password has nothing to offer, and a Tunnels only host opens no shell to forward to.
- * Always allow leads with who can then sign.
+ * Always allow leads with who can then sign; a Keystore key that needs the user ([keyModel], as
+ * the key unlocker reads it) still takes its system prompt, for each signature or once its unlock
+ * window has closed, and the note says so.
  */
-fun agentForwardingNote(hostName: String, keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean): AgentForwardingNote {
+fun agentForwardingNote(hostName: String, keyName: String?, keyAuth: Boolean, silent: Boolean, tunnelsOnly: Boolean, keyModel: KeyAuthModel? = null): AgentForwardingNote {
     val offered = "Only ${keyPhrase(keyName)} is offered, and only its signatures leave this phone."
     return when {
         tunnelsOnly -> AgentForwardingNote(null, "With Tunnels only on, Connect opens no shell, so no agent is forwarded.")
         !keyAuth -> AgentForwardingNote(null, "Only the key that signs in to this host is offered, and this host signs in without one, so the agent has nothing to offer.")
-        silent -> AgentForwardingNote("Anything on ${hostName.ifBlank { "this host" }}, root included, can sign as you without asking while a tab is connected.", offered)
+        silent -> AgentForwardingNote(
+            "Anything on ${hostName.ifBlank { "this host" }}, root included, can sign as you without asking while a tab is connected.",
+            when (keyModel) {
+                KeyAuthModel.PER_USE -> "$offered The key still asks for your fingerprint, face or screen lock for each signature."
+                KeyAuthModel.TIMED_WINDOW -> "$offered The key signs silently while its ${HardwareKeys.AUTH_WINDOW_SECONDS} s unlock window is open, then asks for your fingerprint, face or screen lock again."
+                KeyAuthModel.NONE, null -> offered
+            },
+        )
         else -> AgentForwardingNote(null, "$offered Each request asks you first, naming the host and what it is for.")
     }
 }
