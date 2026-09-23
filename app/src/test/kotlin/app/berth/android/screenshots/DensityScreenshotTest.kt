@@ -131,11 +131,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     @Test
     fun `settings panels and rows`() {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Interface editor").performScrollTo()
         compose.waitForIdle()
         capture("density-settings-comfortable")
         val comfortable = bounds("System font")
 
         setDensity(Density.COMPACT)
+        compose.onNodeWithText("Interface editor").performScrollTo()
+        compose.waitForIdle()
         capture("density-settings-compact")
         val compact = bounds("System font")
         assertEquals("the panel's padding is 12 dp, not 16", 4f, (comfortable.left - compact.left).inDp(), 0.5f)
