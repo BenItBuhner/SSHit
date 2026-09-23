@@ -66,6 +66,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import app.berth.android.session.ManagedTab
@@ -655,7 +656,9 @@ private fun CarryGhost(title: String, color: Color, monogram: String, at: Offset
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(Modifier.size(16.dp).clip(RoundedCornerShape(BerthRadius.swatchSmall)).background(color), contentAlignment = Alignment.Center) {
-            Text(monogram, style = BerthType.caption.copy(fontSize = BerthType.caption.fontSize * 0.8f), color = Color.White, maxLines = 1)
+            // On its face's own line, not Caption's 16 sp: at the 1.3 cap that line is 20.8 dp to the
+            // text, taller than the swatch, which cut it and stood the letters 2.4 dp low.
+            Text(monogram, style = BerthType.caption.copy(fontSize = BerthType.caption.fontSize * 0.8f, lineHeight = TextUnit.Unspecified), color = Color.White, maxLines = 1)
         }
         Text(title, style = BerthType.bodyMedium, color = c.text1, maxLines = 1)
     }

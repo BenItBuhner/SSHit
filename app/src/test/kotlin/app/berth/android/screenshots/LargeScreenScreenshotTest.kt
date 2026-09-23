@@ -65,6 +65,7 @@ import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -333,6 +334,32 @@ class LargeScreenScreenshotTest {
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
         capture("tablet-landscape-switcher-dialog")
+    }
+
+    /**
+     * The carried tab's ghost at the interface's font cap (spec A11): its 16 dp swatch holds the
+     * monogram's line centred and whole. Caption's 16 sp line is 20.8 dp to the text at the cap;
+     * set on it, the monogram's line was cut at the swatch and stood 2.4 dp low of its centre.
+     */
+    @Test
+    @Config(qualifiers = TABLET_LANDSCAPE)
+    fun `tablet on its side at the font cap, the carried tab's ghost keeps its monogram centred and whole`() {
+        RuntimeEnvironment.setFontScale(2f)
+        mountApp()
+        val body = compose.onNode(hasTestTag(TerminalTag)).fetchSemanticsNode().boundsInRoot
+        val pihole = carry("pi-hole", Offset(body.left + body.width * 0.75f, body.center.y))
+        capture("tablet-landscape-carry-font-scale-2x")
+        val ghost = hasContentDescription("Carrying pi-hole")
+        val monogram = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(ghost), useUnmergedTree = true)
+            .fetchSemanticsNodes().single { it.textLayout()!!.layoutInput.text.text != "pi-hole" }
+        val layout = monogram.textLayout()!!
+        assertFalse("the monogram's line whole in its swatch", layout.didOverflowHeight)
+        assertFalse("the monogram's two letters within its swatch", layout.didOverflowWidth)
+        val lineCentre = monogram.boundsInRoot.top + (layout.getLineTop(0) + layout.getLineBottom(0)) / 2f
+        val swatchCentre = compose.onNode(ghost).fetchSemanticsNode().boundsInRoot.center.y
+        assertEquals("the monogram's line on the swatch's centre", swatchCentre, lineCentre, 0.5f * compose.density.density)
+        pihole.performTouchInput { up() }
+        waitForPane("s-pihole", PaneSide.RIGHT)
     }
 
     /**
