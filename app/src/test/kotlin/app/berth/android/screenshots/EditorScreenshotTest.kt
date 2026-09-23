@@ -290,7 +290,8 @@ class EditorScreenshotTest {
     /**
      * About keeps one sentence and a Licences row; the row's sheet lists each font, library and
      * palette with its terms, a row with a shipped text opens it in place, and Back returns to the
-     * list. Gruvbox, whose upstream has no licence file, is a credit with nothing to open.
+     * list. Gruvbox, whose upstream has no licence file, is a credit with nothing to open. The
+     * symbols font's text ends in its icon sets' table, a paragraph a row, its cells set apart.
      */
     private fun aboutPanel(suffix: String) {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
@@ -319,6 +320,14 @@ class EditorScreenshotTest {
 
         compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("Symbols Nerd Font Mono, from Nerd Fonts").performScrollTo().performClick()
+        val codicons = "Codicons \u00B7 https://github.com/microsoft/vscode-codicons \u00B7 0.0.45 \u00B7 CC BY 4.0"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(codicons).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(codicons).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Weather Icons \u00B7 https://github.com/erikflowers/weather-icons \u00B7 2.0.10 (1.100) \u00B7 OFL 1.1").performScrollTo()
+        capture("settings-licence-table$suffix")
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
     }
 
     @Test
