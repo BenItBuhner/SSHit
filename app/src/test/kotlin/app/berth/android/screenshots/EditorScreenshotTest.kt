@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -255,21 +256,39 @@ class EditorScreenshotTest {
     }
 
     @Test
-    fun `Settings About names the palettes' licences`() = aboutPanel("")
+    fun `Settings About opens the shipped licences`() = aboutPanel("")
 
     @Test
-    fun `Settings About names the palettes' licences at the 1,3 cap`() {
+    fun `Settings About opens the shipped licences at the 1,3 cap`() {
         RuntimeEnvironment.setFontScale(2f)
         aboutPanel("-font-scale-2x")
     }
 
+    /**
+     * About keeps one sentence and a Licences row; the row's sheet lists each font, library and
+     * palette with its terms, a row with a shipped text opens it in place, and Back returns to the
+     * list. Gruvbox, whose upstream has no licence file, is a credit with nothing to open.
+     */
     private fun aboutPanel(suffix: String) {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
-        compose.onNodeWithText("Terminal palettes:", substring = true).performScrollTo()
+        compose.onNodeWithText("Licences").performScrollTo()
         scrollToEnd()
         capture("settings-about$suffix")
-        compose.onNodeWithText("Tokyo Night (folke) under Apache 2.0", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("colours from gruvbox by Pavel Pertsev (github.com/morhetz/gruvbox) under the MIT/X11 licence its README states", substring = true).assertIsDisplayed()
+
+        compose.onNodeWithText("Licences").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+        capture("settings-licences$suffix")
+        compose.onNodeWithText("under the MIT/X11 licence its README states", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Gruvbox Dark and Light").assertHasNoClickAction()
+        compose.onNodeWithText("Tokyo Night, by folke").performScrollTo().assertIsDisplayed()
+
+        compose.onNodeWithText("Catppuccin Mocha and Latte").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Copyright (c) 2021 Catppuccin").fetchSemanticsNodes().isNotEmpty() }
+        capture("settings-licence-text$suffix")
+        compose.onNodeWithText("Permission is hereby granted, free of charge", substring = true).assertIsDisplayed()
+
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test

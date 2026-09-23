@@ -100,6 +100,7 @@ fun SettingsScreen(
     var fontPicker by remember { mutableStateOf(false) }
     var exportBundle by remember { mutableStateOf(false) }
     var importBundle by remember { mutableStateOf(false) }
+    var licences by remember { mutableStateOf(false) }
     // The New key sheet the import's report opens, on the key it names to make again (spec C20).
     var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
     // One line at the foot of the screen for what a row just did (cleared, exported, imported); the text stays for the exit animation.
@@ -121,6 +122,7 @@ fun SettingsScreen(
     if (exportBundle) ExportBundleSheet(vm, onDismiss = { exportBundle = false }, onNotice = onNotice)
     if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice, onMakeKey = { makeKey = it })
     makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
+    if (licences) LicencesSheet(onDismiss = { licences = false })
 
     Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
@@ -266,10 +268,8 @@ fun SettingsScreen(
             Panel(label = "About") {
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
                 Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
-                Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text3)
-                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack under the MIT licence; Symbols Nerd Font Mono from Nerd Fonts under the MIT licence, its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
-                Text("Terminal palettes: Catppuccin, Nord, Solarized, Ros\u00E9 Pine, Kanagawa, Everforest, Dracula, One Dark, Ayu and GitHub (Primer) under the MIT licence; Tokyo Night (folke) under Apache 2.0. Each licence text ships with the app.", style = BerthType.caption, color = c.text3)
-                Text("Gruvbox Dark and Light: colours from gruvbox by Pavel Pertsev (github.com/morhetz/gruvbox) under the MIT/X11 licence its README states.", style = BerthType.caption, color = c.text3)
+                Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text2)
+                ListRow("Licences", subtitle = "The fonts, libraries and terminal palettes Berth ships, and their terms", surface = Color.Transparent, minHeight = 44.dp, onClick = { licences = true }, trailing = chevron)
             }
         }
     }
