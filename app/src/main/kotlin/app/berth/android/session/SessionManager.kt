@@ -342,6 +342,8 @@ class SessionManager @Inject constructor(
         override val networkAvailable: Flow<Unit> = network.available
         override val networkChanges: Flow<Unit> = this@SessionManager.networkChanges
         override val idleDetachAfter: Flow<Long?> = this@SessionManager.idleDetachAfter
+        // The document itself, not the eager copy: a tab restored at launch may connect before that copy's first read lands.
+        override suspend fun connectionDefaults(): ConnectionSettings = settings.connectionSettings.first()
         override fun onClipboardText(host: Host, text: String) = remoteClipboard.offer(host, text)
         override suspend fun agentSignsSilently(host: Host): Boolean = settings.securitySettings.first().signsAgentSilently(host.id)
 

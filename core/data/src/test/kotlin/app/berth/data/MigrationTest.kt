@@ -88,6 +88,14 @@ import kotlin.test.assertTrue
  * in case where the more recently seen row is the one to keep, a pair where the older row is the
  * pinned one (from version 2, which brought the pin) and so the one to keep, and two key types
  * under one endpoint that both stand; and a row that reads back case-blind through the repository.
+ *
+ * Version 7 changes rows too: a host's Keepalive and Reconnect may inherit Settings › Connection's
+ * defaults, and the 15 s and 15 min an older build stored as the editor's starting values become
+ * inherit ([app.berth.data.db.PersistenceInherits]). The seed's web host keeps its 30 s keepalive
+ * and inherits its reconnect; the bastion inherits its keepalive and keeps Forever (0); the nas, a
+ * host nobody changed, stored at the editor's 15 s and 15 min, inherits both, and so does its tab's
+ * snapshot; the detached tab's snapshot of the web host folds as the host does; the quick
+ * connect's, stored without a policy, is left as it was.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -112,6 +120,35 @@ class MigrationTest {
 
     @Test
     fun `a version 5 database migrates to the current version keeping every row`() = migrateAndCheck(from = 5)
+
+    @Test
+    fun `a version 6 database migrates to the current version keeping every row`() = migrateAndCheck(from = 6)
+
+    /** Version 7's row changes on the framework's connection, the path the app opens its database on. */
+    @Test
+    fun `a version 6 database opened the way the app opens it has the old starting values folded to inherit`() {
+        val file = File.createTempFile("berth-v6-app", ".db").also { it.delete(); it.deleteOnExit() }
+        val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), file, AndroidSQLiteDriver(), BerthDatabase::class, { BerthDatabase_Impl() }, emptyList())
+        helper.createDatabase(6).use { seed(it, 6) }
+
+        val db = Room.databaseBuilder(RuntimeEnvironment.getApplication(), BerthDatabase::class.java, file.absolutePath).allowMainThreadQueries().build()
+        try {
+            runTest {
+                val hosts = RoomHostRepository(db)
+                assertEquals(PersistencePolicy(keepaliveSeconds = 30, tmux = TmuxMode.ATTACH_OR_CREATE, tmuxSessionName = "web"), hosts.get("h1")?.persistence)
+                assertEquals(PersistencePolicy(reconnectMinutes = 0), hosts.get("bastion")?.persistence)
+                assertEquals(PersistencePolicy(), hosts.get("nas")?.persistence)
+                assertEquals(listOf(prodWeb.persistence, PersistencePolicy(), PersistencePolicy()), RoomSessionRepository(db).getAll().map { it.hostSnapshot.persistence })
+                // Settings › Connection starts where the editor did, so each host connects as it did before the upgrade.
+                val defaults = RoomSettingsRepository(db).connectionSettings.first()
+                assertEquals(30 to 15, hosts.get("h1")!!.persistence.let { it.effectiveKeepaliveSeconds(defaults) to it.effectiveReconnectMinutes(defaults) })
+                assertEquals(15 to 0, hosts.get("bastion")!!.persistence.let { it.effectiveKeepaliveSeconds(defaults) to it.effectiveReconnectMinutes(defaults) })
+                assertEquals(15 to 15, hosts.get("nas")!!.persistence.let { it.effectiveKeepaliveSeconds(defaults) to it.effectiveReconnectMinutes(defaults) })
+            }
+        } finally {
+            db.close()
+        }
+    }
 
     /**
      * The app opens its database with no driver set ([BerthDatabase.create]), where Room runs a
@@ -173,8 +210,10 @@ class MigrationTest {
     )
     private val bastion = Host(
         id = "bastion", name = "bastion", color = SwatchColor.SLATE, monogram = "BA", address = "bastion.example.net", user = "ops",
-        auth = AuthMethod.Password("pw-1"), startupCommand = "tmux attach", muteBell = true, createdAt = 900,
+        auth = AuthMethod.Password("pw-1"), persistence = PersistencePolicy(reconnectMinutes = 0), startupCommand = "tmux attach", muteBell = true, createdAt = 900,
     )
+    /** A host nobody changed: an older build stored the editor's starting 15 s and 15 min, and it reads back inheriting both. */
+    private val nas = Host(id = "nas", name = "nas", color = SwatchColor.MOSS, monogram = "NA", address = "nas.local", user = "admin", createdAt = 950)
 
     /** A quick connect's snapshot, stored without the optional fields; they decode as their defaults. */
     private val quick = Host(id = "quick-1", name = "10.0.0.7", color = SwatchColor.GRAPHITE, monogram = "10", address = "10.0.0.7", user = "root", createdAt = 11)
@@ -198,6 +237,10 @@ class MigrationTest {
     private val quickSession = SessionRecord(
         id = "s2", workspaceId = "w2", hostId = null, hostSnapshot = quick, state = SessionState.FAILED,
         title = "root@10.0.0.7", needsAttention = true, attentionReason = "Connection refused", sortOrder = 0, createdAt = 11,
+    )
+    private val nasSession = SessionRecord(
+        id = "s3", workspaceId = Workspace.DEFAULT_ID, hostId = "nas", hostSnapshot = nas, state = SessionState.DETACHED,
+        title = "admin@nas: ~", sortOrder = 1, createdAt = 12,
     )
     private val frame = byteArrayOf(1, 2, 3, 4)
 
@@ -243,11 +286,22 @@ class MigrationTest {
             "id" to "bastion", "name" to "bastion", "color" to "SLATE", "monogram" to "BA", "address" to "bastion.example.net", "port" to 22, "user" to "ops",
             "authJson" to """{"type":"app.berth.domain.model.AuthMethod.Password","secretId":"pw-1"}""",
             "jumpHostIdsJson" to "[]",
-            "persistenceJson" to """{"keepaliveSeconds":15,"reconnectMinutes":15,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
+            "persistenceJson" to """{"keepaliveSeconds":15,"reconnectMinutes":0,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
             "startupCommand" to "tmux attach", "environmentJson" to "{}", "terminalType" to "xterm-256color",
             "agentForwarding" to false, "compression" to false, "addressFamily" to "AUTO",
             "appearanceJson" to """{"terminalThemeId":null,"fontSizeSp":null,"fontFamily":null}""",
             "tagsJson" to "[]", "muteBell" to true, "lastConnectedAt" to null, "createdAt" to 900,
+        )
+        insert(
+            "hosts",
+            "id" to "nas", "name" to "nas", "color" to "MOSS", "monogram" to "NA", "address" to "nas.local", "port" to 22, "user" to "admin",
+            "authJson" to """{"type":"app.berth.domain.model.AuthMethod.AskEachTime"}""",
+            "jumpHostIdsJson" to "[]",
+            "persistenceJson" to """{"keepaliveSeconds":15,"reconnectMinutes":15,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
+            "startupCommand" to null, "environmentJson" to "{}", "terminalType" to "xterm-256color",
+            "agentForwarding" to false, "compression" to false, "addressFamily" to "AUTO",
+            "appearanceJson" to """{"terminalThemeId":null,"fontSizeSp":null,"fontFamily":null}""",
+            "tagsJson" to "[]", "muteBell" to false, "lastConnectedAt" to null, "createdAt" to 950,
         )
 
         insert(
@@ -323,6 +377,17 @@ class MigrationTest {
             "state" to "FAILED", "layer" to "LOCAL_FRAME", "title" to "root@10.0.0.7", "cwd" to null, "lastCommand" to null,
             "needsAttention" to true, "attentionReason" to "Connection refused", "sortOrder" to 0, "createdAt" to 11, "lastLiveAt" to null, "frameKey" to null,
         )
+        insert(
+            "sessions",
+            "id" to "s3", "workspaceId" to Workspace.DEFAULT_ID, "hostId" to "nas",
+            "hostSnapshotJson" to """{"id":"nas","name":"nas","color":"MOSS","monogram":"NA","address":"nas.local","port":22,"user":"admin",""" +
+                """"auth":{"type":"app.berth.domain.model.AuthMethod.AskEachTime"},"jumpHostIds":[],""" +
+                """"persistence":{"keepaliveSeconds":15,"reconnectMinutes":15,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"},""" +
+                """"startupCommand":null,"environment":{},"terminalType":"xterm-256color","agentForwarding":false,"compression":false,"addressFamily":"AUTO",""" +
+                """"appearance":{"terminalThemeId":null,"fontSizeSp":null,"fontFamily":null},"tags":[],"muteBell":false,"lastConnectedAt":null,"createdAt":950}""",
+            "state" to "DETACHED", "layer" to "LOCAL_FRAME", "title" to "admin@nas: ~", "cwd" to null, "lastCommand" to null,
+            "needsAttention" to false, "attentionReason" to null, "sortOrder" to 1, "createdAt" to 12, "lastLiveAt" to null, "frameKey" to null,
+        )
 
         insert(
             "tunnels",
@@ -378,6 +443,12 @@ class MigrationTest {
             // Version 4's column: the bastion marked tunnels only, as a phone on that build could have set it.
             execSQL("UPDATE hosts SET tunnelsOnly = 1 WHERE id = 'bastion'")
         }
+
+        if (version >= 6) {
+            // A version 6 phone holds its known hosts as its own migration left them: lowercase, one row per endpoint and key type.
+            execSQL("DELETE FROM known_hosts WHERE id IN ('k3', 'k6')")
+            execSQL("UPDATE known_hosts SET host = LOWER(host)")
+        }
     }
 
     // ---- after the migration -----------------------------------------------------------------------
@@ -387,12 +458,44 @@ class MigrationTest {
         assertEquals(CURRENT_VERSION.toLong(), long("PRAGMA user_version"))
         val counts = mapOf(
             // Version 6 folds seven known hosts to five: k3 goes under k2, and one of k5 and k6 under the other.
-            "hosts" to 2, "identities" to 2, "secrets" to 1, "known_hosts" to 5, "workspaces" to 2, "sessions" to 2,
+            "hosts" to 3, "identities" to 2, "secrets" to 1, "known_hosts" to 5, "workspaces" to 2, "sessions" to 3,
             "session_frames" to 1, "tunnels" to 2, "snippets" to 2, "preferences" to if (from >= 2) 8 else 7,
             // Version 5: the history table arrives empty; the commands an older build kept in each tab's frame reach it as the frames are restored.
             "command_history" to 0,
         )
         for ((table, rows) in counts) assertEquals(rows.toLong(), long("SELECT COUNT(*) FROM $table"), "$table keeps its rows")
+
+        // Version 7: a stored 15 in either field is inherit now (null); anything else stays the host's own, and the rest of the document is as it was.
+        assertEquals(
+            """{"keepaliveSeconds":30,"reconnectMinutes":null,"tmux":"ATTACH_OR_CREATE","tmuxSessionName":"web","tmuxPrefix":"C-b","transport":"SSH"}""",
+            text("SELECT persistenceJson FROM hosts WHERE id = 'h1'"),
+        )
+        assertEquals(
+            """{"keepaliveSeconds":null,"reconnectMinutes":0,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
+            text("SELECT persistenceJson FROM hosts WHERE id = 'bastion'"),
+        )
+        assertEquals(
+            """{"keepaliveSeconds":null,"reconnectMinutes":null,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}""",
+            text("SELECT persistenceJson FROM hosts WHERE id = 'nas'"),
+            "a host left at the editor's 15 s and 15 min inherits both",
+        )
+        assertTrue(
+            text("SELECT hostSnapshotJson FROM sessions WHERE id = 's3'")!!.contains(
+                """"persistence":{"keepaliveSeconds":null,"reconnectMinutes":null,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"},""",
+            ),
+            "and so does its tab's snapshot",
+        )
+        assertTrue(
+            text("SELECT hostSnapshotJson FROM sessions WHERE id = 's1'")!!.contains(
+                """"persistence":{"keepaliveSeconds":30,"reconnectMinutes":null,"tmux":"ATTACH_OR_CREATE","tmuxSessionName":"web","tmuxPrefix":"C-b","transport":"SSH"},""",
+            ),
+            "the detached tab's snapshot folds as its host does",
+        )
+        assertEquals(
+            """{"id":"quick-1","name":"10.0.0.7","color":"GRAPHITE","monogram":"10","address":"10.0.0.7","user":"root","auth":{"type":"app.berth.domain.model.AuthMethod.AskEachTime"},"createdAt":11}""",
+            text("SELECT hostSnapshotJson FROM sessions WHERE id = 's2'"),
+            "a snapshot with no policy already inherits and is not rewritten",
+        )
 
         // Version 6: every known host's name is lowercase, and one row stands per endpoint and key type. k3, seen less
         // recently than k2 though saved later, went; k5 and k6 turn on the pin version 2 brought: with it, the pinned
@@ -412,12 +515,12 @@ class MigrationTest {
         execSQL("DELETE FROM command_history")
 
         // Version 4: every old host opens a terminal on Connect; the tunnels-only toggle is off until set, and stays set where a version 4 phone set it.
-        assertEquals(if (from >= 4) 1L else 2L, long("SELECT COUNT(*) FROM hosts WHERE tunnelsOnly = 0"))
+        assertEquals(if (from >= 4) 2L else 3L, long("SELECT COUNT(*) FROM hosts WHERE tunnelsOnly = 0"))
         assertEquals(0L, long("SELECT tunnelsOnly FROM hosts WHERE id = 'h1'"))
         assertEquals(if (from >= 4) 1L else 0L, long("SELECT tunnelsOnly FROM hosts WHERE id = 'bastion'"))
 
         // Version 3: every old tab is an SSH tab; the rename and the collapsed group a version 3 phone set survive.
-        assertEquals(2L, long("SELECT COUNT(*) FROM sessions WHERE kind = 'ssh'"))
+        assertEquals(3L, long("SELECT COUNT(*) FROM sessions WHERE kind = 'ssh'"))
         assertEquals(if (from >= 3) "web box" else null, text("SELECT customTitle FROM sessions WHERE id = 's1'"))
         assertNull(text("SELECT customTitle FROM sessions WHERE id = 's2'"))
         assertEquals(0L, long("SELECT collapsed FROM workspaces WHERE id = '${Workspace.DEFAULT_ID}'"))
@@ -437,7 +540,8 @@ class MigrationTest {
         val hosts = RoomHostRepository(db)
         assertEquals(prodWeb, hosts.get("h1"))
         assertEquals(bastion.copy(tunnelsOnly = from >= 4), hosts.get("bastion"))
-        assertEquals(listOf("bastion", "h1"), hosts.observeAll().first().map { it.id })
+        assertEquals(nas, hosts.get("nas"))
+        assertEquals(listOf("bastion", "nas", "h1"), hosts.observeAll().first().map { it.id })
 
         val identities = RoomIdentityRepository(db, EncryptedSecretStore(db, crypto), HardwareKeys(RuntimeEnvironment.getApplication()))
         assertEquals(laptop, identities.get("id-1"))
@@ -470,7 +574,7 @@ class MigrationTest {
         val sessions = RoomSessionRepository(db)
         val records = sessions.getAll()
         val renamed = deploySession.copy(customTitle = if (from >= 3) "web box" else null)
-        assertEquals(listOf(renamed, quickSession), records)
+        assertEquals(listOf(renamed, quickSession, nasSession), records)
         assertTrue(records.all { it.kind == TabKind.Ssh })
         assertEquals(if (from >= 3) "web box" else "deploy@web: ~", records.first().displayTitle)
         assertEquals(if (from >= 4) listOf("bastion") else emptyList(), hosts.observeAll().first().filter { it.tunnelsOnly }.map { it.id }, "only a host a version 4 phone marked opens tunnels only")
@@ -542,6 +646,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 6
+        const val CURRENT_VERSION = 7
     }
 }

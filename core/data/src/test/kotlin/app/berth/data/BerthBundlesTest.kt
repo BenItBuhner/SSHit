@@ -259,8 +259,8 @@ class BerthBundlesTest {
     @Test
     fun `a document from a newer Berth is refused whole, and a sealed non-document is not a bundle`() = runTest {
         val codec = BundleCodec()
-        val newer = codec.seal("""{"format":2,"exported_at":1,"hosts":[]}""".toByteArray(), "pw".toCharArray(), quick)
-        assertEquals(2, assertFailsWith<BundleFormatException.NewerThanThisBuild> { new.bundles.open(newer, "pw".toCharArray()) }.format)
+        val newer = codec.seal("""{"format":3,"exported_at":1,"hosts":[]}""".toByteArray(), "pw".toCharArray(), quick)
+        assertEquals(3, assertFailsWith<BundleFormatException.NewerThanThisBuild> { new.bundles.open(newer, "pw".toCharArray()) }.format)
         val garbage = codec.seal("hello".toByteArray(), "pw".toCharArray(), quick)
         assertFailsWith<BundleFormatException.NotABundle> { new.bundles.open(garbage, "pw".toCharArray()) }
         // The document reads its own output back, defaults and all.

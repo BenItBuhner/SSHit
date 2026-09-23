@@ -3,6 +3,7 @@ package app.berth.android.session
 import app.berth.android.diagnostics.BerthLog
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AltKeyMode
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.ReconnectBackoff
@@ -104,6 +105,13 @@ interface SessionEnvironment {
     val idleDetachAfter: Flow<Long?> get() = flowOf(null)
 
     /**
+     * Settings › Connection as it stands (spec C20): the Keepalive and Reconnect a host that sets
+     * neither of its own gets, read when a login is made and each time a retry is weighed. A
+     * stand-in keeps the shipped defaults.
+     */
+    suspend fun connectionDefaults(): ConnectionSettings = ConnectionSettings()
+
+    /**
      * The host's ProxyJump chain as saved hosts, first hop first; an id no host answers to any
      * more is skipped. Each hop logs in with its own [authFor] and is trusted by its own [hostKeyPolicyFor].
      */
@@ -156,6 +164,25 @@ interface SessionEnvironment {
     /** What a hardware keyboard's Alt does to a character typed at [hostId] (spec C22, Settings › Hardware keyboard). */
     fun altKeyFor(hostId: String?): AltKeyMode = AltKeyMode.ESC_PREFIX
 }
+
+/**
+ * What a login to [h] dials: its address and options, and the keepalive it sends, the host's own or
+ * Settings › Connection's ([defaults]) when it inherits. A jump chain dials each hop this way, with
+ * the hop's own host.
+ */
+internal fun sshEndpointFor(h: Host, auth: List<SshAuth>, defaults: ConnectionSettings) = SshEndpoint(
+    host = h.address,
+    port = h.port,
+    user = h.user,
+    auth = auth,
+    keepaliveSeconds = h.persistence.effectiveKeepaliveSeconds(defaults),
+    compression = h.compression,
+    preferIpv6 = when (h.addressFamily) {
+        AddressFamily.AUTO -> null
+        AddressFamily.IPV4 -> false
+        AddressFamily.IPV6 -> true
+    },
+)
 
 /** A failure worth telling the user about away from the Stage (spec C21, Problems channel). */
 sealed interface SessionProblem {
@@ -678,7 +705,7 @@ class TerminalSession(
                 }
             }
             teardownConnection()
-            if (!ReconnectBackoff.shouldRetry(env.now() - since, host.persistence)) {
+            if (!ReconnectBackoff.shouldRetry(env.now() - since, host.persistence.effectiveReconnectMinutes(env.connectionDefaults()))) {
                 marker("gave up reconnecting")
                 transition(SessionState.DETACHED, PersistenceLayer.LOCAL_FRAME)
                 val waited = env.now() - since
@@ -708,8 +735,9 @@ class TerminalSession(
         // Hops first, in the order they are made, so their prompts come in that order too.
         val chain = env.jumpHostsFor(h)
         chainHosts = chain
-        val hops = chain.mapIndexed { index, hop -> SshHop(endpointFor(hop, env.authFor(hop)), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h), null)) }
-        val endpoint = endpointFor(h, env.authFor(h))
+        val defaults = env.connectionDefaults()
+        val hops = chain.mapIndexed { index, hop -> SshHop(sshEndpointFor(hop, env.authFor(hop), defaults), env.hostKeyPolicyFor(hop, HopRole(index, chain.size, h), null)) }
+        val endpoint = sshEndpointFor(h, env.authFor(h), defaults)
         val conn = SshConnection(endpoint, env.hostKeyPolicyFor(h, null, linkFingerprint), hops)
         connection = conn
         val progress = scope.launch {
@@ -820,20 +848,6 @@ class TerminalSession(
         val end = conn.state.first { it is SshConnectionState.Disconnected } as SshConnectionState.Disconnected
         return Outcome.Dropped(end.reason.ifBlank { "connection lost" }, end.error)
     }
-
-    private fun endpointFor(h: Host, auth: List<SshAuth>) = SshEndpoint(
-        host = h.address,
-        port = h.port,
-        user = h.user,
-        auth = auth,
-        keepaliveSeconds = h.persistence.keepaliveSeconds,
-        compression = h.compression,
-        preferIpv6 = when (h.addressFamily) {
-            AddressFamily.AUTO -> null
-            AddressFamily.IPV4 -> false
-            AddressFamily.IPV6 -> true
-        },
-    )
 
     private fun tmuxName(h: Host): String =
         (h.persistence.tmuxSessionName ?: "berth-${h.name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}").ifBlank { "berth" }

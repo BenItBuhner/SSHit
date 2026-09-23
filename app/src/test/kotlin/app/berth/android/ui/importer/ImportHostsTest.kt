@@ -107,6 +107,33 @@ class ImportHostsTest {
         assertEquals("the hop hosts themselves have no chain", emptyList<String>(), relay.jumpHostIds)
     }
 
+    @Test
+    fun `a ServerAliveInterval is the host's own keepalive, and without one the host inherits Settings' default`() = runBlocking {
+        val parsed = graph.viewModel.parseSshConfig(
+            """
+            Host prod
+              HostName 10.0.4.12
+              User deploy
+              ServerAliveInterval 30
+              ProxyJump relay@10.9.9.9:2022
+
+            Host lab
+              HostName 10.0.5.1
+              User ben
+            """.trimIndent(),
+        )
+        importCandidates(graph.viewModel, candidatesFor(parsed.hosts, emptyList(), graph.hosts.items.value), graph.hosts.items.value)
+        val all = graph.hosts.items.value
+        val prod = all.single { it.name == "prod" }
+        val lab = all.single { it.name == "lab" }
+        val relay = all.single { it.address == "10.9.9.9" }
+
+        assertEquals(30, prod.persistence.keepaliveSeconds)
+        assertNull("no ServerAliveInterval: the keepalive inherits", lab.persistence.keepaliveSeconds)
+        assertNull("a hop made from a spec inherits too", relay.persistence.keepaliveSeconds)
+        assertEquals("no config sets a reconnect span, so every one inherits", listOf(null, null, null), listOf(prod, lab, relay).map { it.persistence.reconnectMinutes })
+    }
+
     private fun saved(name: String, address: String, user: String, port: Int = 22) = Host(
         id = "saved-$name",
         name = name,

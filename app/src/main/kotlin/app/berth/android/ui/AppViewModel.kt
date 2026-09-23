@@ -695,6 +695,16 @@ class AppViewModel @Inject constructor(
         viewModelScope.launch { settings.setCommandHistoryEnabled(enabled) }
     }
 
+    /** Settings › Connection › Keepalive default (spec C20): every host that sets none of its own, from its next login. */
+    fun setKeepaliveDefault(seconds: Int) {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(keepaliveSeconds = seconds) } }
+    }
+
+    /** Settings › Connection › Reconnect default (spec C20): every host that sets none of its own, from the next retry it weighs. */
+    fun setReconnectDefault(minutes: Int) {
+        viewModelScope.launch { settings.updateConnectionSettings { it.copy(reconnectMinutes = minutes) } }
+    }
+
     /** Settings › Connection › Detach idle sessions (spec C20, vision §4.4). */
     fun setIdleDetach(policy: IdleDetach) {
         viewModelScope.launch { settings.updateConnectionSettings { it.copy(idleDetach = policy) } }
@@ -1045,7 +1055,8 @@ class AppViewModel @Inject constructor(
             user = entry.user ?: "root",
             auth = if (identityId != null) AuthMethod.Key(identityId) else AuthMethod.AskEachTime,
             jumpHostIds = jumpHostIds,
-            persistence = app.berth.domain.model.PersistencePolicy(keepaliveSeconds = entry.serverAliveInterval ?: 15),
+            // A ServerAliveInterval is the host's own keepalive; without one the host inherits Settings › Connection's.
+            persistence = app.berth.domain.model.PersistencePolicy(keepaliveSeconds = entry.serverAliveInterval),
             startupCommand = entry.remoteCommand,
             agentForwarding = entry.forwardAgent ?: false,
             compression = entry.compression ?: false,

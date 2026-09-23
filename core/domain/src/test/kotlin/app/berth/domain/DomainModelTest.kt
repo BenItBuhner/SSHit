@@ -1,5 +1,7 @@
 package app.berth.domain
 
+import app.berth.domain.model.BerthBundle
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.DeckAction
 import app.berth.domain.model.DeckKey
 import app.berth.domain.model.DeckKeyCode
@@ -13,6 +15,7 @@ import app.berth.domain.model.ReconnectBackoff
 import app.berth.domain.model.Snippet
 import app.berth.domain.model.SwatchColor
 import app.berth.domain.model.TerminalTheme
+import app.berth.domain.model.TmuxMode
 import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import kotlin.test.Test
@@ -154,8 +157,58 @@ class DomainModelTest {
     @Test
     fun `reconnect backoff schedule`() {
         assertEquals(listOf(1, 2, 4, 8, 15, 30, 60, 60), (0 until 8).map(ReconnectBackoff::delaySeconds))
-        assertTrue(ReconnectBackoff.shouldRetry(14 * 60_000L, PersistencePolicy(reconnectMinutes = 15)))
-        assertFalse(ReconnectBackoff.shouldRetry(15 * 60_000L, PersistencePolicy(reconnectMinutes = 15)))
-        assertTrue(ReconnectBackoff.shouldRetry(Long.MAX_VALUE / 2, PersistencePolicy(reconnectMinutes = 0)))
+        assertTrue(ReconnectBackoff.shouldRetry(14 * 60_000L, 15))
+        assertFalse(ReconnectBackoff.shouldRetry(15 * 60_000L, 15))
+        assertTrue(ReconnectBackoff.shouldRetry(Long.MAX_VALUE / 2, 0))
+    }
+
+    @Test
+    fun `a host's keepalive and reconnect are its own when set and Settings › Connection's when not`() {
+        val inherits = PersistencePolicy()
+        // The shipped defaults are what every host did before it could inherit.
+        assertEquals(15, inherits.effectiveKeepaliveSeconds(ConnectionSettings()))
+        assertEquals(15, inherits.effectiveReconnectMinutes(ConnectionSettings()))
+
+        val moved = ConnectionSettings(keepaliveSeconds = 30, reconnectMinutes = 0)
+        assertEquals(30, inherits.effectiveKeepaliveSeconds(moved))
+        assertEquals(0, inherits.effectiveReconnectMinutes(moved), "forever reaches the host too")
+        val own = PersistencePolicy(keepaliveSeconds = 0, reconnectMinutes = 60)
+        assertEquals(0, own.effectiveKeepaliveSeconds(moved), "a host's Off is its own, not an inherit")
+        assertEquals(60, own.effectiveReconnectMinutes(moved))
+    }
+
+    @Test
+    fun `the host editor's old starting values read as inherit, field by field, and nothing else does`() {
+        assertEquals(PersistencePolicy(), PersistencePolicy(keepaliveSeconds = 15, reconnectMinutes = 15).foldLegacyDefaults())
+        assertEquals(PersistencePolicy(keepaliveSeconds = 30), PersistencePolicy(keepaliveSeconds = 30, reconnectMinutes = 15).foldLegacyDefaults())
+        assertEquals(
+            PersistencePolicy(reconnectMinutes = 0, tmux = TmuxMode.ATTACH_OR_CREATE, tmuxSessionName = "web"),
+            PersistencePolicy(keepaliveSeconds = 15, reconnectMinutes = 0, tmux = TmuxMode.ATTACH_OR_CREATE, tmuxSessionName = "web").foldLegacyDefaults(),
+        )
+        assertEquals(PersistencePolicy(keepaliveSeconds = 0, reconnectMinutes = 60), PersistencePolicy(keepaliveSeconds = 0, reconnectMinutes = 60).foldLegacyDefaults())
+    }
+
+    /**
+     * A format 1 bundle stored the editor's starting values on every host that never changed them;
+     * this build reads those as inherit. A format 2 document says inherit itself, so a 15 there is
+     * the host's own and stays one.
+     */
+    @Test
+    fun `a format 1 bundle's hosts inherit where they carried the old starting values`() {
+        val host = """"color":"SLATE","monogram":"AA","user":"ben","createdAt":1"""
+        val v1 = """{"format":1,"exported_at":1,"hosts":[""" +
+            """{"id":"a","name":"a","address":"a.example",$host,"persistence":{"keepaliveSeconds":15,"reconnectMinutes":15,"tmux":"OFF","tmuxSessionName":null,"tmuxPrefix":"C-b","transport":"SSH"}},""" +
+            """{"id":"b","name":"b","address":"b.example",$host,"persistence":{"keepaliveSeconds":60,"reconnectMinutes":0,"tmux":"ATTACH_OR_CREATE","tmuxSessionName":null,"tmuxPrefix":"C-a","transport":"SSH"}},""" +
+            """{"id":"c","name":"c","address":"c.example",$host}]}"""
+        val read = BerthBundle.fromJson(v1)
+        assertEquals(PersistencePolicy(), read.hosts[0].persistence)
+        assertEquals(PersistencePolicy(keepaliveSeconds = 60, reconnectMinutes = 0, tmux = TmuxMode.ATTACH_OR_CREATE, tmuxPrefix = "C-a"), read.hosts[1].persistence)
+        assertEquals(PersistencePolicy(), read.hosts[2].persistence)
+        assertEquals(1, read.format, "the document read says what it was")
+
+        val pinned = Host(id = "d", name = "d", color = SwatchColor.SLATE, monogram = "DD", address = "d.example", user = "ben", createdAt = 1, persistence = PersistencePolicy(keepaliveSeconds = 15))
+        val v2 = BerthBundle(exportedAt = 1, hosts = listOf(pinned, pinned.copy(id = "e", persistence = PersistencePolicy()))).toJson()
+        assertTrue(v2.contains(""""format":2"""))
+        assertEquals(listOf(PersistencePolicy(keepaliveSeconds = 15), PersistencePolicy()), BerthBundle.fromJson(v2).hosts.map { it.persistence })
     }
 }

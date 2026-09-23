@@ -108,6 +108,10 @@ class RoomRepositoriesTest {
         assertEquals(AuthMethod.Password("pw-1"), updated.auth)
         assertEquals(22, updated.port)
 
+        // Inherit is stored as inherit: a host set back to it reads back with neither field, not the value it had.
+        repo.upsert(updated.copy(persistence = updated.persistence.copy(keepaliveSeconds = null)))
+        assertEquals(PersistencePolicy(tmux = TmuxMode.ATTACH_OR_CREATE, tmuxSessionName = "web"), repo.get("h1")?.persistence)
+
         repo.delete("h1")
         assertNull(repo.get("h1"))
     }
@@ -321,6 +325,11 @@ class RoomRepositoriesTest {
         assertEquals(IdleDetach.ONE_HOUR, all.idleDetach, "one field's write leaves the others as they were")
         assertTrue(all.backgroundNoticeShown)
         assertTrue(all.batteryExplained)
+
+        // The Keepalive and Reconnect defaults start where the host editor used to, and move with the rest left alone.
+        assertEquals(15 to 15, all.keepaliveSeconds to all.reconnectMinutes)
+        settings.updateConnectionSettings { it.copy(keepaliveSeconds = 60, reconnectMinutes = 0) }
+        assertEquals(all.copy(keepaliveSeconds = 60, reconnectMinutes = 0), settings.connectionSettings.first())
 
         // The document is read back as written, so a field an older build never wrote comes up as its default.
         db.preferences().upsert(PreferenceEntity(RoomSettingsRepository.KEY_CONNECTION, """{"idleDetach":"FIFTEEN_MINUTES"}""", 1L))

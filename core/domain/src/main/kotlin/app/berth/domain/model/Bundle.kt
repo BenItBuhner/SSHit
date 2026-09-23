@@ -16,7 +16,9 @@ import kotlinx.serialization.json.Json
  * name only, so the import can say which keys need creating again.
  *
  * [format] is the document's own version, separate from the container's: a newer document is
- * refused whole rather than read with its new fields ignored.
+ * refused whole rather than read with its new fields ignored. Format 2 lets a host's Keepalive and
+ * Reconnect inherit (null, [PersistencePolicy]); a format 1 document stored the editor's starting
+ * values on every host that never changed them, and reads here as [PersistencePolicy.foldLegacyDefaults] says.
  */
 @Serializable
 data class BerthBundle(
@@ -48,7 +50,7 @@ data class BerthBundle(
 
     companion object {
         /** The document version this build writes and the newest it reads. */
-        const val FORMAT = 1
+        const val FORMAT = 2
 
         /** The file extension, and the name a fresh export suggests. */
         const val EXTENSION = "berth"
@@ -71,7 +73,8 @@ data class BerthBundle(
                 throw BundleFormatException.NotABundle(e.message)
             }
             if (bundle.format > FORMAT) throw BundleFormatException.NewerThanThisBuild(bundle.format)
-            return bundle
+            if (bundle.format >= 2) return bundle
+            return bundle.copy(hosts = bundle.hosts.map { it.copy(persistence = it.persistence.foldLegacyDefaults()) })
         }
     }
 }

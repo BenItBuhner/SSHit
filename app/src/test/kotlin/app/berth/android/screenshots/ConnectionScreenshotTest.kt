@@ -15,8 +15,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -32,6 +34,7 @@ import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.BACKGROUND_NOTICE
+import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.BackgroundSheet
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.theme.BerthTheme
@@ -54,6 +57,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -73,6 +77,7 @@ import java.util.concurrent.TimeUnit
 /**
  * The surfaces of Settings › Connection and the background (spec C20, Part B; vision §4.4), each
  * at 1× and at the interface's 1.3× font cap (A11): the Connection panel with Never in force, the
+ * Keepalive and Reconnect defaults' pickers and the host editor's rows that inherit them, the
  * idle-detach picker open, the Background sheet on stock Android without the exemption and on a
  * Samsung with it, Back's one line over a Stage with a login up, and the sheet the app raises on
  * its own after a connection was lost while it was away, which needs the sshd.
@@ -147,6 +152,15 @@ class ConnectionScreenshotTest {
     private fun waitForText(text: String, substring: Boolean = false) =
         compose.waitUntil(5_000) { compose.onAllNodes(hasText(text, substring = substring)).fetchSemanticsNodes().isNotEmpty() }
 
+    /** A line of the open picker menu, not a row's value that happens to read the same. */
+    private fun inMenu(text: String) = hasText(text) and hasAnyAncestor(isPopup())
+
+    private fun waitForMenuItem(text: String) =
+        compose.waitUntil(5_000) { compose.onAllNodes(inMenu(text)).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun waitForMenuClosed() =
+        compose.waitUntil(5_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() }
+
     /** Real time passes while the compose clock keeps ticking, so a bar's entrance or a sheet's finishes. */
     private fun settle(ms: Long) {
         val end = System.currentTimeMillis() + ms
@@ -206,11 +220,15 @@ class ConnectionScreenshotTest {
         settingsConnection("settings-connection-font-cap")
     }
 
-    /** The panel as a fresh install reads it: idle-detach Never, the Background row, and the note that sessions keep running. */
+    /** The panel as a fresh install reads it: the Keepalive and Reconnect defaults, idle-detach Never, the Background row, and the note that sessions keep running. */
     private fun settingsConnection(name: String) {
         StageFixture.seed(graph)
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         scrollToConnectionPanel()
+        waitForText("Keepalive default")
+        waitForText("15 s")
+        waitForText("Reconnect default")
+        waitForText("15 min")
         waitForText("Never")
         waitForText("Background")
         assertEquals(IdleDetach.NEVER, connectionSettings().idleDetach)
@@ -232,19 +250,106 @@ class ConnectionScreenshotTest {
         themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
         scrollToConnectionPanel()
         compose.onNodeWithText("Detach idle sessions").performClick()
-        waitForText("15 min")
-        waitForText("1 hour")
-        waitForText("4 hours")
+        // The Reconnect default's row also reads 15 min, so the spans are looked for in the menu.
+        listOf("15 min", "1 hour", "4 hours").forEach(::waitForMenuItem)
         assertEquals("Never, selected, and Never on the row", 2, compose.onAllNodesWithText("Never").fetchSemanticsNodes().size)
         capture(name)
         compose.assertNoTextCut("the idle-detach picker")
 
-        compose.onNodeWithText("1 hour").performClick()
+        compose.onNode(inMenu("1 hour")).performClick()
         compose.waitUntil(5_000) { connectionSettings().idleDetach == IdleDetach.ONE_HOUR }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("15 min").fetchSemanticsNodes().isEmpty() }
+        waitForMenuClosed()
         waitForText("1 hour")
         assertEquals(TimeUnit.HOURS.toMillis(1), IdleDetach.ONE_HOUR.millis)
     }
+
+    @Test
+    fun `keepalive and reconnect default pickers`() = defaultPickers("connection-defaults")
+
+    @Test
+    fun `keepalive and reconnect default pickers at the font cap`() {
+        atTheCap()
+        defaultPickers("connection-defaults-font-cap")
+    }
+
+    /**
+     * The two defaults every host inherits (C20) open their spans as menus the way idle-detach does,
+     * starting where the host editor did before it could inherit (15 s, 15 min); a pick is written to
+     * the one Connection document and the row reads it back.
+     */
+    private fun defaultPickers(name: String) {
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        scrollToConnectionPanel()
+        assertEquals(15 to 15, connectionSettings().let { it.keepaliveSeconds to it.reconnectMinutes })
+        waitForText("15 s")
+
+        compose.onNodeWithText("Keepalive default").performClick()
+        listOf("Off", "15 s", "30 s", "60 s").forEach(::waitForMenuItem)
+        capture("$name-keepalive")
+        compose.assertNoTextCut("the Keepalive default picker")
+        compose.onNode(inMenu("30 s")).performClick()
+        compose.waitUntil(5_000) { connectionSettings().keepaliveSeconds == 30 }
+        waitForMenuClosed()
+        waitForText("30 s")
+
+        compose.onNodeWithText("Reconnect default").performClick()
+        listOf("5 min", "15 min", "1 hour", "Forever").forEach(::waitForMenuItem)
+        capture("$name-reconnect")
+        compose.assertNoTextCut("the Reconnect default picker")
+        compose.onNode(inMenu("Forever")).performClick()
+        compose.waitUntil(5_000) { connectionSettings().reconnectMinutes == 0 }
+        waitForMenuClosed()
+        waitForText("Forever")
+        assertEquals("idle-detach is its own field", IdleDetach.NEVER, connectionSettings().idleDetach)
+    }
+
+    @Test
+    fun `host editor keepalive and reconnect inherit the defaults`() = hostEditorInherits("host-editor-persistence")
+
+    @Test
+    fun `host editor keepalive and reconnect inherit the defaults at the font cap`() {
+        atTheCap()
+        hostEditorInherits("host-editor-persistence-font-cap")
+    }
+
+    /**
+     * The host editor's Keepalive and Reconnect (C10) on a host that sets neither: each reads
+     * Inherit with what Settings › Connection gives it. A span picked is the host's own and Save
+     * writes it; Inherit picked again writes none, so the host follows the default once more.
+     */
+    private fun hostEditorInherits(name: String) {
+        StageFixture.seed(graph)
+        runBlocking { graph.settings.updateConnectionSettings { it.copy(keepaliveSeconds = 30, reconnectMinutes = 0) } }
+        var done = 0
+        themed { HostEditorScreen(graph.viewModel, hostId = "homelab", onDone = { done++ }) }
+        waitForText("homelab")
+        compose.onNodeWithText("tmux").performScrollTo()
+        waitForText("Inherit (30 s)")
+        waitForText("Inherit (forever)")
+        capture(name)
+        compose.assertNoTextCut("the host editor's Persistence panel")
+
+        compose.onNodeWithText("Keepalive").performClick()
+        listOf("Inherit (30 s)", "Off", "15 s", "30 s", "60 s").forEach(::waitForMenuItem)
+        capture("$name-keepalive")
+        compose.assertNoTextCut("the host editor's Keepalive menu", within = isPopup())
+        compose.onNode(inMenu("60 s")).performClick()
+        waitForMenuClosed()
+        waitForText("60 s")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { homelab().persistence.keepaliveSeconds == 60 }
+        assertEquals(1, done)
+        assertNull("Reconnect left on Inherit stays inherit", homelab().persistence.reconnectMinutes)
+
+        compose.onNodeWithText("Keepalive").performClick()
+        waitForMenuItem("Inherit (30 s)")
+        compose.onNode(inMenu("Inherit (30 s)")).performClick()
+        waitForMenuClosed()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(5_000) { homelab().persistence.keepaliveSeconds == null }
+    }
+
+    private fun homelab() = graph.hosts.items.value.first { it.id == "homelab" }
 
     // ---- C20, vision §4.4: the Background sheet -----------------------------------------------------------
 

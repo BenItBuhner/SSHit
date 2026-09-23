@@ -56,6 +56,8 @@ import app.berth.android.ui.components.spokenName
 import app.berth.android.ui.components.TrailingMenuAnchor
 import app.berth.android.ui.settings.HostAltKeyPicker
 import app.berth.android.ui.settings.HostRemoteClipboardPicker
+import app.berth.android.ui.settings.hostKeepaliveLabel
+import app.berth.android.ui.settings.hostReconnectLabel
 import app.berth.android.ui.stage.rememberTerminalFontFamilies
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
@@ -69,6 +71,7 @@ import app.berth.data.crypto.KeyAuthModel
 import app.berth.domain.model.AddressFamily
 import app.berth.domain.model.AltKeyMode
 import app.berth.domain.model.AuthMethod
+import app.berth.domain.model.ConnectionSettings
 import app.berth.domain.model.Host
 import app.berth.domain.model.RemoteClipboardPolicy
 import app.berth.domain.model.SwatchColor
@@ -121,8 +124,10 @@ fun HostEditorScreen(
     var password by remember { mutableStateOf("") }
     var agentForwarding by remember { mutableStateOf(false) }
     var agentSilent by remember { mutableStateOf(false) }
-    var keepalive by remember { mutableStateOf(15) }
-    var reconnectMinutes by remember { mutableStateOf(15) }
+    val connection by vm.connectionSettings.collectAsState()
+    // Null inherits Settings › Connection's default; a new host starts there.
+    var keepalive by remember { mutableStateOf<Int?>(null) }
+    var reconnectMinutes by remember { mutableStateOf<Int?>(null) }
     var tmux by remember { mutableStateOf(TmuxMode.OFF) }
     var tmuxPrefix by remember { mutableStateOf("C-b") }
     var themeId by remember { mutableStateOf<String?>(null) }
@@ -376,8 +381,8 @@ fun HostEditorScreen(
             }
 
             Panel(label = "Persistence") {
-                CyclePicker("Keepalive", listOf(0, 15, 30, 60), keepalive, { if (it == 0) "Off" else "$it s" }) { keepalive = it }
-                CyclePicker("Reconnect", listOf(5, 15, 60, 0), reconnectMinutes, { if (it == 0) "Forever" else "$it min" }) { reconnectMinutes = it }
+                CyclePicker("Keepalive", listOf<Int?>(null) + ConnectionSettings.KEEPALIVE_CHOICES, keepalive, { hostKeepaliveLabel(it, connection.keepaliveSeconds) }) { keepalive = it }
+                CyclePicker("Reconnect", listOf<Int?>(null) + ConnectionSettings.RECONNECT_CHOICES, reconnectMinutes, { hostReconnectLabel(it, connection.reconnectMinutes) }) { reconnectMinutes = it }
                 CyclePicker("tmux", TmuxMode.entries, tmux, { it.label() }) { tmux = it }
                 if (tmux != TmuxMode.OFF) {
                     BerthField(tmuxPrefix, { tmuxPrefix = it }, label = "Prefix", mono = true, helper = "Session name berth-${(name.ifBlank { address }).lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')}")
