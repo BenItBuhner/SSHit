@@ -6,6 +6,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
@@ -21,6 +23,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyChild
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -55,7 +58,10 @@ import app.berth.android.ui.settings.keysLine
 import app.berth.android.ui.settings.leftBehindNote
 import app.berth.android.ui.settings.namedKeyLine
 import app.berth.android.ui.settings.recreateNote
+import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.bundle.BundleCodec
@@ -68,6 +74,7 @@ import app.berth.domain.model.KeyAlgorithm
 import app.berth.domain.model.KeyProtection
 import app.berth.domain.model.KeyStorage
 import app.berth.domain.model.KnownHostKey
+import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.ssh.SshCiphers
 import app.berth.ssh.SshKeys
@@ -77,6 +84,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -92,7 +100,8 @@ import java.util.concurrent.TimeUnit
  * The library's data surfaces of wave four (spec C9, C10, C12, C13) through Robolectric's native
  * graphics, each at the system's 1× and at 2×, where interface text stops at its 1.3× cap (A11):
  * the host editor's question when Back would drop edits and its Advanced › Scrollback and
- * Ciphers rows, Rename and Change protection on the Keys screen, the Hosts screen's Export hosts
+ * Ciphers rows, with the Stage's failure when a server takes none of a host's ciphers (against
+ * the local sshd), Rename and Change protection on the Keys screen, the Hosts screen's Export hosts
  * and the `+` long-press to Quick connect, with a hosts-only file's import, and Known hosts' swipe
  * to forget with Undo. Every capture is the accessibility audit too, and no text on these
  * surfaces is cut at either size.
@@ -394,6 +403,45 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         compose.onNodeWithText("Save").performClick()
         compose.waitUntil(5_000) { done == 1 }
         assertEquals(SshCiphers.MODERN, graph.hosts.items.value.first { it.id == "build-box" }.ciphers)
+    }
+
+    /**
+     * Against the local sshd, when `SSH_TEST_*` is set: a host offering only 3des-cbc, which the
+     * server does not take, fails on the Stage before any login, in words that name the host
+     * editor's row, and Edit host beside Retry goes to it. The mismatch comes before the host key,
+     * so no trust sheet stands in front of the failure.
+     */
+    @Test
+    fun `a host offering only ciphers the server lacks fails on the Stage naming the Ciphers row`() {
+        val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        val legacy = host("legacy-nas", "legacy nas", sshHost, System.getenv("SSH_TEST_USER").orEmpty(), SwatchColor.MOSS, AuthMethod.Password(AuthResolver.passwordSecretId("legacy-nas")))
+            .copy(port = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22, ciphers = listOf("3des-cbc"))
+        runBlocking {
+            graph.secrets.put(AuthResolver.passwordSecretId(legacy.id), "never sent".toByteArray())
+            graph.hosts.upsert(legacy)
+            graph.sessions.restore()
+        }
+        val edited = ArrayList<String>()
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, graph.viewModel.activeTab.collectAsState().value, actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = { edited += it })
+        }
+        val tab = runBlocking { graph.sessions.connect(legacy) }
+        compose.waitUntil(20_000) { tab.state == SessionState.FAILED }
+        waitForText("The server accepts none of the ciphers set under Advanced \u203A Ciphers.")
+        compose.onNodeWithText("Retry").assertIsDisplayed()
+        compose.onNodeWithText("Edit host").assertIsDisplayed()
+        capture("stage-failed-no-common-cipher")
+        // The strip above holds tab titles to its own height at the cap, so the check is the panel's.
+        val panel = hasAnyChild(hasText("Couldn't connect"))
+        assertTrue(
+            "the check reaches the panel's text",
+            compose.onAllNodes(hasText("The server accepts none", substring = true) and hasAnyAncestor(panel), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertNoTextCut("the Stage's failure on a cipher mismatch", within = panel)
+        compose.onNodeWithText("Edit host").performClick()
+        assertEquals(listOf("legacy-nas"), edited)
     }
 
     // ---- Keys: Rename and Change protection (C12) ------------------------------------------------
