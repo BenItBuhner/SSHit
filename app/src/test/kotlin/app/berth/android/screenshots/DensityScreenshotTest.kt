@@ -146,6 +146,24 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertTrue("a captioned row loses its 8 dp of padding", (comfortable.height - compact.height).inDp() >= 7.5f)
     }
 
+    /** Settings › Connection: its pickers are rows like the rest, so they take the same tokens. */
+    @Test
+    fun `settings connection rows`() {
+        themed { SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {}) }
+        compose.onNodeWithText("Sessions keep running", substring = true).performScrollTo()
+        compose.waitForIdle()
+        capture("density-settings-connection-comfortable")
+        val comfortable = bounds("Detach idle sessions")
+
+        setDensity(Density.COMPACT)
+        compose.onNodeWithText("Sessions keep running", substring = true).performScrollTo()
+        compose.waitForIdle()
+        capture("density-settings-connection-compact")
+        val compact = bounds("Detach idle sessions")
+        assertEquals("the panel's padding is 12 dp, not 16", 4f, (comfortable.left - compact.left).inDp(), 0.5f)
+        assertTrue("the captioned row loses its 8 dp of padding", (comfortable.height - compact.height).inDp() >= 7.5f)
+    }
+
     @Test
     fun `hosts list rows`() {
         themed { HostsScreen(graph.viewModel, onConnect = {}, onAddHost = {}, onEditHost = {}, onBack = null, onOpenDrawer = {}, onKnownHosts = {}) }
