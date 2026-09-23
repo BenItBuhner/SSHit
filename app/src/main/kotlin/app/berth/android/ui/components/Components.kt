@@ -267,13 +267,13 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier, color: Color = Ber
  */
 val LocalPanelSurface = compositionLocalOf<Color?> { null }
 
-/** Radius 20 surface.2 panel with 16 dp padding and an optional caption above the content. */
+/** Radius 20 surface.2 panel with density's padding (16 dp, Compact 12) and an optional caption above the content. */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
     label: String? = null,
     surface: Color = Berth.colors.surface2,
-    padding: Dp = BerthSpace.panelPadding,
+    padding: Dp = Berth.density.panelPadding,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier) {
@@ -308,8 +308,10 @@ fun linesAtFontScale(lines: Int): Int =
     if (lines == Int.MAX_VALUE) lines else ceil(lines * LocalDensity.current.fontScale).toInt().coerceAtLeast(lines)
 
 /**
- * A list row: 12 dp radius, tonal step by state, leading swatch or icon, title and subtitle, and a
- * trailing column. Selection is the tonal step plus a 4 dp accent dot inside the padding (A6).
+ * A list row: 12 dp radius, density's height and vertical padding (56 dp and 10, Compact 48 and 6)
+ * unless [minHeight] sets its own floor, tonal step by state, leading swatch or icon, title and
+ * subtitle, and a trailing column. Selection is the tonal step plus a 4 dp accent dot inside the
+ * padding (A6).
  * The title is one line unless [titleMaxLines] gives it more, for a title whose end matters as
  * much as its start (a forward's `bind → destination` breaks at the arrow rather than losing the
  * destination to the ellipsis). The subtitle takes a plain String or an [AnnotatedString] (mixed
@@ -332,7 +334,7 @@ fun ListRow(
     subtitle: CharSequence? = null,
     selected: Boolean = false,
     surface: Color = Berth.colors.surface2,
-    minHeight: Dp = 56.dp,
+    minHeight: Dp = Berth.density.row,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
@@ -377,7 +379,7 @@ fun ListRow(
                     Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, role = role, onClick = { onClick?.invoke() }, onLongClick = onLongClick)
                 } else Modifier,
             )
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = Berth.density.rowPadding),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (leading != null) {
@@ -1115,6 +1117,7 @@ fun BerthField(
     focusRequester: FocusRequester? = null,
 ) {
     val c = Berth.colors
+    val fieldHeight = Berth.density.field
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val bg by animateColorAsState(if (focused) c.surface3 else c.surface2, tween(120), label = "field")
@@ -1126,7 +1129,7 @@ fun BerthField(
         Row(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 44.dp)
+                .heightIn(min = fieldHeight)
                 .clip(RoundedCornerShape(BerthRadius.row))
                 .background(bg)
                 .padding(horizontal = 12.dp, vertical = if (singleLine) 0.dp else 10.dp),
@@ -1163,16 +1166,16 @@ fun BerthField(
         }
         if (helper != null) {
             // In a panel the field's box is the panel's own surface, unseen, and its bottom half (the
-            // 44 dp less the line of text) is the gap to the label under it; the helper stands where
-            // that half was, so it carries the same gap rather than leaving the next label 4 dp off.
-            val bottom = if (LocalPanelSurface.current != null) FieldHelperPanelGap else 0.dp
+            // field's height less the line of text) is the gap to the label under it; the helper stands
+            // where that half was, so it carries the same gap rather than leaving the next label 4 dp off.
+            val bottom = if (LocalPanelSurface.current != null) (fieldHeight - FieldTextLine) / 2 else 0.dp
             Text(helper, style = BerthType.caption.copy(letterSpacing = 0.sp), color = if (isError) c.danger else c.text3, modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = bottom))
         }
     }
 }
 
-/** What a field's box leaves under its text: (44 dp − the body's 22 sp line) / 2, given to a helper inside a [Panel]. */
-private val FieldHelperPanelGap = 11.dp
+/** The body's 22 sp line, whose room a field's box leaves around it; half the rest is given to a helper inside a [Panel]. */
+private val FieldTextLine = 22.dp
 
 // ---- Sheets and misc ---------------------------------------------------------------------------------
 

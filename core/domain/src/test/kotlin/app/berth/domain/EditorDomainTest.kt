@@ -1,5 +1,6 @@
 package app.berth.domain
 
+import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.ColorMath
 import app.berth.domain.model.DECK_MAX_KEYS_PER_LAYER
 import app.berth.domain.model.DeckAction
@@ -88,6 +89,45 @@ class EditorDomainTest {
         assertTrue(TerminalTheme.BERTH_DARK.isDark)
         assertFalse(TerminalTheme.BERTH_LIGHT.isDark)
         assertTrue(TerminalTheme.SOLARIZED_DARK.isDark)
+    }
+
+    @Test
+    fun `the accent presets are the spec's seven and a colour finds its preset`() {
+        assertEquals(
+            listOf("Copper" to 0xE0A458, "Verdigris" to 0x5FB3A1, "Slate" to 0x7A9CD6, "Moss" to 0x8FB573, "Rose" to 0xE27D8F, "Mauve" to 0xC387B8, "Bone" to 0xC9C4BB),
+            AccentPreset.entries.map { it.title to it.rgb },
+        )
+        assertEquals(AccentPreset.ROSE, AccentPreset.of(0xE27D8F))
+        assertEquals(AccentPreset.COPPER, AccentPreset.of(0xFFE0A458.toInt()))
+        assertNull(AccentPreset.of(0xD9776B))
+        assertEquals(AccentPreset.COPPER, AccentPreset.of(InterfaceTheme.DEFAULT.accent))
+        for ((_, preset) in InterfaceTheme.presets) assertNotNull(AccentPreset.of(preset.accent))
+    }
+
+    @Test
+    fun `the gallery ships the spec's eighteen stock themes in its order`() {
+        assertEquals(
+            listOf(
+                "Berth Dark", "Berth Light", "Catppuccin Mocha", "Catppuccin Latte", "Gruvbox Dark", "Gruvbox Light", "Nord",
+                "Solarized Dark", "Solarized Light", "Ros\u00E9 Pine", "Tokyo Night", "Kanagawa", "Everforest", "Dracula",
+                "One Dark", "Ayu", "GitHub Dark High Contrast", "GitHub Light High Contrast",
+            ),
+            TerminalTheme.builtIns.map { it.name },
+            "a new stock id may already name a stored custom theme: it needs a database step of its own, as version 9 freed these eighteen",
+        )
+        val light = setOf(
+            TerminalTheme.BERTH_LIGHT_ID, TerminalTheme.CATPPUCCIN_LATTE_ID, TerminalTheme.GRUVBOX_LIGHT_ID,
+            TerminalTheme.SOLARIZED_LIGHT_ID, TerminalTheme.GITHUB_LIGHT_HIGH_CONTRAST_ID,
+        )
+        for (t in TerminalTheme.builtIns) {
+            assertEquals(t.id !in light, t.isDark, "${t.id} is ${if (t.id in light) "light" else "dark"}")
+            assertNotNull(t.suggestedAccent, "${t.id} suggests an accent")
+            assertTrue(t.selection != t.background, "${t.id} selection shows")
+        }
+        for (t in listOf(TerminalTheme.GITHUB_DARK_HIGH_CONTRAST, TerminalTheme.GITHUB_LIGHT_HIGH_CONTRAST)) {
+            assertTrue(ColorMath.contrast(t.foreground, t.background) >= 7.0, "${t.id} text reads at AAA")
+            assertTrue(ColorMath.contrast(t.foreground, t.selection) >= 7.0, "${t.id} selected text reads at AAA")
+        }
     }
 
     @Test

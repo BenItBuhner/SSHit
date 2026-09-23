@@ -158,6 +158,14 @@ class AppViewModel @Inject constructor(
     val records: StateFlow<List<SessionRecord>> = sessions.records
     val workspaces: StateFlow<List<Workspace>> = sessions.workspaces
     val currentWorkspaceId: StateFlow<String?> = sessions.currentWorkspaceId
+
+    /**
+     * The interface theme the shell draws with: [interfaceTheme], under the current group's own
+     * accent when that group has one (spec A10, C3), so the pickers still read and write the app's.
+     */
+    val shownInterfaceTheme: StateFlow<InterfaceTheme> = combine(interfaceTheme, workspaces, currentWorkspaceId) { theme, groups, current ->
+        groups.firstOrNull { it.id == current }?.accentRgb?.let { theme.copy(accent = it, materialYou = false) } ?: theme
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, InterfaceTheme.DEFAULT)
     val activeTabId: StateFlow<String?> = sessions.activeTabId
 
     /** Whether the persisted tabs are loaded; before that the Stage shows nothing rather than an empty state it cannot vouch for. */
@@ -680,6 +688,9 @@ class AppViewModel @Inject constructor(
 
     /** The group editor's Reconnect tabs at launch (spec C8): restore honours it per group when the app starts. */
     fun setWorkspaceReconnectAtLaunch(id: String, reconnect: Boolean) = sessions.updateWorkspace(id) { copy(reconnectAtLaunch = reconnect) }
+
+    /** The group editor's Accent (spec C8): the interface's accent while the group is current; null inherits the app's. */
+    fun setWorkspaceAccent(id: String, rgb: Int?) = sessions.updateWorkspace(id) { copy(accentRgb = rgb) }
     fun moveGroup(id: String, toIndex: Int) = sessions.moveGroup(id, toIndex)
     fun closeGroup(id: String) = sessions.closeGroup(id)
     fun deleteWorkspace(id: String, closeTabs: Boolean) = sessions.deleteWorkspace(id, closeTabs)

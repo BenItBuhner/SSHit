@@ -45,6 +45,9 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.themes.AccentChoice
+import app.berth.android.ui.themes.AccentPicker
+import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.Host
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SwatchColor
@@ -97,13 +100,15 @@ fun RenameTabSheet(
 /**
  * Create or edit a group (spec C3, Groups; C8, the editor): name, colour and monogram, the colour
  * picked from the twelve swatches, the monogram the name's own (A8) until it is typed over, and
- * for an existing [group] the spec's Reconnect at launch switch, which is off by default so a
- * launch restores the group's frames and reconnects on a tap. Editing an existing group's colour
- * and switch applies as you go; its name and monogram, being typed, commit together on Done
- * through [onRename], the monogram blank when it is the name's own; creating one commits on
- * Create. The sheet is a fixed set of controls, so it opens at its content height rather than at
- * half the window, where Done and Cancel stood below the fold at the interface's font cap (A11),
- * and its column scrolls for a window shorter than the controls.
+ * for an existing [group] its Accent, Inherit (drawn in [inheritedAccent], the app's) or one of
+ * the app's accent list, which the interface takes while the group is current, and the spec's
+ * Reconnect at launch switch, which is off by default so a launch restores the group's frames and
+ * reconnects on a tap. Editing an existing group's colour, accent and switch applies as you go;
+ * its name and monogram, being typed, commit together on Done through [onRename], the monogram
+ * blank when it is the name's own; creating one commits on Create. The sheet is a fixed set of
+ * controls, so it opens at its content height rather than at half the window, where Done and
+ * Cancel stood below the fold at the interface's font cap (A11), and its column scrolls for a
+ * window shorter than the controls.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,12 +119,15 @@ fun GroupEditorSheet(
     onRecolor: (SwatchColor) -> Unit,
     onDismiss: () -> Unit,
     onReconnectAtLaunch: (Boolean) -> Unit = {},
+    inheritedAccent: Int = AccentPreset.COPPER.rgb,
+    onAccent: (Int?) -> Unit = {},
 ) {
     val c = Berth.colors
     var name by remember { mutableStateOf(group?.name ?: "") }
     var color by remember { mutableStateOf(group?.color ?: SwatchColor.SLATE) }
     var touchedColor by remember { mutableStateOf(group != null) }
     var reconnect by remember { mutableStateOf(group?.reconnectAtLaunch ?: false) }
+    var accent by remember { mutableStateOf(group?.accentRgb) }
     // A saved monogram that is not the name's own was typed once; the field keeps it and the auto stops.
     var monogram by remember { mutableStateOf(group?.monogram ?: "") }
     var monogramEdited by remember { mutableStateOf(group != null && group.monogram != Host.monogramFor(group.name)) }
@@ -177,6 +185,15 @@ fun GroupEditorSheet(
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false),
             )
             if (group != null) {
+                Text("Accent".uppercase(), style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp))
+                AccentPicker(
+                    choice = accent?.let(AccentChoice::Colour) ?: AccentChoice.Inherit,
+                    onChoose = { choice ->
+                        accent = (choice as? AccentChoice.Colour)?.rgb
+                        onAccent(accent)
+                    },
+                    inherited = inheritedAccent,
+                )
                 ToggleRow(
                     "Reconnect tabs at launch",
                     reconnect,

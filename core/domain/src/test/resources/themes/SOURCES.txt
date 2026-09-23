@@ -1,0 +1,20 @@
+Real theme files the import tests read, byte for byte as published (fetched September 2026).
+
+iterm2/Dracula.itermcolors, Catppuccin Latte.itermcolors, Gruvbox Dark.itermcolors
+    https://github.com/mbadolato/iTerm2-Color-Schemes/tree/master/schemes
+iterm2/One Dark.itermcolors
+    https://github.com/joshdick/onedark.vim/tree/main/term
+
+ghostty/dracula                  https://github.com/dracula/ghostty
+ghostty/rose-pine                https://github.com/rose-pine/ghostty (dist/rose-pine)
+ghostty/tokyonight_night         https://github.com/folke/tokyonight.nvim (extras/ghostty)
+ghostty/kanagawa-wave            https://github.com/rebelot/kanagawa.nvim (extras/ghostty)
+ghostty/catppuccin-latte.conf    https://github.com/catppuccin/ghostty (themes)
+
+base16/dracula.yaml, catppuccin-latte.yaml, gruvbox-dark-hard.yaml
+    https://github.com/tinted-theming/schemes (base16, the current `palette:` layout)
+base16/default-dark.yaml
+    https://github.com/chriskempson/base16-default-schemes (the original flat layout)
+
+termux/*.properties
+    https://github.com/termux/termux-styling/tree/master/app/src/main/assets/colors

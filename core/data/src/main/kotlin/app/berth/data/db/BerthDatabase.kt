@@ -8,7 +8,9 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.AutoMigrationSpec
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
+import app.berth.domain.model.TerminalTheme
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -28,7 +30,7 @@ import kotlinx.serialization.json.intOrNull
         PreferenceEntity::class,
         CommandHistoryEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
@@ -39,6 +41,7 @@ import kotlinx.serialization.json.intOrNull
         AutoMigration(from = 6, to = 7, spec = PersistenceInherits::class),
         // Version 8: a host's own scrollback cap and cipher list, two columns whose defaults leave every host as it was.
         AutoMigration(from = 7, to = 8),
+        AutoMigration(from = 8, to = 9, spec = StockThemeIdsFreed::class),
     ],
 )
 abstract class BerthDatabase : RoomDatabase() {
@@ -134,29 +137,114 @@ class PersistenceInherits : AutoMigrationSpec {
         return if (keep == this) this else JsonObject(keep)
     }
 
-    /** [column] of every row of [table] through [change], written back where it changed; a value that is not a JSON object is left alone. */
-    private fun SQLiteConnection.rewriteJson(table: String, column: String, change: (JsonObject) -> JsonObject) {
-        val changed = ArrayList<Pair<String, String>>()
-        prepare("SELECT id, $column FROM $table").use { rows ->
-            while (rows.step()) {
-                if (rows.isNull(1)) continue
-                val stored = rows.getText(1)
-                val json = runCatching { Json.parseToJsonElement(stored) }.getOrNull() as? JsonObject ?: continue
-                val folded = change(json)
-                if (folded != json) changed += rows.getText(0) to folded.toString()
-            }
-        }
-        for ((id, value) in changed) {
-            prepare("UPDATE $table SET $column = ? WHERE id = ?").use { update ->
-                update.bindText(1, value)
-                update.bindText(2, id)
-                update.step()
-            }
-        }
-    }
-
     private companion object {
         const val LEGACY_KEEPALIVE_SECONDS = 15
         const val LEGACY_RECONNECT_MINUTES = 15
+    }
+}
+
+/**
+ * Version 9: no custom theme is shadowed by a stock one. Builds before the stock set grew to its
+ * eighteen saved an imported scheme with no id under a slug of its name, so a Gogh "Dracula" sat
+ * at `dracula`, now a stock id: the stock theme hid it, every host, group and default on it drew
+ * the stock colours, and it could be neither opened nor deleted. Each custom under a stock id
+ * moves to [TerminalTheme.freedId] with its name and colours as they were, and every reference to
+ * it follows: the app default, each group's theme, each host's appearance and each tab's host
+ * snapshot. A reference to a stock id no custom sat under still names the stock theme.
+ *
+ * The step runs on the JSON as stored rather than through the model, and against its own copy of
+ * the eighteen ids stock at this version, [STOCK_IDS], so neither a later change to the model's
+ * fields nor a stock theme added later changes what it did; a later addition needs a step of its
+ * own. Where a theme moves to is [TerminalTheme.freedId], shared with bundle import so a bundle
+ * made before the upgrade lands on the moved theme, which is why that derivation never changes.
+ */
+class StockThemeIdsFreed : AutoMigrationSpec {
+    override fun onPostMigrate(connection: SQLiteConnection) {
+        val stored = connection.preference(CUSTOM_THEMES)?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() } as? JsonArray ?: return
+        val moved = HashMap<String, String>()
+        val themes = stored.map { element ->
+            val theme = element as? JsonObject ?: return@map element
+            val id = theme.stringField("id")?.takeIf { it in STOCK_IDS } ?: return@map element
+            val to = TerminalTheme.freedId(id)
+            moved[id] = to
+            JsonObject(theme + ("id" to JsonPrimitive(to)))
+        }
+        if (moved.isEmpty()) return
+        connection.setPreference(CUSTOM_THEMES, JsonArray(themes).toString())
+
+        val default = connection.preference(DEFAULT_THEME)?.let { runCatching { Json.parseToJsonElement(it) }.getOrNull() as? JsonPrimitive }
+        default?.takeIf { it.isString }?.content?.let(moved::get)?.let { connection.setPreference(DEFAULT_THEME, JsonPrimitive(it).toString()) }
+        for ((from, to) in moved) {
+            connection.prepare("UPDATE workspaces SET terminalThemeId = ? WHERE terminalThemeId = ?").use { update ->
+                update.bindText(1, to)
+                update.bindText(2, from)
+                update.step()
+            }
+        }
+        connection.rewriteJson("hosts", "appearanceJson") { it.repointed(moved) }
+        connection.rewriteJson("sessions", "hostSnapshotJson") { host ->
+            val appearance = host["appearance"] as? JsonObject ?: return@rewriteJson host
+            val repointed = appearance.repointed(moved)
+            if (repointed == appearance) host else JsonObject(host + ("appearance" to repointed))
+        }
+    }
+
+    /** An appearance override whose theme moved, naming where it went. */
+    private fun JsonObject.repointed(moved: Map<String, String>): JsonObject {
+        val to = stringField("terminalThemeId")?.let(moved::get) ?: return this
+        return JsonObject(this + ("terminalThemeId" to JsonPrimitive(to)))
+    }
+
+    private fun JsonObject.stringField(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    private fun SQLiteConnection.preference(key: String): String? =
+        prepare("SELECT value FROM preferences WHERE `key` = ?").use { row ->
+            row.bindText(1, key)
+            if (row.step()) row.getText(0) else null
+        }
+
+    private fun SQLiteConnection.setPreference(key: String, value: String) {
+        prepare("UPDATE preferences SET value = ? WHERE `key` = ?").use { update ->
+            update.bindText(1, value)
+            update.bindText(2, key)
+            update.step()
+        }
+    }
+
+    internal companion object {
+        private const val CUSTOM_THEMES = "terminal_themes_custom"
+        private const val DEFAULT_THEME = "terminal_theme_default"
+
+        /** The stock ids at version 9, as they were then; this list does not follow the gallery. */
+        internal val STOCK_IDS: Set<String> = setOf(
+            "berth-dark", "berth-light",
+            "catppuccin-mocha", "catppuccin-latte",
+            "gruvbox-dark", "gruvbox-light",
+            "nord",
+            "solarized-dark", "solarized-light",
+            "rose-pine", "tokyo-night", "kanagawa", "everforest", "dracula", "one-dark", "ayu",
+            "github-dark-high-contrast", "github-light-high-contrast",
+        )
+    }
+}
+
+/** [column] of every row of [table] through [change], written back where it changed; a value that is not a JSON object is left alone. */
+private fun SQLiteConnection.rewriteJson(table: String, column: String, change: (JsonObject) -> JsonObject) {
+    val changed = ArrayList<Pair<String, String>>()
+    prepare("SELECT id, $column FROM $table").use { rows ->
+        while (rows.step()) {
+            if (rows.isNull(1)) continue
+            val stored = rows.getText(1)
+            val json = runCatching { Json.parseToJsonElement(stored) }.getOrNull() as? JsonObject ?: continue
+            val folded = change(json)
+            if (folded != json) changed += rows.getText(0) to folded.toString()
+        }
+    }
+    for ((id, value) in changed) {
+        prepare("UPDATE $table SET $column = ? WHERE id = ?").use { update ->
+            update.bindText(1, value)
+            update.bindText(2, id)
+            update.step()
+        }
     }
 }

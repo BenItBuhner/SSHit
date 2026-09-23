@@ -175,8 +175,12 @@ val r8Resources = tasks.register("r8Resources") {
     // With --no-data-resources R8 never sees the service files, so they are carried across as they are. (The app
     // build hands R8 the merged resources, and R8 writes them back named after the service interfaces' new names,
     // which is what the renamed LoggerFactory loads; verifyReleaseKeepRules follows the mapping to that file.)
-    description = "META-INF/services from the program's jars, which R8 does not see here, so ServiceLoader finds what it would in the APK."
+    // The tests' own files, the fixtures a test reads from the classpath by name (:core:domain's theme samples),
+    // are carried the same way: no APK holds them, so R8's output would otherwise lack them and a test would fail
+    // on its fixture before it reached the code under proof.
+    description = "META-INF/services from the program's jars, and the tests' own files, which R8 does not see here, so each is found as it would be outside R8."
     val jars = programJars
+    val testJar = r8TestJar.map { it.outputs.files.singleFile }
     val out = r8Dir.map { it.dir("resources") }
     inputs.files(jars)
     outputs.dir(out)
@@ -191,6 +195,13 @@ val r8Resources = tasks.register("r8Resources") {
                     // Several jars may declare providers of one service: their lines are joined, as the APK's merger does.
                     zip.getInputStream(entry).use { input -> target.appendText(input.reader().readText().let { if (it.endsWith("\n")) it else it + "\n" }) }
                 }
+            }
+        }
+        ZipFile(testJar.get()).use { zip ->
+            for (entry in zip.entries().asSequence().filter { !it.isDirectory && !it.name.endsWith(".class") && !it.name.startsWith("META-INF/") }) {
+                val target = dir.resolve(entry.name)
+                target.parentFile.mkdirs()
+                zip.getInputStream(entry).use { input -> target.outputStream().use { input.copyTo(it) } }
             }
         }
     }

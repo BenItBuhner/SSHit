@@ -1,5 +1,6 @@
 package app.berth.domain.model
 
+import java.util.UUID
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -104,6 +105,18 @@ data class TerminalTheme(
         const val GRUVBOX_DARK_ID = "gruvbox-dark"
         const val NORD_ID = "nord"
         const val SOLARIZED_DARK_ID = "solarized-dark"
+        const val CATPPUCCIN_LATTE_ID = "catppuccin-latte"
+        const val GRUVBOX_LIGHT_ID = "gruvbox-light"
+        const val SOLARIZED_LIGHT_ID = "solarized-light"
+        const val ROSE_PINE_ID = "rose-pine"
+        const val TOKYO_NIGHT_ID = "tokyo-night"
+        const val KANAGAWA_ID = "kanagawa"
+        const val EVERFOREST_ID = "everforest"
+        const val DRACULA_ID = "dracula"
+        const val ONE_DARK_ID = "one-dark"
+        const val AYU_ID = "ayu"
+        const val GITHUB_DARK_HIGH_CONTRAST_ID = "github-dark-high-contrast"
+        const val GITHUB_LIGHT_HIGH_CONTRAST_ID = "github-light-high-contrast"
 
         val BERTH_DARK = TerminalTheme(
             id = BERTH_DARK_ID,
@@ -207,8 +220,245 @@ data class TerminalTheme(
             builtIn = true,
         )
 
-        /** Stock themes: Berth's own pair plus a small curated set. They cannot be deleted, only duplicated. */
-        val builtIns: List<TerminalTheme> = listOf(BERTH_DARK, BERTH_LIGHT, CATPPUCCIN_MOCHA, GRUVBOX_DARK, NORD, SOLARIZED_DARK)
+        // The palettes below are each project's own terminal mapping. Where upstream swaps the text colour
+        // under a selection, the selection is the project's editor selection instead, since Berth keeps the
+        // glyph's own colour there.
+
+        val CATPPUCCIN_LATTE = TerminalTheme(
+            id = CATPPUCCIN_LATTE_ID,
+            name = "Catppuccin Latte",
+            ansi = listOf(
+                0x5C5F77, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xACB0BE,
+                0x6C6F85, 0xD20F39, 0x40A02B, 0xDF8E1D, 0x1E66F5, 0xEA76CB, 0x179299, 0xBCC0CC,
+            ),
+            background = 0xEFF1F5,
+            foreground = 0x4C4F69,
+            cursor = 0xDC8A78,
+            cursorText = 0xEFF1F5,
+            selection = 0xD8DAE1,
+            links = 0x1E66F5,
+            suggestedAccent = 0x8839EF,
+            builtIn = true,
+        )
+
+        val GRUVBOX_LIGHT = TerminalTheme(
+            id = GRUVBOX_LIGHT_ID,
+            name = "Gruvbox Light",
+            ansi = listOf(
+                0xFBF1C7, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0x7C6F64,
+                0x928374, 0x9D0006, 0x79740E, 0xB57614, 0x076678, 0x8F3F71, 0x427B58, 0x3C3836,
+            ),
+            background = 0xFBF1C7,
+            foreground = 0x3C3836,
+            cursor = 0x3C3836,
+            cursorText = 0xFBF1C7,
+            selection = 0xD5C4A1,
+            links = 0x076678,
+            suggestedAccent = 0xD65D0E,
+            builtIn = true,
+        )
+
+        val SOLARIZED_LIGHT = TerminalTheme(
+            id = SOLARIZED_LIGHT_ID,
+            name = "Solarized Light",
+            ansi = SOLARIZED_DARK.ansi,
+            background = 0xFDF6E3,
+            foreground = 0x657B83,
+            cursor = 0x657B83,
+            cursorText = 0xFDF6E3,
+            selection = 0xEEE8D5,
+            links = 0x268BD2,
+            suggestedAccent = 0xB58900,
+            builtIn = true,
+        )
+
+        val ROSE_PINE = TerminalTheme(
+            id = ROSE_PINE_ID,
+            name = "Ros\u00E9 Pine",
+            ansi = listOf(
+                0x26233A, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+                0x6E6A86, 0xEB6F92, 0x31748F, 0xF6C177, 0x9CCFD8, 0xC4A7E7, 0xEBBCBA, 0xE0DEF4,
+            ),
+            background = 0x191724,
+            foreground = 0xE0DEF4,
+            cursor = 0xE0DEF4,
+            cursorText = 0x191724,
+            selection = 0x403D52,
+            links = 0x9CCFD8,
+            suggestedAccent = 0xEBBCBA,
+            builtIn = true,
+        )
+
+        val TOKYO_NIGHT = TerminalTheme(
+            id = TOKYO_NIGHT_ID,
+            name = "Tokyo Night",
+            ansi = listOf(
+                0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
+                0x414868, 0xFF899D, 0x9FE044, 0xFABA4A, 0x8DB0FF, 0xC7A9FF, 0xA4DAFF, 0xC0CAF5,
+            ),
+            background = 0x1A1B26,
+            foreground = 0xC0CAF5,
+            cursor = 0xC0CAF5,
+            cursorText = 0x1A1B26,
+            selection = 0x283457,
+            links = 0x7AA2F7,
+            suggestedAccent = 0x7AA2F7,
+            builtIn = true,
+        )
+
+        val KANAGAWA = TerminalTheme(
+            id = KANAGAWA_ID,
+            name = "Kanagawa",
+            ansi = listOf(
+                0x16161D, 0xC34043, 0x76946A, 0xC0A36E, 0x7E9CD8, 0x957FB8, 0x6A9589, 0xC8C093,
+                0x727169, 0xE82424, 0x98BB6C, 0xE6C384, 0x7FB4CA, 0x938AA9, 0x7AA89F, 0xDCD7BA,
+            ),
+            background = 0x1F1F28,
+            foreground = 0xDCD7BA,
+            cursor = 0xC8C093,
+            cursorText = 0x1F1F28,
+            selection = 0x2D4F67,
+            links = 0x7E9CD8,
+            suggestedAccent = 0x7E9CD8,
+            builtIn = true,
+        )
+
+        val EVERFOREST = TerminalTheme(
+            id = EVERFOREST_ID,
+            name = "Everforest",
+            ansi = listOf(
+                // Upstream repeats bg3 as bright black, which leaves autosuggestions and dimmed text at about 1.6:1
+                // on the background; bright black is its comment grey (grey1) instead.
+                0x475258, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+                0x859289, 0xE67E80, 0xA7C080, 0xDBBC7F, 0x7FBBB3, 0xD699B6, 0x83C092, 0xD3C6AA,
+            ),
+            background = 0x2D353B,
+            foreground = 0xD3C6AA,
+            cursor = 0xD3C6AA,
+            cursorText = 0x2D353B,
+            selection = 0x543A48,
+            links = 0x7FBBB3,
+            suggestedAccent = 0xA7C080,
+            builtIn = true,
+        )
+
+        val DRACULA = TerminalTheme(
+            id = DRACULA_ID,
+            name = "Dracula",
+            ansi = listOf(
+                0x21222C, 0xFF5555, 0x50FA7B, 0xF1FA8C, 0xBD93F9, 0xFF79C6, 0x8BE9FD, 0xF8F8F2,
+                0x6272A4, 0xFF6E6E, 0x69FF94, 0xFFFFA5, 0xD6ACFF, 0xFF92DF, 0xA4FFFF, 0xFFFFFF,
+            ),
+            background = 0x282A36,
+            foreground = 0xF8F8F2,
+            cursor = 0xF8F8F2,
+            cursorText = 0x282A36,
+            selection = 0x44475A,
+            links = 0x8BE9FD,
+            suggestedAccent = 0xBD93F9,
+            builtIn = true,
+        )
+
+        val ONE_DARK = TerminalTheme(
+            id = ONE_DARK_ID,
+            name = "One Dark",
+            ansi = listOf(
+                0x2C323C, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0x5C6370,
+                0x3E4452, 0xE06C75, 0x98C379, 0xE5C07B, 0x61AFEF, 0xC678DD, 0x56B6C2, 0xABB2BF,
+            ),
+            background = 0x282C34,
+            foreground = 0xABB2BF,
+            cursor = 0x61AFEF,
+            cursorText = 0x282C34,
+            selection = 0x3E4452,
+            links = 0x61AFEF,
+            suggestedAccent = 0x61AFEF,
+            builtIn = true,
+        )
+
+        val AYU = TerminalTheme(
+            id = AYU_ID,
+            name = "Ayu",
+            ansi = listOf(
+                0x11151C, 0xEA6C73, 0x7FD962, 0xF9AF4F, 0x53BDFA, 0xCDA1FA, 0x90E1C6, 0xC7C7C7,
+                0x686868, 0xF07178, 0xAAD94C, 0xFFB454, 0x59C2FF, 0xD2A6FF, 0x95E6CB, 0xFFFFFF,
+            ),
+            background = 0x0B0E14,
+            foreground = 0xBFBDB6,
+            cursor = 0xE6B450,
+            cursorText = 0x0B0E14,
+            selection = 0x1B3A5B,
+            links = 0x59C2FF,
+            suggestedAccent = 0xE6B450,
+            builtIn = true,
+        )
+
+        // GitHub's pair is Primer's high-contrast colours (@primer/primitives 7.10.0) in the slots GitHub's
+        // VS Code theme gives them, on the panel background its terminal draws on. Its high-contrast
+        // selection is an inverted block, so the selection is the accent at 20% its other variants use.
+
+        val GITHUB_DARK_HIGH_CONTRAST = TerminalTheme(
+            id = GITHUB_DARK_HIGH_CONTRAST_ID,
+            name = "GitHub Dark High Contrast",
+            ansi = listOf(
+                0x7A828E, 0xFF9492, 0x26CD4D, 0xF0B72F, 0x71B7FF, 0xCB9EFF, 0x39C5CF, 0xD9DEE3,
+                0x9EA7B3, 0xFFB1AF, 0x4AE168, 0xF7C843, 0x91CBFF, 0xDBB7FF, 0x56D4DD, 0xFFFFFF,
+            ),
+            background = 0x010409,
+            foreground = 0xF0F3F6,
+            cursor = 0x71B7FF,
+            cursorText = 0x010409,
+            selection = 0x17283A,
+            links = 0x71B7FF,
+            suggestedAccent = 0x71B7FF,
+            builtIn = true,
+        )
+
+        val GITHUB_LIGHT_HIGH_CONTRAST = TerminalTheme(
+            id = GITHUB_LIGHT_HIGH_CONTRAST_ID,
+            name = "GitHub Light High Contrast",
+            ansi = listOf(
+                0x0E1116, 0xA0111F, 0x024C1A, 0x3F2200, 0x0349B4, 0x622CBC, 0x1B7C83, 0x66707B,
+                0x4B535D, 0x86061D, 0x055D20, 0x4E2C00, 0x1168E3, 0x844AE7, 0x3192AA, 0x88929D,
+            ),
+            background = 0xFFFFFF,
+            foreground = 0x0E1116,
+            cursor = 0x0349B4,
+            cursorText = 0xFFFFFF,
+            selection = 0xCDDBF0,
+            links = 0x0349B4,
+            suggestedAccent = 0x0349B4,
+            builtIn = true,
+        )
+
+        /**
+         * Stock themes, in the gallery's order (spec A10). They cannot be deleted, only duplicated.
+         * A stock id added here may already name a stored custom theme (an older build saved an
+         * imported scheme with no id under a slug of its name). The database step that freed those
+         * under the eighteen here (version 9) holds its own copy of their ids, so it does not see a
+         * later addition: that needs a step of its own, moving its customs to [freedId] the same way.
+         */
+        val builtIns: List<TerminalTheme> = listOf(
+            BERTH_DARK, BERTH_LIGHT,
+            CATPPUCCIN_MOCHA, CATPPUCCIN_LATTE,
+            GRUVBOX_DARK, GRUVBOX_LIGHT,
+            NORD,
+            SOLARIZED_DARK, SOLARIZED_LIGHT,
+            ROSE_PINE, TOKYO_NIGHT, KANAGAWA, EVERFOREST, DRACULA, ONE_DARK, AYU,
+            GITHUB_DARK_HIGH_CONTRAST, GITHUB_LIGHT_HIGH_CONTRAST,
+        )
+
+        private val stockIds: Set<String> = builtIns.mapTo(HashSet()) { it.id }
+
+        fun isStockId(id: String): Boolean = id in stockIds
+
+        /**
+         * The id a custom theme stored under stock id [id] moves to, so the stock theme no longer
+         * shadows it. The same id always moves to the same place: a bundle made before the move
+         * lands on the theme the move made instead of beside it. Phones have moved themes with it
+         * since database version 9, so the derivation stays as it is.
+         */
+        fun freedId(id: String): String = "theme-" + UUID.nameUUIDFromBytes("stock-clash:$id".toByteArray(Charsets.UTF_8)).toString().take(8)
     }
 }
 
@@ -323,10 +573,15 @@ enum class InterfaceContrast { STANDARD, HIGH }
 
 enum class Density { COMFORTABLE, COMPACT }
 
-/** Accent presets from the design system, as 0xRRGGBB. */
-enum class AccentPreset(val rgb: Int) {
-    COPPER(0xE0A458), VERDIGRIS(0x5FB3A1), SLATE(0x7A9CD6), MOSS(0x8FB573),
-    ROSE(0xE27D8F), MAUVE(0xC387B8), BONE(0xC9C4BB),
+/** Accent presets from the design system (spec A2), as 0xRRGGBB, in the order every accent control lists them. */
+enum class AccentPreset(val rgb: Int, val title: String) {
+    COPPER(0xE0A458, "Copper"), VERDIGRIS(0x5FB3A1, "Verdigris"), SLATE(0x7A9CD6, "Slate"), MOSS(0x8FB573, "Moss"),
+    ROSE(0xE27D8F, "Rose"), MAUVE(0xC387B8, "Mauve"), BONE(0xC9C4BB, "Bone");
+
+    companion object {
+        /** The preset whose colour is [rgb], or null for a custom accent. */
+        fun of(rgb: Int): AccentPreset? = entries.firstOrNull { it.rgb == rgb and 0xFFFFFF }
+    }
 }
 
 /** Interface theme: tone, accent, contrast and density are independent of the terminal palette. */

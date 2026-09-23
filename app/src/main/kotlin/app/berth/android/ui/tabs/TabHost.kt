@@ -59,6 +59,7 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.SheetTitle
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.themes.shownAccentRgb
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.delay
@@ -193,6 +194,7 @@ fun TabSheets(vm: AppViewModel, ui: TabUiState, actions: TabActions, onAddHost: 
                 if (group == null) {
                     ui.groupEditor = null
                 } else {
+                    val appTheme by vm.interfaceTheme.collectAsState()
                     GroupEditorSheet(
                         group = group,
                         onCreate = { _, _, _ -> },
@@ -200,6 +202,8 @@ fun TabSheets(vm: AppViewModel, ui: TabUiState, actions: TabActions, onAddHost: 
                         onRecolor = { vm.setWorkspaceColor(group.id, it) },
                         onDismiss = { ui.groupEditor = null },
                         onReconnectAtLaunch = { vm.setWorkspaceReconnectAtLaunch(group.id, it) },
+                        inheritedAccent = appTheme.shownAccentRgb(),
+                        onAccent = { vm.setWorkspaceAccent(group.id, it) },
                     )
                 }
             }

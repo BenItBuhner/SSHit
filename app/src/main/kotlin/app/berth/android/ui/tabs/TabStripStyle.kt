@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.sp
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 
 /** How the active tab is told apart from the rest. */
 enum class ActiveTabMark {
@@ -41,7 +42,7 @@ enum class StripChrome { FLAT, ISLAND }
 @Immutable
 data class TabStripStyle(
     /** Header row height; the terminal starts beneath it, so it must not grow past the ribbon it replaces. */
-    val height: Dp = 40.dp,
+    val height: Dp = DensityTokens.Comfortable.header,
     val chrome: StripChrome = StripChrome.FLAT,
     /** Island only: inset from the header's edges and the island's own radius. */
     val islandInset: Dp = 6.dp,

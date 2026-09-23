@@ -24,10 +24,12 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
@@ -48,8 +51,12 @@ import app.berth.android.ui.components.ButtonKind
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SheetTitle
-import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.PickedText
+import app.berth.android.ui.io.rememberOpenNamedTextFile
+import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
+import app.berth.android.ui.tabs.NOTICE_BAR_MS
+import app.berth.android.ui.tabs.NoticeBar
 import app.berth.android.ui.terminal.PreviewScript
 import app.berth.android.ui.terminal.TerminalPreview
 import app.berth.android.ui.theme.Berth
@@ -59,10 +66,16 @@ import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.TerminalThemes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The terminal theme gallery (UX spec C19): every theme as a tile that is a live mini-render of
  * its own colours. Tap opens the editor; long-press offers default, duplicate, export and delete.
+ * Setting as the app default a theme that suggests an accent other than the interface's offers
+ * it at the foot for the notice bar's six seconds (A10).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,25 +90,45 @@ fun ThemesScreen(
     val themes by vm.terminalThemes.collectAsState()
     val default by vm.defaultTerminalTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
+    val appTheme by vm.interfaceTheme.collectAsState()
     var menu by remember { mutableStateOf(false) }
     var pasteSheet by remember { mutableStateOf(false) }
-    var importNote by remember { mutableStateOf<String?>(null) }
-
-    fun importText(text: String) {
-        val imported = TerminalThemes.importAll(text)
-        importNote = when {
-            imported.isEmpty() -> "That text is not a terminal theme Berth can read."
-            else -> {
-                imported.forEach { t ->
-                    // Never overwrite a stock theme on import; a clash gets a fresh id.
-                    val id = if (themes.any { it.id == t.id && it.builtIn }) AppViewModel.newThemeId() else t.id
-                    vm.saveTerminalTheme(t.copy(id = id))
-                }
-                if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
-            }
+    var exporting by remember { mutableStateOf<TerminalTheme?>(null) }
+    val saver = rememberSaveTextFile()
+    // An import's answer or a new default's accent on offer, on the one bar at the foot, where an
+    // import started from the header menu can see it; the bar keeps the last one through its exit.
+    var notice by remember { mutableStateOf<GalleryNotice?>(null) }
+    val shownNotice = remember { mutableStateOf<GalleryNotice?>(null) }
+    if (notice != null) shownNotice.value = notice
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(NOTICE_BAR_MS)
+            notice = null
         }
     }
-    val openFile = rememberOpenTextFile(::importText)
+
+    val scope = rememberCoroutineScope()
+    // iTerm2, Ghostty and Termux files carry no name of their own; the file's name stands in.
+    fun importText(text: String, fileName: String? = null) {
+        scope.launch {
+            val imported = withContext(Dispatchers.Default) { TerminalThemes.importAll(text, TerminalThemes.nameFromFile(fileName)) }
+            val note = when {
+                imported.isEmpty() -> "That text is not a terminal theme Berth can read."
+                else -> {
+                    imported.forEach { t ->
+                        // Never overwrite a stock theme on import; a clash gets a fresh id.
+                        val id = if (themes.any { it.id == t.id && it.builtIn }) AppViewModel.newThemeId() else t.id
+                        vm.saveTerminalTheme(t.copy(id = id))
+                    }
+                    if (imported.size == 1) "Imported ${imported[0].name}." else "Imported ${imported.size} themes."
+                }
+            }
+            notice = GalleryNotice.Note(note)
+        }
+    }
+    val openFile = rememberOpenNamedTextFile { picked ->
+        if (picked is PickedText.Read) importText(picked.text, picked.name) else picked.refusal("a theme")?.let { notice = GalleryNotice.Note(it) }
+    }
 
     fun newTheme() {
         val id = AppViewModel.newThemeId()
@@ -103,10 +136,10 @@ fun ThemesScreen(
         onOpen(id)
     }
 
+    Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
-        modifier
+        Modifier
             .fillMaxSize()
-            .background(c.surface0)
             .statusBarsPadding()
             .navigationBarsPadding(),
     ) {
@@ -140,34 +173,53 @@ fun ThemesScreen(
                     font = font,
                     isDefault = theme.id == default.id,
                     onOpen = { onOpen(theme.id) },
-                    onSetDefault = { vm.setDefaultTerminalTheme(theme.id) },
+                    onSetDefault = {
+                        vm.setDefaultTerminalTheme(theme.id)
+                        theme.takeIf { t -> t.suggestedAccent?.let { AccentChoice.Colour(it) != appTheme.accentChoice } == true }
+                            ?.let { notice = GalleryNotice.AccentOffer(it) }
+                    },
                     onDuplicate = {
                         val id = AppViewModel.newThemeId()
                         vm.saveTerminalTheme(theme.duplicate(id))
                         onOpen(id)
                     },
-                    onExport = { shareText(context, "${theme.name}.json", theme.toJson()) },
+                    onExport = { exporting = theme },
                     onDelete = if (theme.builtIn) null else ({ vm.deleteTerminalTheme(theme.id) }),
                 )
             }
             item(span = { GridItemSpan(2) }) {
-                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BerthButton("Import file", onClick = openFile)
-                        BerthButton("Paste theme text", onClick = { pasteSheet = true })
-                    }
-                    val n = importNote
-                    if (n != null) Text(n, style = BerthType.caption, color = c.text1, modifier = Modifier.padding(start = 4.dp))
+                Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BerthButton("Import file", onClick = openFile)
+                    BerthButton("Paste theme text", onClick = { pasteSheet = true })
                 }
             }
         }
+    }
+    val shown = shownNotice.value
+    NoticeBar(
+        visible = notice != null,
+        text = when (shown) {
+            is GalleryNotice.Note -> shown.text
+            is GalleryNotice.AccentOffer -> "${shown.theme.name} is the app default"
+            null -> ""
+        },
+        action = if (shown is GalleryNotice.AccentOffer) "Use its accent" else "OK",
+        onAction = {
+            (shown as? GalleryNotice.AccentOffer)?.theme?.suggestedAccent?.let { vm.setInterfaceTheme(appTheme.withAccent(AccentChoice.Colour(it))) }
+            notice = null
+        },
+        modifier = Modifier.align(Alignment.BottomCenter),
+        // A long theme name or a refusal at the font cap would be cut off; the line is read whole.
+        maxLines = 2,
+    )
     }
 
     if (pasteSheet) {
         PasteTextSheet(
             title = "Paste theme text",
-            caption = "Berth theme JSON, a Windows Terminal scheme, or a Gogh export",
+            caption = "Berth JSON, iTerm2, Ghostty, Windows Terminal, base16 or Termux colours",
             action = "Import",
+            placeholder = null,
             onDismiss = { pasteSheet = false },
             onSubmit = { text ->
                 importText(text)
@@ -175,6 +227,13 @@ fun ThemesScreen(
             },
         )
     }
+    exporting?.let { theme -> ThemeExportSheet(theme, saver, onDismiss = { exporting = null }) }
+}
+
+/** What the gallery's notice bar says: a line to read, or a new app default whose accent it offers. */
+private sealed interface GalleryNotice {
+    data class Note(val text: String) : GalleryNotice
+    data class AccentOffer(val theme: TerminalTheme) : GalleryNotice
 }
 
 /**
@@ -216,7 +275,15 @@ private fun ThemeTile(
                 modifier = Modifier.clip(RoundedCornerShape(BerthRadius.swatchSmall)),
             )
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(theme.name, style = BerthType.label, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // The eighteen stock tiles fill whole rows and the two stock names that wrap share one; a
+                // custom name could wrap beside a one-line tile and unbalance its row.
+                Text(
+                    theme.name,
+                    style = BerthType.label.copy(lineBreak = LineBreak.Heading),
+                    color = fg,
+                    maxLines = if (theme.builtIn) 2 else 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     when {
                         isDefault -> "App default"
@@ -224,7 +291,7 @@ private fun ThemeTile(
                         else -> "Custom"
                     },
                     style = BerthType.caption,
-                    color = fg.copy(alpha = if (isDefault) 0.85f else 0.6f),
+                    color = fg,
                 )
             }
         }
@@ -254,6 +321,7 @@ internal fun PasteTextSheet(
     onSubmit: (String) -> Unit,
     error: String? = null,
     secondary: Pair<String, () -> Unit>? = null,
+    placeholder: String? = "{ ... }",
 ) {
     val c = Berth.colors
     var text by remember { mutableStateOf("") }
@@ -266,7 +334,7 @@ internal fun PasteTextSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SheetTitle(title, caption)
-            BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = "{ ... }", helper = error, isError = error != null)
+            BerthField(text, { text = it }, mono = true, singleLine = false, minLines = 6, placeholder = placeholder, helper = error, isError = error != null)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BerthButton(action, onClick = { onSubmit(text) }, kind = ButtonKind.PRIMARY, enabled = text.isNotBlank())
                 if (secondary != null) BerthButton(secondary.first, onClick = secondary.second)

@@ -869,7 +869,7 @@ class TerminalSurfaceScreenshotTest {
         settle(400)
         capture("terminal-nerd-font-glyphs$suffix")
 
-        // Settings › About names the symbols font and its icon sets' licences beside the other fonts.
+        // Settings › About › Licences names the symbols font and its icon sets' licences beside the other fonts.
         settings = true
         waitForText("Nerd Font fallback")
         compose.onNodeWithText("Nerd Font fallback").performScrollTo()
@@ -877,12 +877,14 @@ class TerminalSurfaceScreenshotTest {
         settle(200)
         capture("settings-nerd-font-fallback$suffix")
         compose.assertNoTextCut("the Nerd Font fallback's caption${if (cap) " at the interface's font cap" else ""}")
+        compose.onNodeWithText("Licences").performScrollTo().performClick()
+        waitForText("What Berth ships that came under terms of its own")
         compose.onNodeWithText("Symbols Nerd Font Mono", substring = true).performScrollTo()
         compose.onNodeWithText("Font Logos the Unlicense", substring = true).assertIsDisplayed()
         compose.onNodeWithText("Weather Icons and Pomicons under the SIL Open Font License,", substring = true).assertIsDisplayed()
         settle(200)
         capture("settings-about-fonts$suffix")
-        compose.assertNoTextCut("Settings › About${if (cap) " at the interface's font cap" else ""}")
+        compose.assertNoTextCut("Settings › About › Licences${if (cap) " at the interface's font cap" else ""}")
     }
 
     @Test

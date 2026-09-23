@@ -1,7 +1,6 @@
 package app.berth.android.ui.themes
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -36,7 +34,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthButton
-import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSlider
@@ -48,7 +45,9 @@ import app.berth.android.ui.components.ScreenHeader
 import app.berth.android.ui.components.SectionLabel
 import app.berth.android.ui.components.SegmentedControl
 import app.berth.android.ui.components.Swatch
-import app.berth.android.ui.io.rememberOpenTextFile
+import app.berth.android.ui.io.PickedText
+import app.berth.android.ui.io.TEXT_DOCUMENT_TYPES
+import app.berth.android.ui.io.rememberOpenNamedTextFile
 import app.berth.android.ui.io.rememberSaveTextFile
 import app.berth.android.ui.io.shareText
 import app.berth.android.ui.stage.Deck
@@ -61,10 +60,9 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.theme.toColor
-import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.Density
-import app.berth.domain.model.HexColorSerializer
 import app.berth.domain.model.InterfaceContrast
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
@@ -87,18 +85,18 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
     val terminalTheme by vm.defaultTerminalTheme.collectAsState()
     val font by vm.terminalFont.collectAsState()
     val deck by vm.deckLayout.collectAsState()
-    var customHex by remember { mutableStateOf(HexColorSerializer.toHex(theme.accent)) }
     var note by remember { mutableStateOf<String?>(null) }
     val saver = rememberSaveTextFile()
-    val openFile = rememberOpenTextFile { text ->
-        val imported = runCatching { InterfaceTheme.fromJson(text) }.getOrNull()
-        note = if (imported == null) "That file is not an interface theme." else { vm.setInterfaceTheme(imported); "Imported." }
+    val openFile = rememberOpenNamedTextFile(TEXT_DOCUMENT_TYPES) { picked ->
+        val imported = (picked as? PickedText.Read)?.let { runCatching { InterfaceTheme.fromJson(it.text) }.getOrNull() }
+        note = when {
+            picked !is PickedText.Read -> picked.refusal("an interface theme")
+            imported == null -> "That file is not an interface theme."
+            else -> { vm.setInterfaceTheme(imported); "Imported." }
+        }
     }
     var pasteSheet by remember { mutableStateOf(false) }
     fun set(t: InterfaceTheme) = vm.setInterfaceTheme(t)
-    val presetAccent = AccentPreset.entries.firstOrNull { it.rgb == theme.accent }
-    val customAccent = !theme.materialYou && presetAccent == null
-
     Column(
         modifier
             .fillMaxSize()
@@ -144,28 +142,8 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                     Text("Cool", style = BerthType.caption, color = c.text3)
                 }
                 Caption("Accent", top = 8.dp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (accent in AccentPreset.entries) {
-                        AccentChip(accent.name.lowercase().replaceFirstChar { it.uppercase() }, accent.rgb, selected = presetAccent == accent && !theme.materialYou) {
-                            set(theme.copy(accent = accent.rgb, materialYou = false))
-                        }
-                    }
-                    Chip("Material You", selected = theme.materialYou) { set(theme.copy(materialYou = true)) }
-                    Chip("Custom", selected = customAccent) { set(theme.copy(materialYou = false, accent = HexColorSerializer.parse(customHex) ?: theme.accent)) }
-                }
-                if (customAccent) {
-                    Spacer(Modifier.height(8.dp))
-                    BerthField(
-                        value = customHex,
-                        onValueChange = { text ->
-                            customHex = text
-                            HexColorSerializer.parse(text)?.let { set(theme.copy(accent = it, materialYou = false)) }
-                        },
-                        label = "Accent hex",
-                        mono = true,
-                        isError = HexColorSerializer.parse(customHex) == null,
-                    )
-                }
+                AccentPicker(theme.accentChoice, onChoose = { set(theme.withAccent(it)) }, customSeed = theme.accent)
+                GroupAccentNote(vm)
                 Caption("Contrast", top = 14.dp)
                 SegmentedControl(
                     listOf("Standard", "High"),
@@ -251,7 +229,7 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
             .semantics { contentDescription = "Interface preview" },
     ) {
         Row(
-            Modifier.fillMaxWidth().height(40.dp).background(c.surface1).padding(horizontal = 4.dp),
+            Modifier.fillMaxWidth().height(DensityTokens.Comfortable.header).background(c.surface1).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The ribbon's IconActions are 44 dp wide inside the 40 dp strip.
@@ -275,23 +253,4 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
 @Composable
 private fun Caption(text: String, top: androidx.compose.ui.unit.Dp = 0.dp, modifier: Modifier = Modifier) {
     Text(text, style = BerthType.caption, color = Berth.colors.text2, modifier = modifier.padding(start = 4.dp, top = top, bottom = 6.dp))
-}
-
-/** A chip with the accent colour as a leading dot, selected chips step up a surface. */
-@Composable
-private fun AccentChip(text: String, rgb: Int, selected: Boolean, onClick: () -> Unit) {
-    val c = Berth.colors
-    Row(
-        Modifier
-            .height(28.dp)
-            .clip(RoundedCornerShape(BerthRadius.swatch))
-            .background(if (selected) c.surface4 else c.surface2)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(rgb.toColor()))
-        Text(text, style = BerthType.label, color = c.text1, maxLines = 1)
-    }
 }

@@ -34,7 +34,6 @@ import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthSlider
-import app.berth.android.ui.components.ColorOption
 import app.berth.android.ui.components.ListRow
 import app.berth.android.ui.components.Panel
 import app.berth.android.ui.components.PanelNote
@@ -54,7 +53,10 @@ import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
-import app.berth.android.ui.theme.toColor
+import app.berth.android.ui.themes.AccentPicker
+import app.berth.android.ui.themes.GroupAccentNote
+import app.berth.android.ui.themes.accentChoice
+import app.berth.android.ui.themes.withAccent
 import app.berth.domain.model.DoubleTapAction
 import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.InterfaceContrast
@@ -98,6 +100,7 @@ fun SettingsScreen(
     var fontPicker by remember { mutableStateOf(false) }
     var exportBundle by remember { mutableStateOf(false) }
     var importBundle by remember { mutableStateOf(false) }
+    var licences by remember { mutableStateOf(false) }
     // The New key sheet the import's report opens, on the key it names to make again (spec C20).
     var makeKey by remember { mutableStateOf<NewKeyPrefill?>(null) }
     // One line at the foot of the screen for what a row just did (cleared, exported, imported); the text stays for the exit animation.
@@ -119,6 +122,7 @@ fun SettingsScreen(
     if (exportBundle) ExportBundleSheet(vm, onDismiss = { exportBundle = false }, onNotice = onNotice)
     if (importBundle) ImportBundleSheet(vm, onDismiss = { importBundle = false }, onNotice = onNotice, onMakeKey = { makeKey = it })
     makeKey?.let { GenerateKeySheet(vm, onDismiss = { makeKey = null }, prefill = it) }
+    if (licences) LicencesSheet(onDismiss = { licences = false })
 
     Box(modifier.fillMaxSize().background(c.surface0)) {
     Column(
@@ -138,65 +142,6 @@ fun SettingsScreen(
         ) {
             // Rows that navigate end in the drawn chevron, never a text glyph.
             val chevron: @Composable RowScope.() -> Unit = { BerthIcon(BerthIcons.chevronRight, tint = c.text3, size = 20.dp) }
-            Panel(label = "Interface") {
-                Text("Appearance", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
-                SegmentedControl(
-                    listOf("System", "Light", "Dark", "Black"),
-                    listOf(InterfaceVariant.SYSTEM, InterfaceVariant.LIGHT, InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK).indexOf(theme.variant),
-                    { vm.setInterfaceTheme(theme.copy(variant = listOf(InterfaceVariant.SYSTEM, InterfaceVariant.LIGHT, InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK)[it])) },
-                )
-                Text("Tone", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Warm", style = BerthType.caption, color = c.text3)
-                    // Bipolar: the notch is neutral graphite, the fill shows how far warm or cool.
-                    BerthSlider(
-                        value = theme.tone,
-                        onValueChange = { vm.setInterfaceTheme(theme.copy(tone = it)) },
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                        neutral = 0.5f,
-                    )
-                    Text("Cool", style = BerthType.caption, color = c.text3)
-                }
-                Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp))
-                // Each option is a 48 dp target around its 32 dp swatch, so the row's pitch is the target's.
-                Row {
-                    for ((name, accent) in ACCENTS) {
-                        ColorOption(
-                            color = accent.toColor(),
-                            name = name,
-                            selected = theme.accent == accent && !theme.materialYou,
-                            onClick = { vm.setInterfaceTheme(theme.copy(accent = accent, materialYou = false)) },
-                            size = 32.dp,
-                            inset = 5.dp,
-                        )
-                    }
-                }
-                ToggleRow("Material You accent", theme.materialYou, { vm.setInterfaceTheme(theme.copy(materialYou = it)) }, caption = "Follow the wallpaper colour on Android 12 and later")
-                ToggleRow("High contrast", theme.contrast == InterfaceContrast.HIGH, { vm.setInterfaceTheme(theme.copy(contrast = if (it) InterfaceContrast.HIGH else InterfaceContrast.STANDARD)) })
-                ToggleRow("System font", theme.useSystemFont, { vm.setInterfaceTheme(theme.copy(useSystemFont = it)) }, caption = "Use the device's interface font instead of Plex Sans")
-                ListRow("Interface editor", subtitle = "Presets, corner radius, density and a live preview", surface = Color.Transparent, minHeight = 44.dp, onClick = onAppearance, trailing = chevron)
-            }
-
-            Panel(label = "Terminal") {
-                ListRow("Terminal themes", subtitle = "${themes.size} themes \u00B7 ${defaultTheme.name} is the default", surface = Color.Transparent, minHeight = 44.dp, onClick = onThemes, trailing = chevron)
-                CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
-                // The family opens its own sheet (spec C20, Fonts): a list with each family set in its own face, and the import.
-                PickerRow("Terminal font", font.resolvedFamily(context), onClick = { fontPicker = true })
-                CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
-                ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
-                CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
-                ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
-                ToggleRow("Nerd Font fallback", font.nerdFontFallback, { vm.setTerminalFont(font.copy(nerdFontFallback = it)) }, caption = "Icons and separators the family lacks, from the bundled Symbols Nerd Font")
-                ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
-                // The cursor the user chose stands until the program on the other end asks for its own (DECSCUSR).
-                Text("Cursor", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
-                SegmentedControl(CURSOR_SHAPES.map { it.second }, CURSOR_SHAPES.indexOfFirst { it.first == font.cursorShape.lowercase() }.coerceAtLeast(0), { vm.setTerminalFont(font.copy(cursorShape = CURSOR_SHAPES[it].first)) })
-                ToggleRow("Blink", font.cursorBlink, { vm.setTerminalFont(font.copy(cursorBlink = it)) })
-                CyclePicker("Scrollback", TerminalSettings.SCROLLBACK_CHOICES, terminal.scrollbackLines, { "%,d lines".format(it) }, caption = "History kept above each terminal's screen") { lines -> vm.updateTerminalSettings { it.copy(scrollbackLines = lines) } }
-            }
-
-            CommandHistorySettings(vm, onNotice = onNotice)
-
             Panel(label = "Deck") {
                 ListRow("Edit layers and keys", subtitle = deck.layers.joinToString(", ") { it.name }, surface = Color.Transparent, minHeight = 44.dp, onClick = onDeckEditor, trailing = chevron)
                 CyclePicker("Height", listOf(40, 44, 48, 52), deck.heightDp, { "$it dp" }) { vm.setDeckLayout(deck.copy(heightDp = it)) }
@@ -249,6 +194,52 @@ fun SettingsScreen(
 
             SecurityPanel(vm, onKnownHosts)
 
+            // Spec C20's order: Input, Connection, Security, Appearance, Data (command history its last row), About.
+            Panel(label = "Interface") {
+                Text("Appearance", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+                SegmentedControl(
+                    listOf("System", "Light", "Dark", "Black"),
+                    listOf(InterfaceVariant.SYSTEM, InterfaceVariant.LIGHT, InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK).indexOf(theme.variant),
+                    { vm.setInterfaceTheme(theme.copy(variant = listOf(InterfaceVariant.SYSTEM, InterfaceVariant.LIGHT, InterfaceVariant.DARK, InterfaceVariant.TRUE_BLACK)[it])) },
+                )
+                Text("Tone", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Warm", style = BerthType.caption, color = c.text3)
+                    // Bipolar: the notch is neutral graphite, the fill shows how far warm or cool.
+                    BerthSlider(
+                        value = theme.tone,
+                        onValueChange = { vm.setInterfaceTheme(theme.copy(tone = it)) },
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                        neutral = 0.5f,
+                    )
+                    Text("Cool", style = BerthType.caption, color = c.text3)
+                }
+                Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp))
+                AccentPicker(theme.accentChoice, onChoose = { vm.setInterfaceTheme(theme.withAccent(it)) }, customSeed = theme.accent)
+                GroupAccentNote(vm)
+                ToggleRow("High contrast", theme.contrast == InterfaceContrast.HIGH, { vm.setInterfaceTheme(theme.copy(contrast = if (it) InterfaceContrast.HIGH else InterfaceContrast.STANDARD)) })
+                ToggleRow("System font", theme.useSystemFont, { vm.setInterfaceTheme(theme.copy(useSystemFont = it)) }, caption = "Use the device's interface font instead of Plex Sans")
+                ListRow("Interface editor", subtitle = "Presets, corner radius, density and a live preview", surface = Color.Transparent, minHeight = 44.dp, onClick = onAppearance, trailing = chevron)
+            }
+
+            Panel(label = "Terminal") {
+                ListRow("Terminal themes", subtitle = "${themes.size} themes \u00B7 ${defaultTheme.name} is the default", surface = Color.Transparent, minHeight = 44.dp, onClick = onThemes, trailing = chevron)
+                CyclePicker("Theme", themes.map { it.id }, defaultTheme.id, { id -> themes.firstOrNull { it.id == id }?.name ?: id }) { vm.setDefaultTerminalTheme(it) }
+                // The family opens its own sheet (spec C20, Fonts): a list with each family set in its own face, and the import.
+                PickerRow("Terminal font", font.resolvedFamily(context), onClick = { fontPicker = true })
+                CyclePicker("Size", (TerminalFont.MIN_SIZE_SP..TerminalFont.MAX_SIZE_SP).toList(), font.sizeSp, { "$it sp" }) { vm.setTerminalFont(font.copy(sizeSp = it)) }
+                ToggleRow("Follow system text size", font.followSystemScale, { vm.setTerminalFont(font.copy(followSystemScale = it)) }, caption = "Scale the terminal with the device's font size as well; off, the size above is the size")
+                CyclePicker("Line height", listOf(1.0f, 1.1f, 1.2f, 1.3f, 1.4f), font.lineHeight, { "%.1f".format(it) }) { vm.setTerminalFont(font.copy(lineHeight = it)) }
+                ToggleRow("Ligatures", font.ligatures, { vm.setTerminalFont(font.copy(ligatures = it)) })
+                ToggleRow("Nerd Font fallback", font.nerdFontFallback, { vm.setTerminalFont(font.copy(nerdFontFallback = it)) }, caption = "Icons and separators the family lacks, from the bundled Symbols Nerd Font")
+                ToggleRow("Bold as bright", font.boldAsBright, { vm.setTerminalFont(font.copy(boldAsBright = it)) })
+                // The cursor the user chose stands until the program on the other end asks for its own (DECSCUSR).
+                Text("Cursor", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 6.dp))
+                SegmentedControl(CURSOR_SHAPES.map { it.second }, CURSOR_SHAPES.indexOfFirst { it.first == font.cursorShape.lowercase() }.coerceAtLeast(0), { vm.setTerminalFont(font.copy(cursorShape = CURSOR_SHAPES[it].first)) })
+                ToggleRow("Blink", font.cursorBlink, { vm.setTerminalFont(font.copy(cursorBlink = it)) })
+                CyclePicker("Scrollback", TerminalSettings.SCROLLBACK_CHOICES, terminal.scrollbackLines, { "%,d lines".format(it) }, caption = "History kept above each terminal's screen") { lines -> vm.updateTerminalSettings { it.copy(scrollbackLines = lines) } }
+            }
+
             Panel(label = "Data") {
                 ListRow("Export encrypted bundle", subtitle = "Hosts, keys, snippets, themes and the rest in one .berth file, under a passphrase", surface = Color.Transparent, minHeight = 44.dp, onClick = { exportBundle = true }, trailing = chevron)
                 ListRow("Import bundle", subtitle = "A .berth file from this phone or another", surface = Color.Transparent, minHeight = 44.dp, onClick = { importBundle = true }, trailing = chevron)
@@ -256,6 +247,8 @@ fun SettingsScreen(
                 ListRow("Import known_hosts", subtitle = "Server keys from ~/.ssh/known_hosts", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKnownHosts = true }, trailing = chevron)
                 ListRow("Import private key", subtitle = "OpenSSH, PEM, PKCS#8 or PuTTY", surface = Color.Transparent, minHeight = 44.dp, onClick = { importKey = true }, trailing = chevron)
             }
+
+            CommandHistorySettings(vm, onNotice = onNotice)
 
             Panel(label = "Diagnostics") {
                 val crashes = reports.count { it.kind == ReportKind.CRASH }
@@ -275,9 +268,9 @@ fun SettingsScreen(
 
             Panel(label = "About") {
                 val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "" }
-                Text("Berth $version".trim(), style = BerthType.body, color = c.text1)
-                Text("No account. No telemetry. Everything stays on this device.", style = BerthType.caption, color = c.text3)
-                Text("Fonts: IBM Plex Sans, IBM Plex Mono, JetBrains Mono, Fira Code and Source Code Pro under the SIL Open Font License; Hack under the MIT licence; Symbols Nerd Font Mono from Nerd Fonts under the MIT licence, its icon sets under their own: Font Awesome and Codicons CC BY 4.0, Material Design Icons Apache 2.0, Weather Icons and Pomicons under the SIL Open Font License, Font Logos the Unlicense, the rest MIT. SSH transport: sshj (Apache 2.0). Link captions read the Public Suffix List (Mozilla Public License 2.0).", style = BerthType.caption, color = c.text3)
+                Text("Berth $version".trim(), style = BerthType.body, color = c.text1, modifier = Modifier.padding(start = 12.dp))
+                PanelNote("No account. No telemetry. Everything stays on this device.")
+                ListRow("Licences", subtitle = "The fonts, libraries and terminal palettes Berth ships, and their terms", surface = Color.Transparent, minHeight = 44.dp, onClick = { licences = true }, trailing = chevron)
             }
         }
     }
@@ -293,16 +286,6 @@ fun SettingsScreen(
 
 /** How long a notice stands before it sinks on its own. */
 private const val NOTICE_MS = 3_500L
-
-/** The accent choices with the names a screen reader gives them; the colour alone never tells them apart. */
-private val ACCENTS = listOf(
-    "Copper" to 0xE0A458,
-    "Coral" to 0xD9776B,
-    "Aqua" to 0x7AD3C6,
-    "Moss" to 0x8FB573,
-    "Periwinkle" to 0x89A7E0,
-    "Lilac" to 0xC79BD8,
-)
 
 /** The cursor shapes as [TerminalFont.cursorShape] stores them and as the control names them (spec C20: block, underline, bar). */
 private val CURSOR_SHAPES = listOf("block" to "Block", "underline" to "Underline", "bar" to "Bar")
