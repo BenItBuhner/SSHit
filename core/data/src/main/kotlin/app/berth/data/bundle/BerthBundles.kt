@@ -155,11 +155,12 @@ class BerthBundles(
     }
 
     /**
-     * What [apply] would do here with [bundle] beyond writing its records, for the sheet to say
+     * What [apply] would do here with [carried] beyond writing its records, for the sheet to say
      * before the import: read against this phone as it stands now, so the same rule runs again at
      * the write.
      */
-    suspend fun plan(bundle: BerthBundle): BundleImportPlan {
+    suspend fun plan(carried: BerthBundle): BundleImportPlan {
+        val bundle = withStockThemeIdsFreed(carried)
         // A key Berth cannot read fails the plan here, so the sheet never offers the import.
         val read = readIdentities(bundle)
         val here = localIdentities()
@@ -226,8 +227,28 @@ class BerthBundles(
         ReadIdentity(if (carried.isHardwareBacked || key == null) carried else withOwnPublicHalf(carried, key), key)
     }
 
-    /** Writes [bundle] into the repositories and says what it did. */
-    suspend fun apply(bundle: BerthBundle, options: BundleImportOptions = BundleImportOptions()): BundleImportReport {
+    /**
+     * [bundle] with each custom theme under a stock id moved where the database step moves one
+     * ([TerminalTheme.freedId]), and each host, group and the default naming it following. A
+     * bundle made before the stock set grew can carry a custom `dracula`, which written as it came
+     * would sit behind the stock Dracula; moved the same way as the phone's own, a bundle made on
+     * this phone before the upgrade lands on the theme the upgrade moved instead of beside it.
+     */
+    private fun withStockThemeIdsFreed(bundle: BerthBundle): BerthBundle {
+        val moved = bundle.terminalThemes.map { it.id }.filter(TerminalTheme::isStockId).associateWith(TerminalTheme::freedId)
+        if (moved.isEmpty()) return bundle
+        fun repointed(id: String?): String? = id?.let { moved[it] ?: it }
+        return bundle.copy(
+            terminalThemes = bundle.terminalThemes.map { theme -> moved[theme.id]?.let { theme.copy(id = it) } ?: theme },
+            hosts = bundle.hosts.map { host -> host.copy(appearance = host.appearance.copy(terminalThemeId = repointed(host.appearance.terminalThemeId))) },
+            workspaces = bundle.workspaces.map { workspace -> workspace.copy(terminalThemeId = repointed(workspace.terminalThemeId)) },
+            defaultTerminalThemeId = repointed(bundle.defaultTerminalThemeId),
+        )
+    }
+
+    /** Writes [carried] into the repositories and says what it did. */
+    suspend fun apply(carried: BerthBundle, options: BundleImportOptions = BundleImportOptions()): BundleImportReport {
+        val bundle = withStockThemeIdsFreed(carried)
         // Before the first write: a bundle this build refuses leaves nothing behind.
         val read = readIdentities(bundle)
         workspaces.upsertAll(bundle.workspaces)

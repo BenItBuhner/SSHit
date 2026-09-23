@@ -59,6 +59,8 @@ import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -102,7 +104,12 @@ import kotlin.test.assertTrue
  * Version 8 gives each host its own scrollback cap and cipher list, two columns whose defaults
  * (null, and an empty list) leave every host as it was: following Settings › Terminal ›
  * Scrollback and offering the client's own ciphers. A session's host snapshot, a JSON document
- * without either field, reads them as the same defaults.
+ * without either field, reads them as the same defaults. A version 8 phone may have set both on a
+ * host since: the nas's cap and ciphers, set there, come through the step after as they were.
+ *
+ * Version 9 changes rows as well: a custom theme stored under what is now a stock id moves to its
+ * own, and whatever named it follows ([app.berth.data.db.StockThemeIdsFreed]). The shared seed
+ * holds no custom theme, so it passes through untouched; its own tests seed one.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -133,6 +140,9 @@ class MigrationTest {
 
     @Test
     fun `a version 7 database migrates to the current version keeping every row`() = migrateAndCheck(from = 7)
+
+    @Test
+    fun `a version 8 database migrates to the current version keeping every row`() = migrateAndCheck(from = 8)
 
     /** Version 7's row changes on the framework's connection, the path the app opens its database on. */
     @Test
@@ -177,6 +187,58 @@ class MigrationTest {
                 val knownHosts = RoomKnownHostRepository(db)
                 assertEquals(listOf("example.com", "example.com", "nas.local", "prod-api.example.com", "web.example.net"), knownHosts.observeAll().first().map { it.host })
                 assertEquals(listOf("k5"), knownHosts.find("NAS.local", 22).map { it.id }, "the pinned row stands, found under the spelling it was saved in")
+            }
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `a version 8 custom theme under what is now a stock id moves to its own id, and what named it follows`() = stockIdCustomMoves(from = 8)
+
+    @Test
+    fun `a version 7 custom theme under what is now a stock id moves through version 8 to its own id`() = stockIdCustomMoves(from = 7)
+
+    /**
+     * Version 9's row changes ([app.berth.data.db.StockThemeIdsFreed]), on the path the app opens
+     * its database on. An older build saved a Gogh "Dracula" with no id under `dracula`, now a stock
+     * id, and put the default, the Work group, the web host and its tab on it; the bastion is on
+     * Berth Light, stock in every build, with no custom under it.
+     */
+    private fun stockIdCustomMoves(from: Int) {
+        val file = File.createTempFile("berth-v$from-themes", ".db").also { it.delete(); it.deleteOnExit() }
+        val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), file, AndroidSQLiteDriver(), BerthDatabase::class, { BerthDatabase_Impl() }, emptyList())
+        helper.createDatabase(from).use { connection ->
+            seed(connection, from)
+            with(connection) {
+                // The theme model of versions 7 and 8 had today's fields, so today's encoding is the one they wrote.
+                val custom = Json { encodeDefaults = true }.encodeToString(ListSerializer(TerminalTheme.serializer()), listOf(goghDracula, monokai))
+                insert("preferences", "key" to "terminal_themes_custom", "value" to custom, "updatedAt" to 5)
+                execSQL("UPDATE preferences SET value = '\"dracula\"' WHERE `key` = 'terminal_theme_default'")
+                execSQL("UPDATE workspaces SET terminalThemeId = 'dracula' WHERE id = 'w2'")
+                execSQL("""UPDATE hosts SET appearanceJson = '{"terminalThemeId":"dracula","fontSizeSp":15,"fontFamily":null}' WHERE id = 'h1'""")
+                execSQL("""UPDATE hosts SET appearanceJson = '{"terminalThemeId":"berth-light","fontSizeSp":null,"fontFamily":null}' WHERE id = 'bastion'""")
+                execSQL(
+                    """UPDATE sessions SET hostSnapshotJson = REPLACE(hostSnapshotJson, '"appearance":{"terminalThemeId":null', '"appearance":{"terminalThemeId":"dracula"') WHERE id = 's1'""",
+                )
+            }
+        }
+
+        val db = Room.databaseBuilder(RuntimeEnvironment.getApplication(), BerthDatabase::class.java, file.absolutePath).allowMainThreadQueries().build()
+        try {
+            runTest {
+                val freed = TerminalTheme.freedId("dracula")
+                val settings = RoomSettingsRepository(db)
+                assertEquals(TerminalTheme.builtIns + goghDracula.copy(id = freed) + monokai, settings.terminalThemes.first())
+                assertEquals(freed, settings.defaultTerminalThemeId.first())
+                assertEquals(freed, RoomWorkspaceRepository(db).observeAll().first().single { it.id == "w2" }.terminalThemeId)
+                val hosts = RoomHostRepository(db)
+                assertEquals(prodWeb.appearance.copy(terminalThemeId = freed), hosts.get("h1")?.appearance)
+                assertEquals(TerminalTheme.BERTH_LIGHT_ID, hosts.get("bastion")?.appearance?.terminalThemeId)
+                assertEquals(listOf(freed, null, null), RoomSessionRepository(db).getAll().map { it.hostSnapshot.appearance.terminalThemeId })
+                // Out from behind the stock Dracula, it can be deleted.
+                settings.deleteTerminalTheme(freed)
+                assertEquals(TerminalTheme.builtIns + monokai, settings.terminalThemes.first())
             }
         } finally {
             db.close()
@@ -273,6 +335,8 @@ class MigrationTest {
         variant = InterfaceVariant.LIGHT, tone = 0.85f, accent = 0x7A9CD6, contrast = InterfaceContrast.HIGH, density = Density.COMPACT,
         useSystemFont = true, radiusScale = 0.7f,
     )
+    private val goghDracula = TerminalTheme.DRACULA.copy(background = 0x1E1F29, suggestedAccent = null, builtIn = false)
+    private val monokai = TerminalTheme.BERTH_DARK.copy(id = "monokai", name = "Monokai", builtIn = false)
     private val fira = TerminalFont(family = "Fira Code", sizeSp = 15, lineHeight = 1.3f, ligatures = false, boldAsBright = true, cursorShape = "bar", cursorBlink = true)
     private val filesPrefs = FilesPrefs(sort = FilesSort.SIZE, ascending = false, showHidden = true, recentPaths = mapOf("h1" to listOf("/var/log", "/home/deploy")))
 
@@ -471,6 +535,11 @@ class MigrationTest {
             }
             execSQL("UPDATE hosts SET persistenceJson = REPLACE(persistenceJson, '\"keepaliveSeconds\":null,', '\"keepaliveSeconds\":15,') WHERE id = 'bastion'")
         }
+
+        if (version >= 8) {
+            // Version 8's columns: the nas given its own scrollback cap and cipher list, as a phone on that build could have set them.
+            execSQL("""UPDATE hosts SET scrollbackLines = 20000, ciphersJson = '["aes256-gcm@openssh.com"]' WHERE id = 'nas'""")
+        }
     }
 
     // ---- after the migration -----------------------------------------------------------------------
@@ -521,7 +590,8 @@ class MigrationTest {
         )
 
         // Version 8: every old host follows Settings' scrollback and offers the client's own ciphers until its editor says otherwise.
-        assertEquals(3L, long("SELECT COUNT(*) FROM hosts WHERE scrollbackLines IS NULL AND ciphersJson = '[]'"))
+        // A version 8 phone's own cap and ciphers on the nas come through as it set them.
+        assertEquals(if (from >= 8) 2L else 3L, long("SELECT COUNT(*) FROM hosts WHERE scrollbackLines IS NULL AND ciphersJson = '[]'"))
 
         // Version 6: every known host's name is lowercase, and one row stands per endpoint and key type. k3, seen less
         // recently than k2 though saved later, went; k5 and k6 turn on the pin version 2 brought: with it, the pinned
@@ -569,7 +639,7 @@ class MigrationTest {
             bastion.copy(tunnelsOnly = from >= 4, persistence = bastion.persistence.copy(keepaliveSeconds = if (from >= 7) 15 else null)),
             hosts.get("bastion"),
         )
-        assertEquals(nas, hosts.get("nas"))
+        assertEquals(if (from >= 8) nas.copy(scrollbackLines = 20_000, ciphers = listOf("aes256-gcm@openssh.com")) else nas, hosts.get("nas"))
         assertEquals(listOf("bastion", "nas", "h1"), hosts.observeAll().first().map { it.id })
 
         val identities = RoomIdentityRepository(db, EncryptedSecretStore(db, crypto), HardwareKeys(RuntimeEnvironment.getApplication()))
@@ -682,6 +752,6 @@ class MigrationTest {
 
     private companion object {
         /** Keep in step with `@Database(version)` on [BerthDatabase]; the exported `schemas/` JSON for it must exist. */
-        const val CURRENT_VERSION = 8
+        const val CURRENT_VERSION = 9
     }
 }

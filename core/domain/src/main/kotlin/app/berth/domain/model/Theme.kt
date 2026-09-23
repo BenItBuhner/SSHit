@@ -1,5 +1,6 @@
 package app.berth.domain.model
 
+import java.util.UUID
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -430,7 +431,12 @@ data class TerminalTheme(
             builtIn = true,
         )
 
-        /** Stock themes, in the gallery's order (spec A10). They cannot be deleted, only duplicated. */
+        /**
+         * Stock themes, in the gallery's order (spec A10). They cannot be deleted, only duplicated.
+         * A stock id added here may already name a stored custom theme (an older build saved an
+         * imported scheme with no id under a slug of its name); the database step that frees those
+         * reads this list, so a phone upgrading past it moves them, and a later addition needs a step of its own.
+         */
         val builtIns: List<TerminalTheme> = listOf(
             BERTH_DARK, BERTH_LIGHT,
             CATPPUCCIN_MOCHA, CATPPUCCIN_LATTE,
@@ -440,6 +446,17 @@ data class TerminalTheme(
             ROSE_PINE, TOKYO_NIGHT, KANAGAWA, EVERFOREST, DRACULA, ONE_DARK, AYU,
             GITHUB_DARK_HIGH_CONTRAST, GITHUB_LIGHT_HIGH_CONTRAST,
         )
+
+        private val stockIds: Set<String> = builtIns.mapTo(HashSet()) { it.id }
+
+        fun isStockId(id: String): Boolean = id in stockIds
+
+        /**
+         * The id a custom theme stored under stock id [id] moves to, so the stock theme no longer
+         * shadows it. The same id always moves to the same place: a bundle made before the move
+         * lands on the theme the move made instead of beside it.
+         */
+        fun freedId(id: String): String = "theme-" + UUID.nameUUIDFromBytes("stock-clash:$id".toByteArray(Charsets.UTF_8)).toString().take(8)
     }
 }
 

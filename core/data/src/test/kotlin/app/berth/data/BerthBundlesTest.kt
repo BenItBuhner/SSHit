@@ -14,6 +14,7 @@ import app.berth.data.repo.RoomSettingsRepository
 import app.berth.data.repo.RoomSnippetRepository
 import app.berth.data.repo.RoomTunnelRepository
 import app.berth.data.repo.RoomWorkspaceRepository
+import app.berth.domain.model.AppearanceOverride
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Base64Codec
 import app.berth.domain.model.BerthBundle
@@ -513,6 +514,42 @@ class BerthBundlesTest {
         assertTrue(themeOnly.summary.endsWith(" and the default terminal theme."), themeOnly.summary)
         assertNull(new.bundles.plan(bundle).defaultTerminalTheme)
         assertFalse(new.bundles.apply(bundle).defaultTerminalTheme)
+    }
+
+    /**
+     * A bundle from a build before the stock set grew can carry a custom theme under what is now a
+     * stock id: that build saved a Gogh "Dracula" with no id at `dracula`. The import moves it where
+     * the database step moves one, with the web host, the Work group and the default on it following,
+     * so it stands beside the stock Dracula instead of behind it; the nas on stock Nord keeps Nord.
+     * Imported again, it lands on the same theme.
+     */
+    @Test
+    fun `a bundled custom theme under a stock id moves to its own id, and what named it follows`() = runTest {
+        val gogh = TerminalTheme.DRACULA.copy(background = 0x1E1F29, suggestedAccent = null, builtIn = false)
+        val bundle = BerthBundle(
+            exportedAt = 1,
+            hosts = listOf(
+                web.copy(appearance = AppearanceOverride(terminalThemeId = "dracula")),
+                nas.copy(appearance = AppearanceOverride(terminalThemeId = TerminalTheme.NORD_ID)),
+            ),
+            workspaces = listOf(work.copy(terminalThemeId = "dracula")),
+            terminalThemes = listOf(gogh, mine),
+            defaultTerminalThemeId = "dracula",
+        )
+        new.settings.setDefaultTerminalTheme(TerminalTheme.DRACULA_ID)
+        val freed = TerminalTheme.freedId("dracula")
+
+        // The bundle's default is its own Dracula, not the stock one this phone is on, so the plan offers it.
+        assertEquals("Dracula", new.bundles.plan(bundle).defaultTerminalTheme)
+        assertTrue(new.bundles.apply(bundle).defaultTerminalTheme)
+        assertEquals(TerminalTheme.builtIns + gogh.copy(id = freed) + mine, new.settings.terminalThemes.first())
+        assertEquals(freed, new.settings.defaultTerminalThemeId.first())
+        assertEquals(freed, new.hosts.get("h-web")?.appearance?.terminalThemeId)
+        assertEquals(TerminalTheme.NORD_ID, new.hosts.get("h-nas")?.appearance?.terminalThemeId)
+        assertEquals(freed, new.workspaces.observeAll().first().single { it.id == "w-work" }.terminalThemeId)
+
+        new.bundles.apply(bundle)
+        assertEquals(TerminalTheme.builtIns + gogh.copy(id = freed) + mine, new.settings.terminalThemes.first())
     }
 
     @Test
