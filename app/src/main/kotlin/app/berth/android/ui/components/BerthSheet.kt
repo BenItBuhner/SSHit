@@ -93,6 +93,7 @@ fun sheetFillsHeight(): Boolean = LocalSheetPresentation.current == SheetPresent
  * Either way the sheet is a window of its own, whose Compose view provides the density afresh from
  * its Context; the theme's interface cap (A11, 1.3×) is applied again inside it through
  * [CappedFontScale], so a sheet's text at the system's larger sizes stops where the screen's does.
+ * While it is up no [CoachMark] shows, since one raised under it would float over it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,6 +107,7 @@ fun BerthSheet(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Berth.colors
+    CoachMarkCover()
     if (windowLayout().dialogs) {
         CompositionLocalProvider(LocalSheetPresentation provides SheetPresentation.DIALOG) {
             SheetDialog(onDismiss = onDismiss, modifier = modifier, maxWidth = dialogMaxWidth, scrim = dialogScrimColor, content = content)

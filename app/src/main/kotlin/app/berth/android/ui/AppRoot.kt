@@ -42,7 +42,10 @@ import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.ConnectionAnnouncer
 import app.berth.android.ui.components.BerthButton
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.CoachMarkCover
+import app.berth.android.ui.components.CoachMarkSlot
 import app.berth.android.ui.components.EmptyState
+import app.berth.android.ui.components.LocalCoachMarkSlot
 import app.berth.android.ui.components.LocalWindowSecure
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.diagnostics.CrashReportHost
@@ -155,8 +158,14 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val windowFocus = remember { WindowFocus() }
     // What the notice bars and the Stage's bottom chrome hold at the window's bottom edge, so the state pill stands clear of a bar by construction.
     val bottomEdge = remember { BottomEdge() }
+    val coachMarks = remember { CoachMarkSlot() }
     BerthTheme(theme) {
-        CompositionLocalProvider(LocalHapticLevel provides hapticLevel, LocalWindowFocus provides windowFocus, LocalBottomEdge provides bottomEdge) {
+        CompositionLocalProvider(
+            LocalHapticLevel provides hapticLevel,
+            LocalWindowFocus provides windowFocus,
+            LocalBottomEdge provides bottomEdge,
+            LocalCoachMarkSlot provides coachMarks,
+        ) {
             Box(Modifier.fillMaxSize().background(Berth.colors.surface0).windowFocus(windowFocus)) {
                 // Nothing is composed until the lock is decided (the splash holds meanwhile). From
                 // then on the shell stays composed, locked or not, so an edit in progress, an open
@@ -469,6 +478,8 @@ private fun Shell(vm: AppViewModel) {
                 Box(Modifier.weight(1f).fillMaxHeight().padding(start = RailGutter)) { screens() }
             }
         } else {
+            // The drawer is drawn in this window and a coach mark is a window over it.
+            if (drawer.currentValue == DrawerValue.Open || drawer.targetValue == DrawerValue.Open) CoachMarkCover()
             ModalNavigationDrawer(
                 drawerState = drawer,
                 gesturesEnabled = onStage || drawer.isOpen,

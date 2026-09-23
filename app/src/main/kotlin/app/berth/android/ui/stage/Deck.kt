@@ -95,6 +95,7 @@ import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.BerthMenuItem
 import app.berth.android.ui.components.BerthMenuToggle
 import app.berth.android.ui.components.BerthPopup
+import app.berth.android.ui.components.CoachMark
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
@@ -162,6 +163,8 @@ class DeckEditing(
  * four arrow keys or shows both, and [DeckLayout.rows] adds a second row with its own layer.
  * [onPredictiveTextChange], where the Stage gives one, puts the tab's [predictiveText] in the
  * layer picker; [echoOff] puts the grip's dot up while the shell is not echoing (spec C2).
+ * [nubCoachMark], where the Stage gives one, hangs the Nub's one-time coach mark over the first
+ * row's Nub while the Deck is in reach and not being edited, and is what its dismissal calls.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -175,6 +178,7 @@ fun Deck(
     predictiveText: Boolean = false,
     onPredictiveTextChange: ((Boolean) -> Unit)? = null,
     echoOff: Boolean = false,
+    nubCoachMark: (() -> Unit)? = null,
     settings: DeckSettings = DeckSettings(),
     onGripTap: () -> Unit = {},
     onGripSwipeDown: () -> Unit = {},
@@ -203,6 +207,9 @@ fun Deck(
     val direction = LocalLayoutDirection.current
     fun pickerFor(shown: Int, taken: Int?, onSelect: (Int) -> Unit) =
         LayerPicker(layers, shown, taken, onSelect, predictiveText, onPredictiveTextChange, direction)
+    val nubMark: (@Composable () -> Unit)? = nubCoachMark?.takeIf { enabled && editing == null }?.let { dismiss ->
+        { CompositionLocalProvider(LocalLayoutDirection provides direction) { CoachMark(NubCoachMarkText, onDismiss = dismiss) } }
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides if (layout.reach == DeckReach.LEFT) LayoutDirection.Rtl else LayoutDirection.Ltr) {
         Column(
@@ -255,6 +262,7 @@ fun Deck(
                 onStrip = { held -> strip = if (strip == held) null else held },
                 editing = editing,
                 snippets = snippets,
+                nubMark = nubMark,
             )
             if (layout.rows >= 2 && layers.size > 1) {
                 val second = secondIndex.coerceIn(0, layers.lastIndex).let { if (it == index) (it + 1) % layers.size else it }
@@ -277,6 +285,7 @@ fun Deck(
                     onStrip = { held -> strip = if (strip == held) null else held },
                     editing = null,
                     snippets = snippets,
+                    nubMark = null,
                 )
             }
         }
@@ -366,6 +375,7 @@ private fun DeckRow(
     onStrip: (List<DeckKeyCode>) -> Unit,
     editing: DeckEditing?,
     snippets: List<Snippet>,
+    nubMark: (@Composable () -> Unit)?,
 ) {
     val c = Berth.colors
     val patterns = rememberDeckHaptics(haptics)
@@ -425,6 +435,7 @@ private fun DeckRow(
                         onLayerStep = onLayerStep,
                         onStrip = onStrip,
                         snippets = snippets,
+                        nubMark = nubMark,
                     )
                     if (editing != null && key.isEmpty) {
                         Text("empty", style = BerthType.caption.keySized(), color = c.text3)
@@ -486,6 +497,7 @@ private fun SlotContent(
     onLayerStep: ((Int) -> Unit)?,
     onStrip: (List<DeckKeyCode>) -> Unit,
     snippets: List<Snippet>,
+    nubMark: (@Composable () -> Unit)?,
 ) {
     @Composable
     fun arrowKeys(modifier: Modifier) {
@@ -507,10 +519,10 @@ private fun SlotContent(
     }
     when {
         key.nub -> when (arrows) {
-            DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, onArrow = { input.onKey(it) })
+            DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
             DeckArrows.FOUR_KEYS -> arrowKeys(Modifier.fillMaxSize())
             DeckArrows.BOTH -> Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, onArrow = { input.onKey(it) })
+                Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
                 arrowKeys(Modifier.weight(3f).fillMaxHeight())
             }
         }
@@ -1060,13 +1072,17 @@ private fun String.isSymbolLabel(): Boolean =
 
 private val FunctionKeyLabel = Regex("F\\d{1,2}")
 
-/** The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed. */
+/**
+ * The circular arrow key: tap sends Up; drag sends the dominant-axis arrow with spatial speed.
+ * [mark] is the coach mark that hangs from it, where the Deck has one up.
+ */
 @Composable
 fun Nub(
     enabled: Boolean,
     haptics: HapticFeedback,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
+    mark: (@Composable () -> Unit)? = null,
     onArrow: (TerminalKey) -> Unit,
 ) {
     val c = Berth.colors
@@ -1181,8 +1197,12 @@ fun Nub(
             chevron(TerminalKey.LEFT, -1f, 0f)
             chevron(TerminalKey.RIGHT, 1f, 0f)
         }
+        mark?.invoke()
     }
 }
+
+/** What the Nub's coach mark says (product vision, the Nub): the gesture, its spatial speed, and the tap. */
+internal const val NubCoachMarkText = "This is the Nub, your arrow keys. Drag from it in any direction; the further you drag, the faster it repeats. A tap sends Up."
 
 /**
  * The trailing layer key (spec C4): tap for the next layer, swipe up for the layer picker

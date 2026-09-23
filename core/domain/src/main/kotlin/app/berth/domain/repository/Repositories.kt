@@ -221,6 +221,10 @@ interface SettingsRepository {
     val predictiveTextDefault: Flow<Boolean>
     suspend fun setPredictiveTextDefault(on: Boolean)
 
+    /** The one-time coach marks (spec A9) already dismissed, by id: each is shown until then, and never again. */
+    val coachMarksSeen: Flow<Set<String>>
+    suspend fun markCoachMarkSeen(id: String)
+
     /** Alt key behaviour, per-host overrides and the compact Deck (spec C22, Settings › Hardware keyboard). */
     val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings>
 

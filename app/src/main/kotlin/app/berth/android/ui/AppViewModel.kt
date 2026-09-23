@@ -19,6 +19,7 @@ import app.berth.android.session.SessionNotifier
 import app.berth.android.session.TabSlot
 import app.berth.android.session.TerminalSession
 import app.berth.android.session.TunnelStatus
+import app.berth.android.ui.components.CoachMarkId
 import android.net.Uri
 import android.os.Build
 import app.berth.data.bundle.BerthBundles
@@ -1290,6 +1291,23 @@ class AppViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    // ---- coach marks (spec A9) --------------------------------------------------------------------
+
+    private val coachMarksDismissed = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The one-time coach marks already dismissed, by [CoachMarkId.key]: null until the stored set is
+     * read, so a mark dismissed in an earlier run never shows for a frame at launch. One dismissed
+     * now is in it at once, ahead of the write.
+     */
+    val coachMarksSeen: StateFlow<Set<String>?> = combine(settings.coachMarksSeen, coachMarksDismissed) { stored, now -> stored + now }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    fun dismissCoachMark(mark: CoachMarkId) {
+        coachMarksDismissed.update { it + mark.key }
+        viewModelScope.launch { settings.markCoachMarkSeen(mark.key) }
     }
 
     /** Font size writes one at a time: a pinch fires several steps in a row and each must read the last one's result. */

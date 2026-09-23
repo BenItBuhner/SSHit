@@ -104,6 +104,7 @@ import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
 import app.berth.android.ui.components.BerthMenu
 import app.berth.android.ui.components.ButtonKind
+import app.berth.android.ui.components.CoachMarkId
 import app.berth.android.ui.components.IconAction
 import app.berth.android.ui.components.LocalWallClock
 import app.berth.android.ui.components.Pill
@@ -749,6 +750,8 @@ private fun StageBody(
     val predictiveTabIds by vm.predictiveTextTabIds.collectAsState()
     val predictiveText = session.id in predictiveTabIds
     val echoOff by session.echoOff.collectAsState()
+    val coachMarksSeen by vm.coachMarksSeen.collectAsState()
+    val nubCoachMark: (() -> Unit)? = if (coachMarksSeen?.contains(CoachMarkId.NUB.key) == false) ({ vm.dismissCoachMark(CoachMarkId.NUB) }) else null
 
     val live = record.state == SessionState.LIVE
     val frameAlpha = when (record.state) {
@@ -889,6 +892,7 @@ private fun StageBody(
                         predictiveText = predictiveText,
                         onPredictiveTextChange = { vm.setPredictiveText(session.id, it) },
                         echoOff = echoOff,
+                        nubCoachMark = nubCoachMark,
                     )
                 }
                 if (!deckVisible && deckStateOk) {

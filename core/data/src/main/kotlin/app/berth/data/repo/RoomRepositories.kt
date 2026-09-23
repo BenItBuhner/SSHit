@@ -48,6 +48,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 
@@ -315,6 +316,14 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
     override val predictiveTextDefault: Flow<Boolean> = document(KEY_PREDICTIVE_TEXT_DEFAULT, Boolean.serializer()) { false }
     override suspend fun setPredictiveTextDefault(on: Boolean) = write(KEY_PREDICTIVE_TEXT_DEFAULT, Boolean.serializer(), on)
 
+    private val coachMarkLock = Mutex()
+    private val coachMarkIds = SetSerializer(String.serializer())
+    override val coachMarksSeen: Flow<Set<String>> = document(KEY_COACH_MARKS_SEEN, coachMarkIds) { emptySet() }
+    override suspend fun markCoachMarkSeen(id: String) = coachMarkLock.withLock {
+        val seen = db.preferences().get(KEY_COACH_MARKS_SEEN)?.let { runCatching { dataJson.decodeFromString(coachMarkIds, it) }.getOrNull() } ?: emptySet()
+        if (id !in seen) write(KEY_COACH_MARKS_SEEN, coachMarkIds, seen + id)
+    }
+
     private val securityLock = Mutex()
     override val securitySettings: Flow<SecuritySettings> = document(KEY_SECURITY, SecuritySettings.serializer()) { SecuritySettings() }
     override suspend fun updateSecuritySettings(change: (SecuritySettings) -> SecuritySettings) = securityLock.withLock {
@@ -372,6 +381,7 @@ class RoomSettingsRepository(private val db: BerthDatabase) : SettingsRepository
         const val KEY_CONNECTION = "connection"
         const val KEY_COMMAND_HISTORY = "command_history_enabled"
         const val KEY_PREDICTIVE_TEXT_DEFAULT = "predictive_text_default"
+        const val KEY_COACH_MARKS_SEEN = "coach_marks_seen"
         const val KEY_HARDWARE_KEYBOARD = "hardware_keyboard"
         const val KEY_TERMINAL = "terminal"
         const val KEY_DECK_SETTINGS = "deck_settings"

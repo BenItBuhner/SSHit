@@ -43,7 +43,9 @@ import app.berth.domain.model.Tunnel
 import app.berth.domain.model.TunnelType
 import app.berth.domain.model.Workspace
 import app.berth.domain.repository.CommandHistoryRepository
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -351,6 +353,23 @@ class RoomRepositoriesTest {
         settings.setPaneDividerFraction(1f / 3f)
         assertEquals(1f / 3f, settings.paneDividerFraction.first())
         assertEquals(1f / 3f, settings.paneDividerFraction.first(), "the divider's rest outlives the split")
+    }
+
+    @Test
+    fun `a coach mark dismissed is kept seen by its id, each once, two dismissed at once both kept`() = runTest {
+        val settings = RoomSettingsRepository(db)
+        assertEquals(emptySet(), settings.coachMarksSeen.first(), "a first run has seen none")
+
+        settings.markCoachMarkSeen("nub")
+        settings.markCoachMarkSeen("nub")
+        assertEquals(setOf("nub"), settings.coachMarksSeen.first())
+
+        coroutineScope {
+            launch { settings.markCoachMarkSeen("layers") }
+            launch { settings.markCoachMarkSeen("grip") }
+        }
+        assertEquals(setOf("nub", "layers", "grip"), settings.coachMarksSeen.first())
+        assertEquals(setOf("nub", "layers", "grip"), RoomSettingsRepository(db).coachMarksSeen.first(), "read back as the next run would")
     }
 
     @Test

@@ -1,6 +1,7 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import androidx.activity.ComponentDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -46,10 +47,12 @@ import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
+import app.berth.android.ui.components.CoachMarkId
 import app.berth.android.ui.hosts.HostEditorScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.LocalDeckFit
+import app.berth.android.ui.stage.NubCoachMarkText
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.TwoRowDeckFit
@@ -80,6 +83,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -477,6 +481,75 @@ class DeckRailScreenshotTest {
         compose.onNode(grip).assertIsDisplayed()
         graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
     }
+
+    // ---- the Nub's coach mark (spec A9, product vision: the Nub) --------------------------------------
+
+    /** A first run: the Nub's one-time mark hangs over the Nub on `surface.3`, its one action under its lines, every line whole. */
+    @Test
+    fun `a first run hangs the Nub's coach mark over the Nub`() = nubCoachMark("stage-nub-coach-mark")
+
+    /** The same mark at the interface's 1.3× cap (spec A11): a window of its own, capped again. */
+    @Test
+    fun `the Nub's coach mark at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        nubCoachMark("stage-nub-coach-mark-font-scale-2x")
+    }
+
+    private fun nubCoachMark(name: String) {
+        graph.settings.coachMarks.value = emptySet()
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        val live = StageFixture.liveHomelab()
+        themed { Stage(live) }
+        awaitDeck()
+        compose.waitUntil(5_000) { compose.onAllNodes(nubMark).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(hasText("Got it") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+        compose.assertNoTextCut("the Nub's coach mark", within = isPopup())
+        compose.assertNoBrokenWords("the Nub's coach mark", within = isPopup())
+        settle(400)
+        capture(name)
+    }
+
+    /**
+     * The same first run through the shell against the local sshd: the mark is up once the tab is
+     * live, waits under the drawer and under the Session sheet (a mark is a window, and would float
+     * over both) and is back after each, and Got it puts it away for good.
+     */
+    @Test
+    fun `live, the Nub's coach mark waits under the drawer and the Session sheet, and Got it puts it away`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        graph.settings.coachMarks.value = emptySet()
+        seedTestBox()
+        compose.setContent { AppRoot(graph.viewModel) }
+        connectTestBox()
+        awaitDeck()
+        fun marks() = compose.onAllNodes(nubMark).fetchSemanticsNodes().size
+        compose.waitUntil(5_000) { marks() == 1 }
+        settle(400)
+        capture("stage-nub-coach-mark-live")
+
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Library").performClick()
+        waitForText("GROUPS")
+        compose.waitForIdle()
+        assertEquals("no mark over the drawer", 0, marks())
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { marks() == 1 }
+
+        compose.onNode(hasContentDescription("Grip", substring = true)).performTouchInput { down(center); up() }
+        waitForText("Look")
+        compose.waitForIdle()
+        assertEquals("no mark over the Session sheet", 0, marks())
+        compose.runOnUiThread { (ShadowDialog.getLatestDialog() as ComponentDialog).onBackPressedDispatcher.onBackPressed() }
+        compose.waitUntil(5_000) { marks() == 1 }
+
+        compose.onNode(hasText("Got it") and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { marks() == 0 }
+        compose.waitUntil(5_000) { CoachMarkId.NUB.key in graph.settings.coachMarks.value }
+        graph.sessions.sessions.value.forEach { graph.sessions.close(it.id) }
+    }
+
+    private val nubMark = hasText(NubCoachMarkText) and hasAnyAncestor(isPopup())
 
     // ---- the Session sheet's Look row (spec C6) -------------------------------------------------------
 

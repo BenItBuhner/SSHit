@@ -24,6 +24,7 @@ import app.berth.android.session.PromptCenter
 import app.berth.android.session.SessionManager
 import app.berth.android.session.SessionNotifier
 import app.berth.android.ui.AppViewModel
+import app.berth.android.ui.components.CoachMarkId
 import app.berth.data.bundle.BerthBundles
 import app.berth.data.crypto.HardwareKeys
 import app.berth.data.crypto.KeystoreSigning
@@ -309,6 +310,10 @@ class InMemorySettings : SettingsRepository {
     val predictiveDefault = MutableStateFlow(false)
     override val predictiveTextDefault: Flow<Boolean> = predictiveDefault
     override suspend fun setPredictiveTextDefault(on: Boolean) { predictiveDefault.value = on }
+    /** Every coach mark seen, so a frame shows the screen and not a first run's marks; a test of one starts from an empty set. */
+    val coachMarks = MutableStateFlow(CoachMarkId.entries.map { it.key }.toSet())
+    override val coachMarksSeen: Flow<Set<String>> = coachMarks
+    override suspend fun markCoachMarkSeen(id: String) = coachMarks.update { it + id }
 
     val hardwareKeyboard = MutableStateFlow(HardwareKeyboardSettings())
     override val hardwareKeyboardSettings: Flow<HardwareKeyboardSettings> = hardwareKeyboard
