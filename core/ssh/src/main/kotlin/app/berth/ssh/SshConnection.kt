@@ -17,6 +17,7 @@ import net.schmizz.sshj.connection.ConnectionException
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.connection.channel.forwarded.RemotePortForwarder
 import net.schmizz.sshj.sftp.SFTPClient
+import net.schmizz.sshj.transport.Transport
 import net.schmizz.sshj.transport.TransportException
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.keyprovider.KeyProvider
@@ -34,6 +35,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Ways to prove who we are, tried in order. Secrets are pulled lazily so prompts can happen late. */
@@ -361,10 +363,12 @@ class SshConnection(
     }
 
     private fun connectClient(c: SSHClient, ep: SshEndpoint, via: SSHClient?) {
-        when {
-            via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
-            ep.preferIpv6 == null -> c.connect(ep.host, ep.port)
-            else -> c.connect(resolve(ep), ep.port)
+        c.connectOrCauseOfDeath {
+            when {
+                via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
+                ep.preferIpv6 == null -> c.connect(ep.host, ep.port)
+                else -> c.connect(resolve(ep), ep.port)
+            }
         }
         if (ep.compression) c.useCompression()
         c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
@@ -607,6 +611,34 @@ class SshConnection(
     companion object {
         /** The global request [probe] sends: what OpenSSH's client sends for `ServerAliveInterval`, answered by every server. */
         const val PROBE_REQUEST = "keepalive@openssh.com"
+    }
+}
+
+/**
+ * Runs sshj's [connect] on this client and, when it ends in sshj's bare "Not connected", throws
+ * what the transport died of instead. sshj's reader can take the server's key exchange offer, fail
+ * to settle it (no cipher in common) and die before connect reaches its own check, which then
+ * knows only that the client is down.
+ */
+internal fun SSHClient.connectOrCauseOfDeath(connect: () -> Unit) {
+    try {
+        connect()
+    } catch (e: IllegalStateException) {
+        throw transport.causeOfDeath() ?: e
+    }
+}
+
+/**
+ * The error a dead transport died of. A transport that is up, closed cleanly or never started has
+ * none; one that died answers at once, so the short join only ever expires for one never started.
+ */
+private fun Transport.causeOfDeath(): TransportException? {
+    if (isRunning) return null
+    return try {
+        join(1, TimeUnit.MILLISECONDS)
+        null
+    } catch (e: TransportException) {
+        e.takeIf { it.cause !is TimeoutException }
     }
 }
 
