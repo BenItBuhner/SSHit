@@ -82,8 +82,9 @@ import kotlinx.coroutines.delay
 /**
  * Every server key the user has trusted (C13): searchable, one row per key with the algorithm and
  * fingerprint, a pill on pinned keys. Tap opens the detail sheet with pin and forget; a swipe to
- * the left forgets the key there, and either way `Forgot the key for prod-api · Undo` stands at the
- * foot for six seconds, the keys forgotten while it is up counted into it and put back together.
+ * the left forgets an unpinned key there (a pinned one does not swipe, and is forgotten from its
+ * sheet), and either way `Forgot the key for prod-api · Undo` stands at the foot for six seconds,
+ * the keys forgotten while it is up counted into it and put back together.
  * The header's overflow, and the empty screen, offer the `known_hosts` import (A16), the same sheet
  * the Hosts overflow and Settings › Data open.
  */
@@ -166,11 +167,11 @@ fun KnownHostsScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
             ) {
                 items(shown, key = { it.id }) { k ->
                     val names = hostNamesFor(k, hosts)
-                    SwipeToForget(onForget = { forget(k) }, modifier = Modifier.animateItem()) {
+                    SwipeToForget(enabled = !k.pinned, onForget = { forget(k) }, modifier = Modifier.animateItem()) {
                         ListRow(
                             title = k.endpoint + if (names.isNotEmpty()) "  \u00B7  ${names.joinToString(", ")}" else "",
-                            // A swipe is out of a screen reader's reach; the row offers the same Forget as an action of its own.
-                            modifier = Modifier.semantics { customActions = listOf(CustomAccessibilityAction("Forget") { forget(k); true }) },
+                            // A swipe is out of a screen reader's reach; an unpinned row offers the same Forget as an action of its own.
+                            modifier = Modifier.semantics { if (!k.pinned) customActions = listOf(CustomAccessibilityAction("Forget") { forget(k); true }) },
                             // One Caption line: algorithm, the pin, then the hash and its leading groups in Mono (K1).
                             subtitle = buildAnnotatedString {
                                 append(k.algorithmLabel)
@@ -255,11 +256,12 @@ internal fun forgotLine(keys: List<KnownHostKey>, beside: Boolean): String {
 /**
  * A row that forgets its key on a swipe to the left, past 40 % of its width or on a fling. The
  * strip behind it is drawn only while the row is moved: `Forget` in danger on the quiet surface,
- * filling with danger once letting go would forget.
+ * filling with danger once letting go would forget. With [enabled] off the row does not move: a
+ * pinned key is the one trust nothing light may take away, so it is forgotten from its sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SwipeToForget(onForget: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun SwipeToForget(enabled: Boolean, onForget: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     // Not rememberSaveable: the list keeps each key's saved state, so a row put back by Undo would come back swiped away and forget itself again.
     val state = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { it * 0.4f }) }
     SwipeToDismissBox(
@@ -269,6 +271,7 @@ private fun SwipeToForget(onForget: () -> Unit, modifier: Modifier = Modifier, c
         },
         modifier = modifier,
         enableDismissFromStartToEnd = false,
+        gesturesEnabled = enabled,
         onDismiss = { onForget() },
     ) {
         content()

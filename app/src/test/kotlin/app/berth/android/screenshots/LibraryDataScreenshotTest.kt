@@ -741,14 +741,15 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         compose.onNode(hasText(title) and hasText("$algorithm \u00B7", substring = true) and hasClickAction())
 
     /**
-     * A swipe to the left over a row shows Forget behind it, quiet until letting go would forget
-     * and filled with danger after; let go past that, the key is forgotten, and the foot says so
-     * for six seconds with Undo, which puts the key back as it was, its pin and its dates.
+     * A swipe to the left over an unpinned row shows Forget behind it, quiet until letting go would
+     * forget and filled with danger after; let go past that, the key is forgotten, and the foot says
+     * so for six seconds with Undo, which puts the key back as it was, with its dates. The pinned
+     * build box stays in the frames as it is.
      */
     @Test
     fun `a swipe to the left forgets a known host, and Undo puts it back as it was`() {
         seedLibrary()
-        runBlocking { graph.knownHosts.setPinned("kh-lab", true) }
+        runBlocking { graph.knownHosts.setPinned("kh-build", true) }
         val before = graph.knownHosts.items.value.single { it.id == "kh-lab" }
         knownHostsScreen()
         val lab = "192.168.1.20  \u00B7  homelab"
@@ -775,12 +776,58 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
 
         compose.onNodeWithText("Undo").performClick()
         compose.waitUntil(5_000) { graph.knownHosts.items.value.any { it.id == "kh-lab" } }
-        assertEquals("the key is back as it was, pinned, with its own dates", before, graph.knownHosts.items.value.single { it.id == "kh-lab" })
+        assertEquals("the key is back as it was, with its own dates", before, graph.knownHosts.items.value.single { it.id == "kh-lab" })
         waitForText(lab)
         waitForNoText("Forgot the key for 192.168.1.20")
-        knownRow(lab).assert(hasText("pinned", substring = true))
+        knownRow("build.internal  \u00B7  build box").assert(hasText("pinned", substring = true))
         hasNoText("Forget")
         assertEquals(3, graph.knownHosts.items.value.size)
+    }
+
+    /**
+     * A pinned key is the one trust nothing light may take away: its row does not move under a
+     * drag or a swipe and offers a screen reader no Forget, and it is forgotten only from its
+     * detail sheet, with the same Undo, which puts it back pinned.
+     */
+    @Test
+    fun `a pinned key does not swipe and is forgotten from its sheet`() {
+        seedLibrary()
+        runBlocking { graph.knownHosts.setPinned("kh-build", true) }
+        val before = graph.knownHosts.items.value.single { it.id == "kh-build" }
+        knownHostsScreen()
+        val build = "build.internal  \u00B7  build box"
+        waitForText(build)
+        val row = knownRow(build)
+        assertTrue(
+            "a pinned row offers no Forget action",
+            row.fetchSemanticsNode().config.getOrElse(SemanticsActions.CustomActions) { emptyList() }.none { it.label == "Forget" },
+        )
+
+        val left = row.fetchSemanticsNode().boundsInRoot.left
+        row.performTouchInput {
+            down(Offset(width - 24f, centerY))
+            repeat(20) { moveBy(Offset(-width * 0.03f, 0f)) }
+        }
+        compose.waitForIdle()
+        assertEquals("the row stays where it is under a drag", left, row.fetchSemanticsNode().boundsInRoot.left)
+        hasNoText("Forget")
+        row.performTouchInput { up() }
+        row.performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        assertEquals(3, graph.knownHosts.items.value.size)
+        compose.onAllNodes(hasText("Forgot", substring = true)).assertCountEquals(0)
+
+        row.performClick()
+        waitForText("Pin this key")
+        inSheet("Forget").performScrollTo().performClick()
+        waitForNoText("Pin this key")
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.none { it.id == "kh-build" } }
+        waitForText("Forgot the key for build.internal")
+        compose.onNodeWithText("Undo").performClick()
+        compose.waitUntil(5_000) { graph.knownHosts.items.value.any { it.id == "kh-build" } }
+        assertEquals("the key is back pinned, with its own dates", before, graph.knownHosts.items.value.single { it.id == "kh-build" })
+        waitForText(build)
+        knownRow(build).assert(hasText("pinned", substring = true))
     }
 
     /** A swipe that stops short and comes back slowly, and one to the right, forget nothing: the row settles, and a tap still opens it. */
