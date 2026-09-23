@@ -427,6 +427,43 @@ class EditorScreenshotTest {
     }
 
     @Test
+    fun `while a group's own accent is in force the app's pickers say so`() = groupAccentNote("")
+
+    @Test
+    fun `while a group's own accent is in force the app's pickers say so at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        groupAccentNote("-font-scale-2x")
+    }
+
+    /**
+     * Settings' and the Interface editor's accent pickers set the app's accent (spec A2): while Work
+     * is current with Rose of its own, a line under each says whose accent the chrome is in and what
+     * a pick there sets; once Work inherits again the line goes.
+     */
+    private fun groupAccentNote(suffix: String) {
+        val note = "While Work is current the interface uses its accent, Rose. This sets the app's, for groups on Inherit."
+        runBlocking { graph.sessions.restore() }
+        graph.sessions.setCurrentWorkspace("ws-work", activate = false)
+        graph.viewModel.setWorkspaceAccent("ws-work", AccentPreset.ROSE.rgb)
+        awaitOnMain("Rose to be the chrome's") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
+        var appearance by mutableStateOf(false)
+        shellThemed {
+            if (appearance) AppearanceScreen(graph.viewModel, onBack = {}) else SettingsScreen(graph.viewModel, onBack = {}, onKnownHosts = {})
+        }
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Copper").assertIsSelected()
+        capture("settings-group-accent-note$suffix")
+
+        appearance = true
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Interface preview").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(note).performScrollTo().assertIsDisplayed()
+
+        graph.viewModel.setWorkspaceAccent("ws-work", null)
+        awaitOnMain("Work to inherit the app's accent") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.COPPER.rgb }
+        compose.onAllNodesWithText(note).assertCountEquals(0)
+    }
+
+    @Test
     fun `applying a theme offers its suggested accent`() = accentOffer("")
 
     @Test

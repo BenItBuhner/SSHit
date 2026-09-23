@@ -54,6 +54,7 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.themes.AccentPicker
+import app.berth.android.ui.themes.GroupAccentNote
 import app.berth.android.ui.themes.accentChoice
 import app.berth.android.ui.themes.withAccent
 import app.berth.domain.model.DoubleTapAction
@@ -160,6 +161,7 @@ fun SettingsScreen(
                 }
                 Text("Accent", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp))
                 AccentPicker(theme.accentChoice, onChoose = { vm.setInterfaceTheme(theme.withAccent(it)) }, customSeed = theme.accent)
+                GroupAccentNote(vm)
                 ToggleRow("High contrast", theme.contrast == InterfaceContrast.HIGH, { vm.setInterfaceTheme(theme.copy(contrast = if (it) InterfaceContrast.HIGH else InterfaceContrast.STANDARD)) })
                 ToggleRow("System font", theme.useSystemFont, { vm.setInterfaceTheme(theme.copy(useSystemFont = it)) }, caption = "Use the device's interface font instead of Plex Sans")
                 ListRow("Interface editor", subtitle = "Presets, corner radius, density and a live preview", surface = Color.Transparent, minHeight = 44.dp, onClick = onAppearance, trailing = chevron)

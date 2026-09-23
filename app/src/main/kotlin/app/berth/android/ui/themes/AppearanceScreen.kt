@@ -143,6 +143,7 @@ fun AppearanceScreen(vm: AppViewModel, onBack: () -> Unit, modifier: Modifier = 
                 }
                 Caption("Accent", top = 8.dp)
                 AccentPicker(theme.accentChoice, onChoose = { set(theme.withAccent(it)) }, customSeed = theme.accent)
+                GroupAccentNote(vm)
                 Caption("Contrast", top = 14.dp)
                 SegmentedControl(
                     listOf("Standard", "High"),

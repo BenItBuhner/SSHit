@@ -68,7 +68,6 @@ import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthSpace
 import app.berth.android.ui.theme.BerthType
 import app.berth.android.ui.theme.toColor
-import app.berth.domain.model.AccentPreset
 import app.berth.domain.model.ColorMath
 import app.berth.domain.model.HexColorSerializer
 import app.berth.domain.model.TerminalTheme
@@ -328,7 +327,7 @@ fun TerminalThemeEditorScreen(
                     Text("Applied to $where.", style = BerthType.caption, color = c.text2, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                 }
                 if (offerFor != null && suggested != null) {
-                    val colour = AccentPreset.of(suggested)?.title ?: HexColorSerializer.toHex(suggested)
+                    val colour = accentName(suggested)
                     Spacer(Modifier.height(4.dp))
                     ListRow(
                         title = "Use this theme's accent for the interface",

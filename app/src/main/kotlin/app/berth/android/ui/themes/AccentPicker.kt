@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.touchTarget
 import app.berth.android.ui.components.BerthField
 import app.berth.android.ui.components.LocalPanelSurface
@@ -134,6 +136,28 @@ fun AccentPicker(
             )
         }
     }
+}
+
+/** An accent as the pickers name it: the preset's title, or the hex of any other colour. */
+fun accentName(rgb: Int): String = AccentPreset.of(rgb)?.title ?: HexColorSerializer.toHex(rgb)
+
+/**
+ * The line under the app's accent picker while the current group has an accent of its own (spec
+ * A2, C8). The chrome is drawn in the group's then, so without it a pick here changes nothing the
+ * user can see; with no group accent in force there is no line.
+ */
+@Composable
+fun GroupAccentNote(vm: AppViewModel) {
+    val groups by vm.workspaces.collectAsState()
+    val current by vm.currentWorkspaceId.collectAsState()
+    val group = groups.firstOrNull { it.id == current } ?: return
+    val rgb = group.accentRgb ?: return
+    Text(
+        "While ${group.name} is current the interface uses its accent, ${accentName(rgb)}. This sets the app's, for groups on Inherit.",
+        style = BerthType.caption,
+        color = Berth.colors.text2,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp),
+    )
 }
 
 /**
