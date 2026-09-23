@@ -218,7 +218,8 @@ class HardwareKeyboardScreenshotTest {
      * C22's table (design review, item 4): a row per chord with the action as its title and the keys
      * trailing in mono, one line each on a row of a touch target's 48 dp (the app's rows are the
      * remap table's controls, and the fixed rows keep step), the reader hearing the action first;
-     * and the whole sheet under two screens, where the two-line rows ran to four.
+     * and the whole sheet under two screens, where the two-line rows ran to four, with room for
+     * C22's `[ / ]` on top, a row for each group chord since each is rebound on its own.
      */
     private fun assertShortcutTable() {
         val row = compose.onNode(hasContentDescription("Next tab, Ctrl+Tab")).fetchSemanticsNode()
@@ -235,7 +236,8 @@ class HardwareKeyboardScreenshotTest {
         val whole = (scroll.size.height + range.maxValue()) / density
         // Two roots stand, the Stage's and the sheet's window, both the screen's size.
         val screen = compose.onAllNodes(isRoot()).fetchSemanticsNodes().maxOf { it.size.height } / density
-        assertTrue("the sheet is under two screens: $whole dp of $screen", whole < 2 * screen)
+        val groupRows = 2 * TouchTargetSize.value
+        assertTrue("the sheet is under two screens and the group chords' rows: $whole dp of $screen", whole < 2 * screen + groupRows)
     }
 
     @Test
