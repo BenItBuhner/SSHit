@@ -320,7 +320,7 @@ private fun tapLabel(action: TapAction): String = when (action) {
 
 /** The one gesture whose alternative takes something away: the tap is the soft keyboard's only way up. */
 private fun tapCaption(action: TapAction): String = when (action) {
-    TapAction.SHOW_KEYBOARD -> "And a click where the program has the mouse"
+    TapAction.SHOW_KEYBOARD -> "Also clicks where the program has the mouse"
     TapAction.NOTHING -> "No keyboard and no click; type from a hardware keyboard"
 }
 
