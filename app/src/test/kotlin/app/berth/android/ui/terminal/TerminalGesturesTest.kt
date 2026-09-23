@@ -41,6 +41,7 @@ import app.berth.android.ui.a11y.TerminalTag
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.stage.StageTools
+import app.berth.android.ui.stage.resolveLook
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
@@ -143,9 +144,19 @@ class TerminalGesturesTest {
 
     // ---- geometry and waiting -------------------------------------------------------------------------
 
+    /** The saved host the Stage under test takes its look from; a canvas alone is drawn at the app's font whatever its session's host. */
+    private var stagedHostId: String? = null
+
+    /**
+     * The paints of the font the terminal under test is drawn at: the app's, and on the Stage the saved
+     * host's size and family over it as the Stage resolves them. The Stage draws the record's snapshot
+     * until the hosts flow brings it the saved host, so a host's own size lands a frame or more late.
+     */
     private fun paints(): TerminalPaints {
         val res = context.resources
-        val font = runBlocking { graph.settings.terminalFont.first() }
+        val app = runBlocking { graph.settings.terminalFont.first() }
+        val saved = stagedHostId?.let { id -> graph.hosts.items.value.firstOrNull { it.id == id } }
+        val font = saved?.let { resolveLook(emptyList(), TerminalTheme.BERTH_DARK, app, it, null).font } ?: app
         return TerminalPaintsCache.get(context, font, res.displayMetrics.density, res.configuration.fontScale)
     }
 
@@ -158,8 +169,8 @@ class TerminalGesturesTest {
     /** Waits for the canvas to size the grid to itself, so cells map to pixels. */
     private fun awaitGrid(session: TerminalSession) {
         compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(TerminalTag)).fetchSemanticsNodes().isNotEmpty() }
-        val p = paints()
         compose.waitUntil(5_000) {
+            val p = paints()
             val size = compose.onNodeWithTag(TerminalTag).fetchSemanticsNode().size
             val cols = (size.width / p.cellWidth).toInt()
             val rows = (size.height / p.cellHeight).toInt()
@@ -709,6 +720,7 @@ class TerminalGesturesTest {
 
     private fun stage(session: TerminalSession, ui: TabUiState = TabUiState()): StageTools {
         val tools = StageTools()
+        stagedHostId = session.record.value.hostId
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
                 Box(Modifier.fillMaxSize()) { Stage(session, tools, ui) }
