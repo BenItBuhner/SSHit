@@ -463,6 +463,8 @@ class EditorScreenshotTest {
         val note = "While Work is current the interface uses its accent, Rose. This sets the app's, for groups on Inherit."
         runBlocking { graph.sessions.restore() }
         graph.sessions.setCurrentWorkspace("ws-work", activate = false)
+        // An accent set on a group the manager has not loaded yet is dropped, so Work has to be there first.
+        awaitOnMain("Work to reach the view model") { graph.viewModel.workspaces.value.any { it.id == "ws-work" } }
         graph.viewModel.setWorkspaceAccent("ws-work", AccentPreset.ROSE.rgb)
         awaitOnMain("Rose to be the chrome's") { graph.viewModel.shownInterfaceTheme.value.accent == AccentPreset.ROSE.rgb }
         var appearance by mutableStateOf(false)
