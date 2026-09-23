@@ -99,6 +99,18 @@ fun ComposeTestRule.assertDeckHintsClearOfLabels() {
     assertTrue("keys with a hint over a label were on the Deck", checked > 0)
 }
 
+/**
+ * The face of the Deck key labelled [label], in dp: its label is laid out in the whole of it. The
+ * key's node is its touch, the face and the gaps above and below it.
+ */
+fun ComposeTestRule.deckKeyFaceDp(label: String): Float {
+    val layout = onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(hasTestTag(DeckKeyTag)), useUnmergedTree = true)
+        .fetchSemanticsNodes()
+        .mapNotNull { it.textLayout() }
+        .first { it.layoutInput.text.text == label }
+    return layout.layoutInput.constraints.maxHeight / layout.layoutInput.density.density
+}
+
 private fun SemanticsNode.textDescendants(): List<SemanticsNode> = buildList {
     for (child in children) {
         if (child.config.getOrNull(SemanticsProperties.Text) != null) add(child)

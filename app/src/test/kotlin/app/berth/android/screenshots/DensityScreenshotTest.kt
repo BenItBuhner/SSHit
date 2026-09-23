@@ -386,12 +386,7 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
     private fun ctrlKeyDp(): Float = compose.onNode(ctrlKey).fetchSemanticsNode().size.height.toFloat().inDp()
 
-    /** Ctrl's face: its label is laid out in the whole of it. */
-    private fun ctrlFaceDp(): Float = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(ctrlKey), useUnmergedTree = true)
-        .fetchSemanticsNodes()
-        .mapNotNull { it.textLayout() }
-        .first { it.layoutInput.text.text == "Ctrl" }
-        .layoutInput.constraints.maxHeight.toFloat().inDp()
+    private fun ctrlFaceDp(): Float = compose.deckKeyFaceDp("Ctrl")
 
     private fun awaitDeck() {
         compose.waitUntil(10_000) { compose.onAllNodes(ctrlKey).fetchSemanticsNodes().isNotEmpty() }

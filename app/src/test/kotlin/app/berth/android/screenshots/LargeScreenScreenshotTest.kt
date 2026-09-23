@@ -486,8 +486,7 @@ class LargeScreenScreenshotTest {
         session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear && ls --color=always -la /\n")
         settle(1_500)
         assertEquals(32f, stripHeightDp(), 0.5f)
-        val ctrl = compose.onNode(hasContentDescription("Ctrl", substring = true)).fetchSemanticsNode()
-        assertEquals(40f, ctrl.size.height / compose.density.density, 1f)
+        assertEquals(40f, compose.deckKeyFaceDp("Ctrl"), 1f)
         capture("phone-landscape-live-deck")
     }
 
