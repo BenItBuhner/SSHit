@@ -490,8 +490,8 @@ private fun Pane(
 
 /**
  * The pane's header (spec C23): 20 dp swatch with the state dot, the title in Body, then the age
- * of a detached frame in Caption, and on the focused pane the × that closes the pane (the tab
- * stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
+ * of a detached frame in Caption, and on the focused pane, at the pane's end, the × that closes the
+ * pane (the tab stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
  * height is the strip's (spec C3), so on a phone on its side and under Compact it shortens with the
  * strip rather than standing taller than the window's own header and costing each pane rows; only
  * the title's line at the interface's font cap stands taller (Body's 28.6 dp over Compact's 28), and
@@ -527,18 +527,21 @@ private fun PaneHeader(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Swatch(color, monogram, 20.dp, state = state, attention = attention)
-        Text(
-            title,
-            style = BerthType.bodyMedium,
-            color = if (focused) c.text1 else c.text2,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
-        if (state == SessionState.DETACHED && lastLiveAt != null) {
-            Text(ageText(lastLiveAt, ageTicker()), style = BerthType.caption, color = c.text3, maxLines = 1)
+        // The title and the age take all the swatch and the × leave, so the × stands at the pane's end
+        // whatever the title's length, and a title too long for the room ends in its ellipsis before the age.
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                title,
+                style = BerthType.bodyMedium,
+                color = if (focused) c.text1 else c.text2,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (state == SessionState.DETACHED && lastLiveAt != null) {
+                Text(ageText(lastLiveAt, ageTicker()), style = BerthType.caption, color = c.text3, maxLines = 1)
+            }
         }
-        Spacer(Modifier.weight(1f))
         if (focused) {
             IconAction(onClick = onClose, description = "Close pane") {
                 BerthIcon(BerthIcons.close, size = 16.dp)
