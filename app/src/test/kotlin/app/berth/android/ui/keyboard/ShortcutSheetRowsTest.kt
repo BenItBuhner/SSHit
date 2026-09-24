@@ -90,9 +90,6 @@ class ShortcutSheetRowsTest(private val systemFontScale: Float) {
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Keyboard shortcuts").fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
-        compose.captureAudited(File(outDir, "shortcut-sheet-rows$suffix.png"))
-        captureAt("Split works on a wide screen", "shortcut-sheet-rows-panes")
-        captureAt("Unbound combinations always reach the terminal", "shortcut-sheet-rows-terminal")
         val wrapped = buildList {
             for (prefix in ChordPrefix.entries) {
                 for (ctrlTabKeysReachTerminal in listOf(false, true)) {
@@ -103,8 +100,15 @@ class ShortcutSheetRowsTest(private val systemFontScale: Float) {
                 }
             }
         }
-        captureAt("Transpose, delete word", "shortcut-sheet-rows-terminal-leader-readline")
         assertTrue("texts on more than $linesForOne line(s) at ${systemFontScale}x:\n${wrapped.joinToString("\n")}", wrapped.isEmpty())
+
+        table = ChordTable(HardwareKeyboardSettings())
+        compose.waitForIdle()
+        compose.captureAudited(File(outDir, "shortcut-sheet-rows$suffix.png"))
+        captureAt("Split works on a wide screen", "shortcut-sheet-rows-panes")
+        captureAt("Unbound combinations always reach the terminal", "shortcut-sheet-rows-terminal")
+        table = ChordTable(HardwareKeyboardSettings().withChordPrefix(ChordPrefix.LEADER), true)
+        captureAt("Transpose, delete word", "shortcut-sheet-rows-terminal-leader-readline")
     }
 
     private fun captureAt(text: String, name: String) {
