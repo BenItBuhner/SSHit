@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
@@ -109,7 +110,7 @@ private const val TABLET_LANDSCAPE = "w1280dp-h800dp-land-320dpi"
  * the key's foot, the alternates as a popover on a hold, the layer by a swipe across, the grip's
  * drag up), the Session sheet's Look row over the Stage it previews (spec C6), and the two rows in
  * Settings that turn the gestures and the second row. Through Robolectric's native graphics into
- * `build/outputs/roborazzi`. The gestures that send are driven against the local sshd when the
+ * [screenshotDir]. The gestures that send are driven against the local sshd when the
  * `SSH_TEST_*` variables are set, so what the terminal shows after each is what the finger meant.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -123,7 +124,7 @@ class DeckRailScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()

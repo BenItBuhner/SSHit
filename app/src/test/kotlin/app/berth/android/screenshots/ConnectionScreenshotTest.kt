@@ -28,6 +28,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.BlackHoleProxy
 import app.berth.android.session.Prompt
@@ -92,7 +93,7 @@ class ConnectionScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val app: Application get() = ApplicationProvider.getApplicationContext()
     private val bg = CoroutineScope(Dispatchers.Default + Job())

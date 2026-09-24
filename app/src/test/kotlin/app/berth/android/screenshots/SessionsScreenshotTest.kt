@@ -26,6 +26,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.NotificationPrompt
@@ -77,7 +78,7 @@ import java.util.concurrent.TimeUnit
  * The session model's surfaces (vision §4.3, §4.5; spec C3, C21) rendered through the real
  * screens in Berth Dark on a Pixel-class phone: the notification permission's rationale and its
  * refused notice, the attention states on the strip and jump-to-unread, a cold start after the OS
- * killed a live tab, and the Settings row for notifications. PNGs land in `build/outputs/roborazzi`.
+ * killed a live tab, and the Settings row for notifications. PNGs land in [screenshotDir].
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -89,7 +90,7 @@ class SessionsScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     /** The fixture's clock and the interface's: pinned, so an age or a `detached HH:MM` marker reads the same on every run. */
     private val now = FIXED_NOW

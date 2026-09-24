@@ -34,6 +34,7 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.keys.GenerateKeySheet
 import app.berth.android.ui.keys.NewKeyPrefill
@@ -105,7 +106,7 @@ class PersistenceScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     /**
      * The records' clock and the interface's, pinned: the History sheet groups its rows by day

@@ -47,6 +47,7 @@ import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.security.FakeKeystore
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.AppViewModel
@@ -133,7 +134,7 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var graph: TestGraph
 

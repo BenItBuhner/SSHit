@@ -50,6 +50,7 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.HostKeyChangedDecision
 import app.berth.android.session.LinkFingerprint
@@ -136,7 +137,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Renders the real screens, in Berth Dark on a Pixel-class phone, through Robolectric's native
- * graphics and writes PNGs to `build/outputs/roborazzi`. Offline cases seed in-memory storage;
+ * graphics and writes PNGs to [screenshotDir]. Offline cases seed in-memory storage;
  * `live session on stage` drives a real sshj connection when the `SSH_TEST_*` variables are set,
  * so the Stage, the Deck and the trust prompt in those frames come from an actual session.
  */
@@ -150,7 +151,7 @@ class BerthScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()

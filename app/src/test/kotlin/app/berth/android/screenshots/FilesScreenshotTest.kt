@@ -47,6 +47,7 @@ import app.berth.android.files.FilesBrowser
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferKind
 import app.berth.android.files.TransferState
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
@@ -124,7 +125,7 @@ class FilesScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /** The offline tree's clock and the interface's: pinned, so a modified time reads the same on every run. */

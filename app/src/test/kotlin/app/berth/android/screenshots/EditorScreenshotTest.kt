@@ -54,6 +54,7 @@ import androidx.core.app.ActivityOptionsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
 import app.berth.android.ui.io.MAX_TEXT_BYTES
@@ -109,7 +110,7 @@ import java.util.concurrent.TimeUnit
  * with its colour sheet, apply panel and accent offer, the interface
  * editor, the Deck editor with the action catalogue, the presets sheet, the layout panel, a two-row
  * left-reach layout and a Termux import, plus the Stage picking up a workspace theme. Written to
- * `build/outputs/roborazzi`.
+ * [screenshotDir].
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -121,7 +122,7 @@ class EditorScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
 
     /** The Libraries row whose one text is each of its five libraries' own. */
     private val SHARED_APACHE = "Dagger and Hilt, JSpecify, listenablefuture, javax.inject and JSR 305"

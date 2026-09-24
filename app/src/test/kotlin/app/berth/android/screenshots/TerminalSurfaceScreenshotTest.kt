@@ -55,6 +55,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
+import app.berth.android.screenshotDir
 import app.berth.android.ui.security.BerthClipboardLocals
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.SessionSheet
@@ -119,7 +120,7 @@ class TerminalSurfaceScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val sessions = ArrayList<TerminalSession>()

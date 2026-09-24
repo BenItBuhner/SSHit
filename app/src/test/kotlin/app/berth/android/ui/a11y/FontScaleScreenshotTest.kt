@@ -32,6 +32,7 @@ import app.berth.android.createBerthComposeRule
 import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.LogRing
+import app.berth.android.screenshotDir
 import app.berth.android.screenshots.FIXED_INSTALL
 import app.berth.android.screenshots.FIXED_NOW
 import app.berth.android.screenshots.StageFixture
@@ -103,7 +104,7 @@ class FontScaleScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
 
     @Before

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.session.AuthResolver
@@ -65,7 +66,7 @@ class ReducedMotionTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private val now = System.currentTimeMillis()
     private lateinit var graph: TestGraph
 

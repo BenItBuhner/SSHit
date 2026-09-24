@@ -50,6 +50,7 @@ import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
@@ -109,7 +110,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The screens a hardware keyboard brings (spec C22, C4 "Hardware keyboard attached", A11), written
- * to `build/outputs/roborazzi` with the accessibility audit on each: the Stage with a keyboard
+ * to [screenshotDir] with the accessibility audit on each: the Stage with a keyboard
  * attached and the Deck folded to its 20 dp strip, that strip opened to the one row of modifiers
  * and actions, the same with the compact setting off and the whole Deck standing, the focus a
  * keyboard shows on a tab of the strip, on a Deck key and on a Settings row, the shortcut sheet
@@ -129,7 +130,7 @@ class HardwareKeyboardScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val bg = CoroutineScope(Dispatchers.Default + Job())
     private val now = System.currentTimeMillis()

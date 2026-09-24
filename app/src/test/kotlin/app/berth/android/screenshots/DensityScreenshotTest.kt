@@ -34,6 +34,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.PaneSide
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.hosts.HostEditorScreen
@@ -75,7 +76,7 @@ import kotlin.math.roundToInt
  * Density control is the switch, Settings' panels and rows, the Hosts list, the host editor's
  * fields, and the Stage's chrome: its strip upright and on its side, the panes' headers on a
  * tablet, and the Deck. The interface theme comes from the view model as the shell's does, so the
- * pick in the editor is the density every screen draws at. Written to `build/outputs/roborazzi` in
+ * pick in the editor is the density every screen draws at. Written to [screenshotDir] in
  * pairs, `density-<surface>-comfortable` and `density-<surface>-compact`, with the phone's strip
  * under a status bar as a phone has one, and Compact's once more without.
  */
@@ -95,7 +96,7 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val now = System.currentTimeMillis()
     private val suffix = if (systemFontScale > 1f) "-font-scale-2x" else ""

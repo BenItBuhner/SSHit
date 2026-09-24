@@ -60,6 +60,7 @@ import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.screenshots.StageFixture
 import app.berth.android.screenshots.TestGraph
 import app.berth.android.screenshots.assertNoTextCut
@@ -98,7 +99,7 @@ import java.io.File
 
 /**
  * The remap table, the chord prefix, pass-through and the first Ctrl+W's hint (spec C22, A44,
- * A46), and the volume buttons (A43), written to `build/outputs/roborazzi` with the accessibility
+ * A46), and the volume buttons (A43), written to [screenshotDir] with the accessibility
  * audit on each frame: the shortcut sheet with a row listening for its new chord, the line naming
  * what Ctrl+F takes from the shell, the row rebound, the line refusing Ctrl+C, and beside a German
  * keyboard ([ShadowKeyLayout], that test's own) the line saying AltGr+Q types `@`; the Stage with
@@ -122,7 +123,7 @@ class RemapScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
 
     @Before

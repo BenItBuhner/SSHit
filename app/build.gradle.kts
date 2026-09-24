@@ -440,3 +440,11 @@ tasks.withType<Test>().configureEach {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// Each variant's unit tests write their frames to a folder of their own, build/outputs/roborazzi/debug and
+// build/outputs/roborazzi/release (the tests' screenshotDir): the two draw a detached tab's frame a level apart,
+// and one folder for both kept whichever variant ran second. The property is the variant's name, not a path, so
+// no absolute path reaches the task's cache key.
+tasks.withType<Test>().matching { it.name.endsWith("UnitTest") }.configureEach {
+    systemProperty("berth.roborazziVariant", name.removePrefix("test").removeSuffix("UnitTest").replaceFirstChar { it.lowercase() })
+}
