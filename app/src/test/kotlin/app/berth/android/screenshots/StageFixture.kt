@@ -85,6 +85,20 @@ object StageFixture {
         override fun onClipboardText(host: Host, text: String) = Unit
     }
 
+    /**
+     * Row [i] of a screen of glyphs the renderer draws a cell at a time: a tmux pane border between a `tree` listing
+     * and a meter of blocks, over a line of braille graph. [BOX_ROW_COLS] wide, so a grid narrower than that wraps it.
+     */
+    fun boxRow(i: Int): String {
+        val tree = (if (i % 5 == 4) "\u2502   \u2514\u2500\u2500 " else "\u2502   \u251C\u2500\u2500 ") + "file-$i.kt"
+        val fill = i % 20
+        val meter = "cpu [" + "\u2588".repeat(fill) + "\u2591".repeat(20 - fill) + "] " + "\u28C0\u28E4\u28F6\u28FF".repeat(4)
+        return "\u001b[32m" + tree.padEnd(39) + "\u001b[0m\u2502 \u001b[36m" + meter + "\u001b[0m"
+    }
+
+    /** The columns a [boxRow] takes: the listing's 39, the border and its space, and the meter's 43. */
+    const val BOX_ROW_COLS = 84
+
     fun seed(graph: TestGraph, now: Long = System.currentTimeMillis()) = runBlocking {
         graph.workspaces.upsert(Workspace(Workspace.DEFAULT_ID, Workspace.DEFAULT_NAME, SwatchColor.COPPER, "H", sortOrder = 0, createdAt = now - TimeUnit.DAYS.toMillis(30)))
         graph.workspaces.upsert(Workspace("ws-work", "Work", SwatchColor.SLATE, "W", sortOrder = 1, createdAt = now - TimeUnit.DAYS.toMillis(20)))

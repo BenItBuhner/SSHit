@@ -83,7 +83,7 @@ class TerminalFrameCostTest {
     fun `drawing a screen of plain text or of box drawing allocates no more than a run buffer`() {
         val paints = TerminalPaints(context, TerminalFont(), density = 2.625f, fontScale = 1f)
         val plain = TerminalFrame().also { it.capture(screen(::plainRow), 0) }
-        val boxes = TerminalFrame().also { it.capture(screen(::boxRow), 0) }
+        val boxes = TerminalFrame().also { it.capture(screen(StageFixture::boxRow), 0) }
         val canvas = NullCanvas()
         val w = COLS * paints.cellWidth
         val h = ROWS * paints.cellHeight
@@ -161,14 +161,6 @@ class TerminalFrameCostTest {
 
     /** An `ls --color` line: directories bold blue, scripts green, the rest plain. */
     private fun plainRow(i: Int): String = "\u001b[01;34mdir-$i\u001b[0m  file-$i.txt  \u001b[32mscript-$i.sh\u001b[0m  notes-$i.md  \u001b[01;34mbuild-$i\u001b[0m  Makefile"
-
-    /** A tmux pane border between a `tree` listing and a meter of blocks, over a line of braille graph. */
-    private fun boxRow(i: Int): String {
-        val tree = (if (i % 5 == 4) "\u2502   \u2514\u2500\u2500 " else "\u2502   \u251C\u2500\u2500 ") + "file-$i.kt"
-        val fill = i % 20
-        val meter = "cpu [" + "\u2588".repeat(fill) + "\u2591".repeat(20 - fill) + "] " + "\u28C0\u28E4\u28F6\u28FF".repeat(4)
-        return "\u001b[32m" + tree.padEnd(39) + "\u001b[0m\u2502 \u001b[36m" + meter + "\u001b[0m"
-    }
 
     /** Every resumption queued on the test scheduler run, and a capture on the worker given time to come back. */
     private fun settle() {
