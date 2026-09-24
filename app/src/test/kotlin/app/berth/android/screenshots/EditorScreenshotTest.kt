@@ -122,6 +122,9 @@ class EditorScreenshotTest {
     val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+
+    /** The Libraries row whose one text is each of its five libraries' own. */
+    private val SHARED_APACHE = "Dagger and Hilt, JSpecify, listenablefuture, javax.inject and JSR 305"
     private lateinit var graph: TestGraph
     private val now = System.currentTimeMillis()
 
@@ -351,6 +354,37 @@ class EditorScreenshotTest {
         compose.onNodeWithText("From github.com/hierynomus/sshj at v0.40.0: LICENSE and NOTICE").assertIsDisplayed()
         capture("settings-licence-sshj$suffix")
         compose.onNodeWithText("sshj - SSHv2 library for Java", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        val platform = listOf(
+            "AndroidX, the interface and the database", "Kotlin, the language's standard library", "kotlinx.coroutines, the concurrency",
+            "kotlinx.serialization, the stored formats", "JetBrains annotations", "Jakarta Dependency Injection, Hilt's annotations", SHARED_APACHE,
+        )
+        compose.onNodeWithText(SHARED_APACHE).performScrollTo()
+        capture("settings-licences-platform$suffix")
+        for (library in platform) compose.onNode(hasText(library) and hasClickAction()).assertExists()
+        compose.assertNoTextCut("the Licences list$suffix")
+        compose.assertNoBrokenWords("the Licences list$suffix")
+
+        compose.onNodeWithText(SHARED_APACHE).performClick()
+        val origins = "From github.com/google/dagger at dagger-2.60.1: LICENSE.txt; github.com/jspecify/jspecify at v1.0.0: LICENSE;"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(origins, substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(origins, substring = true).assertIsDisplayed()
+        capture("settings-licence-apache-shared$suffix")
+        compose.assertNoTextCut("the shared Apache text$suffix")
+        compose.assertNoBrokenWords("the shared Apache text$suffix")
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        // Kotlin's NOTICE follows its licence in the one text, as sshj's does.
+        compose.onNodeWithText("Kotlin, the language's standard library").performScrollTo().performClick()
+        val notice = "Kotlin Compiler\nCopyright 2010-2024 JetBrains s.r.o and respective authors and developers"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(notice).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(notice).performScrollTo().assertIsDisplayed()
+        capture("settings-licence-kotlin-notice$suffix")
+        compose.assertNoTextCut("Kotlin's licence and NOTICE$suffix")
+        compose.assertNoBrokenWords("Kotlin's licence and NOTICE$suffix")
         compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
 

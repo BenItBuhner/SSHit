@@ -75,6 +75,52 @@ internal val SHIPPED_NOTICES: List<Pair<String, List<ShippedNotice>>> = listOf(
             listOf("public-suffix-list-MPL-2.0.txt"),
             "github.com/publicsuffix/list at 17cb0fe, the list's own commit: LICENSE",
         ),
+        ShippedNotice(
+            "AndroidX, the interface and the database",
+            "Apache License 2.0",
+            listOf("androidx-Apache-2.0.txt"),
+            "github.com/androidx/androidx at 47122cc: LICENSE.txt, the text every AndroidX library carries",
+        ),
+        ShippedNotice(
+            "Kotlin, the language's standard library",
+            "Apache License 2.0, with its NOTICE",
+            listOf("kotlin-Apache-2.0.txt", "kotlin-NOTICE.txt"),
+            "github.com/JetBrains/kotlin at v2.4.20: license/LICENSE.txt and license/NOTICE.txt",
+        ),
+        ShippedNotice(
+            "kotlinx.coroutines, the concurrency",
+            "Apache License 2.0, with its NOTICE",
+            listOf("kotlinx-coroutines-Apache-2.0.txt", "kotlinx-coroutines-NOTICE.txt"),
+            "github.com/Kotlin/kotlinx.coroutines at 1.11.0: LICENSE.txt and license/NOTICE.txt",
+        ),
+        ShippedNotice(
+            "kotlinx.serialization, the stored formats",
+            "Apache License 2.0, with its NOTICE",
+            listOf("kotlinx-serialization-Apache-2.0.txt", "kotlinx-serialization-NOTICE.txt"),
+            "github.com/Kotlin/kotlinx.serialization at v1.11.0: LICENSE.txt and license/NOTICE.txt",
+        ),
+        ShippedNotice(
+            "JetBrains annotations",
+            "Apache License 2.0",
+            listOf("jetbrains-annotations-Apache-2.0.txt"),
+            "github.com/JetBrains/java-annotations at 23.0.0: LICENSE.txt",
+        ),
+        ShippedNotice(
+            "Jakarta Dependency Injection, Hilt's annotations",
+            "Apache License 2.0, with its NOTICE",
+            listOf("jakarta-inject-Apache-2.0.txt", "jakarta-inject-NOTICE.txt"),
+            "github.com/jakartaee/inject at 2.0.1: LICENSE.txt and NOTICE.md",
+        ),
+        // A text names several libraries only where it is byte for byte each one's own file at its pin,
+        // or the file its POM names where it has none, and none of them carries a NOTICE.
+        ShippedNotice(
+            "Dagger and Hilt, JSpecify, listenablefuture, javax.inject and JSR 305",
+            "Apache License 2.0, one text that is each one's own",
+            listOf("apache-LICENSE-2.0.txt"),
+            "github.com/google/dagger at dagger-2.60.1: LICENSE.txt; github.com/jspecify/jspecify at v1.0.0: LICENSE; " +
+                "github.com/google/guava at v26.0, listenablefuture 1.0's parent: COPYING; javax.inject 1 and jsr305 3.0.2, " +
+                "which have no file of their own, by the www.apache.org/licenses/LICENSE-2.0.txt their POMs name",
+        ),
     ),
     "Terminal palettes" to listOf(
         ShippedNotice("Catppuccin Mocha and Latte", "MIT", listOf("theme-catppuccin-MIT.txt")),
@@ -171,29 +217,36 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
  * proportional type cannot keep the padding's columns: three or more cells padded apart, the
  * first and the last holding a letter or a digit, standing in the columns of a neighbouring row.
  * A justified text's padding falls somewhere else on every line, so it reads as prose, its runs
- * of spaces set as one. A box drawn in stars (the MPL's disclaimers) loses its drawing: a rule of
- * ten or more stars ends a paragraph, and a line inside keeps only what stands between its edge
- * stars, so the words read as prose too.
+ * of spaces set as one. A box drawn in stars (the MPL's disclaimers) or in equals signs (the
+ * Apache NOTICEs' headers) loses its drawing: a rule of ten or more of its sign opens and closes
+ * it, each ending a paragraph, and a line inside keeps only what stands between its edge signs, so
+ * the words read as prose too. A rule of equals signs opens a box only over a line edged in them;
+ * over anything else it is a heading's underline (the MPL's title) and keeps its line.
  */
 internal fun licenceParagraphs(text: String): List<String> {
     val lines = text.lines().map(String::trimEnd)
     val out = mutableListOf<String>()
     val paragraph = StringBuilder()
     var runsOn = false
-    var boxed = false
+    var box: Char? = null
     fun endParagraph() {
         if (paragraph.isNotEmpty()) out += paragraph.toString()
         paragraph.clear()
         runsOn = false
     }
+    fun edged(line: String, sign: Char) = line.length >= 2 && line.first() == sign && line.last() == sign
     for ((index, raw) in lines.withIndex()) {
         var line = raw.trim()
         if (line.matches(BOX_RULE)) {
-            boxed = !boxed
-            endParagraph()
-            continue
+            val sign = line.first()
+            val opens = box == null && (sign == '*' || lines.getOrNull(index + 1)?.trim()?.let { edged(it, sign) && !it.matches(BOX_RULE) } == true)
+            if (box == sign || opens) {
+                box = if (opens) sign else null
+                endParagraph()
+                continue
+            }
         }
-        if (boxed && line.length >= 2 && line.startsWith('*') && line.endsWith('*')) line = line.substring(1, line.length - 1).trim()
+        box?.let { sign -> if (edged(line, sign)) line = line.trim(sign).trim() }
         if (line.isEmpty()) {
             endParagraph()
             continue
@@ -238,4 +291,4 @@ internal const val TABLE_CELL_SEPARATOR = " \u00B7 "
 
 private val COLUMN_GAP = Regex(" {2,}")
 
-private val BOX_RULE = Regex("\\*{10,}")
+private val BOX_RULE = Regex("\\*{10,}|={10,}")

@@ -7,7 +7,8 @@ import java.io.File
 
 /**
  * Settings › Licences against what ships: every licence file under `assets/licenses/` is opened by
- * exactly one row and every row's file is there, so a text added or renamed cannot go unlisted;
+ * exactly one row and every row's file is there, so a text added or renamed cannot go unlisted, and
+ * every library on the release runtime classpath answers to a row, so a dependency cannot either;
  * and a file's hard wraps are joined while its headings, title block and rules keep their lines, and a
  * table's rows stand as paragraphs of their own. Of the shipped texts only the icon sets' table has any,
  * so a text added later that the rule would split fails here first.
@@ -123,11 +124,53 @@ class LicencesTest {
     }
 
     @Test
+    fun `a box drawn in equals signs loses its drawing, while a heading's underline keeps its line`() {
+        val notice = """
+            |   =========================================================================
+            |   ==  NOTICE file corresponding to the section 4 d of                    ==
+            |   ==  the Apache License, Version 2.0,                                   ==
+            |   ==  in this case for the Kotlin Compiler distribution.                 ==
+            |   =========================================================================
+            |
+            |   Kotlin Compiler
+        """.trimMargin()
+        assertEquals(
+            listOf(
+                "NOTICE file corresponding to the section 4 d of\nthe Apache License, Version 2.0,\nin this case for the Kotlin Compiler distribution.",
+                "Kotlin Compiler",
+            ),
+            licenceParagraphs(notice),
+        )
+        val mpl = "Mozilla Public License Version 2.0\n==================================\n\n1. Definitions\n--------------"
+        assertEquals(listOf("Mozilla Public License Version 2.0\n==================================", "1. Definitions\n--------------"), licenceParagraphs(mpl))
+    }
+
+    @Test
     fun `every font's and library's text names where it came from`() {
         for ((section, notices) in SHIPPED_NOTICES.filter { (section, _) -> section == "Fonts" || section == "Libraries" }) {
             for (notice in notices) assertTrue("$section: ${notice.name} names no origin", !notice.origin.isNullOrBlank() && notice.origin.startsWith("github.com/"))
         }
         assertEquals(listOf("Fonts", "Libraries"), SHIPPED_NOTICES.map { it.first }.filter { it == "Fonts" || it == "Libraries" })
+    }
+
+    /**
+     * Every module the release APK carries answers to a Libraries row that opens its text, one row
+     * per upstream licence file; the one text several rows' worth share is theirs only because none
+     * of them carries a NOTICE, and each library whose upstream does (Apache 2.0 §4(d); the build
+     * strips the jars' copies) ships it. The build passes the release runtime classpath's modules.
+     */
+    @Test
+    fun `every library the release APK carries has a row with its text, and its NOTICE where it has one`() {
+        val modules = System.getProperty("berth.releaseModules").orEmpty().split(',').filter(String::isNotBlank)
+        assertTrue("the build passed no release modules (berth.releaseModules)", modules.size > 50)
+        val rows = SHIPPED_NOTICES.single { it.first == "Libraries" }.second.associateBy { it.name }
+        assertEquals("modules on the release classpath with no row", emptyList<String>(), modules.filter { m -> ROW_BY_MODULE.none { m.startsWith(it.first) } })
+        for ((prefix, row) in ROW_BY_MODULE) {
+            assertTrue("$prefix's row is not among the Libraries: $row", rows[row]?.files.orEmpty().isNotEmpty())
+            assertTrue("$prefix: no module the release carries; its row outlived it", modules.any { it.startsWith(prefix) })
+        }
+        for (row in WITH_NOTICE) assertTrue("$row ships no NOTICE", rows.getValue(row).files.any { "NOTICE" in it })
+        assertTrue("the shared text's libraries carry no NOTICE", rows.getValue(SHARED).files.none { "NOTICE" in it })
     }
 
     @Test
@@ -142,9 +185,39 @@ class LicencesTest {
     fun `every shipped text keeps every word it has, and adds none but a table's separators`() {
         for (file in shipped.listFiles().orEmpty()) {
             val text = file.readText()
-            val words = { s: String -> s.split(Regex("[ \t\r\n]+")).filter { it.isNotEmpty() && !it.all { c -> c == '*' } } }
+            val words = { s: String -> s.split(Regex("[ \t\r\n]+")).filter { it.isNotEmpty() && !it.all { c -> c == '*' } && !it.all { c -> c == '=' } } }
             val shown = licenceParagraphs(text).flatMap { words(it.replace(TABLE_CELL_SEPARATOR, " ")) }
             assertEquals(file.name, words(text), shown)
         }
+    }
+
+    private companion object {
+        const val SHARED = "Dagger and Hilt, JSpecify, listenablefuture, javax.inject and JSR 305"
+        const val KOTLIN = "Kotlin, the language's standard library"
+        const val COROUTINES = "kotlinx.coroutines, the concurrency"
+        const val SERIALIZATION = "kotlinx.serialization, the stored formats"
+        const val JAKARTA = "Jakarta Dependency Injection, Hilt's annotations"
+        const val SSHJ = "sshj, the SSH transport"
+
+        /** The release runtime classpath by group or group:name, each to the row that answers for it. */
+        val ROW_BY_MODULE = listOf(
+            "androidx." to "AndroidX, the interface and the database",
+            "org.jetbrains.kotlin:kotlin-stdlib" to KOTLIN,
+            "org.jetbrains.kotlinx:kotlinx-coroutines-" to COROUTINES,
+            "org.jetbrains.kotlinx:kotlinx-serialization-" to SERIALIZATION,
+            "org.jetbrains:annotations" to "JetBrains annotations",
+            "jakarta.inject:" to JAKARTA,
+            "com.google.dagger:" to SHARED,
+            "org.jspecify:" to SHARED,
+            "com.google.guava:listenablefuture" to SHARED,
+            "javax.inject:" to SHARED,
+            "com.google.code.findbugs:jsr305" to SHARED,
+            "com.hierynomus:sshj" to SSHJ,
+            "com.hierynomus:asn-one" to "asn-one, sshj's ASN.1 coding",
+            "org.bouncycastle:" to "Bouncy Castle, the cryptography",
+            "org.slf4j:" to "SLF4J, the transport's logging",
+        )
+
+        val WITH_NOTICE = listOf(SSHJ, KOTLIN, COROUTINES, SERIALIZATION, JAKARTA)
     }
 }
