@@ -1204,6 +1204,8 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
             else -> entry.tabs.firstOrNull()?.let { actions.activate(it.id) }
         }
     }
+    // The gesture keeps the tap it was first handed for as long as the chip's key stands; the group's state it reads moves on.
+    val currentTap by rememberUpdatedState(tap)
 
     Box(
         modifier
@@ -1216,7 +1218,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.GroupChip(
                     drag.startOffset + state.dragTravel - current
                 } else 0f
             }
-            .stripItemGestures(entry.key, isChip = true, controller, state, onTap = tap, onPressedChange = { pressed = it })
+            .stripItemGestures(entry.key, isChip = true, controller, state, onTap = { currentTap() }, onPressedChange = { pressed = it })
             .keyPressable(enabled = true, interactionSource = interaction, onPress = tap)
             .clearAndSetSemantics {
                 role = Role.Button
