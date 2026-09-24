@@ -204,7 +204,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
     /**
      * A phone on its side (spec C23): under its status bar the strip's own 32 steps to Compact's 28
-     * as well, its lines whole, and with none it stands its own 32 with the 4 dp band over it.
+     * as well, its lines whole. With none there is no inset to lend the short strip its reach, so the
+     * skin's 40 dp row stands with the 4 dp band over it, its targets l.102's 44 as upright.
      */
     @Test
     @Config(qualifiers = "w914dp-h411dp-land-420dpi")
@@ -222,8 +223,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertStripLinesWhole("the Compact strip on its side")
 
         statusBar(0)
-        assertEquals(32f, stripRowDp(), 1f)
-        assertEquals(36f, stripHeightDp(), 0.5f)
+        assertEquals("with no status bar the skin's 40 dp row stands", 40f, stripRowDp(), 1f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
     }
 
     /**

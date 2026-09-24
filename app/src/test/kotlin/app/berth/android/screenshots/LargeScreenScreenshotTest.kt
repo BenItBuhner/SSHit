@@ -82,6 +82,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** A Pixel-class phone upright, the size every other screenshot class renders at. */
 private const val PHONE_PORTRAIT = "w411dp-h914dp-420dpi"
@@ -165,14 +166,15 @@ class LargeScreenScreenshotTest {
     }
 
     /**
-     * The phone on its side (spec C23): the strip drops to 32 dp so the terminal keeps the rows,
-     * the drawer stays a sheet (too short for the rail), and the width still fits two panes.
+     * The phone on its side (spec C23): the drawer stays a sheet (too short for the rail), and the
+     * width still fits two panes. With no status bar to lend the short strip its reach the skin's
+     * 40 dp row stands under the 4 dp band, the header 44 as upright (l.102, l.351).
      */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
-    fun `phone on its side, the strip shortens and two panes fit`() {
+    fun `phone on its side, two panes fit`() {
         mountApp()
-        assertEquals(36f, stripHeightDp(), 0.5f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
         drawerIsASheet()
         capture("phone-landscape-stage")
 
@@ -194,13 +196,17 @@ class LargeScreenScreenshotTest {
         capture("phone-portrait-stage-font-scale-2x")
     }
 
-    /** The shorter strip at the cap: its 28 dp tabs and 20 dp chips, where Caption's line alone is taller than the chip. */
+    /**
+     * The shorter strip at the cap, under the status bar that lends it its reach: its 28 dp tabs and
+     * 20 dp chips, where Caption's line alone is taller than the chip.
+     */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
     fun `phone on its side at the font cap, the shorter strip's titles and chips stand whole`() {
         RuntimeEnvironment.setFontScale(2f)
         mountApp()
-        assertEquals(36f, stripHeightDp(), 0.5f)
+        statusBar(24)
+        assertEquals("the 32 dp row and its 16 dp reach into the status bar", 48f, stripHeightDp(), 0.5f)
         assertStripLinesWhole("the shorter strip on its side at the font cap")
         capture("phone-landscape-stage-font-scale-2x")
     }
@@ -501,7 +507,7 @@ class LargeScreenScreenshotTest {
 
     // ---- live, against the local sshd ------------------------------------------------------------
 
-    /** The phone on its side with a live session: the 32 dp strip, the terminal, and the Deck one row of 40 (spec C23). */
+    /** The phone on its side with a live session: the header, 44 with no status bar, the terminal, and the Deck one row of 40 (spec C23). */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
     fun `live session on a phone on its side, the Deck one row of 40`() {
@@ -512,7 +518,7 @@ class LargeScreenScreenshotTest {
         settle(1_200)
         session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear && ls --color=always -la /\n")
         settle(1_500)
-        assertEquals(36f, stripHeightDp(), 0.5f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
         assertEquals(40f, compose.deckKeyFaceDp("Ctrl"), 1f)
         capture("phone-landscape-live-deck")
     }
@@ -656,6 +662,15 @@ class LargeScreenScreenshotTest {
      * Gives the window a navigation bar [px] tall along the bottom, dispatched to the compose view
      * as the window would, so what pays that inset can be seen paying it; 0 takes the bar away.
      */
+    /** Gives the window a status bar [dp] tall, dispatched to the compose view as the window would. */
+    private fun statusBar(dp: Int) {
+        val view = checkNotNull(composeView) { "mountApp first" }
+        val px = (dp * compose.density.density).roundToInt()
+        val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, px, 0, 0)).build()
+        compose.runOnUiThread { ViewCompat.dispatchApplyWindowInsets(view, insets) }
+        compose.waitForIdle()
+    }
+
     private fun navigationBar(px: Int) {
         val view = checkNotNull(composeView) { "mountApp first" }
         val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, px)).build()
