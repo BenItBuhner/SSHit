@@ -49,7 +49,8 @@ import org.robolectric.annotation.GraphicsMode
  * which carry Compose's 48 dp reach and would say 48 on a 40 dp header: a finger 1 dp under the
  * header's top and 1 dp above its foot lands on each. Under the foot the Stage's 4 dp padding is the
  * terminal's (spec C2 l.297, D1 l.1161), however far a target's reach would hang: a finger 1 dp and
- * 3 dp into it, under a tab, a group chip, the count tile and Overflow, clicks the terminal's first row.
+ * 3 dp into it, under a tab, a group chip, the count tile and Overflow, clicks the terminal's first
+ * row, and 1 dp in from either side its first or last column.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -124,6 +125,9 @@ class HeaderBandTest {
 
     private fun centreX(matcher: SemanticsMatcher): Float = compose.onAllNodes(matcher)[0].fetchSemanticsNode().boundsInRoot.center.x
 
+    /** The header's foot, in dp down the window: the strip's, which stands the band and the row. */
+    private fun footDp(): Float = compose.onNode(strip).fetchSemanticsNode().boundsInRoot.bottom / density
+
     private fun heardSoFar() = mapOf(
         "a tab" to heard.activated.size,
         "a chip" to heard.chips.size,
@@ -138,6 +142,7 @@ class HeaderBandTest {
 
     /** Each header target answers 1 dp under the header's top and 1 dp above the foot of its 44 dp, the band's 4 and the row's 40. */
     private fun assertTheBandIsTheTargets(where: String) {
+        assertEquals("$where: the header stands the band's 4 dp and the row's 40", Header, footDp(), 0.5f)
         val ys = listOf(1f, Header - 1f)
         for (y in ys) {
             val n = heard.activated.size
@@ -178,10 +183,23 @@ class HeaderBandTest {
     }
 
     /**
+     * The mouse report a tap at [x] px across and [y] dp down sends the terminal, or null when it
+     * sends none. The tap stands a double tap's window after the last, a click of its own and not a
+     * second tap selecting a word.
+     */
+    private fun clickReport(sent: MutableList<String>, x: Float, y: Float): String? {
+        sent.clear()
+        compose.mainClock.advanceTimeBy(DoubleTapGapMs)
+        tap(x, y)
+        runCatching { compose.waitUntil(2_000) { sent.any { it.startsWith(MouseReport) } } }
+        return sent.firstOrNull { it.startsWith(MouseReport) }
+    }
+
+    /**
      * 1 dp and 3 dp under the header's foot, under each target the header's reach could hang from,
-     * the finger clicks the terminal's first row and no header target hears it. Every tap is tried
-     * and every miss named, so a header whose targets hang shows all of them. The taps stand a
-     * double tap's window apart, each a click of its own and not a second tap selecting a word.
+     * the finger clicks the terminal's first row and no header target hears it; 1 dp in from either
+     * side, halfway down the grid, it clicks the first or the last column. Every tap is tried and
+     * every miss named, so a header whose targets hang shows all of them.
      */
     private fun assertThePaddingIsTheTerminals(where: String) {
         val sent = ArrayList<String>()
@@ -189,21 +207,19 @@ class HeaderBandTest {
         live.emulator.write("\u001b[?1000h")
         compose.waitUntil(5_000) { synchronized(live.emulator.lock) { live.emulator.mouseTracking } != MouseTracking.NONE }
         val misses = ArrayList<String>()
+        val foot = footDp()
         val under = listOf("pi-hole's tab" to pihole, "the Home chip" to chip, "the count tile" to countTile, "Overflow" to overflow)
         for ((name, matcher) in under) {
             for (dp in listOf(1f, 3f)) {
                 val x = centreX(matcher)
                 val heardBefore = heardSoFar()
-                sent.clear()
-                compose.mainClock.advanceTimeBy(DoubleTapGapMs)
-                tap(x, Header + dp)
-                runCatching { compose.waitUntil(2_000) { sent.any { it.startsWith("\u001b[M") } } }
-                val row = sent.firstOrNull { it.startsWith("\u001b[M") }?.get(5)?.code
+                // The report is ESC [ M, the button, then the column and the row, each its number plus 33.
+                val row = clickReport(sent, x, foot + dp)?.get(5)?.code
                 val took = heardSoFar().filter { (target, n) -> n != heardBefore[target] }.keys
                 val menu = menuOpen()
-                if (row != 32 + 1 || took.isNotEmpty() || menu) {
+                if (row != 33 || took.isNotEmpty() || menu) {
                     misses += "$dp dp under $name: " + listOfNotNull(
-                        if (row == null) "no click on the terminal" else if (row != 32 + 1) "the terminal's row byte $row" else null,
+                        if (row == null) "no click on the terminal" else if (row != 33) "the terminal's row byte $row" else null,
                         if (took.isNotEmpty()) "heard by ${took.joinToString()}" else null,
                         if (menu) "Overflow's menu opened" else null,
                     ).joinToString()
@@ -214,12 +230,18 @@ class HeaderBandTest {
                 }
             }
         }
+        val grid = compose.onAllNodes(hasTestTag(TerminalTag))[0].fetchSemanticsNode().boundsInRoot
+        val width = compose.onAllNodes(isRoot())[0].fetchSemanticsNode().size.width
+        val cols = synchronized(live.emulator.lock) { live.emulator.cols }
+        for ((side, x, col) in listOf(Triple("the start", density, 0), Triple("the end", width - density, cols - 1))) {
+            val at = clickReport(sent, x, grid.center.y / density)?.get(4)?.code
+            if (at != col + 33) misses += "1 dp in from $side: " + if (at == null) "no click on the terminal" else "the terminal's column byte $at, not ${col + 33}"
+        }
         live.emulator.write("\u001b[?1000l")
         compose.waitUntil(5_000) { synchronized(live.emulator.lock) { live.emulator.mouseTracking } == MouseTracking.NONE }
         live.sendObserver = null
-        assertEquals("$where: under the header's foot the finger clicks the terminal's first row and no header target", emptyList<String>(), misses)
-        val gridTop = compose.onAllNodes(hasTestTag(TerminalTag))[0].fetchSemanticsNode().boundsInRoot.top / density
-        assertEquals("$where: the grid stands the 4 dp padding under the header's foot, as under the ribbon's", Header + TerminalPadding, gridTop, 0.5f)
+        assertEquals("$where: in the padding the finger clicks the terminal's nearest cell and no header target", emptyList<String>(), misses)
+        assertEquals("$where: the grid stands the 4 dp padding under the header's foot, as under the ribbon's", foot + TerminalPadding, grid.top / density, 0.5f)
     }
 
     @Test
@@ -251,5 +273,8 @@ class HeaderBandTest {
 
         /** Past the platform's 300 ms double-tap window, so two taps in one place are two clicks. */
         const val DoubleTapGapMs = 500L
+
+        /** How a click in mouse mode reaches the shell, X10's encoding. */
+        const val MouseReport = "\u001b[M"
     }
 }
