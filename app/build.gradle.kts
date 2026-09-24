@@ -394,7 +394,7 @@ androidComponents {
         tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }
 
         // Settings › Licences answers for every library the release APK carries (LicencesTest), so both variants'
-        // unit tests are told the release runtime classpath's modules, as group:name, and rerun when it changes.
+        // unit tests are told the release runtime classpath's modules, as group:name:version, and rerun when it changes.
         val releaseModules = variant.runtimeConfiguration.incoming.resolutionResult.rootComponent.map { root ->
             val modules = sortedSetOf<String>()
             val seen = HashSet<ResolvedComponentResult>()
@@ -402,7 +402,7 @@ androidComponents {
             while (queue.isNotEmpty()) {
                 val component = queue.removeFirst()
                 if (!seen.add(component)) continue
-                (component.id as? ModuleComponentIdentifier)?.let { modules += "${it.group}:${it.module}" }
+                (component.id as? ModuleComponentIdentifier)?.let { modules += "${it.group}:${it.module}:${it.version}" }
                 component.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { queue += it.selected }
             }
             modules.joinToString(",")
