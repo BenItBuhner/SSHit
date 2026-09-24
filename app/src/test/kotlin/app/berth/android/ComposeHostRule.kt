@@ -20,8 +20,11 @@ import org.robolectric.Shadows.shadowOf
  * test source set's, whose merge Robolectric uses for nothing here). The debug manifest gets
  * `androidx.activity.ComponentActivity` from `androidx.compose.ui:ui-test-manifest`, a `debugImplementation`
  * dependency; the release manifest has no such activity, and none belongs in the manifest the phone gets. This
- * rule declares it as that library's manifest does (exported, `Theme.Material.Light.NoActionBar`), so both variants
- * render the same screen; where the manifest already declares it, nothing changes.
+ * rule declares it as that library's manifest does (exported, `Theme.Material.Light.NoActionBar`), with the one
+ * flag the package parser gives every activity of an application that leaves hardware acceleration on, as Berth's
+ * does: `FLAG_HARDWARE_ACCELERATED`. Without it the window draws in software, where Compose's layers blend a level
+ * off the phone's, so both variants render the same screen only with it; where the manifest already declares the
+ * activity, nothing changes.
  *
  * Order it before the compose rule (`order = 0` to its `1`): the compose rule launches the activity as it starts.
  */
@@ -49,6 +52,7 @@ class ComposeHostRule : TestRule {
                 packageName = host.packageName
                 exported = true
                 theme = android.R.style.Theme_Material_Light_NoActionBar
+                flags = ActivityInfo.FLAG_HARDWARE_ACCELERATED
             },
         )
     }

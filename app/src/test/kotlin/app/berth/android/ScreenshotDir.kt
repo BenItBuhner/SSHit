@@ -4,8 +4,8 @@ import java.io.File
 
 /**
  * Where a screenshot test writes its frames: the variant's own folder, `build/outputs/roborazzi/debug`
- * or `build/outputs/roborazzi/release`, named by the build (app/build.gradle.kts). Debug and Release
- * draw a detached tab's frame a level apart, so one folder for both kept whichever variant ran second.
+ * or `build/outputs/roborazzi/release`, named by the build (app/build.gradle.kts), so neither variant's
+ * frames overwrite the other's and the two can be compared frame for frame.
  */
 val screenshotDir: File = File(
     System.getProperty("user.dir"),
