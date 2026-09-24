@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,6 +77,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CopyOnWriteArraySet
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -191,6 +193,31 @@ class FrameBuffers {
         val t = front
         front = back
         back = t
+    }
+}
+
+/**
+ * The terminal canvases composed, and what each has yet to draw of its session's screen, for a
+ * screenshot to wait on: neither is Compose's work, so its idling does not see them. The app itself
+ * never asks.
+ */
+internal object TerminalCanvasPending {
+    enum class Kind {
+        /** The grid has not yet followed the canvas's size, which it does once the size has settled on the composition's clock. */
+        GRID,
+
+        /** The frame drawn is not of the screen's latest version, offset and grid; its capture runs on a worker. */
+        FRAME,
+    }
+
+    private val canvases = CopyOnWriteArraySet<() -> Kind?>()
+
+    /** What any canvas has pending, a grid before a frame; null once every canvas draws its screen as it stands. */
+    fun pending(): Kind? = canvases.mapNotNull { it() }.minOrNull()
+
+    fun register(pending: () -> Kind?): () -> Unit {
+        canvases += pending
+        return { canvases -= pending }
     }
 }
 
@@ -351,6 +378,22 @@ fun TerminalCanvas(
                 frameTick++
                 withFrameNanos { }
             }
+    }
+    DisposableEffect(session.id) {
+        val release = TerminalCanvasPending.register {
+            val p = paintsState.value
+            val cols = (canvasSize.width / p.cellWidth).toInt()
+            val rows = (canvasSize.height / p.cellHeight).toInt()
+            val front = frames.front
+            when {
+                cols < 2 || rows < 2 -> null
+                viewport.cols != cols || viewport.rows != rows -> TerminalCanvasPending.Kind.GRID
+                front.version != session.screenVersion.value || front.offset != viewport.scrollOffset || front.cols != cols || front.rows != rows ->
+                    TerminalCanvasPending.Kind.FRAME
+                else -> null
+            }
+        }
+        onDispose { release() }
     }
     // A search follows the buffer: new output while the bar is open re-runs it, settled a little.
     // The pass goes to a worker; its results land here, on the thread the bar steps the match on,
