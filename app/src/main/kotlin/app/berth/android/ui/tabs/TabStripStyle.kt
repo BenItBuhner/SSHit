@@ -178,13 +178,22 @@ fun TabStripStyle.atDensity(header: Dp, statusTop: Dp): TabStripStyle {
 /**
  * How far the header's row reaches above [TabStripStyle.height] under a status bar [statusTop]
  * tall: over a flat toolbar the inset lends [TabStripStyle.topReach] as far as it goes, and
- * whatever of the inset that leaves stands above the row. An island's clip would cut a target
- * reaching past its edge, so an island lends nothing.
+ * whatever of the inset that leaves stands above the row ([insetAbove]). Where the inset lends
+ * less than [HeaderBand] (spec C3 l.351: a split screen's lower window, a freeform or desktop
+ * window), a band of the header's fill above the row makes up the difference, and the reach takes
+ * it: the only case where the header stands taller than the ribbon. An island's clip would cut a
+ * target reaching past its edge, so an island lends nothing.
  */
 fun TabStripStyle.reachUnder(statusTop: Dp): Dp = when (chrome) {
-    StripChrome.FLAT -> minOf(statusTop, topReach)
+    StripChrome.FLAT -> minOf(statusTop, topReach) + (HeaderBand - statusTop).coerceAtLeast(0.dp)
     StripChrome.ISLAND -> 0.dp
 }
+
+/** What of a status bar [statusTop] tall stands above the header's row and its reach: nothing where a band makes up what it does not lend. */
+fun TabStripStyle.insetAbove(statusTop: Dp): Dp = (statusTop - reachUnder(statusTop)).coerceAtLeast(0.dp)
+
+/** The least reach a header target has over its row, lent by the inset or stood as a band of the header's fill (spec C3 l.351): l.102's 44 less the ribbon's 40. */
+private val HeaderBand = 4.dp
 
 /** The strip style in force; the Stage provides it once, so a direction change is a single edit. */
 val LocalTabStripStyle = staticCompositionLocalOf { TabStripStyle.Default }

@@ -255,7 +255,8 @@ fun rememberTabStripState(): TabStripState {
  * the chrome chosen by the style: a flat toolbar on its [TabStripStyle.headerFill], or an island
  * inset from the edges. Over a flat toolbar the strip's items reach [TabStripStyle.topReach] into
  * the inset as touch target ([reachUnder]), so a 40 dp row answers a 48 dp target without moving
- * anything, and a 28 dp row stepped down under Compact the same.
+ * anything, and a 28 dp row stepped down under Compact the same. Where no inset lends 4 dp, a band
+ * of the header's fill stands above the row and the targets take that instead ([insetAbove]).
  */
 @Composable
 fun TabHeader(
@@ -284,7 +285,7 @@ fun TabHeader(
         }
     }
     when (style.chrome) {
-        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
+        StripChrome.FLAT -> row(modifier.fillMaxWidth().background(resolved.headerFill).padding(top = style.insetAbove(statusTop)))
         StripChrome.ISLAND -> Box(
             modifier
                 .fillMaxWidth()

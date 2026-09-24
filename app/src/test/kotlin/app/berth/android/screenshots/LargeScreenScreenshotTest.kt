@@ -160,7 +160,7 @@ class LargeScreenScreenshotTest {
         assertNull(graph.sessions.panes.value)
         compose.onAllNodes(hasContentDescription(", left pane", substring = true)).assertCountEquals(0)
         drawerIsASheet()
-        assertEquals(40f, stripHeightDp(), 0.5f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
         capture("phone-portrait-stage")
     }
 
@@ -172,7 +172,7 @@ class LargeScreenScreenshotTest {
     @Config(qualifiers = PHONE_LANDSCAPE)
     fun `phone on its side, the strip shortens and two panes fit`() {
         mountApp()
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals(36f, stripHeightDp(), 0.5f)
         drawerIsASheet()
         capture("phone-landscape-stage")
 
@@ -200,7 +200,7 @@ class LargeScreenScreenshotTest {
     fun `phone on its side at the font cap, the shorter strip's titles and chips stand whole`() {
         RuntimeEnvironment.setFontScale(2f)
         mountApp()
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals(36f, stripHeightDp(), 0.5f)
         assertStripLinesWhole("the shorter strip on its side at the font cap")
         capture("phone-landscape-stage-font-scale-2x")
     }
@@ -512,7 +512,7 @@ class LargeScreenScreenshotTest {
         settle(1_200)
         session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear && ls --color=always -la /\n")
         settle(1_500)
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals(36f, stripHeightDp(), 0.5f)
         assertEquals(40f, compose.deckKeyFaceDp("Ctrl"), 1f)
         capture("phone-landscape-live-deck")
     }
@@ -712,7 +712,7 @@ class LargeScreenScreenshotTest {
         assertTrue("a line taller than its box on $where: $short", short.isEmpty())
     }
 
-    /** The strip's height in dp: the style's height, since Robolectric's window has no status-bar inset to reach into. */
+    /** The strip's height in dp: the style's row and the 4 dp band of the header's fill over it, since Robolectric's window has no status-bar inset to lend the band (spec C3). */
     private fun stripHeightDp(): Float =
         compose.onNode(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNode().size.height / compose.density.density
 

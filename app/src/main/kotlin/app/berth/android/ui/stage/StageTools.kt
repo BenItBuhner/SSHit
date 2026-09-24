@@ -100,6 +100,7 @@ import app.berth.android.ui.keyboard.stageRegion
 import app.berth.android.ui.tabs.LocalTabStripStyle
 import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.StripChrome
+import app.berth.android.ui.tabs.insetAbove
 import app.berth.android.ui.tabs.reachUnder
 import app.berth.android.ui.tabs.rememberResolvedTabStyle
 import app.berth.android.ui.terminal.LinkTap
@@ -329,7 +330,7 @@ private fun SelectionBar(tools: StageTools, session: TerminalSession) {
     }
     CompositionLocalProvider(LocalTargetReach provides reach) {
         when (style.chrome) {
-            StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).padding(top = statusTop - reach))
+            StripChrome.FLAT -> row(Modifier.fillMaxWidth().background(resolved.headerFill).padding(top = style.insetAbove(statusTop)))
             StripChrome.ISLAND -> Box(
                 Modifier
                     .fillMaxWidth()

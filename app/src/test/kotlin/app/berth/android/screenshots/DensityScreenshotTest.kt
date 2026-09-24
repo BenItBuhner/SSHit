@@ -174,7 +174,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
      * as tall as its line at the cap too, and a tab still answers a 48 dp target, the reach taking
      * the 12 dp the row gave up out of the inset. With no status bar to lend them the step would
      * come out of the targets or stand as empty band, so the skin's strip stands there whole: a
-     * 40 dp row of 32 dp tabs with 20 dp swatches, Comfortable's own.
+     * 40 dp row of 32 dp tabs with 20 dp swatches, Comfortable's own, and over it the 4 dp band of
+     * the header's fill no inset lends it (C3 l.351), its targets 44.
      */
     @Test
     fun `stage header and strip`() {
@@ -196,14 +197,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         statusBar(0)
         capture("density-stage-compact-no-status-bar")
         assertEquals("with no status bar the skin's 40 dp row stands", 40f, stripRowDp(), 1f)
-        assertEquals("and no band over it", 40f, stripHeightDp(), 0.5f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
         assertEquals("its swatch the skin's 20, in a 32 dp tab", 20f, swatchDp(), 0.5f)
         assertStripLinesWhole("the skin's strip under Compact")
     }
 
     /**
      * A phone on its side (spec C23): under its status bar the strip's own 32 steps to Compact's 28
-     * as well, its lines whole, and with none it stands its own 32, row and all.
+     * as well, its lines whole, and with none it stands its own 32 with the 4 dp band over it.
      */
     @Test
     @Config(qualifiers = "w914dp-h411dp-land-420dpi")
@@ -222,13 +223,13 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
         statusBar(0)
         assertEquals(32f, stripRowDp(), 1f)
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals(36f, stripHeightDp(), 0.5f)
     }
 
     /**
      * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). With
      * no status bar to lend the strip Compact's step, the skin's strip stands whole under Compact, a
-     * 40 dp row of 32 dp tabs, and the panes' headers stay 40 with it. Under a status bar the strip
+     * 40 dp row of 32 dp tabs under the 4 dp band, and the panes' headers stay 40 with its row. Under a status bar the strip
      * steps to 28 and a pane's header with it, or to its title's line at the cap where that is
      * taller; never cut either way, and the audit of each frame holds the header's targets.
      */
@@ -245,7 +246,7 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         setDensity(Density.COMPACT)
         capture("density-panes-compact")
         assertEquals("the skin's 40 dp row", 40f, stripRowDp(), 1f)
-        assertEquals(40f, stripHeightDp(), 0.5f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
         assertEquals("its swatch the skin's 20", 20f, swatchDp(), 0.5f)
         assertEquals("the panes' headers the strip's 40", 40f, paneHeaderDp(), 0.5f)
         assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))

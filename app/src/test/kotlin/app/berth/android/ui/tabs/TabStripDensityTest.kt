@@ -56,7 +56,7 @@ class TabStripDensityTest {
         assertEquals(40.dp, s.height)
         assertEquals(32.dp, s.tabHeight)
         assertEquals(20.dp, s.swatchSize)
-        assertEquals(40.dp, s.height + s.reachUnder(0.dp))
+        assertEquals("and the band over it", 44.dp, s.height + s.reachUnder(0.dp))
     }
 
     @Test
@@ -69,15 +69,29 @@ class TabStripDensityTest {
 
     @Test
     fun `comfortable reaches into the inset as before, and no further than it goes`() {
-        assertEquals(0.dp, TabStripStyle.Default.reachUnder(0.dp))
         assertEquals(5.dp, TabStripStyle.Default.reachUnder(5.dp))
         assertEquals(8.dp, TabStripStyle.Default.reachUnder(24.dp))
+        assertEquals("the inset above the reach", 16.dp, TabStripStyle.Default.insetAbove(24.dp))
+    }
+
+    /** Spec C3 l.351: the band is what the inset does not lend of 4 dp, 4 with no status bar and nothing under 4 dp or more. */
+    @Test
+    fun `where the inset lends less than 4 dp a band makes up the difference, and stands above nothing`() {
+        val s = TabStripStyle.Default
+        assertEquals("no status bar: the band's 4", 4.dp, s.reachUnder(0.dp))
+        assertEquals("2 dp lent and a 2 dp band", 4.dp, s.reachUnder(2.dp))
+        assertEquals(4.dp, s.reachUnder(4.dp))
+        for (inset in listOf(0.dp, 2.dp, 4.dp)) assertEquals("no inset left above the row at $inset", 0.dp, s.insetAbove(inset))
+        assertEquals("the header 44 with no status bar", 44.dp, s.insetAbove(0.dp) + s.reachUnder(0.dp) + s.height)
+        assertEquals("and under 2 dp of one", 44.dp, s.insetAbove(2.dp) + s.reachUnder(2.dp) + s.height)
+        assertEquals("under a phone's 24 the header is the inset and the row, no taller", 64.dp, s.insetAbove(24.dp) + s.reachUnder(24.dp) + s.height)
     }
 
     @Test
     fun `an island lends nothing, so it keeps the skin's strip`() {
         val island = TabStripStyle(chrome = StripChrome.ISLAND)
         assertEquals(0.dp, island.reachUnder(24.dp))
+        assertEquals(0.dp, island.reachUnder(0.dp))
         assertSame(island, island.atDensity(compact, 24.dp))
     }
 
