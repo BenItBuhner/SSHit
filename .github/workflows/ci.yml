@@ -47,10 +47,12 @@ jobs:
       # this step's shell only, so the account's password is in the sshds' shadow entry and the test JVM's
       # environment and nowhere else; every module's test task forwards those variables (see app/build.gradle.kts).
       # Both variants' unit tests run: testDebugUnitTest and testReleaseUnitTest for the Android modules, test for
-      # the JVM ones.
+      # the JVM ones. Sourcing the script leaves the shell's options as they were, which the step checks first.
       - name: Run the suite against the live sshds
         run: |
+          options="$- $(shopt -po pipefail || true)"
           source .github/scripts/test-sshd.sh
+          [ "$options" = "$- $(shopt -po pipefail || true)" ] || { echo "::error::sourcing test-sshd.sh changed the shell's options"; exit 1; }
           ./gradlew test --continue --console=plain
 
       - name: Test reports

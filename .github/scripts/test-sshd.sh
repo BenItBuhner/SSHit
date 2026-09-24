@@ -8,6 +8,18 @@
 # first two are the pair the repository's build notes describe for a workstation (the twin's one test skips without
 # it): password and public-key authentication, the sftp subsystem, TCP forwarding for the tunnel tests, one account
 # on all three, and the jump host with host keys of its own so a hop's trust-on-first-use is its own decision.
+#
+# Sourced, the script runs itself again in a child bash and takes back only the exports, as lines on a descriptor
+# of their own and never through a file. The caller's shell keeps its own options, where this script's
+# set -euo pipefail used to stay on and end a workstation's shell at its next failing command, and a failure here
+# is source's status instead of the end of that shell. The child writes everything else where the caller's output
+# goes, so a workflow's ::add-mask:: still reaches the runner before the password is used.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    { berth_test_sshd_exports="$(bash "${BASH_SOURCE[0]}" --exports-fd 3 3>&1 >&4)"; } 4>&1 || return
+    eval "$berth_test_sshd_exports"
+    unset berth_test_sshd_exports
+    return 0
+fi
 set -euo pipefail
 
 user="${SSH_TEST_ACCOUNT:-berth}"
@@ -116,3 +128,9 @@ export SSH_TEST_USER="$user"
 export SSH_TEST_PASSWORD="$password"
 export SSH_TEST_KEY_FILE="$keys/ed25519"
 export SSH_TEST_P256_KEY_FILE="$keys/p256"
+
+if [ "${1:-}" = "--exports-fd" ]; then
+    for name in SSH_TEST_HOST SSH_TEST_PORT SSH_TEST_JUMP_PORT SSH_TEST_NO_AGENT_PORT SSH_TEST_USER SSH_TEST_PASSWORD SSH_TEST_KEY_FILE SSH_TEST_P256_KEY_FILE; do
+        printf 'export %s=%q\n' "$name" "${!name}"
+    done >&"$2"
+fi
