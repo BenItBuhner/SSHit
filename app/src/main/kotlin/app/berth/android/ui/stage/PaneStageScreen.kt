@@ -496,9 +496,9 @@ private fun Pane(
  * strip rather than standing taller than the window's own header and costing each pane rows; only
  * the title's line at the interface's font cap stands taller (Body's 28.6 dp over Compact's 28), and
  * the header takes that rather than cut it. The × is a 48 dp target on a 40 dp row, so its box
- * reaches 4 dp over the body's top edge (10 on Compact's 28), as the strip's own controls reach over
- * the body on a phone (spec A11); the header stands over the body for it, or a Tunnels or Files
- * row flush under the header would take that band and leave the × short of its target.
+ * reaches 4 dp over the body's top edge (10 on Compact's 28), the row being too short to hold it
+ * (spec A11); the header stands over the body for it, or a Tunnels or Files row flush under the
+ * header would take that band and leave the × short of its target.
  */
 @Composable
 private fun PaneHeader(

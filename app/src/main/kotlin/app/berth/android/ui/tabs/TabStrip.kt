@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -115,9 +114,11 @@ import app.berth.android.session.TabSlot
 import app.berth.android.session.TabSource
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.LocalTargetEndsAtFoot
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.a11y.keyPressable
+import app.berth.android.ui.a11y.requiredTarget
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -278,9 +279,10 @@ fun TabHeader(
             TabStrip(slots, groups, activeId, actions, Modifier.weight(1f).fillMaxHeight(), state, style, topReach = reach, entry = entry)
             Spacer(Modifier.width(style.trailingGap))
             // The fixed slots take the same reach the tabs do: the row is the full height and the
-            // controls in it read the reach as target above their visual (IconAction, CountTile).
+            // controls in it read the reach as target above their visual (IconAction, CountTile),
+            // and end their targets at its foot, as the tabs' rows do.
             Row(Modifier.height(style.height + reach), verticalAlignment = Alignment.CenterVertically) {
-                CompositionLocalProvider(LocalTargetReach provides reach) { trailing() }
+                CompositionLocalProvider(LocalTargetReach provides reach, LocalTargetEndsAtFoot provides true) { trailing() }
             }
         }
     }
@@ -1344,8 +1346,9 @@ private fun PlusTab(style: ResolvedTabStyle, actions: TabActions, topReach: Dp, 
 /**
  * The count tile (spec C3, Switcher): a 24 dp square on `surface.2` with the tab count in Label;
  * a ring when a tab scrolled out of view needs attention. Sits in the header's fixed slots inside
- * a 48 dp target (required, like [app.berth.android.ui.components.IconAction]'s, and reaching up
- * by the [reach] the header lends) and opens the switcher; held, it jumps to the unread tab.
+ * a 48 dp target (required, like [app.berth.android.ui.components.IconAction]'s, reaching up by
+ * the [reach] the header lends and ending at the row's foot) and opens the switcher; held, it
+ * jumps to the unread tab.
  */
 @Composable
 fun CountTile(
@@ -1357,6 +1360,7 @@ fun CountTile(
     onLongClick: (() -> Unit)? = null,
     style: TabStripStyle = LocalTabStripStyle.current,
     reach: Dp = LocalTargetReach.current,
+    endsAtFoot: Boolean = LocalTargetEndsAtFoot.current,
 ) {
     val c = Berth.colors
     val resolved = rememberResolvedTabStyle(style)
@@ -1365,13 +1369,18 @@ fun CountTile(
     val focused = interaction.showsFocus()
     Box(
         modifier
-            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
-            .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
-            .clearAndSetSemantics {
-                contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention, hold to jump to it" else ""
-                role = Role.Button
-                if (onLongClick != null) onLongClick { onLongClick(); true }
-            }
+            .requiredTarget(
+                height = TouchTargetSize + reach,
+                width = TouchTargetSize,
+                endsAtFoot = endsAtFoot,
+                tap = Modifier
+                    .combinedClickable(interactionSource = interaction, indication = null, onClick = onClick, onLongClick = onLongClick)
+                    .clearAndSetSemantics {
+                        contentDescription = "$count tabs, open the tab switcher" + if (attention) ", a tab needs attention, hold to jump to it" else ""
+                        role = Role.Button
+                        if (onLongClick != null) onLongClick { onLongClick(); true }
+                    },
+            )
             .padding(top = reach),
         contentAlignment = Alignment.Center,
     ) {

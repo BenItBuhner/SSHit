@@ -126,8 +126,10 @@ import app.berth.android.R
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.LocalTargetEndsAtFoot
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.requiredTarget
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.spoken
 import app.berth.android.ui.a11y.touchTarget
@@ -1316,8 +1318,9 @@ fun ScreenHeader(
  * 48 dp square centred on the row instead of squashing, and the circle stays a circle. [reach] is
  * extra target above the circle for a header that lends its status-bar inset (the ribbon's
  * [app.berth.android.ui.tabs.TabStripStyle.topReach]): the target grows upward by it and the circle
- * stays centred on the row beneath, the way the tabs beside it do. [onLongClick], when given, is a
- * second action on the same target, named to a screen reader by [longClickLabel].
+ * stays centred on the row beneath, the way the tabs beside it do. In a header ([endsAtFoot]) the
+ * target ends at the row's foot, the terminal's edge. [onLongClick], when given, is a second action
+ * on the same target, named to a screen reader by [longClickLabel].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1327,6 +1330,7 @@ fun IconAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     reach: Dp = LocalTargetReach.current,
+    endsAtFoot: Boolean = LocalTargetEndsAtFoot.current,
     onLongClick: (() -> Unit)? = null,
     longClickLabel: String? = null,
     content: @Composable BoxScope.() -> Unit,
@@ -1334,23 +1338,25 @@ fun IconAction(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused = enabled && interaction.showsFocus()
+    val tap = if (onLongClick != null) {
+        Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onLongClick = onLongClick, onClick = onClick)
+    } else {
+        Modifier.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+    }
     Box(
         modifier
-            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
-            .then(
-                if (onLongClick != null) {
-                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onLongClick = onLongClick, onClick = onClick)
-                } else {
-                    Modifier.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+            .requiredTarget(
+                height = TouchTargetSize + reach,
+                width = TouchTargetSize,
+                endsAtFoot = endsAtFoot,
+                // The glyph is decoration; screen readers get the action's name, not the character.
+                tap = tap.clearAndSetSemantics {
+                    contentDescription = description
+                    role = Role.Button
+                    if (!enabled) disabled()
+                    if (onLongClick != null && enabled) this.onLongClick(label = longClickLabel) { onLongClick(); true }
                 },
             )
-            // The glyph is decoration; screen readers get the action's name, not the character.
-            .clearAndSetSemantics {
-                contentDescription = description
-                role = Role.Button
-                if (!enabled) disabled()
-                if (onLongClick != null && enabled) this.onLongClick(label = longClickLabel) { onLongClick(); true }
-            }
             .padding(top = reach),
         contentAlignment = Alignment.Center,
     ) {

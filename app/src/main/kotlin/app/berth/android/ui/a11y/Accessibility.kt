@@ -17,6 +17,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import app.berth.domain.model.SessionState
 
@@ -33,6 +35,49 @@ val TouchTargetSize: Dp = 48.dp
  * reads it as its default reach. Zero everywhere else.
  */
 val LocalTargetReach = compositionLocalOf { 0.dp }
+
+/**
+ * Whether the controls here stand in a header's row, over the terminal, which fills everything
+ * under the header and takes a tap there as its own (spec C2 l.297, D1 l.1161): a target grown past
+ * a row shorter than it ends at the row's foot ([requiredTarget]). The header provides it with
+ * [LocalTargetReach]; false everywhere else.
+ */
+val LocalTargetEndsAtFoot = compositionLocalOf { false }
+
+/**
+ * A control's target, [height] tall and [width] across (null: as wide as what it holds), required
+ * rather than requested: a row shorter than it squashes neither the target nor the visual centred
+ * in it, and it stands centred over the row, half of what the row lacks above and half below.
+ * Where [endsAtFoot], the half below takes no tap: [tap], the control's clickable and semantics,
+ * covers the box down to the row's foot and no further, while the visual keeps its place.
+ */
+fun Modifier.requiredTarget(height: Dp, width: Dp? = null, endsAtFoot: Boolean, tap: Modifier): Modifier =
+    then(TargetBox(width, height, endsAtFoot)).then(tap).then(TargetFoot)
+
+/**
+ * Stands the target centred over the height the row gives it, and tells [TargetFoot], as the least
+ * height it may take, how much of the target is above the row's foot: all of it unless [endsAtFoot].
+ */
+private data class TargetBox(val width: Dp?, val height: Dp, val endsAtFoot: Boolean) : LayoutModifier {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        val h = height.roundToPx()
+        val w = width?.roundToPx()
+        val shown = constraints.constrainHeight(h)
+        val top = (shown - h) / 2
+        val above = if (endsAtFoot) minOf(h, shown - top) else h
+        val placeable = measurable.measure(Constraints(w ?: constraints.minWidth, w ?: constraints.maxWidth, above, h))
+        val shownWidth = constraints.constrainWidth(placeable.width)
+        return layout(shownWidth, shown) { placeable.placeRelative((shownWidth - placeable.width) / 2, top) }
+    }
+}
+
+/** Inside the tap: lays out what it holds at the target's whole height and takes only the part [TargetBox] says is above the foot. */
+private data object TargetFoot : LayoutModifier {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        val placeable = measurable.measure(constraints.copy(minHeight = constraints.maxHeight))
+        return layout(placeable.width, constraints.minHeight) { placeable.placeRelative(0, 0) }
+    }
+}
 
 /**
  * Grows a control's layout to at least [minWidth] by [minHeight] and centres the control in the
