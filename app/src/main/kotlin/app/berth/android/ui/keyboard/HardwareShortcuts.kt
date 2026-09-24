@@ -233,7 +233,7 @@ const val CHORD_SEPARATOR = " \u00B7 "
  * its chord, rebound or not, one row per action. New tab and Close tab carry the plain Ctrl+T and
  * Ctrl+W beside their chords while those are the strip's. [panes] says whether the Stage on screen
  * has panes for the pane chords to act on, since the sheet lists them either way (they are taken
- * either way) and says when they wait for a wider screen.
+ * either way) and says under them when they wait for a wider screen.
  */
 fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGroup> {
     val settings = table.settings
@@ -274,16 +274,16 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
         entry(ChordAction.SHORTCUT_SHEET),
     )
     val paneChords = listOf(
-        entry(ChordAction.SPLIT, if (panes) "Split the Stage in two, or back to one" else "Split the Stage, on a wide screen"),
-        entry(ChordAction.FOCUS_OTHER_PANE, if (panes) "Focus the other pane" else "Focus the other pane, when the Stage is split"),
+        entry(ChordAction.SPLIT, if (panes) "Split the Stage in two, or back to one" else chordTitle(ChordAction.SPLIT)),
+        entry(ChordAction.FOCUS_OTHER_PANE),
     )
     val terminalKeys = buildList {
         add(ShortcutEntry("Ctrl+letter", "Control characters, ^C to ^Z"))
-        add(ShortcutEntry("Alt+key", "Meta: Escape then the key, or the eighth bit"))
-        add(ShortcutEntry("Shift, Ctrl, Alt + arrows", "Modified arrows, Home, End, Page Up and Down"))
+        add(ShortcutEntry("Alt+key", "Meta: Escape prefix or eighth bit"))
+        add(ShortcutEntry("Shift/Ctrl/Alt + arrows", "Modified arrows"))
         add(ShortcutEntry("F1 \u2026 F12", "Function keys, with any modifier"))
         add(ShortcutEntry("Esc, Tab, Insert, Delete", "As on the host"))
-        if (readline) add(ShortcutEntry("Ctrl+T, Ctrl+W", "Readline\u2019s transpose and delete word"))
+        if (readline) add(ShortcutEntry("Ctrl+T, Ctrl+W", "Transpose, delete word"))
     }
     val leaderNote = if (settings.chordPrefix == ChordPrefix.LEADER) " The Leader, ${settings.leaderKey.label()}, never does: it is the app\u2019s." else ""
     return listOf(
@@ -298,7 +298,8 @@ fun shortcutGroups(table: ChordTable, panes: Boolean = false): List<ShortcutGrou
         // of it (it is Esc in the terminal, back to the terminal only from what the chords focus), so
         // it is said here and is no row of the app's chords.
         ShortcutGroup("Stage", stageChords, note = "Tab and the arrows walk the strip and the Deck, Enter presses; Esc from them or the search is back to the terminal. Pass-through sends every key to the shell, the chords too, until its chord again or a tap on its pill."),
-        ShortcutGroup("Panes", paneChords),
-        ShortcutGroup("Terminal", terminalKeys, note = "Which Alt is per host: Settings \u203A Hardware keyboard. Unbound combinations always reach the terminal.$leaderNote"),
+        // A row is a line of the table at 1×, so what a row's action would qualify is said under the rows.
+        ShortcutGroup("Panes", paneChords, note = if (panes) null else "Split works on a wide screen, and Focus the other pane once the Stage is split."),
+        ShortcutGroup("Terminal", terminalKeys, note = "Home, End, Page Up and Page Down take the modifiers as the arrows do. Which Alt is per host: Settings \u203A Hardware keyboard. Unbound combinations always reach the terminal.$leaderNote"),
     )
 }

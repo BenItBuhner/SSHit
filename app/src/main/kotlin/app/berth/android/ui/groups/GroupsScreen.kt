@@ -42,10 +42,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthButton
@@ -291,13 +291,20 @@ private fun GroupCardMenu(
 
 /**
  * A card's height with its three tab lines, so cards in a row stand level whether a group has
- * three tabs or none: the 28 dp header row, four Caption lines (the count and three tabs) at the
- * interface's font scale, the gaps between the five rows and the padding.
+ * three tabs or none: the header row (the 28 dp swatch, or the name's line where that is taller),
+ * four Caption lines (the count and three tabs), the gaps between the five rows and the padding.
+ * The lines as the text lays them out: the density's own sp-to-dp scales large sizes less than the
+ * text's line does (four Caption lines, 64 sp, are 64 dp to it at the 1.3 cap and 83.2 to the
+ * text), and would stand a card of three tabs taller than its neighbours.
  */
 @Composable
 private fun cardMinHeight(): Dp {
-    val captionLines = with(LocalDensity.current) { (BerthType.caption.lineHeight.value * 4).sp.toDp() }
-    return 28.dp + captionLines + 6.dp * 4 + 32.dp
+    val measurer = rememberTextMeasurer()
+    return with(LocalDensity.current) {
+        val captionLine = measurer.measure(" ", BerthType.caption, maxLines = 1).size.height.toDp()
+        val nameLine = measurer.measure(" ", BerthType.bodyMedium, maxLines = 1).size.height.toDp()
+        maxOf(28.dp, nameLine) + captionLine * 4 + 6.dp * 4 + 32.dp
+    }
 }
 
 /** A card's least width; the grid takes as many columns as the screen's width allows at it (two on a phone, three on a tablet). */

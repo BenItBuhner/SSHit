@@ -1,10 +1,16 @@
 package app.berth.android.screenshots
 
 import android.app.Application
+import android.net.Uri
 import android.os.Looper
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -22,6 +28,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasStateDescription
@@ -42,11 +49,14 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.isDialog
+import androidx.core.app.ActivityOptionsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.deck.DeckEditorScreen
+import app.berth.android.ui.io.MAX_TEXT_BYTES
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.GroupEditorRequest
@@ -112,6 +122,9 @@ class EditorScreenshotTest {
     val compose = createBerthComposeRule()
 
     private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+
+    /** The Libraries row whose one text is each of its five libraries' own. */
+    private val SHARED_APACHE = "Dagger and Hilt, JSpecify, listenablefuture, javax.inject and JSR 305"
     private lateinit var graph: TestGraph
     private val now = System.currentTimeMillis()
 
@@ -327,7 +340,67 @@ class EditorScreenshotTest {
         compose.onNodeWithText(codicons).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Weather Icons \u00B7 https://github.com/erikflowers/weather-icons \u00B7 2.0.10 (1.100) \u00B7 OFL 1.1").performScrollTo()
         capture("settings-licence-table$suffix")
-        compose.onNodeWithContentDescription("Back to Licences").performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo()
+        capture("settings-licences-libraries$suffix")
+        for (library in listOf("sshj, the SSH transport", "asn-one, sshj's ASN.1 coding", "Bouncy Castle, the cryptography", "SLF4J, the transport's logging", "Public Suffix List, for link captions")) {
+            compose.onNode(hasText(library) and hasClickAction()).assertExists()
+        }
+
+        compose.onNodeWithText("sshj, the SSH transport").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("sshj - SSHv2 library for Java", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("From github.com/hierynomus/sshj at v0.40.0: LICENSE and NOTICE").assertIsDisplayed()
+        capture("settings-licence-sshj$suffix")
+        compose.onNodeWithText("sshj - SSHv2 library for Java", substring = true).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        val platform = listOf(
+            "AndroidX, the interface and the database", "Kotlin, the language's standard library", "kotlinx.coroutines, the concurrency",
+            "kotlinx.serialization, the stored formats", "JetBrains annotations", "Jakarta Dependency Injection, Hilt's annotations", SHARED_APACHE,
+        )
+        compose.onNodeWithText(SHARED_APACHE).performScrollTo()
+        capture("settings-licences-platform$suffix")
+        for (library in platform) compose.onNode(hasText(library) and hasClickAction()).assertExists()
+        compose.assertNoTextCut("the Licences list$suffix")
+        compose.assertNoBrokenWords("the Licences list$suffix")
+
+        compose.onNodeWithText(SHARED_APACHE).performClick()
+        val origins = "From github.com/google/dagger at dagger-2.60.1: LICENSE.txt; github.com/jspecify/jspecify at v1.0.0: LICENSE;"
+        // The origin line is there from the first frame; the text is read off the main thread, and until it lands the
+        // sheet stands at the header's height, so the frame waits for the text's own heading.
+        val terms = "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(terms, substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(origins, substring = true).assertIsDisplayed()
+        capture("settings-licence-apache-shared$suffix")
+        compose.assertNoTextCut("the shared Apache text$suffix")
+        compose.assertNoBrokenWords("the shared Apache text$suffix")
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        // Kotlin's NOTICE follows its licence in the one text, as sshj's does.
+        compose.onNodeWithText("Kotlin, the language's standard library").performScrollTo().performClick()
+        val notice = "Kotlin Compiler\nCopyright 2010-2024 JetBrains s.r.o and respective authors and developers"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(notice).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(notice).performScrollTo().assertIsDisplayed()
+        capture("settings-licence-kotlin-notice$suffix")
+        compose.assertNoTextCut("Kotlin's licence and NOTICE$suffix")
+        compose.assertNoBrokenWords("Kotlin's licence and NOTICE$suffix")
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo().performClick()
+        val disclaimer = "6. Disclaimer of Warranty\n"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(disclaimer, substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(disclaimer, substring = true).performScrollTo()
+        val warranty = compose.onNodeWithText("Covered Software is provided under this License on an \"as is\" basis, without warranty", substring = true)
+        warranty.performScrollTo()
+        capture("settings-licence-disclaimer$suffix")
+        warranty.assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
     }
 
     @Test
@@ -759,6 +832,53 @@ class EditorScreenshotTest {
         compose.settle(500)
         capture("deck-editor-presets-font-scale-2x")
         compose.assertSheetAtContentHeight("Preset Default", "Preset Vim", "Preset tmux", "Preset Minimal")
+    }
+
+    @Test
+    fun `a Deck file over the limit is refused in the import sheet, which names the limit`() = oversizedDeckFile("")
+
+    @Test
+    fun `a Deck file over the limit is refused in the import sheet at the 1,3 cap`() {
+        RuntimeEnvironment.setFontScale(2f)
+        oversizedDeckFile("-font-scale-2x")
+    }
+
+    /** The import sheet's Open file answered with a file one byte over what a picked document may hold. */
+    private fun oversizedDeckFile(suffix: String) {
+        val file = File.createTempFile("deck", ".json").apply {
+            deleteOnExit()
+            writeBytes(ByteArray(MAX_TEXT_BYTES + 1) { ' '.code.toByte() })
+        }
+        val picker = PickedDocument(Uri.fromFile(file))
+        themed { CompositionLocalProvider(LocalActivityResultRegistryOwner provides picker) { DeckEditorScreen(graph.viewModel, onBack = {}) } }
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("Slot 3").fetchSemanticsNodes().isNotEmpty() }
+        val before = graph.viewModel.deckLayout.value
+        compose.onNodeWithText("Import").performScrollTo().performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Import a Deck")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Open file").performClick()
+        val refusal = "That file is over 2 MB, too big for a Deck."
+        awaitOnMain("the refusal") { compose.onAllNodesWithText(refusal).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(500)
+        capture("deck-editor-import-too-big$suffix")
+        compose.onNodeWithText(refusal).assertIsDisplayed()
+        compose.onNode(hasText("Import a Deck")).assertIsDisplayed()
+        assertEquals(1, picker.launches)
+        assertEquals(before, graph.viewModel.deckLayout.value)
+        compose.assertNoTextCut("the Deck import's refusal$suffix", within = isDialog())
+        compose.assertNoBrokenWords("the Deck import's refusal$suffix", within = isDialog())
+    }
+
+    /** Answers every launch at once with [uri], as the system's picker does when a file is chosen. */
+    private class PickedDocument(private val uri: Uri) : ActivityResultRegistryOwner {
+        var launches = 0
+            private set
+
+        override val activityResultRegistry = object : ActivityResultRegistry() {
+            override fun <I, O> onLaunch(requestCode: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
+                launches++
+                dispatchResult(requestCode, uri)
+            }
+        }
     }
 
     /**

@@ -1,4 +1,8 @@
 import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedComponentResult
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.process.CommandLineArgumentProvider
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.ZipFile
@@ -388,6 +392,25 @@ androidComponents {
             }
         }
         tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }
+
+        // Settings › Licences answers for every library the release APK carries (LicencesTest), so both variants'
+        // unit tests are told the release runtime classpath's modules, as group:name, and rerun when it changes.
+        val releaseModules = variant.runtimeConfiguration.incoming.resolutionResult.rootComponent.map { root ->
+            val modules = sortedSetOf<String>()
+            val seen = HashSet<ResolvedComponentResult>()
+            val queue = ArrayDeque(listOf(root))
+            while (queue.isNotEmpty()) {
+                val component = queue.removeFirst()
+                if (!seen.add(component)) continue
+                (component.id as? ModuleComponentIdentifier)?.let { modules += "${it.group}:${it.module}" }
+                component.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { queue += it.selected }
+            }
+            modules.joinToString(",")
+        }
+        tasks.withType<Test>().matching { it.name.endsWith("UnitTest") }.configureEach {
+            inputs.property("releaseModules", releaseModules)
+            jvmArgumentProviders += CommandLineArgumentProvider { listOf("-Dberth.releaseModules=${releaseModules.get()}") }
+        }
     }
 }
 

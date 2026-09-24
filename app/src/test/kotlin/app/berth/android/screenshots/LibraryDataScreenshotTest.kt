@@ -429,6 +429,21 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         assertNoTextCut("a new host's Remote clipboard row")
     }
 
+    /** A saved host's Remote clipboard row names OSC 52 in its caption beside the value, whole at the font cap. */
+    @Test
+    fun `a saved host's Remote clipboard row keeps its OSC 52 caption whole beside the value`() {
+        seedLibrary()
+        editor("homelab", onDone = {}, onPopped = {})
+        waitForText("Remote clipboard")
+        compose.onNodeWithText("Clipboard writes from this server (OSC 52)").performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("Clipboard writes from this server (OSC 52)").assertIsDisplayed()
+        compose.onNodeWithText("Inherit (blocked)").assertIsDisplayed()
+        capture("host-editor-saved-remote-clipboard")
+        assertNoTextCut("a saved host's Remote clipboard row")
+        compose.assertNoBrokenWords("a saved host's Remote clipboard row")
+    }
+
     // ---- the host editor's Scrollback and Ciphers (C2, C10 Advanced) ------------------------------
 
     /**

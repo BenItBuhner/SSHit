@@ -2,6 +2,7 @@ package app.berth.android.ui.tabs
 
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.short
+import app.berth.android.ui.shortUnder
 import app.berth.android.ui.theme.DensityTokens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -11,8 +12,8 @@ import org.junit.Test
  * The strip at density's header (spec A12, ribbon 40 → 28): Comfortable's header leaves a style
  * as it is; Compact's steps it down in size alone, the swatch as far in from the tab's edges as
  * the padding and the height it gave up added to the target's reach, the phone on its side too.
- * The Stage steps it down only where a status bar's inset lends that whole reach; anywhere else
- * the skin's own strip stands whole.
+ * The Stage steps it down only where a status bar's inset lends that whole reach, and the shell
+ * takes the phone on its side's short strip only there; anywhere else the skin's own strip stands whole.
  */
 class TabStripDensityTest {
     private val compact = DensityTokens.Compact.header
@@ -56,7 +57,7 @@ class TabStripDensityTest {
         assertEquals(40.dp, s.height)
         assertEquals(32.dp, s.tabHeight)
         assertEquals(20.dp, s.swatchSize)
-        assertEquals(40.dp, s.height + s.reachUnder(0.dp))
+        assertEquals("and the band over it", 44.dp, s.height + s.reachUnder(0.dp))
     }
 
     @Test
@@ -69,15 +70,29 @@ class TabStripDensityTest {
 
     @Test
     fun `comfortable reaches into the inset as before, and no further than it goes`() {
-        assertEquals(0.dp, TabStripStyle.Default.reachUnder(0.dp))
         assertEquals(5.dp, TabStripStyle.Default.reachUnder(5.dp))
         assertEquals(8.dp, TabStripStyle.Default.reachUnder(24.dp))
+        assertEquals("the inset above the reach", 16.dp, TabStripStyle.Default.insetAbove(24.dp))
+    }
+
+    /** Spec C3 l.351: the band is what the inset does not lend of 4 dp, 4 with no status bar and nothing under 4 dp or more. */
+    @Test
+    fun `where the inset lends less than 4 dp a band makes up the difference, and stands above nothing`() {
+        val s = TabStripStyle.Default
+        assertEquals("no status bar: the band's 4", 4.dp, s.reachUnder(0.dp))
+        assertEquals("2 dp lent and a 2 dp band", 4.dp, s.reachUnder(2.dp))
+        assertEquals(4.dp, s.reachUnder(4.dp))
+        for (inset in listOf(0.dp, 2.dp, 4.dp)) assertEquals("no inset left above the row at $inset", 0.dp, s.insetAbove(inset))
+        assertEquals("the header 44 with no status bar", 44.dp, s.insetAbove(0.dp) + s.reachUnder(0.dp) + s.height)
+        assertEquals("and under 2 dp of one", 44.dp, s.insetAbove(2.dp) + s.reachUnder(2.dp) + s.height)
+        assertEquals("under a phone's 24 the header is the inset and the row, no taller", 64.dp, s.insetAbove(24.dp) + s.reachUnder(24.dp) + s.height)
     }
 
     @Test
     fun `an island lends nothing, so it keeps the skin's strip`() {
         val island = TabStripStyle(chrome = StripChrome.ISLAND)
         assertEquals(0.dp, island.reachUnder(24.dp))
+        assertEquals(0.dp, island.reachUnder(0.dp))
         assertSame(island, island.atDensity(compact, 24.dp))
     }
 
@@ -96,13 +111,26 @@ class TabStripDensityTest {
     }
 
     @Test
-    fun `the phone on its side steps from its 32 to 28 as well, and with no status bar stands its own 32`() {
+    fun `the phone on its side steps from its 32 to 28 as well`() {
         val s = TabStripStyle.Default.short().atDensity(compact, 24.dp)
         assertEquals(28.dp, s.height)
         assertEquals(24.dp, s.tabHeight)
         assertEquals(16.dp, s.swatchSize)
         assertEquals(20.dp, s.topReach)
         assertEquals(48.dp, s.height + s.reachUnder(24.dp))
-        assertEquals(TabStripStyle.Default.short(), TabStripStyle.Default.short().atDensity(compact, 0.dp))
+    }
+
+    /** Spec C23 under l.102 and l.351: the short strip only where a flat toolbar's status bar holds its 16 dp reach, as [atDensity] steps. */
+    @Test
+    fun `the phone on its side takes the short strip only under a status bar that holds its reach`() {
+        val s = TabStripStyle.Default
+        assertEquals(s.short(), s.shortUnder(24.dp))
+        assertEquals("16 dp holds it", s.short(), s.shortUnder(16.dp))
+        assertSame("15 dp does not", s, s.shortUnder(15.dp))
+        assertSame("no status bar: the skin's strip", s, s.shortUnder(0.dp))
+        assertEquals("its 40 and the band, 44", 44.dp, s.height + s.reachUnder(0.dp))
+        assertEquals("under Compact too, where no status bar takes the step", 44.dp, s.shortUnder(0.dp).atDensity(compact, 0.dp).let { it.height + it.reachUnder(0.dp) })
+        val island = TabStripStyle(chrome = StripChrome.ISLAND)
+        assertSame("an island lends nothing to reach with", island, island.shortUnder(24.dp))
     }
 }

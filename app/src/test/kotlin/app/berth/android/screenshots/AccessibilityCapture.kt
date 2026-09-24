@@ -1,12 +1,15 @@
 package app.berth.android.screenshots
 
 import android.content.Context
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityCheckOptions
@@ -34,8 +37,8 @@ import kotlin.math.abs
  * over every Compose root on screen, so a sheet or a menu is audited along with the screen under
  * it, and a result at the ERROR level fails the test that took the picture. `BERTH_A11Y_LEVEL`
  * (`Warning`, `LogOnly`) moves the bar for a local run that wants the whole list. A few findings
- * are exempt by what they are, never by lowering the bar: a full-height Deck key's width, a row cut at the
- * window's edge on its way in or out of a list or under a half-open sheet, a whole control cut by
+ * are exempt by what they are, never by lowering the bar: a full-height Deck target's width down to its floor, a row cut at the
+ * window's edge on its way in or out of a vertical list or under a half-open sheet, a whole control cut by
  * the reach of a row the list beside it has scrolled past, the strip of scrim a tall sheet leaves
  * above itself, and the contrast of a disabled control's text.
  */
@@ -46,13 +49,16 @@ fun ComposeTestRule.captureAudited(file: File) {
     captureScreenRoboImage(file.path)
     if (System.getenv("BERTH_A11Y_DUMP") != null) dumpA11yFindings(file.nameWithoutExtension)
     val minTarget = with(density) { TouchTargetSize.toPx() }
+    val (keyWidth, gripWidth) = with(density) { DeckKeyWidth.toPx() to DeckGripWidth.toPx() }
     val roots = onAllNodes(isRoot()).fetchSemanticsNodes().size
     for (index in 0 until roots) {
         val root = onAllNodes(isRoot())[index]
         val rootNode = root.fetchSemanticsNode()
         val sheet = rootNode.holdsDialog()
         val nodes = onAllNodes(isRoot(), useUnmergedTree = true).fetchSemanticsNodes().first { it.id == rootNode.id }.flatten()
-        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, UnderAScrolledRowsReach(nodes, minTarget), DeckKeyTargets(minTarget)))
+        val lists = ScrolledPastTheEdge(nodes, rootNode.positionOnScreen)
+        val deckKeys = DeckKeyTargets(nodes, rootNode.positionOnScreen, minTarget, keyWidth, gripWidth)
+        root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, lists, UnderAScrolledRowsReach(nodes, minTarget), deckKeys))
     }
 }
 
@@ -80,54 +86,111 @@ fun ComposeTestRule.settle(ms: Long) {
 private val Level = RoborazziATFAccessibilityChecker.CheckLevel.valueOf(System.getenv("BERTH_A11Y_LEVEL") ?: "Error")
 
 /**
- * The audit of one window. [reach] is built from that window's own semantics tree, since it reads
- * the controls' real boxes; the other exemptions read the framework's hierarchy alone. A sheet's
+ * The audit of one window. [lists] and [reach] are built from that window's own semantics tree,
+ * since they read what the framework's hierarchy does not carry, a scroller's axis and the
+ * controls' real boxes; the other exemptions read the framework's hierarchy alone. A sheet's
  * or a menu's window ([sheet]) takes the same audit, and neither a row the half-open sheet has not
  * yet shown nor the strip of scrim a tall sheet leaves above itself is a finding there.
  */
 @OptIn(ExperimentalRoborazziApi::class)
-private fun auditOptions(sheet: Boolean, reach: UnderAScrolledRowsReach, keys: DeckKeyTargets) = RoborazziATFAccessibilityCheckOptions(
+private fun auditOptions(sheet: Boolean, lists: ScrolledPastTheEdge, reach: UnderAScrolledRowsReach, keys: DeckKeyTargets) = RoborazziATFAccessibilityCheckOptions(
     checker = RoborazziATFAccessibilityChecker(
         preset = AccessibilityCheckPreset.LATEST,
         suppressions = if (sheet) {
-            anyOf(keys, ScrolledPastTheEdge, UnderTheHalfOpenSheet, SheetScrimSliver, reach, DisabledControlContrast)
+            anyOf(keys, lists, UnderTheHalfOpenSheet, SheetScrimSliver, reach, DisabledControlContrast)
         } else {
-            anyOf(keys, ScrolledPastTheEdge, reach, DisabledControlContrast)
+            anyOf(keys, lists, reach, DisabledControlContrast)
         },
     ),
     failureLevel = Level,
 )
 
 /**
- * One exemption: a Deck key's width. The Deck's keys ([DeckKeyTag], published as their resource
- * id) are a keyboard's keys, seven or more to a row, 43 dp wide on a phone, and cannot each be
- * 48 dp across; the framework's own scanner exempts a keyboard's keys the same way. Their height
- * is held: a key's target stands [minTarget] tall at every height the setting and density give it
- * (a 40 dp key takes the 4 dp gaps above and below it), so a finding on a key whose target is
- * short is not exempt. Every other check still runs on them, so a key with no name or no role
- * still fails.
+ * One exemption: a Deck target's width, down to its floor. The Deck's keys and its Grip
+ * ([DeckKeyTag], published as their resource id) are a keyboard's keys, nine or more to a row, and
+ * cannot each be 48 dp across; the framework's own scanner exempts a keyboard's keys the same way.
+ * Their height is held: a target stands [minTarget] tall at every height the setting and density
+ * give it (a key takes the 4 dp gaps above and below its face), so a finding on a short target is
+ * not exempt. Their width is held to spec l.102: 40 for a key, and 44 for the Grip on a row with
+ * room for that beside 40 for each other target (364 dp for the Base layer's nine), 40 below. A row
+ * whose width divided among its targets is under 40, a layer holding more than the row has room
+ * for, gives every target that share (C5), and the floor is the share: named by that cause, not by
+ * a component. The row and each target are read from the window's semantics tree, the boxes a
+ * finger's direct hit lands in: the framework's box for a target is less whatever a neighbour's
+ * reach claims, and Compose gives a key under 48 dp across that reach over its neighbours, where a
+ * direct hit beats it (the Grip's 44 read as 42 beside a 40 dp Esc). A target's own box stands only
+ * where what the framework took off it is a neighbouring key's reach; anything else over it counts.
+ * Every other check still runs on them, so a key with no name or no role still fails.
  */
-private class DeckKeyTargets(private val minTarget: Float) : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+private class DeckKeyTargets(
+    nodes: List<SemanticsNode>,
+    private val rootOnScreen: Offset,
+    private val minTarget: Float,
+    private val keyWidth: Float,
+    private val gripWidth: Float,
+) : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+    private val keys = nodes.filter { it.config.getOrNull(SemanticsProperties.TestTag) == DeckKeyTag }
+
     override fun describeTo(description: Description) {
-        description.appendText("a touch-target finding on a Deck key's width, its target full height")
+        description.appendText("a touch-target finding on a Deck target's width, its target full height and as wide as its floor")
     }
 
     override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
         if (result.accessibilityHierarchyCheck != TouchTargetSizeCheck::class.java) return false
         val element = result.element ?: return false
-        return element.resourceName == DeckKeyTag && element.boundsInScreen.height >= minTarget - 1
+        if (element.resourceName != DeckKeyTag) return false
+        val cut = element.boundsInScreen
+        if (cut.height < minTarget - 1) return false
+        val centre = Offset((cut.left + cut.right) / 2f, (cut.top + cut.bottom) / 2f)
+        val node = keys.firstOrNull { it.boundsInRoot.translate(rootOnScreen).contains(centre) } ?: return false
+        val box = node.boundsInRoot.translate(rootOnScreen)
+        val row = keys.map { it.boundsInRoot.translate(rootOnScreen) }.filter { it.top < box.bottom && it.bottom > box.top }
+        val width = row.maxOf { it.right } - row.minOf { it.left }
+        val grip = node.config.getOrNull(SemanticsProperties.ContentDescription)?.firstOrNull()?.startsWith("Grip") == true
+        return across(node, box, cut.left.toFloat(), cut.right.toFloat()) >= deckTargetFloor(width, row.size, grip, keyWidth, gripWidth) - 1
+    }
+
+    /** The target's width to a finger: its own [box] where the framework's, [left] to [right], is less only a neighbouring key's reach; else the framework's. */
+    private fun across(node: SemanticsNode, box: Rect, left: Float, right: Float): Float {
+        val reaches = keys.filter { it.id != node.id }.map { it.touchBoundsInRoot.translate(rootOnScreen) }
+        fun claimed(from: Float, to: Float) = to - from <= 1 ||
+            reaches.any { it.left <= from + 1 && it.right >= to - 1 && it.top <= box.top + 1 && it.bottom >= box.bottom - 1 }
+        return if (claimed(box.left, left) && claimed(right, box.right)) box.width else right - left
     }
 }
+
+/**
+ * The least a Deck target on a row [width] across holding [targets] may be: the row's share where
+ * it is under [keyWidth]; the Grip's [gripWidth] where the row has room for it beside [keyWidth]
+ * for every other target; otherwise [keyWidth].
+ */
+internal fun deckTargetFloor(width: Float, targets: Int, grip: Boolean, keyWidth: Float, gripWidth: Float): Float {
+    val share = width / targets
+    return when {
+        share < keyWidth -> share
+        grip && width >= gripWidth + keyWidth * (targets - 1) -> gripWidth
+        else -> keyWidth
+    }
+}
+
+/** A Deck key's least target across (spec l.102: Deck keys 40 wide), and the Grip's where the row has room for it (l.102's 44). */
+private val DeckKeyWidth = 40.dp
+private val DeckGripWidth = 44.dp
 
 /**
  * The second: a row scrolled partly out of a list. Compose reports a node's bounds clipped to the
  * window, so the last row of a sheet's list, cut at the screen's bottom edge, reads as a 9 dp
  * target with no text on it; the framework can see the clipping for a View but not for a Compose
  * node, and would otherwise fail every capture of a list longer than the screen. A finding is
- * exempt only when the node's bounds meet the window's edge and a scrollable ancestor holds it,
- * which is exactly a row on its way in or out; a small control resting inside the screen is not.
+ * exempt only when the node's bounds meet the window's top or bottom edge and a list that scrolls
+ * up and down holds it, which is exactly a row on its way in or out; a small control resting
+ * inside the screen is not, and nor is a strip that scrolls sideways standing against the
+ * window's top, whose tabs the edge does not cut: a tab's box there is the strip's own height. The
+ * framework's hierarchy cannot tell which way a scroller moves, so the holder is read from the
+ * window's semantics tree: the node whose box on screen is the finding's, and an ancestor of it
+ * that scrolls ([SemanticsActions.ScrollBy]) and has somewhere to go on the vertical axis.
  */
-private object ScrolledPastTheEdge : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+private class ScrolledPastTheEdge(private val nodes: List<SemanticsNode>, private val rootOnScreen: Offset) : TypeSafeMatcher<AccessibilityViewCheckResult>() {
     override fun describeTo(description: Description) {
         description.appendText("a finding on a row scrolled partly out of the window")
     }
@@ -135,10 +198,22 @@ private object ScrolledPastTheEdge : TypeSafeMatcher<AccessibilityViewCheckResul
     override fun matchesSafely(result: AccessibilityViewCheckResult): Boolean {
         if (!result.isClippingFinding()) return false
         val element = result.element ?: return false
-        var ancestor: ViewHierarchyElement? = element.parentView
-        while (ancestor != null) {
-            if (ancestor.isScrollable == true) return element.meetsWindowEdge()
-            ancestor = ancestor.parentView
+        if (!element.meetsWindowEdge()) return false
+        val cut = element.boundsInScreen
+        val window = nodes.first().boundsInRoot
+        return nodes.any { node ->
+            val box = node.touchBoundsInRoot.intersect(window).translate(rootOnScreen)
+            abs(box.left - cut.left) <= 1 && abs(box.top - cut.top) <= 1 && abs(box.right - cut.right) <= 1 && abs(box.bottom - cut.bottom) <= 1 &&
+                node.isInAVerticalList()
+        }
+    }
+
+    private fun SemanticsNode.isInAVerticalList(): Boolean {
+        var up = parent
+        while (up != null) {
+            val range = up.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+            if (range != null && up.config.contains(SemanticsActions.ScrollBy) && range.maxValue() > 0f) return true
+            up = up.parent
         }
         return false
     }

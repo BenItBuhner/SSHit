@@ -66,6 +66,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import app.berth.android.session.ManagedTab
@@ -495,9 +496,9 @@ private fun Pane(
  * strip rather than standing taller than the window's own header and costing each pane rows; only
  * the title's line at the interface's font cap stands taller (Body's 28.6 dp over Compact's 28), and
  * the header takes that rather than cut it. The × is a 48 dp target on a 40 dp row, so its box
- * reaches 4 dp over the body's top edge (10 on Compact's 28), as the strip's own controls reach over
- * the body on a phone (spec A11); the header stands over the body for it, or a Tunnels or Files
- * row flush under the header would take that band and leave the × short of its target.
+ * reaches 4 dp over the body's top edge (10 on Compact's 28), the row being too short to hold it
+ * (spec A11); the header stands over the body for it, or a Tunnels or Files row flush under the
+ * header would take that band and leave the × short of its target.
  */
 @Composable
 private fun PaneHeader(
@@ -655,7 +656,9 @@ private fun CarryGhost(title: String, color: Color, monogram: String, at: Offset
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(Modifier.size(16.dp).clip(RoundedCornerShape(BerthRadius.swatchSmall)).background(color), contentAlignment = Alignment.Center) {
-            Text(monogram, style = BerthType.caption.copy(fontSize = BerthType.caption.fontSize * 0.8f), color = Color.White, maxLines = 1)
+            // On its face's own line, not Caption's 16 sp: at the 1.3 cap that line is 20.8 dp to the
+            // text, taller than the swatch, which cut it and stood the letters 2.4 dp low.
+            Text(monogram, style = BerthType.caption.copy(fontSize = BerthType.caption.fontSize * 0.8f, lineHeight = TextUnit.Unspecified), color = Color.White, maxLines = 1)
         }
         Text(title, style = BerthType.bodyMedium, color = c.text1, maxLines = 1)
     }

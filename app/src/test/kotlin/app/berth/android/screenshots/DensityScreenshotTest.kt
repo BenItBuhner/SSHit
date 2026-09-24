@@ -41,10 +41,12 @@ import app.berth.android.ui.hosts.HostsScreen
 import app.berth.android.ui.settings.SettingsScreen
 import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.StageScreen
+import app.berth.android.ui.stage.deckKeyHeight
 import app.berth.android.ui.tabs.ShellTabActions
 import app.berth.android.ui.tabs.TabActions
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.themes.AppearanceScreen
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.Density
@@ -172,7 +174,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
      * as tall as its line at the cap too, and a tab still answers a 48 dp target, the reach taking
      * the 12 dp the row gave up out of the inset. With no status bar to lend them the step would
      * come out of the targets or stand as empty band, so the skin's strip stands there whole: a
-     * 40 dp row of 32 dp tabs with 20 dp swatches, Comfortable's own.
+     * 40 dp row of 32 dp tabs with 20 dp swatches, Comfortable's own, and over it the 4 dp band of
+     * the header's fill no inset lends it (C3 l.351), its targets 44.
      */
     @Test
     fun `stage header and strip`() {
@@ -194,14 +197,15 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         statusBar(0)
         capture("density-stage-compact-no-status-bar")
         assertEquals("with no status bar the skin's 40 dp row stands", 40f, stripRowDp(), 1f)
-        assertEquals("and no band over it", 40f, stripHeightDp(), 0.5f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
         assertEquals("its swatch the skin's 20, in a 32 dp tab", 20f, swatchDp(), 0.5f)
         assertStripLinesWhole("the skin's strip under Compact")
     }
 
     /**
      * A phone on its side (spec C23): under its status bar the strip's own 32 steps to Compact's 28
-     * as well, its lines whole, and with none it stands its own 32, row and all.
+     * as well, its lines whole. With none there is no inset to lend the short strip its reach, so the
+     * skin's 40 dp row stands with the 4 dp band over it, its targets l.102's 44 as upright.
      */
     @Test
     @Config(qualifiers = "w914dp-h411dp-land-420dpi")
@@ -219,14 +223,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertStripLinesWhole("the Compact strip on its side")
 
         statusBar(0)
-        assertEquals(32f, stripRowDp(), 1f)
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals("with no status bar the skin's 40 dp row stands", 40f, stripRowDp(), 1f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
     }
 
     /**
      * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). With
      * no status bar to lend the strip Compact's step, the skin's strip stands whole under Compact, a
-     * 40 dp row of 32 dp tabs, and the panes' headers stay 40 with it. Under a status bar the strip
+     * 40 dp row of 32 dp tabs under the 4 dp band, and the panes' headers stay 40 with its row. Under a status bar the strip
      * steps to 28 and a pane's header with it, or to its title's line at the cap where that is
      * taller; never cut either way, and the audit of each frame holds the header's targets.
      */
@@ -243,7 +247,7 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         setDensity(Density.COMPACT)
         capture("density-panes-compact")
         assertEquals("the skin's 40 dp row", 40f, stripRowDp(), 1f)
-        assertEquals(40f, stripHeightDp(), 0.5f)
+        assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
         assertEquals("its swatch the skin's 20", 20f, swatchDp(), 0.5f)
         assertEquals("the panes' headers the strip's 40", 40f, paneHeaderDp(), 0.5f)
         assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
@@ -259,9 +263,10 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
     /**
      * The Deck (spec A12, Deck 44 → 40; lines 102 and 186, 40 × 44 as the target): its keys a step
-     * down under Compact and still 48 dp targets, the 4 dp gaps above and below a 40 dp key being
-     * the key's to a finger; each key's swipe hint clear of its label at either height; and no
-     * status bar here, so the strip above it is the skin's 40.
+     * down under Compact; each key's swipe hint clear of its label at either height; and no status
+     * bar here, so the strip above it is the skin's 40. At every height the setting offers (A9, 40
+     * to 52), Comfortable and Compact, the 4 dp gaps above and below a key's face are the key's to a
+     * finger, so a tap anywhere across the row lands on a key, and the face is drawn as it was.
      */
     @Test
     fun `the deck`() {
@@ -271,23 +276,46 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         themed { StageScreen(graph.viewModel, live, tabActions(), onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {}) }
         awaitDeck()
         capture("density-deck-comfortable")
-        assertEquals(44f, ctrlKeyDp(), 0.5f)
+        assertEquals(44f, ctrlFaceDp(), 0.5f)
         compose.assertDeckHintsClearOfLabels()
 
         setDensity(Density.COMPACT)
         capture("density-deck-compact")
-        assertEquals(40f, ctrlKeyDp(), 0.5f)
+        assertEquals(40f, ctrlFaceDp(), 0.5f)
         compose.assertDeckHintsClearOfLabels()
         assertEquals(40f, stripRowDp(), 1f)
 
+        for (density in listOf(Density.COMFORTABLE, Density.COMPACT)) {
+            setDensity(density)
+            for (setting in listOf(40, 44, 48, 52)) {
+                setKeyHeight(setting)
+                assertGapsAreTheKeys("$density at $setting", deckKeyHeight(setting, DensityTokens.of(density)).value)
+            }
+        }
+    }
+
+    private fun setKeyHeight(setting: Int) {
+        graph.viewModel.setDeckLayout(graph.viewModel.deckLayout.value.copy(heightDp = setting))
+        compose.waitUntil(5_000) { graph.viewModel.deckLayout.value.heightDp == setting }
+        compose.waitForIdle()
+    }
+
+    /**
+     * Ctrl's face is [face] dp and its touch the face and both gaps, a 48 dp target or more; a finger
+     * 3 dp into the gap above the face, 1 dp under the row's top, latches it one-shot, and 3 dp into
+     * the gap below it locked; the face's middle lets go.
+     */
+    private fun assertGapsAreTheKeys(where: String, face: Float) {
+        assertEquals("$where: Ctrl's face", face, ctrlFaceDp(), 0.5f)
         val ctrl = compose.onNode(ctrlKey)
-        assertTrue("a Compact key is a 48 dp target: ${ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp()} dp", ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp() >= 47.5f)
-        // A finger 3 dp into the gap above the key, then below it: one-shot, then locked; the key's middle lets go.
-        val gap = 3 * compose.density.density
-        ctrl.performTouchInput { down(Offset(centerX, -gap)); up() }
+        assertEquals("$where: Ctrl's touch takes the gaps above and below its face", face + 8f, ctrlKeyDp(), 0.5f)
+        assertTrue("$where: a 48 dp target", ctrl.fetchSemanticsNode().touchBoundsInRoot.height.inDp() >= 47.5f)
+        val into = 3 * compose.density.density
+        val halfFace = face * compose.density.density / 2
+        ctrl.performTouchInput { down(Offset(centerX, centerY - halfFace - into)); up() }
         compose.waitForIdle()
         ctrl.assertContentDescriptionEquals("Ctrl, one-shot")
-        ctrl.performTouchInput { down(Offset(centerX, height + gap)); up() }
+        ctrl.performTouchInput { down(Offset(centerX, centerY + halfFace + into)); up() }
         compose.waitForIdle()
         ctrl.assertContentDescriptionEquals("Ctrl, locked")
         ctrl.performTouchInput { down(center); up() }
@@ -359,6 +387,8 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     private val ctrlKey = hasTestTag(DeckKeyTag) and hasContentDescription("Ctrl", substring = true)
 
     private fun ctrlKeyDp(): Float = compose.onNode(ctrlKey).fetchSemanticsNode().size.height.toFloat().inDp()
+
+    private fun ctrlFaceDp(): Float = compose.deckKeyFaceDp("Ctrl")
 
     private fun awaitDeck() {
         compose.waitUntil(10_000) { compose.onAllNodes(ctrlKey).fetchSemanticsNodes().isNotEmpty() }

@@ -6,10 +6,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
@@ -89,6 +92,7 @@ import app.berth.android.ui.tabs.NOTICE_BAR_MS
 import app.berth.android.ui.tabs.Notice
 import app.berth.android.ui.tabs.NoticeSlot
 import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.StripChrome
 import app.berth.android.ui.tabs.TabSheets
 import app.berth.android.ui.tabs.TabStripStyle
 import app.berth.android.ui.tabs.rememberTabUiState
@@ -146,9 +150,19 @@ private enum class ShellNotice { REOPEN, LINK, BACK, LANDED }
  * status bar, so its targets stand the 48 dp the 40 dp row's do. Only the sizes change; the
  * style they change on is the one in force (the direction's skin, through [LocalTabStripStyle]),
  * so a phone turning does not turn the strip back to the default skin. Under Compact the Stage
- * steps it down again, to the density's 28 ([app.berth.android.ui.tabs.within]).
+ * steps it down again, to the density's 28 ([app.berth.android.ui.tabs.within]). The shell takes
+ * it only where that reach is there to lend ([shortUnder]).
  */
 internal fun TabStripStyle.short() = copy(height = 32.dp, tabHeight = 28.dp, tabPadding = 4.dp, topReach = 16.dp, chipHeight = 20.dp)
+
+/**
+ * The phone on its side's strip under a status bar [statusTop] tall: [short] where a flat toolbar's
+ * inset holds its whole 16 dp reach, as [app.berth.android.ui.tabs.atDensity] steps a strip only
+ * there. Anywhere else (no status bar, an island) the style in force stands whole, its 40 dp row
+ * with l.351's band above it where no inset lends 4 dp: 32 and the band would be 36 dp targets
+ * against l.102's 44, and a band made up to 44 is the empty band atDensity turns down.
+ */
+internal fun TabStripStyle.shortUnder(statusTop: Dp): TabStripStyle = short().let { if (chrome == StripChrome.FLAT && statusTop >= it.topReach) it else this }
 
 @Composable
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
@@ -449,10 +463,12 @@ private fun Shell(vm: AppViewModel) {
         )
     }
 
-    // A phone on its side (spec C23): the strip and the Deck give height back to the terminal. A
-    // window past compact both ways (spec C4, two-row mode "default on tablets"): the Deck's second
-    // row, while Settings › Deck keeps it on; the saved layout's rows stand everywhere else.
-    val stripStyle = LocalTabStripStyle.current.let { if (layout.shortLandscape) it.short() else it }
+    // A phone on its side (spec C23): the strip, under a status bar that lends it its reach, and the
+    // Deck give height back to the terminal. A window past compact both ways (spec C4, two-row mode
+    // "default on tablets"): the Deck's second row, while Settings › Deck keeps it on; the saved
+    // layout's rows stand everywhere else.
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val stripStyle = LocalTabStripStyle.current.let { if (layout.shortLandscape) it.shortUnder(statusTop) else it }
     val deckSettings by vm.deckSettings.collectAsState()
     val deckFit = when {
         layout.shortLandscape -> ShortDeckFit

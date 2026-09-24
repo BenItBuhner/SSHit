@@ -65,6 +65,7 @@ import app.berth.ssh.SshSecurity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -81,6 +82,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** A Pixel-class phone upright, the size every other screenshot class renders at. */
 private const val PHONE_PORTRAIT = "w411dp-h914dp-420dpi"
@@ -159,19 +161,20 @@ class LargeScreenScreenshotTest {
         assertNull(graph.sessions.panes.value)
         compose.onAllNodes(hasContentDescription(", left pane", substring = true)).assertCountEquals(0)
         drawerIsASheet()
-        assertEquals(40f, stripHeightDp(), 0.5f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
         capture("phone-portrait-stage")
     }
 
     /**
-     * The phone on its side (spec C23): the strip drops to 32 dp so the terminal keeps the rows,
-     * the drawer stays a sheet (too short for the rail), and the width still fits two panes.
+     * The phone on its side (spec C23): the drawer stays a sheet (too short for the rail), and the
+     * width still fits two panes. With no status bar to lend the short strip its reach the skin's
+     * 40 dp row stands under the 4 dp band, the header 44 as upright (l.102, l.351).
      */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
-    fun `phone on its side, the strip shortens and two panes fit`() {
+    fun `phone on its side, two panes fit`() {
         mountApp()
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
         drawerIsASheet()
         capture("phone-landscape-stage")
 
@@ -193,13 +196,17 @@ class LargeScreenScreenshotTest {
         capture("phone-portrait-stage-font-scale-2x")
     }
 
-    /** The shorter strip at the cap: its 28 dp tabs and 20 dp chips, where Caption's line alone is taller than the chip. */
+    /**
+     * The shorter strip at the cap, under the status bar that lends it its reach: its 28 dp tabs and
+     * 20 dp chips, where Caption's line alone is taller than the chip.
+     */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
     fun `phone on its side at the font cap, the shorter strip's titles and chips stand whole`() {
         RuntimeEnvironment.setFontScale(2f)
         mountApp()
-        assertEquals(32f, stripHeightDp(), 0.5f)
+        statusBar(24)
+        assertEquals("the 32 dp row and its 16 dp reach into the status bar", 48f, stripHeightDp(), 0.5f)
         assertStripLinesWhole("the shorter strip on its side at the font cap")
         capture("phone-landscape-stage-font-scale-2x")
     }
@@ -333,6 +340,32 @@ class LargeScreenScreenshotTest {
         compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
         compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of homelab")).fetchSemanticsNodes().isNotEmpty() }
         capture("tablet-landscape-switcher-dialog")
+    }
+
+    /**
+     * The carried tab's ghost at the interface's font cap (spec A11): its 16 dp swatch holds the
+     * monogram's line centred and whole. Caption's 16 sp line is 20.8 dp to the text at the cap;
+     * set on it, the monogram's line was cut at the swatch and stood 2.4 dp low of its centre.
+     */
+    @Test
+    @Config(qualifiers = TABLET_LANDSCAPE)
+    fun `tablet on its side at the font cap, the carried tab's ghost keeps its monogram centred and whole`() {
+        RuntimeEnvironment.setFontScale(2f)
+        mountApp()
+        val body = compose.onNode(hasTestTag(TerminalTag)).fetchSemanticsNode().boundsInRoot
+        val pihole = carry("pi-hole", Offset(body.left + body.width * 0.75f, body.center.y))
+        capture("tablet-landscape-carry-font-scale-2x")
+        val ghost = hasContentDescription("Carrying pi-hole")
+        val monogram = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(ghost), useUnmergedTree = true)
+            .fetchSemanticsNodes().single { it.textLayout()!!.layoutInput.text.text != "pi-hole" }
+        val layout = monogram.textLayout()!!
+        assertFalse("the monogram's line whole in its swatch", layout.didOverflowHeight)
+        assertFalse("the monogram's two letters within its swatch", layout.didOverflowWidth)
+        val lineCentre = monogram.boundsInRoot.top + (layout.getLineTop(0) + layout.getLineBottom(0)) / 2f
+        val swatchCentre = compose.onNode(ghost).fetchSemanticsNode().boundsInRoot.center.y
+        assertEquals("the monogram's line on the swatch's centre", swatchCentre, lineCentre, 0.5f * compose.density.density)
+        pihole.performTouchInput { up() }
+        waitForPane("s-pihole", PaneSide.RIGHT)
     }
 
     /**
@@ -474,7 +507,7 @@ class LargeScreenScreenshotTest {
 
     // ---- live, against the local sshd ------------------------------------------------------------
 
-    /** The phone on its side with a live session: the 32 dp strip, the terminal, and the Deck one row of 40 (spec C23). */
+    /** The phone on its side with a live session: the header, 44 with no status bar, the terminal, and the Deck one row of 40 (spec C23). */
     @Test
     @Config(qualifiers = PHONE_LANDSCAPE)
     fun `live session on a phone on its side, the Deck one row of 40`() {
@@ -485,9 +518,8 @@ class LargeScreenScreenshotTest {
         settle(1_200)
         session.sendText("export PS1='\\[\\e[38;5;108m\\]\\u@berth\\[\\e[0m\\]:\\[\\e[38;5;179m\\]\\w\\[\\e[0m\\]\\$ ' && clear && ls --color=always -la /\n")
         settle(1_500)
-        assertEquals(32f, stripHeightDp(), 0.5f)
-        val ctrl = compose.onNode(hasContentDescription("Ctrl", substring = true)).fetchSemanticsNode()
-        assertEquals(40f, ctrl.size.height / compose.density.density, 1f)
+        assertEquals(44f, stripHeightDp(), 0.5f)
+        assertEquals(40f, compose.deckKeyFaceDp("Ctrl"), 1f)
         capture("phone-landscape-live-deck")
     }
 
@@ -630,6 +662,15 @@ class LargeScreenScreenshotTest {
      * Gives the window a navigation bar [px] tall along the bottom, dispatched to the compose view
      * as the window would, so what pays that inset can be seen paying it; 0 takes the bar away.
      */
+    /** Gives the window a status bar [dp] tall, dispatched to the compose view as the window would. */
+    private fun statusBar(dp: Int) {
+        val view = checkNotNull(composeView) { "mountApp first" }
+        val px = (dp * compose.density.density).roundToInt()
+        val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.statusBars(), Insets.of(0, px, 0, 0)).build()
+        compose.runOnUiThread { ViewCompat.dispatchApplyWindowInsets(view, insets) }
+        compose.waitForIdle()
+    }
+
     private fun navigationBar(px: Int) {
         val view = checkNotNull(composeView) { "mountApp first" }
         val insets = WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, px)).build()
@@ -686,7 +727,7 @@ class LargeScreenScreenshotTest {
         assertTrue("a line taller than its box on $where: $short", short.isEmpty())
     }
 
-    /** The strip's height in dp: the style's height, since Robolectric's window has no status-bar inset to reach into. */
+    /** The strip's height in dp: the style's row and the 4 dp band of the header's fill over it, since Robolectric's window has no status-bar inset to lend the band (spec C3). */
     private fun stripHeightDp(): Float =
         compose.onNode(hasContentDescription("Tabs, ", substring = true)).fetchSemanticsNode().size.height / compose.density.density
 

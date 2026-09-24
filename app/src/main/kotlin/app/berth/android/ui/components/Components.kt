@@ -111,12 +111,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -126,8 +126,10 @@ import app.berth.android.R
 import app.berth.android.ui.a11y.BerthMotion
 import app.berth.android.ui.a11y.CappedFontScale
 import app.berth.android.ui.a11y.LocalReducedMotion
+import app.berth.android.ui.a11y.LocalTargetEndsAtFoot
 import app.berth.android.ui.a11y.LocalTargetReach
 import app.berth.android.ui.a11y.TouchTargetSize
+import app.berth.android.ui.a11y.requiredTarget
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.a11y.spoken
 import app.berth.android.ui.a11y.touchTarget
@@ -425,14 +427,19 @@ private val SelectionDotGap = 8.dp
 private val TitleLineCentre = HorizontalAlignmentLine { a, b -> minOf(a, b) }
 
 /**
- * The title's [TitleLineCentre]: half its style's line height, the first line's own box under
- * `LineHeightStyle.Trim.None` whether the title runs to one line or two; half the measured
- * height for a style that gives no line height.
+ * The title's [TitleLineCentre]: half its first line's own box, whether the title runs to one line
+ * or two, as the text lays that line out. Not the style's line height through the density: its
+ * sp-to-dp scales large sizes less than the text's line does (22 sp at the 1.3 cap is 25 dp to it,
+ * 28.6 to the text), and would sit the dot high of the line.
  */
-private fun Modifier.publishTitleLineCentre(style: TextStyle): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val line = if (style.lineHeight.isSpecified) style.lineHeight.roundToPx() else placeable.height
-    layout(placeable.width, placeable.height, mapOf(TitleLineCentre to line / 2)) { placeable.place(0, 0) }
+@Composable
+private fun Modifier.publishTitleLineCentre(style: TextStyle): Modifier {
+    val measurer = rememberTextMeasurer()
+    val line = measurer.measure(" ", style, maxLines = 1).size.height
+    return layout { measurable, constraints ->
+        val placeable = measurable.measure(constraints)
+        layout(placeable.width, placeable.height, mapOf(TitleLineCentre to line / 2)) { placeable.place(0, 0) }
+    }
 }
 
 /**
@@ -1311,8 +1318,9 @@ fun ScreenHeader(
  * 48 dp square centred on the row instead of squashing, and the circle stays a circle. [reach] is
  * extra target above the circle for a header that lends its status-bar inset (the ribbon's
  * [app.berth.android.ui.tabs.TabStripStyle.topReach]): the target grows upward by it and the circle
- * stays centred on the row beneath, the way the tabs beside it do. [onLongClick], when given, is a
- * second action on the same target, named to a screen reader by [longClickLabel].
+ * stays centred on the row beneath, the way the tabs beside it do. In a header ([endsAtFoot]) the
+ * target ends at the row's foot, the terminal's edge. [onLongClick], when given, is a second action
+ * on the same target, named to a screen reader by [longClickLabel].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1322,6 +1330,7 @@ fun IconAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     reach: Dp = LocalTargetReach.current,
+    endsAtFoot: Boolean = LocalTargetEndsAtFoot.current,
     onLongClick: (() -> Unit)? = null,
     longClickLabel: String? = null,
     content: @Composable BoxScope.() -> Unit,
@@ -1329,23 +1338,25 @@ fun IconAction(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused = enabled && interaction.showsFocus()
+    val tap = if (onLongClick != null) {
+        Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onLongClick = onLongClick, onClick = onClick)
+    } else {
+        Modifier.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+    }
     Box(
         modifier
-            .requiredSize(width = TouchTargetSize, height = TouchTargetSize + reach)
-            .then(
-                if (onLongClick != null) {
-                    Modifier.combinedClickable(enabled = enabled, interactionSource = interaction, indication = null, onLongClick = onLongClick, onClick = onClick)
-                } else {
-                    Modifier.clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick)
+            .requiredTarget(
+                height = TouchTargetSize + reach,
+                width = TouchTargetSize,
+                endsAtFoot = endsAtFoot,
+                // The glyph is decoration; screen readers get the action's name, not the character.
+                tap = tap.clearAndSetSemantics {
+                    contentDescription = description
+                    role = Role.Button
+                    if (!enabled) disabled()
+                    if (onLongClick != null && enabled) this.onLongClick(label = longClickLabel) { onLongClick(); true }
                 },
             )
-            // The glyph is decoration; screen readers get the action's name, not the character.
-            .clearAndSetSemantics {
-                contentDescription = description
-                role = Role.Button
-                if (!enabled) disabled()
-                if (onLongClick != null && enabled) this.onLongClick(label = longClickLabel) { onLongClick(); true }
-            }
             .padding(top = reach),
         contentAlignment = Alignment.Center,
     ) {

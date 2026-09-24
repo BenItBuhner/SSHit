@@ -1,6 +1,7 @@
 package app.berth.android.ui.terminal
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -18,6 +19,7 @@ import androidx.compose.ui.input.pointer.isTertiaryPressed
 import app.berth.android.session.TerminalSession
 import app.berth.domain.model.SessionState
 import app.berth.terminal.CellPos
+import app.berth.terminal.GridGeometry
 import app.berth.terminal.Mod
 import app.berth.terminal.MouseButton
 import app.berth.terminal.MouseTracking
@@ -51,12 +53,16 @@ internal class MouseHooks(
  * A tab that is not Live hears nothing from the mouse, whatever mode its frame was left in: a
  * pointer drifting over a detached tab must not reconnect it the way a key does, so the wheel
  * and a swipe move its history only and a click is a click of the terminal's own.
+ *
+ * Positions are read on the [grid], the part of the pointer area the grid stands in; a pointer in
+ * the padding around it is the nearest cell's.
  */
 internal suspend fun PointerInputScope.terminalMouse(
     session: TerminalSession,
     viewport: TerminalViewport,
     frames: FrameBuffers,
     paints: () -> TerminalPaints,
+    grid: () -> Rect,
     hooks: MouseHooks,
 ) = awaitPointerEventScope {
     val emulator = session.emulator
@@ -74,7 +80,8 @@ internal suspend fun PointerInputScope.terminalMouse(
     var clicks = 0
     while (true) {
         val d = drag
-        val outside = d != null && d.selecting && (d.at.y < 0f || d.at.y > size.height)
+        val box = grid()
+        val outside = d != null && d.selecting && (d.at.y < 0f || d.at.y > box.height)
         val event = if (outside) withTimeoutOrNull(AUTOSCROLL_MS) { awaitPointerEvent(PointerEventPass.Main) } else awaitPointerEvent(PointerEventPass.Main)
         if (event == null) {
             // Held past the top or bottom edge: history scrolls a line that way and the selection follows.
@@ -88,8 +95,10 @@ internal suspend fun PointerInputScope.terminalMouse(
         }
         val c = event.changes.firstOrNull { it.type == PointerType.Mouse } ?: continue
         val p = paints()
-        val col = (c.position.x / p.cellWidth).toInt().coerceAtLeast(0)
-        val row = (c.position.y / p.cellHeight).toInt().coerceAtLeast(0)
+        val at = c.position - box.topLeft
+        val onGrid = GridGeometry.cellAt(at.x, at.y, p.cellWidth, p.cellHeight, emulator.cols, emulator.rows)
+        val col = onGrid.col
+        val row = onGrid.row
         val cell = pack(col, row)
         val mods = modifiersOf(event.keyboardModifiers)
         val live = session.state == SessionState.LIVE
@@ -152,8 +161,8 @@ internal suspend fun PointerInputScope.terminalMouse(
             lastPressAt = c.uptimeMillis
             lastPressCell = cell
             val sel = hooks.selection()
-            val start = synchronized(emulator.lock) { bufferCellAt(emulator, p, viewport.scrollOffset, c.position) }
-            val next = MouseDrag(sel, start, cell, c.position)
+            val start = synchronized(emulator.lock) { bufferCellAt(emulator, p, viewport.scrollOffset, at) }
+            val next = MouseDrag(sel, start, cell, at)
             if (sel != null && clicks > 1) {
                 synchronized(emulator.lock) { sel.start(emulator, start, if (clicks == 2) SelectionMode.WORD else SelectionMode.LINE) }
                 next.selecting = true
@@ -166,7 +175,7 @@ internal suspend fun PointerInputScope.terminalMouse(
             val dragging = drag
             when {
                 dragging != null && held and (1 shl LEFT) != 0 -> {
-                    dragging.at = c.position
+                    dragging.at = at
                     val sel = dragging.selection
                     if (!dragging.selecting && cell != dragging.cell && sel != null) {
                         synchronized(emulator.lock) { sel.start(emulator, dragging.start, SelectionMode.CELL) }

@@ -404,13 +404,18 @@ class HardwareShortcutsTest {
     }
 
     @Test
-    fun `the sheet's pane rows say when they wait for a wider screen`() {
-        val phone = shortcutGroups(defaults, panes = false).first { it.title == "Panes" }.entries
-        val tablet = shortcutGroups(defaults, panes = true).first { it.title == "Panes" }.entries
+    fun `the sheet's panes say under their rows when they wait for a wider screen`() {
+        val phoneGroup = shortcutGroups(defaults, panes = false).first { it.title == "Panes" }
+        val tabletGroup = shortcutGroups(defaults, panes = true).first { it.title == "Panes" }
+        val phone = phoneGroup.entries
+        val tablet = tabletGroup.entries
         assertEquals(listOf("Ctrl+Shift+D", "Ctrl+Shift+O"), phone.map { it.keys })
         assertEquals(phone.map { it.keys }, tablet.map { it.keys })
-        assertTrue(phone.all { "wide screen" in it.action || "when the Stage is split" in it.action })
+        assertEquals(listOf("Split the Stage", "Focus the other pane"), phone.map { it.action })
+        val note = phoneGroup.note.orEmpty()
+        assertTrue(note, "wide screen" in note && "once the Stage is split" in note)
         assertEquals(listOf("Split the Stage in two, or back to one", "Focus the other pane"), tablet.map { it.action })
+        assertEquals("the tablet's panes are there, so nothing waits", null, tabletGroup.note)
     }
 
     @Test

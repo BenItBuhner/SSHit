@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -62,7 +63,6 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
@@ -786,10 +786,10 @@ private fun StageBody(
                 viewport = viewport,
                 focusRequester = focusRequester,
                 showCursor = live,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 4.dp, top = 4.dp, end = 4.dp)
-                    .alpha(frameAlpha),
+                modifier = Modifier.fillMaxSize(),
+                // The gap under the header and at the sides is the terminal's (spec C2 l.297, D1 l.1161): drawn clear, tapped as its nearest cell.
+                padding = PaddingValues(start = 4.dp, top = 4.dp, end = 4.dp),
+                frameAlpha = frameAlpha,
                 // Each D1 gesture as Settings › Gestures assigns it; a gesture set to nothing is wired to nothing.
                 onFontSizeStep = { step ->
                     if (terminalSettings.pinch == PinchAction.FONT_SIZE) {
@@ -849,9 +849,8 @@ private fun StageBody(
             }
         }
 
-        // A notice bar showing at the window's bottom edge reaches past the chrome under this pill
-        // when that chrome is short (the strip) or gone (a detached frame): the pill stands up by that
-        // much, read from the edge, so the two never meet whatever either grows to.
+        // A notice bar showing stands on the chrome under this pill, as the pill does: the pill stands
+        // up by the bar's band, read from the edge, so the two never meet whatever either grows to.
         val edge = LocalBottomEdge.current
         StatePill(
             state = record.state,
@@ -1014,8 +1013,8 @@ private val StatePillHeight = 32.dp
  * from [retryIn], so the minute tick and the 1 Hz backoff tick recompose the pill alone and the
  * Stage around it never re-runs for either. While a jump chain is being made, [via] names the hop
  * (`Connecting via bastion (1 of 2)…`), so a slow or failing hop is seen as that hop. [clearance]
- * is how far above its 12 dp the pill stands while a notice bar reaches up past the chrome under
- * it ([app.berth.android.ui.tabs.BottomEdge.pillClearance]).
+ * is how far above its 12 dp the pill stands while a notice bar stands on the chrome under it
+ * ([app.berth.android.ui.tabs.BottomEdge.pillClearance]).
  */
 @Composable
 internal fun StatePill(
