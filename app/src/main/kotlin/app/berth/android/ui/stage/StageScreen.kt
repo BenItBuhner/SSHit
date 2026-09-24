@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -788,8 +789,9 @@ private fun StageBody(
                 showCursor = live,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = 4.dp, top = 4.dp, end = 4.dp)
                     .alpha(frameAlpha),
+                // The gap under the header and at the sides is the terminal's (spec C2 l.297, D1 l.1161): drawn clear, tapped as its nearest cell.
+                padding = PaddingValues(start = 4.dp, top = 4.dp, end = 4.dp),
                 // Each D1 gesture as Settings › Gestures assigns it; a gesture set to nothing is wired to nothing.
                 onFontSizeStep = { step ->
                     if (terminalSettings.pinch == PinchAction.FONT_SIZE) {

@@ -8,7 +8,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -32,14 +35,17 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalAccessibility
@@ -54,6 +60,7 @@ import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.Attr
 import app.berth.terminal.CellRange
 import app.berth.terminal.CursorShape
+import app.berth.terminal.GridGeometry
 import app.berth.terminal.MouseButton
 import app.berth.terminal.MouseTracking
 import app.berth.terminal.SelectionMode
@@ -211,6 +218,12 @@ fun TerminalCanvas(
     sink: TerminalInputSink,
     viewport: TerminalViewport,
     modifier: Modifier = Modifier,
+    /**
+     * Room between the grid and the canvas's edges that the canvas leaves undrawn but still takes
+     * touches in (spec C2 l.297, D1 l.1161): the Stage's gap under the header and at its sides. A
+     * finger or a mouse there lands on the nearest cell, the first row's under the header.
+     */
+    padding: PaddingValues = PaddingValues(0.dp),
     focusRequester: FocusRequester = remember { FocusRequester() },
     showCursor: Boolean = true,
     onFontSizeStep: (Int) -> Unit = {},
@@ -368,16 +381,14 @@ fun TerminalCanvas(
     val currentSelectionStarted by rememberUpdatedState(onSelectionStarted)
     val currentOnTap by rememberUpdatedState(onTap)
     val currentFontStep by rememberUpdatedState(onFontSizeStep)
+    val currentPadding by rememberUpdatedState(padding)
+    val layoutDirection by rememberUpdatedState(LocalLayoutDirection.current)
 
+    // The pointer takes the whole box, padding included; the grid, its size, its drawing and what a
+    // screen reader reads stand inside the padding, where the handlers translate every position to.
     Canvas(
         modifier
             .fillMaxSize()
-            .terminalAccessibility(accessibility)
-            .onSizeChanged { canvasSize = it }
-            .terminalInput(sink, predictiveText)
-            .focusRequester(focusRequester)
-            .focusable(interactionSource = interaction)
-            .onPreviewKeyEvent { handleComposeKeyEvent(it, currentSink) }
             .pointerHoverIcon(mouseIcon)
             .pointerInput(session.id) {
                 val hooks = MouseHooks(
@@ -395,7 +406,7 @@ fun TerminalCanvas(
                         mouseIcon = icon
                     },
                 )
-                terminalMouse(session, viewport, frames, { paintsState.value }, hooks)
+                terminalMouse(session, viewport, frames, { paintsState.value }, { gridIn(currentPadding, layoutDirection) }, hooks)
             }
             // Keyed on the session alone: a pinch changes the paints a dozen times and the gesture
             // must not restart under the fingers.
@@ -411,6 +422,9 @@ fun TerminalCanvas(
                     val p = paintsState.value
                     val sel = currentSelection
                     val slop = viewConfiguration.touchSlop
+                    // Positions from here on are the grid's, a finger in the padding standing just outside it.
+                    val grid = gridIn(currentPadding, layoutDirection)
+                    val downAt = down.position - grid.topLeft
                     val place: (Offset) -> Unit = { at ->
                         synchronized(emulator.lock) { sel?.let { it.extendTo(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, at)) } }
                     }
@@ -418,10 +432,10 @@ fun TerminalCanvas(
                     // A handle under the finger: drag that end of the selection. The end follows the
                     // finger's travel from the cell the handle marks, not the cell under the finger,
                     // which is a row off (below a hanging handle, above a flipped one).
-                    val hit = if (sel != null) handleAt(sel, frames.front, down.position, p, handleRadiusPx, handleReachPx, size.width.toFloat(), size.height.toFloat()) else null
+                    val hit = if (sel != null) handleAt(sel, frames.front, downAt, p, handleRadiusPx, handleReachPx, grid.width, grid.height) else null
                     if (sel != null && hit != null && synchronized(emulator.lock) { sel.grab(emulator, hit.handle) }) {
                         down.consume()
-                        dragSelection(emulator, viewport, size.height.toFloat()) { at ->
+                        dragSelection(emulator, viewport, grid) { at ->
                             synchronized(emulator.lock) { sel.moveTo(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, at + hit.offset)) }
                         }
                         sel.release()
@@ -432,14 +446,16 @@ fun TerminalCanvas(
                     // the release sends Tab (spec D1); with the double tap set to nothing there is none.
                     val secondTap = currentDoubleTap != DoubleTapAction.NOTHING && lastTapUp != 0L &&
                         down.uptimeMillis - lastTapUp <= viewConfiguration.doubleTapTimeoutMillis &&
-                        (down.position - lastTapAt).getDistance() <= slop * 2
+                        (downAt - lastTapAt).getDistance() <= slop * 2
                     val selectsOnSecondTap = secondTap && currentDoubleTap == DoubleTapAction.SELECT_WORD && sel != null
                     lastTapUp = 0L
 
                     // A link under the finger is underlined from the moment it lands and until the
                     // gesture turns out to be anything but a tap on it (spec A60). While the application
                     // tracks the mouse a tap is its click, so a link is plain text to the finger.
-                    val (downCol, downRow) = p.cellAt(down.position)
+                    val downCell = GridGeometry.cellAt(downAt.x, downAt.y, p.cellWidth, p.cellHeight, emulator.cols, emulator.rows)
+                    val downCol = downCell.col
+                    val downRow = downCell.row
                     val linkId = if (currentLinkTap != null && sel?.active != true && emulator.mouseTracking == MouseTracking.NONE) frames.front.linkAt(downRow, downCol) else 0
                     pressedLink = linkId
                     val linkUrl = if (linkId != 0) emulator.links.url(linkId) else null
@@ -474,9 +490,9 @@ fun TerminalCanvas(
                         if (event == null) {
                             // Long-press: a word selection at the pressed cell, then a drag grows it by words.
                             pressedLink = 0
-                            synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.WORD) }
+                            synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, downAt), SelectionMode.WORD) }
                             currentSelectionStarted()
-                            dragSelection(emulator, viewport, size.height.toFloat(), place)
+                            dragSelection(emulator, viewport, grid, place)
                             return@awaitEachGesture
                         }
                         val pressed = event.changes.filter { it.pressed }
@@ -519,7 +535,7 @@ fun TerminalCanvas(
                                         // A tap away from the handles dismisses a selection and does nothing else.
                                         sel?.active == true -> sel.clear()
                                         selectsOnSecondTap -> {
-                                            synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.WORD) }
+                                            synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, downAt), SelectionMode.WORD) }
                                             currentSelectionStarted()
                                         }
                                         // Tab after any word the keyboard is still composing, as the Deck's key sends it.
@@ -531,16 +547,14 @@ fun TerminalCanvas(
                                         linkUrl != null -> currentLinkTap?.invoke(LinkTap(linkUrl, frames.front.linkText(downRow, downCol)))
                                         else -> {
                                             lastTapUp = up
-                                            lastTapAt = down.position
-                                            val col = (down.position.x / p.cellWidth).toInt()
-                                            val row = (down.position.y / p.cellHeight).toInt()
+                                            lastTapAt = downAt
                                             focusRequester.requestFocus()
                                             if (currentTap == TapAction.SHOW_KEYBOARD) {
                                                 currentOnTap()
                                                 keyboard?.show()
                                                 if (emulator.mouseTracking != MouseTracking.NONE) {
-                                                    emulator.encodeMouse(MouseButton.LEFT, col, row)?.let(session::send)
-                                                    emulator.encodeMouse(MouseButton.LEFT, col, row, release = true)?.let(session::send)
+                                                    emulator.encodeMouse(MouseButton.LEFT, downCol, downRow)?.let(session::send)
+                                                    emulator.encodeMouse(MouseButton.LEFT, downCol, downRow, release = true)?.let(session::send)
                                                 }
                                             }
                                         }
@@ -613,12 +627,12 @@ fun TerminalCanvas(
                                     pressedLink = 0
                                     if (selectsOnSecondTap) {
                                         // Double-tap and drag: whole lines from the tapped one to the finger.
-                                        synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, down.position), SelectionMode.LINE) }
+                                        synchronized(emulator.lock) { sel!!.start(emulator, bufferCellAt(emulator, p, viewport.scrollOffset, downAt), SelectionMode.LINE) }
                                         currentSelectionStarted()
                                         c.consume()
                                         // The move that crossed the slop is part of the drag: a finger already two rows down selects them now.
-                                        place(c.position)
-                                        dragSelection(emulator, viewport, size.height.toFloat(), place)
+                                        place(c.position - grid.topLeft)
+                                        dragSelection(emulator, viewport, grid, place)
                                         return@awaitEachGesture
                                     }
                                     if (abs(dy) > slop) {
@@ -637,14 +651,23 @@ fun TerminalCanvas(
                                 val lines = (acc / p.cellHeight).toInt()
                                 if (lines != 0) {
                                     acc -= lines * p.cellHeight
-                                    scrollBy(session, viewport, lines, (c.position.x / p.cellWidth).toInt(), (c.position.y / p.cellHeight).toInt())
+                                    val at = c.position - grid.topLeft
+                                    val cell = GridGeometry.cellAt(at.x, at.y, p.cellWidth, p.cellHeight, emulator.cols, emulator.rows)
+                                    scrollBy(session, viewport, lines, cell.col, cell.row)
                                 }
                                 c.consume()
                             }
                         }
                     }
                 }
-            },
+            }
+            .padding(padding)
+            .terminalAccessibility(accessibility)
+            .onSizeChanged { canvasSize = it }
+            .terminalInput(sink, predictiveText)
+            .focusRequester(focusRequester)
+            .focusable(interactionSource = interaction)
+            .onPreviewKeyEvent { handleComposeKeyEvent(it, currentSink) },
     ) {
         drawIntoCanvas { canvas ->
             // Read here and nowhere in composition: output invalidates this draw and nothing above it.
@@ -732,19 +755,20 @@ private fun AwaitPointerEventScope.currentEventUptime(): Long =
     currentEvent.changes.firstOrNull()?.uptimeMillis ?: android.os.SystemClock.uptimeMillis()
 
 /**
- * Follows one finger with [place] until it lifts. Held past the top or bottom edge, the view scrolls
- * a line that way every [AUTOSCROLL_MS] and the selection follows, so a drag reaches into history.
+ * Follows one finger with [place] until it lifts, at its position on the [grid]. Held past the
+ * grid's top or bottom edge, the view scrolls a line that way every [AUTOSCROLL_MS] and the
+ * selection follows, so a drag reaches into history.
  */
 private suspend fun AwaitPointerEventScope.dragSelection(
     emulator: TerminalEmulator,
     viewport: TerminalViewport,
-    height: Float,
+    grid: Rect,
     place: (Offset) -> Unit,
 ) {
     var last: Offset? = null
     while (true) {
         val held = last
-        val outside = held != null && (held.y < 0f || held.y > height)
+        val outside = held != null && (held.y < 0f || held.y > grid.height)
         val event = if (outside) withTimeoutOrNull(AUTOSCROLL_MS) { awaitPointerEvent(PointerEventPass.Main) } else awaitPointerEvent(PointerEventPass.Main)
         if (event == null) {
             val at = held!!
@@ -758,9 +782,22 @@ private suspend fun AwaitPointerEventScope.dragSelection(
         }
         val c = event.changes.firstOrNull { it.pressed } ?: break
         c.consume()
-        last = c.position
-        place(c.position)
+        val at = c.position - grid.topLeft
+        last = at
+        place(at)
     }
+}
+
+/**
+ * Where the grid stands in a canvas's pointer area: inside [padding], by the pixels the layout's
+ * own padding takes, so a position less its top-left is the one the grid was drawn at.
+ */
+internal fun PointerInputScope.gridIn(padding: PaddingValues, direction: LayoutDirection): Rect {
+    val left = padding.calculateLeftPadding(direction).roundToPx()
+    val top = padding.calculateTopPadding().roundToPx()
+    val right = padding.calculateRightPadding(direction).roundToPx()
+    val bottom = padding.calculateBottomPadding().roundToPx()
+    return Rect(left.toFloat(), top.toFloat(), (size.width - right).toFloat(), (size.height - bottom).toFloat())
 }
 
 /** One selection handle: the centre of its disc and whether it hangs above its row (shoulder pointing down) for want of room below. */
