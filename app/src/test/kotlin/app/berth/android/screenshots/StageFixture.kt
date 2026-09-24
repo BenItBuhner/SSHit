@@ -17,7 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -72,11 +72,16 @@ object StageFixture {
         return session
     }
 
-    /** The environment of a tab with no shell behind it: nothing to log in with, every key trusted, no network to wait on. */
-    private val NoShell = object : SessionEnvironment {
+    /**
+     * The environment of a tab with no shell behind it: nothing to log in with, every key trusted, and
+     * a network that never comes back, since the real monitor's flow neither emits nor ends between
+     * outages. A tab that reconnects when a test did not mean it to waits out its retry, so the test's
+     * own assertion is what fails; an empty flow ended the retry's wait with NoSuchElementException.
+     */
+    val NoShell: SessionEnvironment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
-        override val networkAvailable: Flow<Unit> = emptyFlow()
+        override val networkAvailable: Flow<Unit> = MutableSharedFlow()
         override fun onClipboardText(host: Host, text: String) = Unit
     }
 
