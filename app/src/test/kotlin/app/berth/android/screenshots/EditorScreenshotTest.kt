@@ -369,7 +369,10 @@ class EditorScreenshotTest {
 
         compose.onNodeWithText(SHARED_APACHE).performClick()
         val origins = "From github.com/google/dagger at dagger-2.60.1: LICENSE.txt; github.com/jspecify/jspecify at v1.0.0: LICENSE;"
-        compose.waitUntil(5_000) { compose.onAllNodesWithText(origins, substring = true).fetchSemanticsNodes().isNotEmpty() }
+        // The origin line is there from the first frame; the text is read off the main thread, and until it lands the
+        // sheet stands at the header's height, so the frame waits for the text's own heading.
+        val terms = "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(terms, substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(origins, substring = true).assertIsDisplayed()
         capture("settings-licence-apache-shared$suffix")
         compose.assertNoTextCut("the shared Apache text$suffix")
