@@ -63,7 +63,6 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
@@ -787,11 +786,10 @@ private fun StageBody(
                 viewport = viewport,
                 focusRequester = focusRequester,
                 showCursor = live,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .alpha(frameAlpha),
+                modifier = Modifier.fillMaxSize(),
                 // The gap under the header and at the sides is the terminal's (spec C2 l.297, D1 l.1161): drawn clear, tapped as its nearest cell.
                 padding = PaddingValues(start = 4.dp, top = 4.dp, end = 4.dp),
+                frameAlpha = frameAlpha,
                 // Each D1 gesture as Settings › Gestures assigns it; a gesture set to nothing is wired to nothing.
                 onFontSizeStep = { step ->
                     if (terminalSettings.pinch == PinchAction.FONT_SIZE) {

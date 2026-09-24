@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -224,6 +225,11 @@ fun TerminalCanvas(
      * finger or a mouse there lands on the nearest cell, the first row's under the header.
      */
     padding: PaddingValues = PaddingValues(0.dp),
+    /**
+     * How opaque the grid draws (a tab that is not Live fades). Its layer is the grid's box, not the
+     * padded one, so what the grid draws past its edges stays cut in a faded frame.
+     */
+    frameAlpha: Float = 1f,
     focusRequester: FocusRequester = remember { FocusRequester() },
     showCursor: Boolean = true,
     onFontSizeStep: (Int) -> Unit = {},
@@ -662,6 +668,7 @@ fun TerminalCanvas(
                 }
             }
             .padding(padding)
+            .alpha(frameAlpha)
             .terminalAccessibility(accessibility)
             .onSizeChanged { canvasSize = it }
             .terminalInput(sink, predictiveText)
