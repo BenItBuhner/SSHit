@@ -3,17 +3,25 @@ package app.berth.android.ui.tabs
 import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performCustomAccessibilityActionWithLabel
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
@@ -34,6 +42,7 @@ import app.berth.domain.model.Workspace
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -141,6 +150,43 @@ class NoticeSlotTest {
         compose.waitForIdle()
         compose.onNodeWithText("Landed in /tmp").assertIsDisplayed()
         compose.onAllNodesWithText("Sessions keep running. Detach all from the notification.").assertCountEquals(0)
+    }
+
+    /**
+     * Spec, Snackbar: bottom, above the Deck. The bar stands on the chrome the Stage records at the
+     * bottom edge, so it rests over none of the Deck's keys, for Reopen's six seconds or for as long
+     * as Landed is held (review #7 found it over the middle keys); and the state pill, standing on
+     * that chrome too, clears the bar's whole band.
+     */
+    @Test
+    fun `the bar stands on the Stage's chrome, over none of the Deck, and the state pill clears its whole band`() {
+        val edge = BottomEdge()
+        compose.setContent {
+            val density = LocalDensity.current
+            BerthTheme(InterfaceTheme.DEFAULT) {
+                CompositionLocalProvider(LocalBottomEdge provides edge) {
+                    Box(Modifier.fillMaxSize()) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .testTag("chrome")
+                                .onSizeChanged { edge.chrome = with(density) { it.height.toDp() } },
+                        )
+                        NoticeSlot(notices = mapOf("landed" to Notice("Landed in /tmp", "Paste path") {}), modifier = Modifier.align(Alignment.BottomCenter))
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val chromeTop = compose.onNodeWithTag("chrome").fetchSemanticsNode().boundsInRoot.top
+        for (text in listOf("Landed in /tmp", "Paste path")) {
+            val bottom = compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.bottom
+            assertTrue("$text ends at $bottom px, over the chrome from $chromeTop px", bottom <= chromeTop + 0.5f)
+        }
+        assertTrue("a band is recorded: ${edge.noticeBand}", edge.noticeBand >= 44.dp)
+        assertEquals("the pill clears the whole band", edge.noticeBand, edge.pillClearance)
     }
 
     /**

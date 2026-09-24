@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.union
@@ -47,6 +48,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import app.berth.android.session.ClosedTab
 import app.berth.android.session.PaneSide
@@ -427,15 +429,15 @@ fun NoticeSlot(notices: Map<Any, Notice?>, modifier: Modifier = Modifier) {
 private class Kept<T>(var value: T)
 
 /**
- * What stands at the window's bottom edge, above the keyboard and the navigation bar, so the two
- * things that float there agree by construction and not by their sizes happening to: each
- * [NoticeBar] that is showing records the height of its band (the bar and the 12 dp under it)
- * under a key of its own while it is composed, and the Stage records the height of the chrome it
- * has across the bottom (the Deck, or its strip, or nothing on a detached frame). The Stage's
- * state pill, which floats just above that chrome, reads [pillClearance]: how far the tallest bar
- * reaches past the chrome, and so how far the pill has to stand up to be clear of it. One per
- * shell, through [LocalBottomEdge]; a bar or a Stage composed outside one talks to the default,
- * which is the same rule with nobody else listening.
+ * What stands at the window's bottom edge, above the keyboard and the navigation bar, so the
+ * things that float there agree by construction and not by their sizes happening to: the Stage
+ * records the height of the chrome it has across the bottom (the Deck, or its strip, or nothing on
+ * a detached frame), and each [NoticeBar] stands on that chrome, above the Deck (spec, Snackbar),
+ * so it covers none of its keys, and records the height of its band (the bar and the 12 dp under
+ * it) under a key of its own while it is composed. The Stage's state pill, which floats just above
+ * that chrome too, reads [pillClearance]: how far the pill has to stand up to be clear of the
+ * tallest bar. One per shell, through [LocalBottomEdge]; a bar or a Stage composed outside one
+ * talks to the default, which is the same rule with nobody else listening.
  */
 class BottomEdge {
     private val bands = mutableStateMapOf<Any, Dp>()
@@ -443,11 +445,11 @@ class BottomEdge {
     /** The height of the Stage's bottom chrome, without the insets it pads for; 0 while it has none. */
     var chrome: Dp by mutableStateOf(0.dp)
 
-    /** The tallest notice band showing now, without the insets it stands on; 0 while none is. */
+    /** The tallest notice band showing now, without the insets and the chrome it stands on; 0 while none is. */
     val noticeBand: Dp get() = bands.values.maxOfOrNull { it } ?: 0.dp
 
-    /** How far the Stage's state pill has to stand above the chrome to be clear of every bar showing. */
-    val pillClearance: Dp get() = (noticeBand - chrome).coerceAtLeast(0.dp)
+    /** How far the Stage's state pill has to stand above the chrome to be clear of every bar showing: the bars stand on the chrome, so their whole band. */
+    val pillClearance: Dp get() = noticeBand
 
     fun setBand(key: Any, height: Dp) {
         bands[key] = height
@@ -462,8 +464,8 @@ val LocalBottomEdge = compositionLocalOf { BottomEdge() }
 
 /**
  * The Stage's one-line notice with one action, `Closed prod-web · Reopen` (spec C3, Closing) and
- * `Notifications are off · Settings` (spec C21): a full-radius bar on `surface.3` above the
- * keyboard and the navigation bar, Caption text, a middle dot, the action in accent. It stays
+ * `Notifications are off · Settings` (spec C21): a full-radius bar on `surface.3` above the Deck,
+ * the keyboard and the navigation bar, Caption text, a middle dot, the action in accent. It stays
  * composed and [visible] drives it, so the exit animates; the owner decides when it goes. A line
  * that has to be read whole (`Sessions keep running. Detach all from the notification.`, spec
  * Part B) asks for [maxLines] of two and the bar grows to hold it at the font cap, its radius
@@ -478,7 +480,9 @@ fun NoticeBar(visible: Boolean, text: String, action: String, onAction: () -> Un
     Box(
         modifier
             .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)),
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))
+            // Read at placement, so the Deck's unfolding moves the bar without composing it again.
+            .offset { IntOffset(0, -edge.chrome.roundToPx()) },
         contentAlignment = Alignment.BottomCenter,
     ) {
         AnimatedVisibility(

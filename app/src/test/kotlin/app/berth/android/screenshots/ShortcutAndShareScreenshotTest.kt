@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -41,6 +42,7 @@ import app.berth.android.session.TerminalSession
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.AppViewModel
 import app.berth.android.ui.HeldPaths
+import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.android.ui.theme.BerthType
@@ -267,6 +269,10 @@ class ShortcutAndShareScreenshotTest {
             assertEquals(HeldPaths(quoted, 1), graph.viewModel.heldPaths.value[session.id])
             settle(600)
             assertFalse("nothing reached the alternate screen", session.emulator.screenText().any { it.contains(report.name) })
+            // Above the Deck (spec, Snackbar): for as long as the path is held, no key is under the bar.
+            val action = compose.onNodeWithText(AppViewModel.PASTE_PATH).fetchSemanticsNode().boundsInRoot
+            val deckTop = compose.onAllNodes(hasTestTag(DeckKeyTag), useUnmergedTree = true).fetchSemanticsNodes().minOf { it.boundsInRoot.top }
+            assertTrue("the bar's action ends at ${action.bottom} px, over the Deck from $deckTop px", action.bottom <= deckTop + 0.5f)
             capture("share-landed-held")
             val line = compose.onNode(hasText(AppViewModel.LANDED_IN_TMP), useUnmergedTree = true).fetchSemanticsNode().textLayout()
             assertNotNull("the notice has a layout", line)

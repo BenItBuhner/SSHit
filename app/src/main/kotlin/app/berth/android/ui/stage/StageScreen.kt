@@ -849,9 +849,8 @@ private fun StageBody(
             }
         }
 
-        // A notice bar showing at the window's bottom edge reaches past the chrome under this pill
-        // when that chrome is short (the strip) or gone (a detached frame): the pill stands up by that
-        // much, read from the edge, so the two never meet whatever either grows to.
+        // A notice bar showing stands on the chrome under this pill, as the pill does: the pill stands
+        // up by the bar's band, read from the edge, so the two never meet whatever either grows to.
         val edge = LocalBottomEdge.current
         StatePill(
             state = record.state,
@@ -1014,8 +1013,8 @@ private val StatePillHeight = 32.dp
  * from [retryIn], so the minute tick and the 1 Hz backoff tick recompose the pill alone and the
  * Stage around it never re-runs for either. While a jump chain is being made, [via] names the hop
  * (`Connecting via bastion (1 of 2)…`), so a slow or failing hop is seen as that hop. [clearance]
- * is how far above its 12 dp the pill stands while a notice bar reaches up past the chrome under
- * it ([app.berth.android.ui.tabs.BottomEdge.pillClearance]).
+ * is how far above its 12 dp the pill stands while a notice bar stands on the chrome under it
+ * ([app.berth.android.ui.tabs.BottomEdge.pillClearance]).
  */
 @Composable
 internal fun StatePill(
