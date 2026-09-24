@@ -12,10 +12,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -228,8 +231,7 @@ fun Deck(
                         .fillMaxWidth()
                         .height(rowHeight)
                         .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = DeckEdge + GripWidth + DeckGap),
-                    horizontalArrangement = Arrangement.spacedBy(DeckGap),
+                        .padding(start = GripTarget, end = DeckEdge - DeckGap / 2),
                 ) {
                     for (k in keys) {
                         DeckKeyView(
@@ -237,7 +239,7 @@ fun Deck(
                             latch = input.latch,
                             enabled = enabled && editing == null,
                             haptics = haptics,
-                            modifier = Modifier.width(48.dp).fillMaxHeight(),
+                            modifier = Modifier.width(48.dp + DeckGap).fillMaxHeight(),
                             onAction = { input.dispatch(it, layer) },
                             onHold = {},
                         )
@@ -357,30 +359,76 @@ fun deckKeyHeightNote(setting: Int, density: DensityTokens): String? {
     return if (height < setting.coerceIn(MIN_KEY_DP, MAX_KEY_DP).dp) "${height.value.roundToInt()} dp under Compact" else null
 }
 
-/** Gap between Deck keys and between the keys and the strip's edges (A11). */
+/** Gap between Deck key faces, and above and below them (A11); half of each gap across is the target's on either side. */
 private val DeckGap = 4.dp
 
-/** Deck strip side padding. */
+/** The Deck's trailing edge, past the layer key's face; the layer key's target takes it, and it gives first on a short row. */
 private val DeckEdge = 8.dp
 
-/** Touch column of the Grip; the 6 × 24 pill is centred in it. */
-private val GripWidth = 20.dp
+/** The Grip's target where the row has room (spec l.102's least target): the leading 8 dp edge, its column, and half the gap to the first key. */
+private val GripTarget = 44.dp
+
+/** A Deck key's least target across (spec l.102, Deck keys 40 wide); the Grip gives way to it and no lower. */
+private val KeyTarget = 40.dp
+
+/** The layer key's face at its widest; its target adds half a gap before it and [DeckEdge] after. */
+private val LayerKeyFace = 40.dp
 
 /**
- * A key's face inside the slot that takes its touch: the slot is the row's full height, so the
- * [DeckGap] above and below the face is the key's to a finger and to a reader at every key height,
- * and only the face between the gaps is drawn. Goes after the modifiers that take the touch and
- * name the key, and before what the key draws and hangs from it (a popover, a coach mark).
+ * A key's face inside the slot that takes its touch: the slot is the row's full height and its
+ * target's width, so the [DeckGap] above and below the face and half the gap to each neighbour are
+ * the key's to a finger and to a reader at every key height, and only the face is drawn. The layer
+ * key's face ends [end] short of the Deck's trailing edge instead. Goes after the modifiers that
+ * take the touch and name the key, and before what the key draws and hangs from it (a popover, a
+ * coach mark).
  */
-internal fun Modifier.keyFace(): Modifier = padding(vertical = DeckGap)
+internal fun Modifier.keyFace(end: Dp = DeckGap / 2): Modifier = padding(start = DeckGap / 2, end = end, top = DeckGap, bottom = DeckGap)
 
 /** [keyFace] with the key's rounded fill. */
 @Composable
-internal fun Modifier.keyFace(fill: Color): Modifier = keyFace().clip(RoundedCornerShape(BerthRadius.key)).background(fill)
+internal fun Modifier.keyFace(fill: Color, end: Dp = DeckGap / 2): Modifier = keyFace(end).clip(RoundedCornerShape(BerthRadius.key)).background(fill)
 
 /**
- * The most a key grows to on a wide row (#15 review, nit 8): on a phone seven keys divide the row
- * and each is 43 dp; on a tablet the same seven would be 170 and the five of the compact Deck
+ * What a Deck row's width gives each of its targets (spec l.102, C5): the Grip, or the space in its
+ * place on the second row; each key, the arrow keys and the Nub counted one by one; and the layer
+ * key. Every dp of the row is a target's: the Grip's takes the leading edge and half the gap to the
+ * first key, a key's the half gaps beside its face, the layer key's its half gap and the trailing
+ * edge. The keys share what the Grip's 44 and the layer key's 50 leave, up to [KeyMaxWidth] a face.
+ * Short of 40 a key, the trailing edge gives first, the layer key's target down to 40, then the
+ * Grip's, to 40 and no lower. A row with less than 40 for each of its targets gives every target,
+ * the Grip and the layer key too, the same share.
+ */
+internal data class DeckRowTargets(val grip: Dp, val key: Dp, val layerKey: Dp) {
+    /** The layer key's face: 40 while its target has room for it and the gaps' share, then what the target leaves. */
+    val layerFace: Dp get() = minOf(LayerKeyFace, layerKey - DeckGap)
+
+    /** What is left of the trailing edge past the layer key's face. */
+    val trailingEdge: Dp get() = layerKey - DeckGap / 2 - layerFace
+}
+
+/** [DeckRowTargets] for a row [width] wide whose layer holds [keys] targets between the Grip and the layer key. */
+internal fun deckRowTargets(width: Dp, keys: Int): DeckRowTargets {
+    val count = keys + 2
+    if (width < KeyTarget * count) return (width / count).let { DeckRowTargets(it, it, it) }
+    val layerKey = DeckGap / 2 + LayerKeyFace + DeckEdge
+    val share = ((width - GripTarget - layerKey) / keys).coerceAtMost(KeyMaxWidth + DeckGap)
+    if (share >= KeyTarget) return DeckRowTargets(GripTarget, share, layerKey)
+    val run = KeyTarget * keys
+    val layer = (width - GripTarget - run).coerceIn(KeyTarget, layerKey)
+    val grip = (width - run - layer).coerceIn(KeyTarget, GripTarget)
+    return DeckRowTargets(grip, (width - grip - layer) / keys, layer)
+}
+
+/** The targets a slot holds: the arrow slot one per control (four keys, or the Nub and four keys), any other one. */
+internal fun DeckKey.targets(arrows: DeckArrows): Int = if (!nub) 1 else when (arrows) {
+    DeckArrows.NUB -> 1
+    DeckArrows.FOUR_KEYS -> 4
+    DeckArrows.BOTH -> 5
+}
+
+/**
+ * The most a key's face grows to on a wide row (#15 review, nit 8): on a 411 dp phone seven keys
+ * divide the row and each face is 41 dp; on a tablet the same seven would be 170 and the five of the compact Deck
  * 290, `Ctrl` wider than the word `Paste` is tall. Past this the run stops growing and sits
  * centred between the grip and the layer key, the way a keyboard's keys keep their size on a
  * wider keyboard. The snippets slot is the exception: its chips scroll, and it takes the row.
@@ -421,99 +469,87 @@ private fun DeckRow(
     // Right is the next layer and left the one before (spec D2), in the hand: a pointer's axis is not
     // mirrored with a left-reach row, and the layers have no side of their own.
     val onLayerStep: ((Int) -> Unit)? = if (settings.layerSwipe && layerCount > 1) { dir -> if (dir > 0) onNext() else onPrevious() } else null
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(height)
-            .padding(horizontal = DeckEdge),
-        horizontalArrangement = Arrangement.spacedBy(DeckGap),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (grip != null) grip() else Spacer(Modifier.width(GripWidth))
-        // The keys share what is left between the grip and the layer key; capped, the run is centred in it.
-        Row(
-            Modifier.weight(1f).fillMaxHeight(),
-            horizontalArrangement = Arrangement.spacedBy(DeckGap, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            layer.keys.forEachIndexed { slot, key ->
-                val weight = if (key.nub) {
-                    when (layout.arrows) {
-                        DeckArrows.NUB -> 1f
-                        DeckArrows.FOUR_KEYS -> 3f
-                        DeckArrows.BOTH -> 4f
+    BoxWithConstraints(Modifier.fillMaxWidth().height(height)) {
+        val targets = deckRowTargets(maxWidth, layer.keys.sumOf { it.targets(layout.arrows) })
+        // A key run capped at its widest stands centred between the Grip and the layer key; otherwise the keys share the run by their targets.
+        val capped = targets.key >= KeyMaxWidth + DeckGap
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(targets.grip).fillMaxHeight()) { grip?.invoke() }
+            Row(
+                Modifier.weight(1f).fillMaxHeight(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                layer.keys.forEachIndexed { slot, key ->
+                    val weight = key.targets(layout.arrows).toFloat()
+                    val base = when {
+                        key.snippets || !capped -> Modifier.weight(weight).fillMaxHeight()
+                        else -> Modifier.width(targets.key * weight).fillMaxHeight()
                     }
-                } else 1f
-                val base = if (key.snippets) {
-                    Modifier.weight(weight).fillMaxHeight()
-                } else {
-                    Modifier
-                        .weight(weight, fill = false)
-                        .widthIn(min = if (weight == 1f) 40.dp else 0.dp, max = KeyMaxWidth * weight + DeckGap * (weight - 1))
-                        .fillMaxWidth()
-                        .fillMaxHeight()
-                }
-                val selected = editing != null && editing.selectedSlot == slot
-                Box(
-                    if (editing == null) base else base.editableSlot(slot, key.editorLabel(snippets), editingState, keyCount, drag, patterns, mirror),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    SlotContent(
-                        key = key,
-                        arrows = layout.arrows,
-                        layer = layer,
-                        input = input,
-                        enabled = enabled && editing == null,
-                        haptics = haptics,
-                        selected = selected,
-                        settings = settings,
-                        onLayerStep = onLayerStep,
-                        onStrip = onStrip,
-                        snippets = snippets,
-                        nubMark = nubMark,
-                    )
-                    if (editing != null && key.isEmpty) {
-                        Text("empty", style = BerthType.caption.keySized(), color = c.text3)
-                    }
-                    if (selected) {
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .keyFace()
-                                .padding(bottom = 4.dp)
-                                .size(4.dp)
-                                .clip(CircleShape)
-                                .background(c.accent),
+                    val selected = editing != null && editing.selectedSlot == slot
+                    Box(
+                        if (editing == null) base else base.editableSlot(slot, key.editorLabel(snippets), editingState, keyCount, drag, patterns, mirror),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        SlotContent(
+                            key = key,
+                            arrows = layout.arrows,
+                            layer = layer,
+                            input = input,
+                            enabled = enabled && editing == null,
+                            haptics = haptics,
+                            selected = selected,
+                            settings = settings,
+                            onLayerStep = onLayerStep,
+                            onStrip = onStrip,
+                            snippets = snippets,
+                            nubMark = nubMark,
                         )
+                        if (editing != null && key.isEmpty) {
+                            Text("empty", style = BerthType.caption.keySized(), color = c.text3)
+                        }
+                        if (selected) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .keyFace()
+                                    .padding(bottom = 4.dp)
+                                    .size(4.dp)
+                                    .clip(CircleShape)
+                                    .background(c.accent),
+                            )
+                        }
                     }
                 }
             }
-        }
-        if (layerCount > 1) {
-            var picking by remember { mutableStateOf(false) }
-            // The picker hangs from the key: the menu is placed from the box that holds it.
-            Box(Modifier.width(40.dp).fillMaxHeight()) {
-                LayerKey(
+            if (layerCount > 1) {
+                var picking by remember { mutableStateOf(false) }
+                // The picker hangs from the key: the menu is placed from the box that holds it.
+                Box(Modifier.width(targets.layerKey).fillMaxHeight()) {
+                    LayerKey(
+                        enabled = enabled,
+                        haptics = haptics,
+                        layerName = layer.name,
+                        modifier = Modifier.fillMaxSize(),
+                        faceEnd = targets.trailingEdge,
+                        onNext = onNext,
+                        onPrevious = onPrevious,
+                        onPick = { picking = true },
+                        onHold = onLayerHold,
+                    )
+                    Box(Modifier.matchParentSize().keyFace(targets.trailingEdge)) {
+                        LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
+                    }
+                }
+            } else {
+                DeckEditorKey(
                     enabled = enabled,
                     haptics = haptics,
-                    layerName = layer.name,
-                    modifier = Modifier.fillMaxSize(),
-                    onNext = onNext,
-                    onPrevious = onPrevious,
-                    onPick = { picking = true },
-                    onHold = onLayerHold,
+                    modifier = Modifier.width(targets.layerKey).fillMaxHeight(),
+                    faceEnd = targets.trailingEdge,
+                    onOpen = onLayerHold,
                 )
-                Box(Modifier.matchParentSize().keyFace()) {
-                    LayerPickerMenu(picker, expanded = picking && enabled, onDismiss = { picking = false })
-                }
             }
-        } else {
-            DeckEditorKey(
-                enabled = enabled,
-                haptics = haptics,
-                modifier = Modifier.width(40.dp).fillMaxHeight(),
-                onOpen = onLayerHold,
-            )
         }
     }
 }
@@ -539,7 +575,7 @@ private fun SlotContent(
 ) {
     @Composable
     fun arrowKeys(modifier: Modifier) {
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(modifier) {
             for (code in listOf(DeckKeyCode.LEFT, DeckKeyCode.DOWN, DeckKeyCode.UP, DeckKeyCode.RIGHT)) {
                 DeckKeyView(
                     key = DeckKey(tap = DeckAction.Key(code)),
@@ -559,24 +595,21 @@ private fun SlotContent(
         key.nub -> when (arrows) {
             DeckArrows.NUB -> Nub(enabled = enabled, haptics = haptics, modifier = Modifier.fillMaxSize(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
             DeckArrows.FOUR_KEYS -> arrowKeys(Modifier.fillMaxSize())
-            DeckArrows.BOTH -> Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            DeckArrows.BOTH -> Row(Modifier.fillMaxSize()) {
                 Nub(enabled = enabled, haptics = haptics, modifier = Modifier.weight(1f).fillMaxHeight(), selected = selected, mark = nubMark, onArrow = { input.onKey(it) })
-                arrowKeys(Modifier.weight(3f).fillMaxHeight())
+                arrowKeys(Modifier.weight(4f).fillMaxHeight())
             }
         }
         // The snippet chips scroll sideways, so a swipe across them is the scroll's and not the layer's.
         key.snippets -> if (snippets.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxSize().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(DeckGap),
-            ) {
+            Row(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
                 for (s in snippets) {
                     DeckKeyView(
                         key = DeckKey(tap = DeckAction.Snippet(s.id), display = s.name.take(16)),
                         latch = input.latch,
                         enabled = enabled,
                         haptics = haptics,
-                        modifier = Modifier.widthIn(min = 56.dp).fillMaxHeight(),
+                        modifier = Modifier.widthIn(min = 56.dp + DeckGap).fillMaxHeight(),
                         selected = selected,
                         onAction = { input.dispatch(it, layer) },
                         onHold = {},
@@ -648,7 +681,7 @@ private fun Modifier.editableSlot(
         awaitEachGesture {
             val down = awaitFirstDown()
             val slop = viewConfiguration.touchSlop
-            val step = size.width + DeckGap.toPx()
+            val step = size.width.toFloat()
             val dir = if (mirror) -1 else 1
             var lifted = false
             var lastX = down.position.x
@@ -726,8 +759,7 @@ private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDo
     val currentOnLongPress by rememberUpdatedState(onLongPress)
     Box(
         Modifier
-            .width(GripWidth)
-            .fillMaxHeight()
+            .fillMaxSize()
             .keyPressable(enabled = true, interactionSource = interaction, onPress = onTap)
             .pointerInput(Unit) {
                 awaitEachGesture {
@@ -1227,7 +1259,8 @@ fun Nub(
     ) {
         Canvas(
             Modifier
-                .size(40.dp)
+                .sizeIn(maxWidth = 40.dp, maxHeight = 40.dp)
+                .aspectRatio(1f)
                 .clip(CircleShape)
                 .background(if (pressed) c.surface4 else if (selected || focused) c.surface3 else c.surface2),
         ) {
@@ -1275,6 +1308,7 @@ private fun LayerKey(
     haptics: HapticFeedback,
     layerName: String,
     modifier: Modifier = Modifier,
+    faceEnd: Dp = DeckGap / 2,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onPick: () -> Unit,
@@ -1343,7 +1377,7 @@ private fun LayerKey(
                     }
                 }
             }
-            .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2),
+            .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2, end = faceEnd),
         contentAlignment = Alignment.Center,
     ) {
         BerthIcon(BerthIcons.moreHoriz, tint = if (focused) c.accent else c.text2)
@@ -1436,7 +1470,7 @@ fun DeckStrip(layerName: String, latch: ModifierLatch, onExpand: () -> Unit, mod
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onExpand)
             .semantics { contentDescription = "Deck collapsed, tap to show it" }
             .padding(bottom = reach)
-            .padding(horizontal = DeckEdge + GripWidth + DeckGap),
+            .padding(start = GripTarget + DeckGap / 2, end = DeckEdge),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Sized from the 20 dp strip like a key's text from its key, so the line holds at the interface's

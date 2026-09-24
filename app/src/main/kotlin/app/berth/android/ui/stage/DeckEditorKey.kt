@@ -14,6 +14,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import app.berth.android.ui.a11y.showsFocus
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -34,6 +36,7 @@ internal fun DeckEditorKey(
     enabled: Boolean,
     haptics: HapticFeedback,
     modifier: Modifier = Modifier,
+    faceEnd: Dp = 2.dp,
     onOpen: (() -> Unit)?,
 ) {
     val c = Berth.colors
@@ -52,7 +55,7 @@ internal fun DeckEditorKey(
                 patterns.keyTap()
                 onOpen?.invoke()
             }
-            .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2),
+            .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2, end = faceEnd),
         contentAlignment = Alignment.Center,
     ) {
         BerthIcon(BerthIcons.edit, tint = if (focused) c.accent else c.text2)

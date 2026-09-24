@@ -280,8 +280,9 @@ class DeckRailScreenshotTest {
         compose.onNode(hasContentDescription("Layer") and hasStateDescription("Nav/Fn")).assertIsDisplayed()
         val ctrl = key("Ctrl").fetchSemanticsNode().boundsInRoot
         val home = key("Home").fetchSemanticsNode().boundsInRoot
-        assertEquals("a key on the wide row stops at 120 dp", 120f, ctrl.width / compose.density.density, 0.5f)
-        assertEquals(120f, home.width / compose.density.density, 0.5f)
+        // A key's target is its face and half the gap either side.
+        assertEquals("a key's face on the wide row stops at 120 dp", 124f, ctrl.width / compose.density.density, 0.5f)
+        assertEquals(124f, home.width / compose.density.density, 0.5f)
         assertTrue("the second row is under the first", home.top >= ctrl.bottom)
         // Centred: the first key stands well in from the grip, not against it.
         val esc = key("Esc").fetchSemanticsNode().boundsInRoot

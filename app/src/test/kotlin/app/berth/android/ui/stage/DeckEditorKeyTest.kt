@@ -77,7 +77,7 @@ class DeckEditorKeyTest {
         mount(DeckLayout.default().compactForHardwareKeyboard(), onOpenDeckEditor = null)
         val key = compose.onNode(editorKey())
         key.assertIsNotEnabled()
-        assertEquals("the layer key's 40 dp", 40f, key.fetchSemanticsNode().size.width / compose.density.density, 0.5f)
+        assertEquals("the layer key's target: half the gap, its 40 dp face and the 8 dp trailing edge", 50f, key.fetchSemanticsNode().size.width / compose.density.density, 0.5f)
     }
 
     @Test
