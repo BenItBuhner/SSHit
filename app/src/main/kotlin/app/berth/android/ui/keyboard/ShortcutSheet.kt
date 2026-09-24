@@ -173,9 +173,10 @@ const val ChordCaptureTag = "chord-capture"
  * One chord as a line of C22's table: the action as the row's title in body, the keys in mono and
  * `text.2` at the trailing edge, right-aligned, on a row of a touch target's height (48 dp), since
  * the app's rows are the remap table's controls and the fixed rows keep step with them; the rows
- * meet, so the table's pitch is the row. A wide chord takes its width first and the action wraps
- * beside it, to two lines for the few long ones; the keys wrap past [keysMaxWidth] ([keysWidth]),
- * never clip. TalkBack hears the action first: "Next tab, Ctrl+Tab".
+ * meet, so the table's pitch is the row. At 1× the action and its keys are each one line on a
+ * phone, what would qualify an action said in the group's note; at the font cap either may take the
+ * second line a one-line text is given there, the keys wrapping past [keysMaxWidth] ([keysWidth]),
+ * never clipped. TalkBack hears the action first: "Next tab, Ctrl+Tab".
  */
 @Composable
 private fun ShortcutRow(entry: ShortcutEntry, keysMaxWidth: Dp) {
