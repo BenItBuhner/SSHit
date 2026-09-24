@@ -50,7 +50,10 @@ import org.robolectric.annotation.GraphicsMode
  * header's top and 1 dp above its foot lands on each. Under the foot the Stage's 4 dp padding is the
  * terminal's (spec C2 l.297, D1 l.1161), however far a target's reach would hang: a finger 1 dp and
  * 3 dp into it, under a tab, a group chip, the count tile and Overflow, clicks the terminal's first
- * row, and 1 dp in from either side its first or last column.
+ * row, and 1 dp in from either side its first or last column. Over a terminal the canvas's own hit
+ * takes that strip before any target's reach could, so the fixed slots' end at the foot is read over
+ * a body that takes no touch there, a Tunnels tab's empty state: the count tile and Overflow answer
+ * 1 dp above the foot, and 1 dp and 3 dp under it nothing does.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -91,20 +94,25 @@ class HeaderBandTest {
     @After
     fun tearDown() {
         live.close()
+        tunnels?.close()
         graph.close()
     }
 
-    private fun mount() {
+    /** A Tunnels tab put on stage instead of [live], closed with it. */
+    private var tunnels: TerminalSession? = null
+
+    /** The Stage with [tab] on it, once the strip and [ready], the tab's body, are up. */
+    private fun mount(tab: TerminalSession = live, ready: SemanticsMatcher = hasTestTag(TerminalTag)) {
         compose.setContent {
             val theme by graph.viewModel.interfaceTheme.collectAsState()
             BerthTheme(theme) {
                 Box(Modifier.fillMaxSize()) {
-                    StageScreen(graph.viewModel, live, heard, onOpenDrawer = {}, onOpenSessionSheet = { sessionSheets++ }, onEditHost = {})
+                    StageScreen(graph.viewModel, tab, heard, onOpenDrawer = {}, onOpenSessionSheet = { sessionSheets++ }, onEditHost = {})
                 }
             }
         }
         compose.waitUntil(10_000) { compose.onAllNodes(pihole).fetchSemanticsNodes().isNotEmpty() }
-        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(TerminalTag)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(ready).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
     }
 
@@ -262,6 +270,30 @@ class HeaderBandTest {
         compose.waitUntil(5_000) { graph.viewModel.interfaceTheme.value.density == Density.COMPACT }
         compose.waitForIdle()
         assertThePaddingIsTheTerminals("Compact")
+    }
+
+    @Test
+    fun `over a body that takes no touch under the header, the count tile and Overflow end at its foot`() {
+        tunnels = StageFixture.detachedTunnels().also { mount(it, ready = hasText("No tunnels on pi-hole.")) }
+        val foot = footDp()
+        val misses = ArrayList<String>()
+        for ((name, matcher) in listOf("the count tile" to countTile, "Overflow" to overflow)) {
+            for (dp in listOf(-1f, 1f, 3f)) {
+                val before = heardSoFar()
+                tap(centreX(matcher), foot + dp)
+                val took = heardSoFar().filter { (target, n) -> n != before[target] }.keys
+                val menu = menuOpen()
+                if (dp < 0 && took.isEmpty() && !menu) misses += "${-dp} dp above the foot, $name: nothing answered"
+                if (dp > 0 && (took.isNotEmpty() || menu)) {
+                    misses += "$dp dp under the foot, $name: " + (took + if (menu) listOf("Overflow's menu opened") else emptyList()).joinToString()
+                }
+                if (menu) {
+                    compose.onNode(sessionRow).performClick()
+                    compose.waitForIdle()
+                }
+            }
+        }
+        assertEquals("over the Tunnels tab each fixed slot answers above the header's foot and nothing under it", emptyList<String>(), misses)
     }
 
     private companion object {

@@ -9,6 +9,7 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
@@ -52,6 +53,18 @@ object StageFixture {
         val session = TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
         session.restoreFrame(frame(HOMELAB_LINES))
         return session
+    }
+
+    /**
+     * A Tunnels tab (spec C14) on pi-hole, detached seven minutes ago, and on a host with no forwards:
+     * its body is the empty state, which stands 48 dp down and takes no touch above it, so nothing
+     * of the body answers a finger just under the header.
+     */
+    fun detachedTunnels(now: Long = System.currentTimeMillis()): TerminalSession {
+        val pihole = host(now, "pi-hole", "pi-hole", "192.168.1.2", "pi", SwatchColor.MOSS, AuthMethod.AskEachTime)
+        val record = record(now, "t-pihole", pihole, Workspace.DEFAULT_ID, 3, 7, "", "")
+            .copy(title = "Tunnels \u00B7 pi-hole", cwd = null, lastCommand = null, kind = TabKind.Tunnels)
+        return TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
     }
 
     /**
