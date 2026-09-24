@@ -142,16 +142,19 @@ fun ShortcutSheet(
 }
 
 /** A [ListRow]'s horizontal padding and the gap it puts between its title and its trailing column. */
-private val ROW_PADDING = 12.dp
-private val COLUMN_GAP = 12.dp
+internal val ROW_PADDING = 12.dp
+internal val COLUMN_GAP = 12.dp
 
 /** The share of a row the keys keep when the action wants the whole line: two fifths, the action the three it is read by. */
-private const val KEYS_SHARE = 0.4f
+internal const val KEYS_SHARE = 0.4f
+
+/** What the action is lent over its measured line: the row lays the line out in whole pixels, and a line given its width to the pixel can come up a fraction short and wrap. */
+private val LINE_SLACK = 1.dp
 
 /**
  * How wide the keys may stand on a row before they wrap: the width the action's own line leaves
- * them (the row's [contentWidth] less the action set on one line in body and the gap between the
- * columns), and never less than [KEYS_SHARE] of the row. So a short action lends its spare width
+ * them (the row's [contentWidth] less the action set on one line in body, its [LINE_SLACK] and the
+ * gap between the columns), and never less than [KEYS_SHARE] of the row. So a short action lends its spare width
  * and `Ctrl+T · Ctrl+Shift+T` sits on one line beside `New tab`; an action too long for its line
  * wraps beside keys that keep two fifths, the larger share going to the column the eye scans, and
  * at the font cap the long action has three lines whole rather than four with the last cut. The
@@ -162,7 +165,7 @@ private fun keysWidth(action: String, contentWidth: Dp, measurer: TextMeasurer):
     val density = LocalDensity.current
     return remember(action, contentWidth, density.density, density.fontScale) {
         val line = with(density) { measurer.measure(action, style = BerthType.body, softWrap = false, maxLines = 1).size.width.toDp() }
-        (contentWidth - line - COLUMN_GAP).coerceAtLeast(contentWidth * KEYS_SHARE)
+        (contentWidth - line - LINE_SLACK - COLUMN_GAP).coerceAtLeast(contentWidth * KEYS_SHARE)
     }
 }
 
