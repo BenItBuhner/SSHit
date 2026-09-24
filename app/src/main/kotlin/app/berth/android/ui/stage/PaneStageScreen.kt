@@ -65,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -90,6 +91,7 @@ import app.berth.android.ui.tabs.TabCarry
 import app.berth.android.ui.theme.Berth
 import app.berth.android.ui.theme.BerthRadius
 import app.berth.android.ui.theme.BerthType
+import app.berth.android.ui.theme.DensityTokens
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
@@ -209,6 +211,7 @@ fun PaneStageScreen(
     // Ctrl+Shift+D and Ctrl+Shift+O (spec C22), for the Stage's chord dispatcher.
     val onSplit: (() -> Unit)? = if (panes == null && active != null) actions::splitActive else null
     val onUnsplit: (() -> Unit)? = panes?.let { p -> { actions.closePane(p.focused.other) } }
+    val onClosePane: (() -> Unit)? = panes?.let { p -> { actions.closePane(p.focused) } }
     val paneActions = PaneActions(
         split = onSplit ?: onUnsplit,
         focusOtherPane = panes?.let { p ->
@@ -234,6 +237,7 @@ fun PaneStageScreen(
             tools = activeTools,
             onSplit = onSplit,
             onUnsplit = onUnsplit,
+            onClosePane = onClosePane,
             onGroups = onGroups,
             focus = focus,
             layer = { tab, body ->
@@ -413,14 +417,14 @@ private fun PaneLayer(
 }
 
 /**
- * One pane: the header (the tab's swatch and title, the age of a detached frame, and × on the
- * focused pane to close the pane) over the tab's body. A touch in the unfocused pane focuses it,
- * seen on the way down and consumed by nobody, so the body's own gestures are untouched; the
- * focused pane's touches are its own, since a scroll in it has nothing to say to the manager. The
- * [DividerReach] along the pane's inner edge is the divider's band and says nothing on its own.
- * While a tab is carried over it the pane's surface steps up to say it will take the drop. To the
- * keyboard the pane, header and all, is the Stage's body region ([StageRegion.Body]), and the
- * focused pane's body is where a chord into the region lands (spec A11).
+ * One pane: the header (the tab's swatch and title, the age of a detached frame, and, where the
+ * header stands 40 dp, × on the focused pane to close the pane) over the tab's body. A touch in
+ * the unfocused pane focuses it, seen on the way down and consumed by nobody, so the body's own
+ * gestures are untouched; the focused pane's touches are its own, since a scroll in it has nothing
+ * to say to the manager. The [DividerReach] along the pane's inner edge is the divider's band and
+ * says nothing on its own. While a tab is carried over it the pane's surface steps up to say it
+ * will take the drop. To the keyboard the pane, header and all, is the Stage's body region
+ * ([StageRegion.Body]), and the focused pane's body is where a chord into the region lands (spec A11).
  */
 @Composable
 private fun Pane(
@@ -489,16 +493,39 @@ private fun Pane(
 }
 
 /**
+ * A pane header's height: the strip's (spec C3), so on a phone on its side and under Compact it
+ * shortens with the strip rather than standing taller than the window's own header and costing
+ * each pane rows; only the title's line at the interface's font cap stands taller (Body's 28.6 dp
+ * over Compact's 28), and the header takes that rather than cut it.
+ */
+@Composable
+internal fun paneHeaderHeight(): Dp {
+    // The line as the text lays it out: the density's own sp-to-dp scales large sizes less than the
+    // text's line does (22 sp at the 1.3 cap is 25 dp to it, 28.6 to the text), and would cut it.
+    val measurer = rememberTextMeasurer()
+    val titleLine = with(LocalDensity.current) { measurer.measure(" ", BerthType.bodyMedium, maxLines = 1).size.height.toDp() }
+    return maxOf(LocalTabStripStyle.current.height, titleLine)
+}
+
+/**
+ * Whether a pane header has its × (spec C23): "A pane header shows its × only where the header
+ * stands 40 dp; where it is shorter the pane closes from Overflow's Close pane." Shorter, under
+ * Compact beneath a status bar or on a phone on its side beneath one, the × would reach into the
+ * terminal's first row, and the Stage's Overflow offers Close pane beside Unsplit instead.
+ */
+@Composable
+internal fun paneHeaderHasClose(): Boolean = paneHeaderHeight() >= DensityTokens.Comfortable.header
+
+/**
  * The pane's header (spec C23): 20 dp swatch with the state dot, the title in Body, then the age
  * of a detached frame in Caption, and on the focused pane, at the pane's end, the × that closes the
- * pane (the tab stays in the strip). Transparent: the strip above has the fill, and the header is a label. Its
- * height is the strip's (spec C3), so on a phone on its side and under Compact it shortens with the
- * strip rather than standing taller than the window's own header and costing each pane rows; only
- * the title's line at the interface's font cap stands taller (Body's 28.6 dp over Compact's 28), and
- * the header takes that rather than cut it. The × is a 48 dp target on a 40 dp row, so its box
- * reaches 4 dp over the body's top edge (10 on Compact's 28), the row being too short to hold it
- * (spec A11); the header stands over the body for it, or a Tunnels or Files row flush under the
- * header would take that band and leave the × short of its target.
+ * pane (the tab stays in the strip). Transparent: the strip above has the fill, and the header is a
+ * label, [paneHeaderHeight] tall. The × stands only on the 40 dp header ([paneHeaderHasClose]), a
+ * 48 dp target on the row: the pane's clip takes the 4 dp above it, and the 4 dp below are the
+ * Stage's padding above the terminal's first row. The × takes that padding and no cell, the one
+ * exception to the padding being the terminal's (spec C2 l.297, A11). The header stands over the
+ * body for it, or a Tunnels or Files row flush under the header would take that band and leave the
+ * × short of its target.
  */
 @Composable
 private fun PaneHeader(
@@ -512,15 +539,12 @@ private fun PaneHeader(
     onClose: () -> Unit,
 ) {
     val c = Berth.colors
-    // A fixed height, not a least one: the × box's required 48 dp would stand a row that could grow to it at 48.
-    // The line as the text lays it out: the density's own sp-to-dp scales large sizes less than the
-    // text's line does (22 sp at the 1.3 cap is 25 dp to it, 28.6 to the text), and would cut it.
-    val measurer = rememberTextMeasurer()
-    val titleLine = with(LocalDensity.current) { measurer.measure(" ", BerthType.bodyMedium, maxLines = 1).size.height.toDp() }
+    val closes = focused && paneHeaderHasClose()
     Row(
         Modifier
             .fillMaxWidth()
-            .height(maxOf(LocalTabStripStyle.current.height, titleLine))
+            // A fixed height, not a least one: the × box's required 48 dp would stand a row that could grow to it at 48.
+            .height(paneHeaderHeight())
             .zIndex(1f)
             .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -542,7 +566,7 @@ private fun PaneHeader(
                 Text(ageText(lastLiveAt, ageTicker()), style = BerthType.caption, color = c.text3, maxLines = 1)
             }
         }
-        if (focused) {
+        if (closes) {
             IconAction(onClick = onClose, description = "Close pane") {
                 BerthIcon(BerthIcons.close, size = 16.dp)
             }

@@ -189,6 +189,11 @@ fun StageScreen(
     /** Overflow › Split and Unsplit (spec C3, C23), offered when the window fits two panes; one at a time. */
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
+    /**
+     * Overflow › Close pane (spec C23): the focused pane's, while two are up. Offered beside Unsplit
+     * only where the pane headers are too short for their × ([paneHeaderHasClose]).
+     */
+    onClosePane: (() -> Unit)? = null,
     /** Overflow › Groups: the groups overview (spec C8, "from the rail ... and from the Overflow"), the door a window without the drawer's GROUPS label has to it. */
     onGroups: () -> Unit = {},
     /** Lays out the body area for the active [tab] under the header, with the modifier that fills it. */
@@ -369,6 +374,7 @@ fun StageScreen(
                             onShareScreen = { (tab as? TerminalSession)?.let { tools.shareScreen(context, it) } },
                             onSplit = onSplit,
                             onUnsplit = onUnsplit,
+                            onClosePane = if (paneHeaderHasClose()) null else onClosePane,
                             onGroups = onGroups,
                         )
                     },
@@ -544,6 +550,7 @@ private fun StageOverflow(
     onShareScreen: () -> Unit = {},
     onSplit: (() -> Unit)? = null,
     onUnsplit: (() -> Unit)? = null,
+    onClosePane: (() -> Unit)? = null,
     onGroups: () -> Unit = {},
 ) {
     val c = Berth.colors
@@ -587,9 +594,11 @@ private fun StageOverflow(
                         item("Share screen text", action = onShareScreen)
                     }
                 }
-                // Split (spec C3 overflow, landscape and larger): a second tab on this host beside this one; Unsplit while two are up.
+                // Split (spec C3 overflow, landscape and larger): a second tab on this host beside this one; Unsplit while two
+                // are up, and Close pane beside it where the pane headers are too short for their × (spec C23).
                 if (onSplit != null) item("Split", action = onSplit)
                 if (onUnsplit != null) item("Unsplit", action = onUnsplit)
+                if (onClosePane != null) item("Close pane", action = onClosePane)
                 item("Session", action = onOpenSessionSheet)
                 record.hostId?.let { hostId -> item("Host settings") { onEditHost(hostId) } }
                 item("Tabs", action = actions::openSwitcher)

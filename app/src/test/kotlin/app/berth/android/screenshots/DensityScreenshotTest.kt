@@ -13,13 +13,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -75,7 +78,7 @@ import kotlin.math.roundToInt
  * system's 1× and at 2×, where interface text stops at its 1.3× cap: the Interface editor, whose
  * Density control is the switch, Settings' panels and rows, the Hosts list, the host editor's
  * fields, and the Stage's chrome: its strip upright and on its side, the panes' headers on a
- * tablet, and the Deck. The interface theme comes from the view model as the shell's does, so the
+ * tablet and on a phone on its side, and the Deck. The interface theme comes from the view model as the shell's does, so the
  * pick in the editor is the density every screen draws at. Written to [screenshotDir] in
  * pairs, `density-<surface>-comfortable` and `density-<surface>-compact`, with the phone's strip
  * under a status bar as a phone has one, and Compact's once more without.
@@ -231,19 +234,21 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     /**
      * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). With
      * no status bar to lend the strip Compact's step, the skin's strip stands whole under Compact, a
-     * 40 dp row of 32 dp tabs under the 4 dp band, and the panes' headers stay 40 with its row. Under a status bar the strip
-     * steps to 28 and a pane's header with it, or to its title's line at the cap where that is
-     * taller; never cut either way, and the audit of each frame holds the header's targets.
+     * 40 dp row of 32 dp tabs under the 4 dp band, and the panes' headers stay 40 with its row, the
+     * focused one's × on it. Under a status bar the strip steps to 28 and a pane's header with it,
+     * or to its title's line at the cap where that is taller, and a header that short has no ×: the
+     * pane closes from Overflow's Close pane, beside Unsplit. Never cut either way, and the audit of
+     * each frame holds the header's targets.
      */
     @Test
     @Config(qualifiers = "w1280dp-h800dp-land-320dpi")
     fun `pane headers on a tablet`() {
         mountShell()
         graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
-        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("pi-hole, right pane")).fetchSemanticsNodes().isNotEmpty() }
-        compose.waitForIdle()
+        awaitPanes()
         capture("density-panes-comfortable")
         assertEquals(40f, paneHeaderDp(), 0.5f)
+        assertEquals("the focused pane's × on Comfortable's 40", 1, closesInHeader())
 
         setDensity(Density.COMPACT)
         capture("density-panes-compact")
@@ -251,15 +256,61 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertEquals("and the 4 dp band over it", 44f, stripHeightDp(), 0.5f)
         assertEquals("its swatch the skin's 20", 20f, swatchDp(), 0.5f)
         assertEquals("the panes' headers the strip's 40", 40f, paneHeaderDp(), 0.5f)
-        assertLinesWhole("the Compact panes' headers", hasContentDescription(" pane", substring = true))
+        assertEquals("and the × on it", 1, closesInHeader())
+        assertLinesWhole("the Compact panes' headers", panes)
 
         statusBar(24)
         capture("density-panes-compact-status-bar")
         assertEquals("under a status bar the strip steps to 28", 28f, stripRowDp(), 1f)
-        // Body's 22 sp line at the capped scale, rounded up to a whole pixel as the text's box is.
-        val line = kotlin.math.ceil(22f * minOf(systemFontScale, 1.3f) * compose.density.density) / compose.density.density
-        assertEquals("and a pane's header with it, or its title's line where taller", maxOf(28f, line), paneHeaderDp(), 0.5f)
-        assertLinesWhole("the stepped panes' headers", hasContentDescription(" pane", substring = true))
+        assertEquals("and a pane's header with it, or its title's line where taller", maxOf(28f, titleLineDp()), paneHeaderDp(), 0.5f)
+        assertLinesWhole("the stepped panes' headers", panes)
+        assertEquals("a header under 40 has no ×", 0, closesInHeader())
+        assertEquals("Overflow offers Close pane after Unsplit", listOf("Unsplit", "Close pane"), overflowRowsFromUnsplit().take(2))
+        capture("density-panes-compact-status-bar-overflow")
+    }
+
+    /**
+     * The panes' headers on a phone on its side (spec C23): under its status bar the strip's own 32
+     * and Compact's 28, and each pane's header with it, or its title's line at the cap; too short
+     * for the ×, so Overflow's Close pane closes the focused pane. With no status bar the skin's
+     * 40 dp row stands, the × on it again.
+     */
+    @Test
+    @Config(qualifiers = "w914dp-h411dp-land-420dpi")
+    fun `pane headers on a phone on its side`() {
+        mountShell()
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        awaitPanes()
+        statusBar(24)
+        capture("density-panes-landscape-comfortable")
+        assertEquals("the strip's own 32", 32f, stripRowDp(), 1f)
+        assertEquals("and a pane's header with it", maxOf(32f, titleLineDp()), paneHeaderDp(), 1f)
+        assertLinesWhole("the panes' headers on the phone's side", panes)
+        assertEquals("a header under 40 has no ×", 0, closesInHeader())
+
+        setDensity(Density.COMPACT)
+        capture("density-panes-landscape-compact")
+        assertEquals("Compact's 28", 28f, stripRowDp(), 1f)
+        assertEquals("and a pane's header with it, or its title's line where taller", maxOf(28f, titleLineDp()), paneHeaderDp(), 1f)
+        assertLinesWhole("the Compact panes' headers on the phone's side", panes)
+        assertEquals("no × on it either", 0, closesInHeader())
+
+        statusBar(0)
+        assertEquals("with no status bar the skin's 40 dp row", 40f, paneHeaderDp(), 0.5f)
+        assertEquals("and the × on it", 1, closesInHeader())
+
+        statusBar(24)
+        assertEquals("Overflow offers Close pane after Unsplit", listOf("Unsplit", "Close pane"), overflowRowsFromUnsplit().take(2))
+        capture("density-panes-landscape-compact-overflow")
+        val focused = checkNotNull(graph.sessions.panes.value).focusedTab.id
+        compose.onNode(hasText("Close pane") and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil(5_000) { graph.sessions.panes.value == null }
+        assertTrue("the focused pane's tab stays in the strip", graph.viewModel.tabs.value.any { it.id == focused })
+    }
+
+    private fun awaitPanes() {
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("pi-hole, right pane")).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
     }
 
     /**
@@ -367,15 +418,37 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
 
     private val onTheStrip = hasContentDescription("Tabs, ", substring = true)
 
+    private val panes = hasContentDescription(" pane", substring = true)
+
+    private val focusedPane = panes and hasStateDescription("Focused")
+
     /**
-     * The focused pane's header: the × centres its target on the row, so the row is twice its
-     * centre's depth into the pane. Read unclipped: the pane's corners clip the target's top, and
-     * nothing its foot over the body.
+     * The focused pane's header: its title centres on the row, so the row is twice the title's
+     * centre's depth into the pane, with the × or without it.
      */
     private fun paneHeaderDp(): Float {
-        val close = compose.onNode(hasContentDescription("Close pane")).fetchSemanticsNode()
-        val pane = compose.onAllNodes(hasContentDescription(" pane", substring = true) and hasStateDescription("Focused")).onFirst().fetchSemanticsNode().boundsInRoot
-        return ((close.positionInRoot.y + close.size.height / 2f - pane.top) * 2).inDp()
+        val pane = compose.onAllNodes(focusedPane).onFirst().fetchSemanticsNode()
+        val title = pane.config[SemanticsProperties.ContentDescription].first().substringBeforeLast(", ")
+        val line = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult) and hasAnyAncestor(focusedPane), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .first { it.textLayout()?.layoutInput?.text?.text == title }
+        return ((line.positionInRoot.y + line.size.height / 2f - pane.boundsInRoot.top) * 2).inDp()
+    }
+
+    /** Body's 22 sp line at the capped scale, rounded up to a whole pixel as the text's box is. */
+    private fun titleLineDp(): Float = kotlin.math.ceil(22f * minOf(systemFontScale, 1.3f) * compose.density.density) / compose.density.density
+
+    /** How many × a pane header shows: the focused pane's where its header stands 40 dp, else none. */
+    private fun closesInHeader(): Int = compose.onAllNodes(hasContentDescription("Close pane")).fetchSemanticsNodes().size
+
+    /** Opens the Stage's Overflow, lets its ripple settle, and reads its rows from Unsplit on. */
+    private fun overflowRowsFromUnsplit(): List<String> {
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Unsplit") and hasAnyAncestor(isPopup())).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(600)
+        return compose.onAllNodes(hasAnyAncestor(isPopup()) and hasClickAction()).fetchSemanticsNodes()
+            .map { it.config[SemanticsProperties.Text].joinToString() }
+            .dropWhile { it != "Unsplit" }
     }
 
     /** The active tab's swatch, across: the width its monogram is laid out in. */
