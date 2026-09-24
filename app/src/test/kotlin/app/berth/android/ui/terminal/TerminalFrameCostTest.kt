@@ -41,6 +41,10 @@ import java.lang.management.ManagementFactory
  * the bytes the JVM allocates to capture a screen and to draw it (a plain `ls` screen, and a screen
  * of box drawing, block elements and a braille graph, which the renderer draws a cell at a time),
  * and how many captures a burst of output makes when its chunks land between two frames.
+ *
+ * The figures it prints (`FRAMECOST`) compare only between runs of this class alone, the two sides of
+ * a change run in turn (before, after, before, after): in the suite's shared test JVM the same draw
+ * reads 24 to 48 B apart from run to run, which is more than a change to the renderer usually moves it.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
