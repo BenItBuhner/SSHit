@@ -87,6 +87,8 @@ import app.berth.domain.model.Workspace
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
 import app.berth.ssh.SshAuth
+import app.berth.ssh.SshConnection
+import app.berth.ssh.SshEndpoint
 import app.berth.ssh.SshSecurity
 import app.berth.terminal.PasteClassifier
 import app.berth.terminal.TerminalKey
@@ -160,6 +162,8 @@ class TerminalToolsScreenshotTest {
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
     private val sshUser = System.getenv("SSH_TEST_USER").orEmpty()
     private val sshPassword = System.getenv("SSH_TEST_PASSWORD").orEmpty()
+    /** Whether the live flow made `~/berth-demo` on the sshd, for [tearDown] to take away. */
+    private var madeDemo = false
 
     @Before
     fun setUp() {
@@ -176,6 +180,23 @@ class TerminalToolsScreenshotTest {
     fun tearDown() {
         TimeZone.setDefault(zone)
         RuntimeEnvironment.setFontScale(1f)
+        if (madeDemo) removeDemo()
+    }
+
+    /**
+     * Takes the live flow's `~/berth-demo` off the shared sshd, through a login of the test's own so it
+     * goes whether or not the flow's session lived to the end. Left there, it was a row in the home
+     * listing of any Files flow that ran after this class.
+     */
+    private fun removeDemo() = runBlocking {
+        val endpoint = SshEndpoint(host = sshHost, port = sshPort, user = sshUser, auth = listOf(SshAuth.Password { sshPassword.toCharArray() }), keepaliveSeconds = 5)
+        val connection = SshConnection(endpoint, AcceptAllHostKeys)
+        connection.connect()
+        try {
+            assertEquals("~/berth-demo is gone", "gone", connection.exec("rm -rf ~/berth-demo; test -e ~/berth-demo || echo gone").trim())
+        } finally {
+            connection.close()
+        }
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -1038,6 +1059,7 @@ class TerminalToolsScreenshotTest {
 
         // Real output on the screen: a listing whose rows stay under the canvas's width (the root
         // directory's run to 68 columns and wrap), then a line to find again from the history sheet.
+        madeDemo = true
         session.sendText("mkdir -p ~/berth-demo && touch ~/berth-demo/{alpha,beta,gamma} && clear && ls --color=always -la ~/berth-demo\n")
         settle(1_500)
         session.sendText("echo re-run from history\n")
