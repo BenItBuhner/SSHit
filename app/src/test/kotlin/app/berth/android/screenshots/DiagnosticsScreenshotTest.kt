@@ -24,6 +24,7 @@ import app.berth.android.diagnostics.BerthLog
 import app.berth.android.diagnostics.CrashReporter
 import app.berth.android.diagnostics.LogRing
 import app.berth.android.diagnostics.ReportKind
+import app.berth.android.screenshotDir
 import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
 import app.berth.android.ui.components.LocalWallClock
@@ -79,7 +80,7 @@ class DiagnosticsScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var graph: TestGraph
     /**

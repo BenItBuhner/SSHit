@@ -47,6 +47,7 @@ import app.berth.android.files.FilesBrowser
 import app.berth.android.files.Transfer
 import app.berth.android.files.TransferKind
 import app.berth.android.files.TransferState
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.Prompt
 import app.berth.android.ui.AppRoot
@@ -124,7 +125,7 @@ class FilesScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /** The offline tree's clock and the interface's: pinned, so a modified time reads the same on every run. */
@@ -1047,13 +1048,15 @@ class FilesScreenshotTest {
         // The tree goes up through the sftp channel of the session on the Stage; every file's hash is kept for the check.
         val random = Random(20260920)
         val expected = LinkedHashMap<String, String>()
-        val (home, dir) = runBlocking {
+        // All of it in a folder of the flow's own, made anew: the frames list that folder and nothing else, so what
+        // other tests leave in the account's home (the terminal tools' ~/berth-demo once) never reaches them.
+        val (root, dir) = runBlocking {
             val fs = session.openSftp()
             try {
-                val home = fs.home()
-                val d = "$home/berth-folder-demo"
-                runCatching { fs.delete(d) }
-                runCatching { fs.delete("$home/berth-folder-upload") }
+                val root = "${fs.home()}/berth-folder-live"
+                runCatching { fs.delete(root) }
+                fs.mkdir(root)
+                val d = "$root/berth-folder-demo"
                 fs.mkdir(d)
                 for (sub in listOf("src", "src/main", "src/main/kotlin", "src/main/res", "src/main/nested-empty", "src/test", "assets", "empty")) fs.mkdir("$d/$sub")
                 val put: suspend (String, ByteArray) -> Unit = { rel, bytes ->
@@ -1065,21 +1068,24 @@ class FilesScreenshotTest {
                 for (i in 1..20) put("src/main/res/strings-%02d.xml".format(i), "<resources>\n    <string name=\"title_$i\">Screen $i</string>\n</resources>\n".toByteArray())
                 for (i in 1..23) put("src/test/Screen%02dTest.kt".format(i), "package app.berth.demo\n\nclass Screen${i}Test\n".toByteArray())
                 put("assets/site-backup.tar.gz", ByteArray(32 * 1024 * 1024).also(random::nextBytes))
-                home to d
+                root to d
             } finally {
                 fs.close()
             }
         }
         assertEquals(85, expected.size)
-        // The tree's row at home shows the tree's date; dated as the column will show it.
+        // The tree's row shows the tree's date; dated as the column will show it.
         pinModified(treeModified, dir)
 
-        // The host's Files tab from the session sheet; it opens at home, where the tree is a row.
+        // The host's Files tab from the session sheet; it opens at home, and the flow's folder, where the tree is a row, is one tap on.
         compose.onNodeWithContentDescription("More").performClick()
         compose.onNodeWithText("Session").performClick()
         waitForText("Detach", 5_000)
         compose.onNode(hasText("Files") and hasAnySibling(hasText("Detach"))).performClick()
-        waitForText("berth-folder-demo", 20_000)
+        waitForText("berth-folder-live", 20_000)
+        compose.onNodeWithText("berth-folder-live").performClick()
+        waitForText("berth-folder-demo", 15_000)
+        compose.waitUntil(10_000) { compose.onAllNodes(hasContentDescription("Files \u00B7 berth-folder-live, live", substring = true)).fetchSemanticsNodes().isNotEmpty() }
 
         // The folder comes down as one transfer into a directory standing for the picked tree, on a channel that
         // meters the queue's clock and holds the copy at a third of the bytes (the big file moving, the rate settled)
@@ -1119,10 +1125,10 @@ class FilesScreenshotTest {
         val downloaded = transfer(down).folder!!
         assertEquals(85, downloaded.filesCopied)
         assertEquals(emptyList<Any>(), downloaded.failures)
-        val root = File(dest, "berth-folder-demo")
-        assertEquals("every file reaches the device with the bytes that went up", expected, hashTree(root))
-        assertTrue(File(root, "empty").isDirectory && File(root, "empty").list()!!.isEmpty())
-        assertTrue(File(root, "src/main/nested-empty").isDirectory)
+        val landed = File(dest, "berth-folder-demo")
+        assertEquals("every file reaches the device with the bytes that went up", expected, hashTree(landed))
+        assertTrue(File(landed, "empty").isDirectory && File(landed, "empty").list()!!.isEmpty())
+        assertTrue(File(landed, "src/main/nested-empty").isDirectory)
 
         // A local tree goes up as one transfer into the folder being shown; the listing picks the folder up on its own.
         val ups = createTempDirectory("berth-folder-up").toFile()
@@ -1137,14 +1143,14 @@ class FilesScreenshotTest {
         write("photos/clip.mp4", ByteArray(8 * 1024 * 1024).also(random::nextBytes))
         File(local, "photos/empty").mkdirs()
         holdAt = 3 * MIB
-        val up = queue.uploadFolder(session, Uri.fromFile(local), home)
+        val up = queue.uploadFolder(session, Uri.fromFile(local), root)
         compose.waitUntil(30_000) { transfer(up).heldAt(holdAt) }
         compose.settle(300)
         capture("files-folder-live-upload")
         channel!!.release()
         compose.waitUntil(180_000) { transfer(up).state == TransferState.DONE }
         waitForText("berth-folder-upload", 15_000)
-        pinModified(createdModified, "$home/berth-folder-upload")
+        pinModified(createdModified, "$root/berth-folder-upload")
         refreshUntil("13:37")
         capture("files-folder-live-uploaded")
         compose.onNodeWithContentDescription("Transfers").performClick()
@@ -1157,14 +1163,13 @@ class FilesScreenshotTest {
         runBlocking {
             val fs = session.openSftp()
             try {
-                val remoteRoot = "$home/berth-folder-upload"
+                val remoteRoot = "$root/berth-folder-upload"
                 assertEquals(expectedUp, remoteHashTree(fs, remoteRoot))
                 assertEquals(0b111_101_101, fs.stat("$remoteRoot/photos").permissions and 0b111_111_111)
                 assertEquals(0b111_101_101, fs.stat("$remoteRoot/photos/empty").permissions and 0b111_111_111)
                 assertEquals(0b110_100_100, fs.stat("$remoteRoot/notes.txt").permissions and 0b111_111_111)
                 assertTrue(fs.list("$remoteRoot/photos/empty").isEmpty())
-                runCatching { fs.delete(dir) }
-                runCatching { fs.delete(remoteRoot) }
+                runCatching { fs.delete(root) }
             } finally {
                 fs.close()
             }

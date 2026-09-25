@@ -47,6 +47,7 @@ import androidx.compose.ui.test.swipeRight
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.security.FakeKeystore
 import app.berth.android.session.AuthResolver
 import app.berth.android.ui.AppViewModel
@@ -133,7 +134,7 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var graph: TestGraph
 
@@ -345,6 +346,60 @@ class LibraryDataScreenshotTest(private val systemFontScale: Float) {
         pressBack()
         compose.waitUntil(5_000) { popped == 1 }
         hasNoText("Discard changes?")
+    }
+
+    /**
+     * Keepalive or Reconnect moved from Inherit to 15, the value Settings gives both by default, is an
+     * edit: the two read the same today, and the host saved with its own 15 stops following Settings.
+     */
+    @Test
+    fun `Keepalive or Reconnect moved from Inherit to the app's own 15 asks on Back`() {
+        seedLibrary()
+        movesAsk("homelab", from = { unit -> "Inherit (15 $unit)" }, to = { unit -> "15 $unit" })
+    }
+
+    /** The way back is an edit too: a host's own 15 moved to Inherit follows Settings from then on. */
+    @Test
+    fun `Keepalive or Reconnect moved from 15 to Inherit asks on Back`() {
+        seedLibrary()
+        runBlocking {
+            val box = graph.hosts.items.value.first { it.id == "build-box" }
+            graph.hosts.upsert(box.copy(persistence = box.persistence.copy(keepaliveSeconds = 15, reconnectMinutes = 15)))
+        }
+        movesAsk("build-box", from = { unit -> "15 $unit" }, to = { unit -> "Inherit (15 $unit)" })
+    }
+
+    /**
+     * On [hostId]'s editor, each of Keepalive and Reconnect moved [from] one choice [to] the other asks on
+     * Back, and Keep editing then the move undone leaves it asking nothing; the labels take the picker's unit.
+     */
+    private fun movesAsk(hostId: String, from: (String) -> String, to: (String) -> String) {
+        var done = 0
+        var popped = 0
+        editor(hostId, onDone = { done++ }, onPopped = { popped++ })
+        for ((picker, unit) in listOf("Keepalive" to "s", "Reconnect" to "min")) {
+            waitForText(from(unit))
+            pick(picker, to(unit))
+            waitForText(to(unit))
+            pressBack()
+            waitForText("Discard changes?")
+            assertEquals("$picker moved to ${to(unit)} does not leave", 0, done + popped)
+            inSheet("Keep editing").performClick()
+            waitForNoText("Discard changes?")
+            pick(picker, from(unit))
+        }
+        pressBack()
+        compose.waitUntil(5_000) { popped == 1 }
+        hasNoText("Discard changes?")
+    }
+
+    /** Opens the editor's [picker] row and chooses [choice] from its menu. */
+    private fun pick(picker: String, choice: String) {
+        compose.onNodeWithText(picker).performScrollTo().performClick()
+        val item = hasText(choice) and hasAnyAncestor(isPopup())
+        compose.waitUntil(5_000) { compose.onAllNodes(item).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(item).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() }
     }
 
     /**

@@ -394,7 +394,7 @@ androidComponents {
         tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(verify) }
 
         // Settings › Licences answers for every library the release APK carries (LicencesTest), so both variants'
-        // unit tests are told the release runtime classpath's modules, as group:name, and rerun when it changes.
+        // unit tests are told the release runtime classpath's modules, as group:name:version, and rerun when it changes.
         val releaseModules = variant.runtimeConfiguration.incoming.resolutionResult.rootComponent.map { root ->
             val modules = sortedSetOf<String>()
             val seen = HashSet<ResolvedComponentResult>()
@@ -402,7 +402,7 @@ androidComponents {
             while (queue.isNotEmpty()) {
                 val component = queue.removeFirst()
                 if (!seen.add(component)) continue
-                (component.id as? ModuleComponentIdentifier)?.let { modules += "${it.group}:${it.module}" }
+                (component.id as? ModuleComponentIdentifier)?.let { modules += "${it.group}:${it.module}:${it.version}" }
                 component.dependencies.filterIsInstance<ResolvedDependencyResult>().forEach { queue += it.selected }
             }
             modules.joinToString(",")
@@ -439,4 +439,11 @@ tasks.withType<Test>().configureEach {
         showStandardStreams = true
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
+}
+
+// Each variant's unit tests write their frames to a folder of their own, build/outputs/roborazzi/debug and
+// build/outputs/roborazzi/release (the tests' screenshotDir), so neither overwrites the other's and the two can be
+// compared. The property is the variant's name, not a path, so no absolute path reaches the task's cache key.
+tasks.withType<Test>().matching { it.name.endsWith("UnitTest") }.configureEach {
+    systemProperty("berth.roborazziVariant", name.removePrefix("test").removeSuffix("UnitTest").replaceFirstChar { it.lowercase() })
 }

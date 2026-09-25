@@ -456,6 +456,16 @@ class SshIntegrationTest {
         }
     }
 
+    /** The connect's race ([racingClient]) on a target reached through a hop, whose client connects over the hop's channel. */
+    @Test
+    fun `a target beyond a hop whose key exchange dies before connect checks for it fails as NoCommonCipher, not as the hop`() = runBlocking {
+        val target = targetBeyondJump().copy(ciphers = listOf("3des-cbc"))
+        val error = assertFailsWith<SshError.NoCommonCipher> {
+            SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(), AcceptAllHostKeys))).apply { clientFactory = ::racingClient }.use { it.connect() }
+        }
+        assertEquals(listOf("3des-cbc"), error.offered)
+    }
+
     @Test
     fun `unreachable host fails fast with ConnectFailed`() = runBlocking {
         val endpoint = SshEndpoint(host = "127.0.0.1", port = 1, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }), connectTimeoutMillis = 2_000)

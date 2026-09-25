@@ -46,8 +46,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * What re-runs on the Stage when something changes under it, counted from the Compose runtime's own
  * trace hooks: every composable body that executes, rather than skips, reports its name. Output, a
  * scroll through history and a selection's drag reach the canvas's draw alone; a title is the strip's
- * tab's to show; an edit to another host is the body's to look at and not the terminal's; a tab switch
- * composes the incoming terminal once and leaves both emulators as they stood. The body, the canvas and
+ * tab's to show; an edit to another host is the body's to look at and not the terminal's, where a step
+ * of the shown host's font size is the terminal's, once; a tab switch composes the incoming terminal
+ * once and leaves both emulators as they stood. The body, the canvas and
  * the Deck are the expensive parts of the Stage, so those are the counts held here.
  */
 @OptIn(InternalComposeTracingApi::class)
@@ -136,6 +137,22 @@ class StageRecompositionTest {
         assertEquals("the body looked at every edit", EDITS, runs[STAGE_BODY])
         assertEquals("TerminalCanvas", 0, runs[TERMINAL_CANVAS])
         assertEquals("Deck", 0, runs[DECK])
+    }
+
+    @Test
+    fun `a step of the shown host's font size re-runs the terminal once, and its cells widen`() {
+        val live = stageHomelab()
+        val before = live.emulator.cellWidthPx to live.emulator.cols
+        runBlocking {
+            val homelab = graph.hosts.get("homelab")!!
+            graph.hosts.upsert(homelab.copy(appearance = homelab.appearance.copy(fontSizeSp = 15)))
+        }
+        compose.waitUntil(5_000) { live.emulator.cellWidthPx != before.first && live.emulator.cols != before.second }
+        compose.waitForIdle()
+        report("font step")
+        assertEquals("TerminalCanvas", 1, runs[TERMINAL_CANVAS])
+        assertTrue("the cells widen from ${before.first} px, now ${live.emulator.cellWidthPx} px", live.emulator.cellWidthPx > before.first)
+        assertTrue("fewer columns than ${before.second}, now ${live.emulator.cols}", live.emulator.cols < before.second)
     }
 
     @Test

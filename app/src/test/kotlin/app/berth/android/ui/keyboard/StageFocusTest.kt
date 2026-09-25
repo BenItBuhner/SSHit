@@ -29,7 +29,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
-import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
@@ -190,8 +189,10 @@ class StageFocusTest {
         // switches to it, the focus staying on the tab it pressed, since the strip stayed.
         chord(KEYCODE_S, META_CTRL_ON or META_SHIFT_ON)
         awaitFocused(tab(), "a tab of the strip after Ctrl+Shift+S")
-        // The selected tab is the active one; its title is the shell's, so the state says which it is.
-        compose.onNode(isFocused()).assert(isSelected() and hasContentDescription(", live, tab 2 of 2", substring = true))
+        // The selected tab is the active one; its title is the shell's, so the state says which it is. The strip reads
+        // the state from the tab's record as it collects it, which can still say connecting a moment after the session
+        // itself says live, so the text is waited on.
+        awaitFocused(tab() and isSelected() and hasContentDescription(", live, tab 2 of 2", substring = true), "the live tab, the active one, after Ctrl+Shift+S")
         press(KEYCODE_DPAD_LEFT)
         awaitFocused(tab() and hasContentDescription("homelab", substring = true), "homelab's tab, the first, after Left from the live tab")
         press(KEYCODE_ENTER)

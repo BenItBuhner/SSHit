@@ -26,6 +26,7 @@ import androidx.compose.ui.test.printToString
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.Prompt
@@ -83,7 +84,7 @@ import java.util.concurrent.TimeUnit
  * prefilled from an `ssh://` link, the Tunnels tab detached and in the switcher with its menu, the
  * notice a malformed link earns, and, against the two local sshds, a hop's failure on the Stage,
  * the pill naming the hop under its trust sheet, and a Live Tunnels tab counting its traffic
- * through the bastion. Berth Dark on a Pixel-class phone; PNGs land in `build/outputs/roborazzi`.
+ * through the bastion. Berth Dark on a Pixel-class phone; PNGs land in [screenshotDir].
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -96,7 +97,7 @@ class ConnectionsScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val now = System.currentTimeMillis()
 

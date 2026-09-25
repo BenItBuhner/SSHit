@@ -35,6 +35,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.AuthResolver
 import app.berth.android.session.PaneSide
 import app.berth.android.session.Prompt
@@ -105,7 +106,7 @@ private const val TABLET_PORTRAIT = "w800dp-h1280dp-port-320dpi"
 /**
  * The app past a phone in portrait (spec A12, C23): the shell as [AppRoot] mounts it, at a phone
  * on its side, a foldable open in both orientations and a tablet in both, through Robolectric's
- * native graphics into `build/outputs/roborazzi`. Each size gets the two-pane Stage where it fits,
+ * native graphics into [screenshotDir]. Each size gets the two-pane Stage where it fits,
  * the 280 dp rail where the width is expanded and the 72 dp column of swatches and glyphs where it
  * is medium (spec C7), sheets as dialogs where a strip across the bottom would be absurd, and the
  * shorter strip where the height is compact. The fixtures are the phone
@@ -126,7 +127,7 @@ class LargeScreenScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
 
     private val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()

@@ -17,6 +17,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
@@ -30,6 +32,7 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -52,6 +55,7 @@ import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
 import app.berth.android.R
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.session.ManagedTab
 import app.berth.android.session.TerminalSession
 import app.berth.android.ui.a11y.TerminalTag
@@ -73,6 +77,7 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.PinchAction
 import app.berth.domain.model.TapAction
 import app.berth.domain.model.TerminalSettings
+import app.berth.domain.model.TerminalTheme
 import app.berth.domain.model.ThreeFingerTapAction
 import app.berth.domain.model.TwoFingerTapAction
 import app.berth.ssh.SshSecurity
@@ -95,6 +100,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * The terminal surface of wave three (spec A60, C18, C20, D1) in Berth Dark on a Pixel-class
@@ -119,7 +125,7 @@ class TerminalSurfaceScreenshotTest {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private lateinit var graph: TestGraph
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val sessions = ArrayList<TerminalSession>()
@@ -893,6 +899,52 @@ class TerminalSurfaceScreenshotTest {
     @Test
     fun `nerd font icons on the stage and About at the 1,3 cap`() = nerdGlyphs(cap = true)
 
+    // ---- glyphs drawn a cell at a time -------------------------------------------------------------------------
+
+    /**
+     * A golden of what the renderer draws a cell at a time rather than from the font: tmux's pane border between
+     * a `tree` listing and a meter of blocks over a braille graph (the screen TerminalFrameCostTest costs,
+     * [StageFixture.boxRow]) with the cursor on a box cell, then a line of decomposed combining marks and a line
+     * of private-use icons. On the phone on its side, where a box row is one line.
+     */
+    private fun cellGlyphs(cap: Boolean) {
+        val suffix = atTheCap(cap)
+        val (session, _) = stageLiveHomelab()
+        val emulator = session.emulator
+        assertTrue("${emulator.cols} columns hold a box row's ${StageFixture.BOX_ROW_COLS}", emulator.cols >= StageFixture.BOX_ROW_COLS)
+        val boxRows = emulator.rows - 2
+        emulator.write("\u001b[H\u001b[2J")
+        emulator.write((0 until boxRows).joinToString("") { StageFixture.boxRow(it) + "\r\n" })
+        emulator.write("$COMBINING\r\n$PRIVATE_USE")
+        // On row 2's first "─", the one after "├".
+        emulator.write("\u001b[3;6H")
+        compose.waitUntil(5_000) { emulator.cursorY == 2 && emulator.cursorX == 5 }
+        assertEquals("each mark rides its base's cell", COMBINING_MARKS, emulator.viewLine(boxRows, 0).combining)
+        assertTrue(emulator.screenText()[boxRows + 1], emulator.screenText()[boxRows + 1].startsWith(PRIVATE_USE))
+        settle(400)
+        capture("terminal-cell-glyphs$suffix")
+
+        val p = paints()
+        val map = compose.onNodeWithTag(TerminalTag).captureToImage().toPixelMap()
+        val background = TerminalTheme.BERTH_DARK.background and 0xFFFFFF
+        fun rgb(x: Int, y: Int) = map[x, y].toArgb() and 0xFFFFFF
+        fun span(from: Int, to: Int, cell: Float) = (from * cell).roundToInt() until (to * cell).roundToInt()
+        // The pane border is one line down every box row: no scanline of its cells is bare.
+        val bare = span(0, boxRows, p.cellHeight).filter { y -> span(39, 40, p.cellWidth).all { x -> rgb(x, y) == background } }
+        assertTrue("the pane border is bare at scanlines $bare", bare.isEmpty())
+        // Row 5's five full blocks are one bar: every pixel of their cells the meter's colour.
+        val bar = span(5, 6, p.cellHeight).flatMap { y -> span(46, 51, p.cellWidth).map { x -> rgb(x, y) } }.toSet()
+        assertEquals("the blocks' colours ${bar.map { "%06x".format(it) }}", 1, bar.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w914dp-h411dp-land-420dpi")
+    fun `tmux borders, blocks, braille, combining marks and a private-use icon, drawn a cell at a time`() = cellGlyphs(cap = false)
+
+    @Test
+    @Config(qualifiers = "w914dp-h411dp-land-420dpi")
+    fun `glyphs drawn a cell at a time at the 1,3 cap`() = cellGlyphs(cap = true)
+
     // ---- Overflow › Share screen text (spec C3) ---------------------------------------------------------------------
 
     /** The text the share sheet was handed by the last Share, the chooser's own intent read open. */
@@ -969,4 +1021,12 @@ class TerminalSurfaceScreenshotTest {
 
     @Test
     fun `share screen text from the overflow at the 1,3 cap`() = shareScreenText(cap = true)
+
+    private companion object {
+        /** Bases with their marks decomposed after them, one of them two marks deep. */
+        const val COMBINING = "cafe\u0301 nai\u0308ve man\u0303ana A\u030Angstro\u0308m e\u0301\u0323"
+        val COMBINING_MARKS = hashMapOf(3 to "\u0301", 7 to "\u0308", 13 to "\u0303", 18 to "\u030A", 24 to "\u0308", 27 to "\u0301\u0323")
+        /** Private-use icons from the bundled Nerd Font symbols, a cell each: a branch, a folder, a Gradle build. */
+        const val PRIVATE_USE = "\uF418 main  \uE5FB .git  \uE634 build.gradle.kts"
+    }
 }

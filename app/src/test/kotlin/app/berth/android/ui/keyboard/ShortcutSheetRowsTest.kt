@@ -19,6 +19,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.TextLayoutResult
 import app.berth.android.ComposeHostRule
 import app.berth.android.createBerthComposeRule
+import app.berth.android.screenshotDir
 import app.berth.android.screenshots.captureAudited
 import app.berth.android.screenshots.textLayout
 import app.berth.android.ui.a11y.MAX_INTERFACE_FONT_SCALE
@@ -64,7 +65,7 @@ class ShortcutSheetRowsTest(private val systemFontScale: Float) {
     @get:Rule(order = 1)
     val compose = createBerthComposeRule()
 
-    private val outDir = File(System.getProperty("user.dir"), "build/outputs/roborazzi")
+    private val outDir = screenshotDir
     private val suffix = if (systemFontScale > 1f) "-font-scale-2x" else ""
 
     @Before

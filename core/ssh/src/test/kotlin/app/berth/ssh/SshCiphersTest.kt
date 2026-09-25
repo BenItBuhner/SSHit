@@ -14,8 +14,26 @@ import java.net.ServerSocket
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+
+/**
+ * An sshj client that loses the connect's race every time its key exchange fails: sshj's bare "Not connected",
+ * thrown once the transport is down, as when the reader dies before connect's own check. A key exchange that
+ * settles is left alone, so a hop the test means to pass logs in as any other.
+ */
+internal fun racingClient(config: DefaultConfig): SSHClient = object : SSHClient(config) {
+    override fun onConnect() {
+        try {
+            super.onConnect()
+        } catch (e: Exception) {
+            val deadline = System.nanoTime() + 5_000_000_000
+            while (transport.isRunning && System.nanoTime() < deadline) Thread.sleep(5)
+            throw IllegalStateException("Not connected")
+        }
+    }
+}
 
 /** A host's cipher list against the ciphers this client has (spec C10, Advanced › Ciphers). */
 class SshCiphersTest {
@@ -99,6 +117,33 @@ class SshCiphersTest {
         // A client whose transport never started has no cause to give: its own error stands.
         val bare = IllegalStateException("Not connected")
         assertSame(bare, assertFailsWith<IllegalStateException> { SSHClient(DefaultConfig()).connectOrCauseOfDeath { throw bare } })
+    }
+
+    /** The same race taken inside [SshConnection.connect] on the target, which reports the settlement only if it connects through [connectOrCauseOfDeath]. */
+    @Test
+    fun `a target whose key exchange dies before connect checks for it fails the connect as NoCommonCipher`() = runBlocking {
+        kexServer().use { server ->
+            val endpoint = SshEndpoint(host = "127.0.0.1", port = server.localPort, user = "nobody", auth = listOf(SshAuth.Password { CharArray(0) }), connectTimeoutMillis = 5_000)
+            val error = assertFailsWith<SshError.NoCommonCipher> {
+                SshConnection(endpoint, AcceptAllHostKeys).apply { clientFactory = ::racingClient }.use { it.connect() }
+            }
+            assertEquals(offered(emptyList()), error.offered)
+        }
+    }
+
+    /** And on a hop, whose failure is named for the hop with the settlement as its reason. */
+    @Test
+    fun `a hop whose key exchange dies before connect checks for it fails naming the hop, as NoCommonCipher`() = runBlocking {
+        kexServer().use { server ->
+            val hop = SshEndpoint(host = "127.0.0.1", port = server.localPort, user = "nobody", auth = listOf(SshAuth.Password { CharArray(0) }), connectTimeoutMillis = 5_000)
+            val target = hop.copy(host = "target.berth.test", port = 22)
+            val error = assertFailsWith<SshError.JumpHopFailed> {
+                SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(hop, AcceptAllHostKeys))).apply { clientFactory = ::racingClient }.use { it.connect() }
+            }
+            assertEquals(0, error.hop)
+            assertEquals(offered(emptyList()), assertIs<SshError.NoCommonCipher>(error.reason).offered)
+            assertTrue(!error.isTransientSshFailure())
+        }
     }
 
     /** One connection's worth of a server that greets, then offers only a cipher no client has. */

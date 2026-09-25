@@ -173,6 +173,25 @@ class LicencesTest {
         assertTrue("the shared text's libraries carry no NOTICE", rows.getValue(SHARED).files.none { "NOTICE" in it })
     }
 
+    /**
+     * A row's texts were taken at the tag its origin names, and that tag is the version of each of its
+     * modules the release resolves, so a bump that moves a licence or a NOTICE fails here until the
+     * files are taken again at the new tag and the origin says so.
+     */
+    @Test
+    fun `every library's origin names the tag of the version the release carries`() {
+        val modules = System.getProperty("berth.releaseModules").orEmpty().split(',').filter(String::isNotBlank)
+        assertTrue("the build passed no release modules (berth.releaseModules)", modules.size > 50)
+        val origins = SHIPPED_NOTICES.single { it.first == "Libraries" }.second.associate { it.name to it.origin.orEmpty() }
+        assertEquals("rows with no tag to hold", ROW_BY_MODULE.map { it.first }.filter { it != ANDROIDX }, PIN_BY_MODULE.keys.toList())
+        val stale = modules.mapNotNull { module ->
+            val (prefix, row) = ROW_BY_MODULE.firstOrNull { module.startsWith(it.first) } ?: return@mapNotNull null
+            val tag = PIN_BY_MODULE[prefix]?.invoke(module.substringAfterLast(':')) ?: return@mapNotNull null
+            "$module: $row's origin names no \"$tag\"".takeIf { tag !in origins.getValue(row) }
+        }
+        assertEquals("modules whose row's origin is another version's", emptyList<String>(), stale)
+    }
+
     @Test
     fun `only the icon sets' text holds table rows, and it holds all fourteen`() {
         val rows = shipped.listFiles().orEmpty()
@@ -198,10 +217,11 @@ class LicencesTest {
         const val SERIALIZATION = "kotlinx.serialization, the stored formats"
         const val JAKARTA = "Jakarta Dependency Injection, Hilt's annotations"
         const val SSHJ = "sshj, the SSH transport"
+        const val ANDROIDX = "androidx."
 
         /** The release runtime classpath by group or group:name, each to the row that answers for it. */
         val ROW_BY_MODULE = listOf(
-            "androidx." to "AndroidX, the interface and the database",
+            ANDROIDX to "AndroidX, the interface and the database",
             "org.jetbrains.kotlin:kotlin-stdlib" to KOTLIN,
             "org.jetbrains.kotlinx:kotlinx-coroutines-" to COROUTINES,
             "org.jetbrains.kotlinx:kotlinx-serialization-" to SERIALIZATION,
@@ -216,6 +236,28 @@ class LicencesTest {
             "com.hierynomus:asn-one" to "asn-one, sshj's ASN.1 coding",
             "org.bouncycastle:" to "Bouncy Castle, the cryptography",
             "org.slf4j:" to "SLF4J, the transport's logging",
+        )
+
+        /**
+         * By [ROW_BY_MODULE]'s prefixes, what a row's origin names for a module at a version, as that
+         * upstream tags its releases. AndroidX has none: its text is the monorepo's at a commit, one
+         * file whatever each library's version.
+         */
+        val PIN_BY_MODULE: Map<String, (String) -> String> = mapOf(
+            "org.jetbrains.kotlin:kotlin-stdlib" to { v -> "JetBrains/kotlin at v$v:" },
+            "org.jetbrains.kotlinx:kotlinx-coroutines-" to { v -> "kotlinx.coroutines at $v:" },
+            "org.jetbrains.kotlinx:kotlinx-serialization-" to { v -> "kotlinx.serialization at v$v:" },
+            "org.jetbrains:annotations" to { v -> "JetBrains/java-annotations at $v:" },
+            "jakarta.inject:" to { v -> "jakartaee/inject at $v:" },
+            "com.google.dagger:" to { v -> "google/dagger at dagger-$v:" },
+            "org.jspecify:" to { v -> "jspecify/jspecify at v$v:" },
+            "com.google.guava:listenablefuture" to { v -> "listenablefuture $v's parent" },
+            "javax.inject:" to { v -> "javax.inject $v and" },
+            "com.google.code.findbugs:jsr305" to { v -> "jsr305 $v," },
+            "com.hierynomus:sshj" to { v -> "hierynomus/sshj at v$v:" },
+            "com.hierynomus:asn-one" to { v -> "hierynomus/asn-one at v$v:" },
+            "org.bouncycastle:" to { v -> "bcgit/bc-java at r${v.replace(".", "rv")} ($v):" },
+            "org.slf4j:" to { v -> "qos-ch/slf4j at v_$v:" },
         )
 
         val WITH_NOTICE = listOf(SSHJ, KOTLIN, COROUTINES, SERIALIZATION, JAKARTA)

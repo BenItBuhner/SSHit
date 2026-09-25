@@ -9,6 +9,7 @@ import app.berth.domain.model.PersistenceLayer
 import app.berth.domain.model.SessionRecord
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
+import app.berth.domain.model.TabKind
 import app.berth.domain.model.Workspace
 import app.berth.ssh.AcceptAllHostKeys
 import app.berth.ssh.HostKeyPolicy
@@ -17,7 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -55,6 +56,18 @@ object StageFixture {
     }
 
     /**
+     * A Tunnels tab (spec C14) on pi-hole, detached seven minutes ago, and on a host with no forwards:
+     * its body is the empty state, which stands 48 dp down and takes no touch above it, so nothing
+     * of the body answers a finger just under the header.
+     */
+    fun detachedTunnels(now: Long = System.currentTimeMillis()): TerminalSession {
+        val pihole = host(now, "pi-hole", "pi-hole", "192.168.1.2", "pi", SwatchColor.MOSS, AuthMethod.AskEachTime)
+        val record = record(now, "t-pihole", pihole, Workspace.DEFAULT_ID, 3, 7, "", "")
+            .copy(title = "Tunnels \u00B7 pi-hole", cwd = null, lastCommand = null, kind = TabKind.Tunnels)
+        return TerminalSession(record, CoroutineScope(SupervisorJob() + Dispatchers.Default), NoShell) {}
+    }
+
+    /**
      * A tab as Quick connect opens one (spec C11), Live as [liveHomelab] is: its host is the spec's
      * address under a `quick-` id, as [app.berth.android.ui.AppViewModel.quickConnect] makes it, and
      * in no library [seed] fills, so a sheet over it offers Save as host and has no Look row to show.
@@ -72,13 +85,32 @@ object StageFixture {
         return session
     }
 
-    /** The environment of a tab with no shell behind it: nothing to log in with, every key trusted, no network to wait on. */
-    private val NoShell = object : SessionEnvironment {
+    /**
+     * The environment of a tab with no shell behind it: nothing to log in with, every key trusted, and
+     * a network that never comes back, since the real monitor's flow neither emits nor ends between
+     * outages. A tab that reconnects when a test did not mean it to waits out its retry, so the test's
+     * own assertion is what fails; an empty flow ended the retry's wait with NoSuchElementException.
+     */
+    val NoShell: SessionEnvironment = object : SessionEnvironment {
         override suspend fun authFor(host: Host): List<SshAuth> = emptyList()
         override fun hostKeyPolicyFor(host: Host): HostKeyPolicy = AcceptAllHostKeys
-        override val networkAvailable: Flow<Unit> = emptyFlow()
+        override val networkAvailable: Flow<Unit> = MutableSharedFlow()
         override fun onClipboardText(host: Host, text: String) = Unit
     }
+
+    /**
+     * Row [i] of a screen of glyphs the renderer draws a cell at a time: a tmux pane border between a `tree` listing
+     * and a meter of blocks, over a line of braille graph. [BOX_ROW_COLS] wide, so a grid narrower than that wraps it.
+     */
+    fun boxRow(i: Int): String {
+        val tree = (if (i % 5 == 4) "\u2502   \u2514\u2500\u2500 " else "\u2502   \u251C\u2500\u2500 ") + "file-$i.kt"
+        val fill = i % 20
+        val meter = "cpu [" + "\u2588".repeat(fill) + "\u2591".repeat(20 - fill) + "] " + "\u28C0\u28E4\u28F6\u28FF".repeat(4)
+        return "\u001b[32m" + tree.padEnd(39) + "\u001b[0m\u2502 \u001b[36m" + meter + "\u001b[0m"
+    }
+
+    /** The columns a [boxRow] takes: the listing's 39, the border and its space, and the meter's 43. */
+    const val BOX_ROW_COLS = 84
 
     fun seed(graph: TestGraph, now: Long = System.currentTimeMillis()) = runBlocking {
         graph.workspaces.upsert(Workspace(Workspace.DEFAULT_ID, Workspace.DEFAULT_NAME, SwatchColor.COPPER, "H", sortOrder = 0, createdAt = now - TimeUnit.DAYS.toMillis(30)))

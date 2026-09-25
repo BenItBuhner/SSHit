@@ -24,6 +24,7 @@ import com.google.android.apps.common.testing.accessibility.framework.checks.Tou
 import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
 import app.berth.android.ui.a11y.TouchTargetSize
 import app.berth.android.ui.stage.DeckKeyTag
+import app.berth.android.ui.terminal.TerminalCanvasPending
 import org.hamcrest.CoreMatchers.anyOf
 import org.hamcrest.Description
 import org.hamcrest.TypeSafeMatcher
@@ -45,6 +46,7 @@ import kotlin.math.abs
 @OptIn(ExperimentalRoborazziApi::class)
 fun ComposeTestRule.captureAudited(file: File) {
     waitForIdle()
+    awaitTerminalCanvases()
     file.parentFile?.mkdirs()
     captureScreenRoboImage(file.path)
     if (System.getenv("BERTH_A11Y_DUMP") != null) dumpA11yFindings(file.nameWithoutExtension)
@@ -59,6 +61,23 @@ fun ComposeTestRule.captureAudited(file: File) {
         val lists = ScrolledPastTheEdge(nodes, rootNode.positionOnScreen)
         val deckKeys = DeckKeyTargets(nodes, rootNode.positionOnScreen, minTarget, keyWidth, gripWidth)
         root.checkRoboAccessibility(roborazziATFAccessibilityCheckOptions = auditOptions(sheet, lists, UnderAScrolledRowsReach(nodes, minTarget), deckKeys))
+    }
+}
+
+/**
+ * Waits until every terminal canvas on screen draws its screen as it stands ([TerminalCanvasPending]). Compose's
+ * idle covers neither the frame, captured on a worker, nor the grid, which follows a new size once the size has
+ * settled on the main clock, so a picture taken at idle alone could hold the frame before, or the pane's old
+ * width. The clock moves only while a grid is pending, so a capture with nothing pending is taken as it stood.
+ */
+private fun ComposeTestRule.awaitTerminalCanvases() {
+    val deadline = System.currentTimeMillis() + 10_000
+    while (true) {
+        val pending = TerminalCanvasPending.pending() ?: return
+        check(System.currentTimeMillis() < deadline) { "a terminal canvas's ${pending.name.lowercase()} was still pending after 10 s" }
+        if (pending == TerminalCanvasPending.Kind.GRID) mainClock.advanceTimeBy(16)
+        Thread.sleep(4)
+        waitForIdle()
     }
 }
 

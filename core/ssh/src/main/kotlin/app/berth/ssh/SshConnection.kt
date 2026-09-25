@@ -244,6 +244,9 @@ class SshConnection(
     @Volatile var negotiatedCipher: String? = null
         private set
 
+    /** Makes the sshj client of each hop and of the target from its config; a test hands in one that loses the connect's race every time. */
+    internal var clientFactory: (DefaultConfig) -> SSHClient = { SSHClient(it) }
+
     init {
         SshSecurity.ensureProviders()
     }
@@ -323,7 +326,7 @@ class SshConnection(
             keepAliveProvider = KeepAliveProvider.KEEP_ALIVE
             cipherFactories = SshCiphers.select(cipherFactories, ep.ciphers)
         }
-        val c = SSHClient(config)
+        val c = clientFactory(config)
         if (isTarget) {
             c.transport.addAlgorithmsVerifier { negotiated ->
                 negotiatedCipher = negotiated.client2ServerCipherAlgorithm
