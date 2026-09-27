@@ -588,8 +588,10 @@ class ProofPassTerminalScreenshotTest {
         clear(marked)
         val history = { graph.commandHistory.items.value.map { it.text } }
 
-        // Typed, no marks: the fallback reads the line off the screen.
-        marked.sendText("echo draft\n")
+        // Typed, no marks: the fallback reads the line off the screen, where its echo is by Enter.
+        marked.sendText("echo draft")
+        awaitScreen(marked, "the typed draft") { rows -> rows.first().trimEnd().endsWith("$ echo draft") }
+        marked.sendKey(TerminalKey.ENTER)
         compose.waitUntil(10_000) { "echo draft" in history() }
         // Recalled and edited, no marks: not the fallback's to know.
         marked.sendKey(TerminalKey.UP)
