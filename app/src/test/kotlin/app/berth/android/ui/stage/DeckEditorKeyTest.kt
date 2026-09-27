@@ -1,13 +1,16 @@
 package app.berth.android.ui.stage
 
 import android.app.Application
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performClick
@@ -28,8 +31,9 @@ import org.robolectric.annotation.Config
 
 /**
  * The key that trails a one-layer Deck (spec C4's layer key has nothing to cycle there): the Deck
- * editor outright, one button with one activation and no layer actions; disabled where there is no
- * editor to open; and the layer key still on a Deck of more layers than one.
+ * editor outright, one button with one activation and no layer actions; where there is no editor to
+ * open (a preview) drawn and nothing more, the row measured as the Stage's; and the layer key still
+ * on a Deck of more layers than one.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -41,13 +45,15 @@ class DeckEditorKeyTest {
     val compose = createBerthComposeRule()
 
     private var opened = 0
+    private var onOpen: (() -> Unit)? by mutableStateOf(null)
 
     private fun mount(layout: DeckLayout, onOpenDeckEditor: (() -> Unit)?) {
+        onOpen = onOpenDeckEditor
         compose.setContent {
             BerthTheme(InterfaceTheme.DEFAULT) {
                 val input = remember { StageInput(session = { null }, latch = ModifierLatch(), onAppAction = {}) }
                 // Index 1: the whole Deck's second layer, which a one-layer Deck holds to its one.
-                Deck(layout = layout, layerIndex = 1, onLayerIndexChange = {}, input = input, onOpenDeckEditor = onOpenDeckEditor)
+                Deck(layout = layout, layerIndex = 1, onLayerIndexChange = {}, input = input, onOpenDeckEditor = onOpen)
             }
         }
         compose.waitForIdle()
@@ -73,11 +79,17 @@ class DeckEditorKeyTest {
     }
 
     @Test
-    fun `with no editor to open the key stands disabled, so the row still measures as the Stage's`() {
-        mount(DeckLayout.default().compactForHardwareKeyboard(), onOpenDeckEditor = null)
-        val key = compose.onNode(editorKey())
-        key.assertIsNotEnabled()
-        assertEquals("the layer key's target: half the gap, its 40 dp face and the 8 dp trailing edge", 50f, key.fetchSemanticsNode().size.width / compose.density.density, 0.5f)
+    fun `with no editor to open the key is drawn and nothing more, so the row still measures as the Stage's`() {
+        mount(DeckLayout.default().compactForHardwareKeyboard(), onOpenDeckEditor = { opened++ })
+        val stood = compose.onNode(editorKey()).fetchSemanticsNode().boundsInRoot
+        assertEquals("the layer key's target: half the gap, its 40 dp face and the 8 dp trailing edge", 50f, stood.width / compose.density.density, 0.5f)
+        val others = { compose.onAllNodes(hasTestTag(DeckKeyTag) and !hasContentDescription("Deck editor")).fetchSemanticsNodes().map { it.boundsInRoot } }
+        val beside = others()
+        onOpen = null
+        compose.waitForIdle()
+        assertTrue("nothing a reader is told of as the Deck editor", compose.onAllNodes(hasContentDescription("Deck editor")).fetchSemanticsNodes().isEmpty())
+        assertTrue("no node where the key stands", compose.onAllNodes(SemanticsMatcher("stands where the key stood") { it.boundsInRoot == stood }).fetchSemanticsNodes().isEmpty())
+        assertEquals("the row's other keys where they stood beside the Stage's key", beside, others())
     }
 
     @Test
