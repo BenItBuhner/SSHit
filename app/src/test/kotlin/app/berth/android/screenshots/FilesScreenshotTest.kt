@@ -137,6 +137,8 @@ class FilesScreenshotTest {
     private val sshPort = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22
     private val sshUser = System.getenv("SSH_TEST_USER").orEmpty()
     private val sshPassword = System.getenv("SSH_TEST_PASSWORD").orEmpty()
+    /** The folders a live flow made in the sshd account's home, for [tearDown] to take away. */
+    private val madeInHome = ArrayList<String>()
 
     @Before
     fun setUp() {
@@ -154,6 +156,23 @@ class FilesScreenshotTest {
         scope.cancel()
         TimeZone.setDefault(zone)
         RuntimeEnvironment.setFontScale(1f)
+        if (madeInHome.isNotEmpty()) removeFromHome(madeInHome)
+    }
+
+    /**
+     * Takes a live flow's folders off the shared sshd, through a login of the test's own so they go
+     * whether or not the flow reached its end or its session lived to it. Left there by a failed run,
+     * a flow's tree was a row in the home listing of every Files flow after it.
+     */
+    private fun removeFromHome(names: List<String>) = runBlocking {
+        val endpoint = SshEndpoint(host = sshHost, port = sshPort, user = sshUser, auth = listOf(SshAuth.Password { sshPassword.toCharArray() }), keepaliveSeconds = 5)
+        val connection = SshConnection(endpoint, AcceptAllHostKeys)
+        connection.connect()
+        try {
+            for (name in names) assertEquals("~/$name is gone", "gone", connection.exec("rm -rf ~/$name; test -e ~/$name || echo gone").trim())
+        } finally {
+            connection.close()
+        }
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -843,6 +862,7 @@ class FilesScreenshotTest {
             try {
                 val home = fs.home()
                 val d = "$home/berth-files-demo"
+                madeInHome += "berth-files-demo"
                 runCatching { fs.delete(d) }
                 fs.mkdir(d)
                 fs.mkdir("$d/logs")
@@ -1000,7 +1020,6 @@ class FilesScreenshotTest {
         waitForNoText("archive", 15_000)
         capture("files-live-deleted")
 
-        runBlocking { session.openSftp().use { runCatching { it.delete(dir) } } }
         out.delete()
         uploads.deleteRecursively()
         graph.sessions.close(session.id)
@@ -1054,6 +1073,7 @@ class FilesScreenshotTest {
             val fs = session.openSftp()
             try {
                 val root = "${fs.home()}/berth-folder-live"
+                madeInHome += "berth-folder-live"
                 runCatching { fs.delete(root) }
                 fs.mkdir(root)
                 val d = "$root/berth-folder-demo"
@@ -1169,7 +1189,6 @@ class FilesScreenshotTest {
                 assertEquals(0b111_101_101, fs.stat("$remoteRoot/photos/empty").permissions and 0b111_111_111)
                 assertEquals(0b110_100_100, fs.stat("$remoteRoot/notes.txt").permissions and 0b111_111_111)
                 assertTrue(fs.list("$remoteRoot/photos/empty").isEmpty())
-                runCatching { fs.delete(root) }
             } finally {
                 fs.close()
             }
