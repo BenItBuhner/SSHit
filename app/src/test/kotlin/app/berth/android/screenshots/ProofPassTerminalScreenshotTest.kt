@@ -22,7 +22,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PixelMap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -32,6 +35,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
@@ -76,6 +80,7 @@ import app.berth.android.ui.theme.berthColors
 import app.berth.android.ui.theme.toColor
 import app.berth.domain.model.AuthMethod
 import app.berth.domain.model.ClipboardClear
+import app.berth.domain.model.HapticLevel
 import app.berth.domain.model.Host
 import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.InterfaceVariant
@@ -131,6 +136,9 @@ import java.util.concurrent.TimeUnit
  * - A24 and A25, the tmux helper and the Deck's tmux layer: a host on Attach or create keeps its
  *   shell through a dropped link, and the layer's keys drive tmux.
  * - A43, the volume buttons: Volume Up under Up and Down arrows recalls the last command.
+ * - A41, the Deck's haptics, which no frame shows: what the Deck asks of the platform for a key
+ *   tap and Ctrl's latches, as Settings' Haptics level moves from Full to Subtle to Off; the
+ *   frames are the taps and the level they were made on.
  * - A76, clipboard auto-clear: a word copied off the screen pastes at once, and 30 s later the
  *   same paste gives nothing.
  *
@@ -162,6 +170,15 @@ class ProofPassTerminalScreenshotTest {
 
     /** What the tabs sent to the remote, in order, from each session's send hook. */
     private val sent = CopyOnWriteArrayList<String>()
+
+    /** What the app asked of the platform's haptics, in order, each with the main clock's time then. */
+    private val buzzes = CopyOnWriteArrayList<Pair<HapticFeedbackType, Long>>()
+
+    private val haptics = object : HapticFeedback {
+        override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) {
+            buzzes += hapticFeedbackType to compose.mainClock.currentTime
+        }
+    }
 
     private val closeables = ArrayList<Closeable>()
 
@@ -243,7 +260,8 @@ class ProofPassTerminalScreenshotTest {
 
     /**
      * The real app with [box] saved and its password with it, the process in front (so the tab on
-     * stage is on stage), the activity's volume buttons provided as MainActivity provides them.
+     * stage is on stage), the activity's volume buttons provided as MainActivity provides them and
+     * the platform's haptics as [haptics], which keeps what is asked of it.
      */
     private fun mountApp(box: Host) {
         runBlocking {
@@ -251,7 +269,9 @@ class ProofPassTerminalScreenshotTest {
             graph.hosts.upsert(box)
         }
         compose.setContent {
-            CompositionLocalProvider(LocalWallClock provides { now }, LocalVolumeKeys provides volumeKeys) { AppRoot(graph.viewModel) }
+            CompositionLocalProvider(LocalWallClock provides { now }, LocalVolumeKeys provides volumeKeys, LocalHapticFeedback provides haptics) {
+                AppRoot(graph.viewModel)
+            }
         }
         graph.process.start()
     }
@@ -884,6 +904,86 @@ class ProofPassTerminalScreenshotTest {
         awaitScreen(session, "the recalled command at the prompt") { rows -> rows.last { it.isNotBlank() }.endsWith("echo recalled by volume up") }
         compose.settle(600)
         capture("A43-volume-up-recall")
+    }
+
+    // ---- A41, the Deck's haptics -------------------------------------------------------------------
+
+    /**
+     * The Deck's haptics (spec A41, D3), which no frame can show, read off what the app asks of the
+     * platform. Under Full, the default, a tap on `-` is `KEYBOARD_TAP`, Ctrl's one-shot two light
+     * ticks 40 ms apart, its lock one heavy tick and its release one light tick. Subtle, picked in
+     * Settings, is taps only, so each of Ctrl's steps is a tap; Off asks for nothing. The frames are
+     * what set each off: Ctrl locked over the `-` typed before it, Settings' Haptics row on each
+     * level, and the prompt with a `-` for each level's tap.
+     */
+    @Test
+    fun `A41 a Deck tap and Ctrl's latches ask for D3's patterns, only taps under Subtle and nothing under Off`() {
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        val box = testHost("Berth test box")
+        mountApp(box)
+        val session = newTab(box)
+        clear(session)
+        val level = { runBlocking { graph.settings.hapticLevel.first() } }
+        assertEquals("Full is the default", HapticLevel.FULL, level())
+        val tap = HapticFeedbackType.KeyboardTap
+        val light = HapticFeedbackType.SegmentTick
+        val heavy = HapticFeedbackType.LongPress
+
+        buzzes.clear()
+        tapDash(session, typed = 1)
+        assertEquals("a key tap", listOf(tap), kinds())
+        buzzes.clear()
+        stepCtrl("Ctrl", "Ctrl, one-shot")
+        compose.waitUntil(5_000) { buzzes.size >= 2 }
+        assertEquals("a one-shot is two light ticks", listOf(light, light), kinds())
+        assertTrue("40 ms apart: ${buzzes.map { it.second }}", buzzes[1].second - buzzes[0].second >= 40)
+        buzzes.clear()
+        stepCtrl("Ctrl, one-shot", "Ctrl, locked")
+        assertEquals("a lock is one heavy tick", listOf(heavy), kinds())
+        compose.settle(600)
+        capture("A41-full-ctrl-locked")
+        buzzes.clear()
+        stepCtrl("Ctrl, locked", "Ctrl")
+        assertEquals("a release is one light tick", listOf(light), kinds())
+
+        val row = hasText("Haptics") and hasClickAction()
+        val option = { name: String -> hasText(name) and hasAnyAncestor(isPopup()) }
+        inSettings("A41-settings-haptics-subtle", row, option("Subtle"), done = { level() == HapticLevel.SUBTLE }) {
+            compose.onNode(row).assertTextContains("Subtle")
+        }
+        buzzes.clear()
+        tapDash(session, typed = 2)
+        stepCtrl("Ctrl", "Ctrl, one-shot")
+        stepCtrl("Ctrl, one-shot", "Ctrl, locked")
+        stepCtrl("Ctrl, locked", "Ctrl")
+        compose.settle(400)
+        assertEquals("Subtle is taps only: the key's and each of Ctrl's steps", List(4) { tap }, kinds())
+
+        inSettings("A41-settings-haptics-off", row, option("Off"), done = { level() == HapticLevel.OFF }) {
+            compose.onNode(row).assertTextContains("Off")
+        }
+        buzzes.clear()
+        tapDash(session, typed = 3)
+        stepCtrl("Ctrl", "Ctrl, one-shot")
+        stepCtrl("Ctrl, one-shot", "Ctrl, locked")
+        stepCtrl("Ctrl, locked", "Ctrl")
+        compose.settle(600)
+        assertTrue("Off asks for nothing: ${kinds()}", buzzes.isEmpty())
+        capture("A41-off-no-haptics")
+    }
+
+    private fun kinds() = buzzes.map { it.first }
+
+    /** The Deck's `-` tapped, and the prompt waited on until it holds [typed] of them. */
+    private fun tapDash(session: TerminalSession, typed: Int) {
+        compose.onNode(deckKey("-")).performClick()
+        awaitScreen(session, "$typed dashes at the prompt") { rows -> rows.first().trimEnd().endsWith("$ " + "-".repeat(typed)) }
+    }
+
+    /** The Deck's Ctrl, described as [from], tapped until it is described as [to]. */
+    private fun stepCtrl(from: String, to: String) {
+        compose.onNode(deckKey(from)).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(deckKey(to)).fetchSemanticsNodes().isNotEmpty() }
     }
 
     // ---- A76, clipboard auto-clear ------------------------------------------------------------------
