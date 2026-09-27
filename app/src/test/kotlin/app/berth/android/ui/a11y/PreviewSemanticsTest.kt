@@ -4,10 +4,17 @@ import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
 import androidx.test.core.app.ApplicationProvider
 import app.berth.android.ComposeHostRule
@@ -35,7 +42,8 @@ import org.robolectric.annotation.GraphicsMode
  * editor's preview a reader can act on a slot, which selects it, and on a layer key, which steps
  * the row's layer, and on nothing else: not the Grip, not the Deck editor key a one-layer draft
  * ends in, not the keys of a second row the editor does not edit. The Appearance screen's preview
- * acts on nothing, so it is its one description with nothing under it.
+ * acts on nothing, so it is its one description with nothing under it. What a reader never hears
+ * of takes no keyboard focus either, or Tab would stop there in silence.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -60,11 +68,30 @@ class PreviewSemanticsTest {
         graph.close()
     }
 
+    private lateinit var focus: FocusManager
+    private lateinit var inputMode: InputModeManager
+
     private fun themed(content: @androidx.compose.runtime.Composable () -> Unit) {
         compose.setContent {
+            focus = LocalFocusManager.current
+            inputMode = LocalInputModeManager.current
             BerthTheme(InterfaceTheme.DEFAULT) {
                 Box(Modifier.fillMaxSize()) { content() }
             }
+        }
+    }
+
+    /**
+     * The Tab order from the top, [count] stops of it, each named as a reader hears the node that
+     * holds focus there, or `silent` where focus stands on a node a reader never hears of: one
+     * cleared from the tree, as a preview's keys are.
+     */
+    private fun tabWalk(count: Int): List<String> {
+        compose.runOnIdle { inputMode.requestInputMode(InputMode.Keyboard) }
+        return List(count) {
+            compose.runOnIdle { focus.moveFocus(FocusDirection.Next) }
+            compose.waitForIdle()
+            compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true)).fetchSemanticsNodes().singleOrNull()?.heard() ?: "silent"
         }
     }
 
@@ -130,5 +157,23 @@ class PreviewSemanticsTest {
         val mock = preview("Interface preview")
         assertEquals("nothing under the Interface preview speaks", emptyList<String>(), mock.descendants().map { it.heard() })
         assertEquals("and the preview itself is no control", false, mock.isControl())
+    }
+
+    @Test
+    fun `keyboard focus passes over the Appearance screen's preview`() {
+        themed { AppearanceScreen(graph.viewModel, onBack = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Interface preview"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        val stops = tabWalk(24)
+        assertEquals("focus stops a reader never hears of, in $stops", 0, stops.count { it == "silent" })
+        assertEquals("from Share, above the preview, focus goes to the first theme, below it: $stops", "Graphite", stops.getOrNull(stops.indexOf("Share") + 1))
+    }
+
+    @Test
+    fun `keyboard focus passes over the second row's keys under the Deck editor's preview, and stops at its layer key`() {
+        mountEditor(DeckLayout.default().copy(rows = 2))
+        val stops = tabWalk(24)
+        assertEquals("focus stops a reader never hears of, in $stops", 0, stops.count { it == "silent" })
+        assertEquals("from the first row's layer key focus goes to the second row's: $stops", "Layer", stops.getOrNull(stops.indexOf("Layer") + 1))
     }
 }

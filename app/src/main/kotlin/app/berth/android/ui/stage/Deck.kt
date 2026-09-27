@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -441,7 +442,7 @@ private val KeyMaxWidth = 120.dp
  * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]). A swipe across
  * a key steps this row's layer (spec D2), the way its layer key's tap and swipe do. [silentKeys] is
  * the Deck editor's second row, which the editor does not edit and whose keys send nothing there:
- * its keys say nothing to a reader, and its layer key still steps it.
+ * its keys say nothing to a reader and take no keyboard focus, and its layer key still steps it.
  */
 @Composable
 private fun DeckRow(
@@ -480,7 +481,7 @@ private fun DeckRow(
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(targets.grip).fillMaxHeight()) { grip?.invoke() }
             Row(
-                Modifier.weight(1f).fillMaxHeight().then(if (silentKeys) Modifier.clearAndSetSemantics {} else Modifier),
+                Modifier.weight(1f).fillMaxHeight().then(if (silentKeys) Modifier.clearAndSetSemantics {}.focusProperties { canFocus = false } else Modifier),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -215,7 +216,8 @@ private const val RADIUS_STOPS = 8
  * the real [StatePill] and the real Deck, so the preview cannot drift from what the Stage draws.
  * The Deck sits flush at the bottom as it does on the Stage, so the mock is cut at the row radius:
  * a panel's 20 dp arc would run through the outer keys' corners. Nothing in it acts, so to a reader
- * it is its one description, none of its keys or its pill's actions a control of its own.
+ * it is its one description, none of its keys or its pill's actions a control of its own, and
+ * keyboard focus passes over it.
  */
 @Composable
 private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font: app.berth.domain.model.TerminalFont, deck: app.berth.domain.model.DeckLayout) {
@@ -227,7 +229,8 @@ private fun StageMock(terminalTheme: app.berth.domain.model.TerminalTheme, font:
             .fillMaxWidth()
             .clip(RoundedCornerShape(BerthRadius.row))
             .background(c.surface0)
-            .clearAndSetSemantics { contentDescription = "Interface preview" },
+            .clearAndSetSemantics { contentDescription = "Interface preview" }
+            .focusProperties { canFocus = false },
     ) {
         Row(
             Modifier.fillMaxWidth().height(Berth.density.header).background(c.surface1).padding(horizontal = 4.dp),
