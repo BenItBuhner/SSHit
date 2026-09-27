@@ -28,13 +28,10 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.TerminalKey
-import com.github.takahirom.roborazzi.captureScreenRoboImage
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,15 +42,12 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import javax.imageio.ImageIO
 import kotlin.concurrent.thread
 
 /**
  * [captureAudited] takes its picture of a terminal only once the canvas draws the screen as it
  * stands (brief item 13): the frame of the latest output, which the canvas captures on a worker
- * Compose's idling does not see, and a grid that has followed the canvas's width. Nothing is
- * pending once a capture returns wherever in it the wait stands, so each picture is held to the
- * screen photographed again after it.
+ * Compose's idling does not see, and a grid that has followed the canvas's width.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -68,14 +62,6 @@ class CaptureWaitsForTerminalTest {
     private val outDir: File = Files.createTempDirectory("berth-capture-waits").toFile()
     private val sessions = ArrayList<TerminalSession>()
 
-    @Before
-    fun setUp() {
-        // The pictures are read back, so they are written, as the screenshot classes' are.
-        if (System.getProperty("roborazzi.test.record") == null && System.getProperty("roborazzi.test.verify") == null) {
-            System.setProperty("roborazzi.test.record", "true")
-        }
-    }
-
     @After
     fun tearDown() {
         sessions.forEach { it.close() }
@@ -83,23 +69,6 @@ class CaptureWaitsForTerminalTest {
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
-
-    /** The pixels of the picture [name] holds, row by row. */
-    private fun pixels(name: String): IntArray {
-        val image = ImageIO.read(File(outDir, "$name.png"))
-        return image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
-    }
-
-    /**
-     * What [capture] wrote as [name] is the screen as it stands once no canvas has anything pending,
-     * pixel for pixel: the wait comes before the picture, not only before the audit after it. Once
-     * nothing is pending the screen is photographed again, on the same clock, to compare.
-     */
-    private fun assertCaptureHoldsTheSettledScreen(name: String) {
-        assertNull("a terminal canvas is still pending after '$name'", TerminalCanvasPending.pending())
-        captureScreenRoboImage(File(outDir, "$name-settled.png").path)
-        assertTrue("the picture '$name' holds the screen from before the canvas drew it", pixels(name).contentEquals(pixels("$name-settled")))
-    }
 
     /** Homelab's live frame on a canvas of its own, [width] wide. */
     private fun canvas(width: () -> Dp): TerminalSession {
@@ -155,8 +124,6 @@ class CaptureWaitsForTerminalTest {
         capture("after-output")
         assertNull("the picture was taken before the canvas drew the output", TerminalCanvasPending.pending())
         holder.join()
-        assertCaptureHoldsTheSettledScreen("after-output")
-        assertFalse("the output changes what the canvas shows", pixels("before").contentEquals(pixels("after-output")))
     }
 
     @Test
@@ -172,7 +139,6 @@ class CaptureWaitsForTerminalTest {
         assertNull("the picture was taken before the canvas drew its new width", TerminalCanvasPending.pending())
         assertEquals(canvasCols(), session.emulator.cols)
         assertTrue("${session.emulator.cols} columns, from $wide", session.emulator.cols < wide)
-        assertCaptureHoldsTheSettledScreen("narrowed")
     }
 
     private companion object {

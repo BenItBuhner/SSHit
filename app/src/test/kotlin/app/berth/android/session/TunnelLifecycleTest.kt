@@ -128,11 +128,9 @@ class TunnelLifecycleTest {
         await(15_000, "tunnel back") { graph.sessions.tunnelStatuses.value[tunnel.id] is TunnelStatus.Up }
         assertEquals(body, get("http://127.0.0.1:$port/"))
 
-        // Closing the session is the same release as disabling, the row going once the handle's close
-        // has returned, so the port is polled to a deadline here too.
         graph.sessions.close(session.id)
         await(10_000, "statuses cleared") { graph.sessions.tunnelStatuses.value.isEmpty() }
-        await(2_000, "port free after close") { refused(port) }
+        assertTrue("port should be free after close", refused(port))
     }
 
     @Test
