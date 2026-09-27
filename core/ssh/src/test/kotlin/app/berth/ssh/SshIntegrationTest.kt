@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import net.schmizz.sshj.SSHClient
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -21,11 +22,14 @@ import java.io.Closeable
 import java.io.DataInputStream
 import java.io.File
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import javax.net.SocketFactory
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -598,23 +602,124 @@ class SshIntegrationTest {
     }
 
     /**
+     * sshj's channel close sends CHANNEL_CLOSE and waits 30 s for a reply that a link gone silent
+     * never carries, so a caller closing the shell first sat out the whole of it. In the background
+     * the caller has its thread back at once, and the socket is shut once the grace is up.
+     */
+    @Test
+    fun `a close in the background over a silent link returns at once and shuts the socket after the grace`() = runBlocking {
+        Relay(host, port).use { relay ->
+            val connection = SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 0), AcceptAllHostKeys)
+            connection.connect()
+            val shell = connection.openShell(80, 24)
+            relay.silent = true
+            val started = System.nanoTime()
+            val closing = connection.closeInBackground(listOf(shell), graceMillis = 1_000)
+            val returned = (System.nanoTime() - started) / 1_000_000
+            assertTrue(returned < 200, "closeInBackground held its caller $returned ms")
+            assertTrue(relay.clientClosed.await(4_000, TimeUnit.MILLISECONDS), "the client's socket was still open 4 s after a close with a 1 s grace")
+            closing.join(2_000)
+            val took = (System.nanoTime() - started) / 1_000_000
+            assertFalse(closing.isAlive, "the close was still running after $took ms")
+            assertTrue(took < 4_000, "the close took $took ms with a 1 s grace; the reply it no longer waits for takes 30 s")
+            assertFalse(shell.isOpen)
+            assertFalse(connection.isConnected)
+            assertTrue(connection.state.value is SshConnectionState.Disconnected)
+        }
+    }
+
+    /** A login already dropped has nobody to answer a close: what it hands over is not waited on. */
+    @Test
+    fun `a close in the background of a login already dropped waits on nothing it hands over`() = runBlocking {
+        Relay(host, port).use { relay ->
+            val connection = SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 0), AcceptAllHostKeys)
+            connection.connect()
+            relay.silent = true
+            connection.dropAsLost("the network changed")
+            withTimeout(2_000) { while (connection.isConnected) delay(20) }
+            val never = CountDownLatch(1)
+            try {
+                val started = System.nanoTime()
+                val closing = connection.closeInBackground(listOf(Closeable { never.await() }), graceMillis = 10_000)
+                closing.join(10_000)
+                val took = (System.nanoTime() - started) / 1_000_000
+                assertFalse(closing.isAlive, "the close was still running after $took ms")
+                assertTrue(took < 2_000, "the close of a dropped login took $took ms; its 10 s grace is for a login that still looks up")
+            } finally {
+                never.countDown()
+            }
+        }
+    }
+
+    /**
+     * A writer stuck on a full send buffer holds sshj's write lock, so the disconnect's own write
+     * waits behind it for as long as the path stays stalled. Once the grace is up the socket is
+     * closed under both, and both end.
+     */
+    @Test
+    fun `a close in the background whose disconnect cannot write closes the socket under it`() = runBlocking {
+        Relay(host, port, bufferBytes = 4_096).use { relay ->
+            val connection = SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 0), AcceptAllHostKeys)
+            connection.clientFactory = { config -> SSHClient(config).apply { socketFactory = SmallSendBuffer(4_096) } }
+            connection.connect()
+            val shell = connection.openShell(80, 24)
+            relay.stalled = true
+            val writerEnded = CountDownLatch(1)
+            thread(isDaemon = true) {
+                runCatching { shell.write(ByteArray(1_024 * 1_024) { 'x'.code.toByte() }) }
+                writerEnded.countDown()
+            }
+            assertFalse(writerEnded.await(1_000, TimeUnit.MILLISECONDS), "the writer should be stuck on the stalled path")
+            val started = System.nanoTime()
+            val closing = connection.closeInBackground(listOf(shell), graceMillis = 500)
+            closing.join(5_000)
+            val took = (System.nanoTime() - started) / 1_000_000
+            assertFalse(closing.isAlive, "the close was still running after $took ms")
+            assertTrue(took < 2_500, "the close took $took ms with a 500 ms grace")
+            assertTrue(writerEnded.await(2_000, TimeUnit.MILLISECONDS), "the stuck writer should end once its socket is closed")
+            assertFalse(connection.isConnected)
+        }
+    }
+
+    /** Sockets whose send buffer is [bytes], so a stalled path fills it within a small write. */
+    private class SmallSendBuffer(private val bytes: Int) : SocketFactory() {
+        override fun createSocket(): Socket = Socket().apply { sendBufferSize = bytes }
+        override fun createSocket(host: String, port: Int): Socket = createSocket().apply { connect(InetSocketAddress(host, port)) }
+        override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+            createSocket().apply { bind(InetSocketAddress(localHost, localPort)); connect(InetSocketAddress(host, port)) }
+        override fun createSocket(host: InetAddress, port: Int): Socket = createSocket().apply { connect(InetSocketAddress(host, port)) }
+        override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+            createSocket().apply { bind(InetSocketAddress(localAddress, localPort)); connect(InetSocketAddress(address, port)) }
+    }
+
+    /**
      * A TCP relay to the sshd that counts the client's writes and can go [silent]: from then on
      * it reads both ways and passes nothing on, a path that lost the network with both sockets
-     * still open, so only a keepalive can tell.
+     * still open, so only a keepalive can tell. [stalled] stops it reading from the client at all,
+     * so the client's writes back up into its send buffer; [bufferBytes] makes that buffer's far
+     * end small. [clientClosed] opens once the client has closed its end.
      */
-    private class Relay(host: String, port: Int) : Closeable {
-        private val listener = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+    private class Relay(host: String, port: Int, bufferBytes: Int? = null) : Closeable {
+        private val listener = ServerSocket().apply {
+            bufferBytes?.let { receiveBufferSize = it }
+            bind(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 1)
+        }
         private val sockets = CopyOnWriteArrayList<Socket>()
         val port: Int get() = listener.localPort
         val writesUp = AtomicInteger()
+        val clientClosed = CountDownLatch(1)
         @Volatile var silent = false
+        @Volatile var stalled = false
 
         init {
             thread(isDaemon = true) {
                 runCatching {
                     val client = listener.accept().also { sockets += it }
                     val server = Socket(host, port).also { sockets += it }
-                    thread(isDaemon = true) { pump(client, server, writesUp) }
+                    thread(isDaemon = true) {
+                        pump(client, server, writesUp)
+                        clientClosed.countDown()
+                    }
                     pump(server, client, null)
                 }
             }
@@ -625,6 +730,7 @@ class SshIntegrationTest {
             val output = to.getOutputStream()
             val buffer = ByteArray(32 * 1024)
             while (true) {
+                while (writes != null && stalled && !listener.isClosed) Thread.sleep(10)
                 val n = input.read(buffer)
                 if (n < 0) break
                 writes?.incrementAndGet()

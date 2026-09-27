@@ -618,12 +618,23 @@ class TerminalSession(
         tunnelRetry.update { it + 1 }
     }
 
-    private fun closeTunnels() {
+    /**
+     * Stops every tunnel and returns the remote forwards' handles unclosed. A local or dynamic
+     * forward's listener holds a device port, so it closes here, and closing one waits on nothing;
+     * a remote forward's close asks the server to stop listening and waits for the answer, so it
+     * goes to the connection's close in the background ([SshConnection.closeInBackground]).
+     */
+    private fun releaseTunnels(): List<ForwardHandle> {
+        val remote = ArrayList<ForwardHandle>()
         synchronized(slots) {
-            slots.values.forEach { slot -> slot.handle?.let { runCatching(it::close) } }
+            for (slot in slots.values) {
+                val handle = slot.handle ?: continue
+                if (slot.tunnel.type == TunnelType.REMOTE) remote += handle else runCatching(handle::close)
+            }
             slots.clear()
         }
         _tunnels.value = emptyMap()
+        return remote
     }
 
     private fun tunnelError(tunnel: Tunnel, e: Throwable): String {
@@ -948,13 +959,17 @@ class TerminalSession(
 
     private fun Throwable.rootSshError(): Throwable = if (this is SshError.JumpHopFailed) reason else this
 
+    /**
+     * Drops the connection without waiting on it: Close and Detach call this on the main thread,
+     * and closing the shell over a link gone silent waits on a reply that never comes. Forward
+     * listeners give back their device ports before this returns, so the next attempt can bind them.
+     */
     private fun teardownConnection() {
-        // Forward listeners hold device ports; release them before the next attempt binds again.
-        closeTunnels()
-        shell?.let { runCatching { it.close() } }
+        val remote = releaseTunnels()
+        val sh = shell
         shell = null
         echo.ended()
-        connection?.let { c -> c.onDisconnected = null; runCatching { c.close() } }
+        connection?.let { c -> c.onDisconnected = null; c.closeInBackground(listOfNotNull(sh) + remote) }
         connection = null
     }
 

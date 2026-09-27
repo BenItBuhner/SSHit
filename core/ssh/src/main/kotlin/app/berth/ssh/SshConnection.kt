@@ -37,6 +37,7 @@ import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /** Ways to prove who we are, tried in order. Secrets are pulled lazily so prompts can happen late. */
 sealed interface SshAuth {
@@ -624,6 +625,33 @@ class SshConnection(
         }
     }
 
+    /**
+     * [close], on a thread of its own, closing [first] ahead of it; returns that thread at once.
+     * sshj's channel close sends CHANNEL_CLOSE and waits for the server's reply as long as the
+     * transport's timeout, 30 s, and a remote forward's cancel waits as long for its answer. Over
+     * a link gone silent without a FIN neither reply comes, so a caller on the main thread would
+     * sit out the whole of it. [first] (the shell, remote forwards) closes on a thread of its own
+     * and has [graceMillis] to finish while the login still looks up, none once it is known dead;
+     * then the transport is disconnected, which ends any wait still pending. A disconnect that
+     * cannot write either (a writer stuck on a full send buffer holds sshj's write lock) has as
+     * long again before the sockets are closed under it. A connect in flight ends as with [close].
+     */
+    fun closeInBackground(first: List<Closeable> = emptyList(), graceMillis: Long = CLOSE_GRACE_MS): Thread {
+        val live = isConnected
+        synchronized(askLock) {
+            closed = true
+            askingUser?.interrupt()
+        }
+        return thread(isDaemon = true, name = "berth-close-${endpoint.host}") {
+            val sockets = runCatching { (listOfNotNull(client, connecting) + hops.toList()).mapNotNull { it.socket } }.getOrDefault(emptyList())
+            val channels = thread(isDaemon = true, name = "berth-close-channels-${endpoint.host}") { first.forEach { runCatching { it.close() } } }
+            if (live) channels.join(graceMillis)
+            val disconnect = thread(isDaemon = true, name = "berth-disconnect-${endpoint.host}") { close() }
+            disconnect.join(graceMillis)
+            if (disconnect.isAlive) sockets.forEach { runCatching { it.close() } }
+        }
+    }
+
     private fun closeQuietly() {
         agent?.close()
         agent = null
@@ -642,6 +670,9 @@ class SshConnection(
     companion object {
         /** The global request [probe] sends: what OpenSSH's client sends for `ServerAliveInterval`, answered by every server. */
         const val PROBE_REQUEST = "keepalive@openssh.com"
+
+        /** How long [closeInBackground] lets a live login's channels close, and then its disconnect run, before going on without them. */
+        const val CLOSE_GRACE_MS = 2_000L
     }
 }
 
