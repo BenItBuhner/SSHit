@@ -33,6 +33,9 @@ import app.berth.domain.model.PersistencePolicy
 import app.berth.domain.model.SessionState
 import app.berth.domain.model.SwatchColor
 import app.berth.ssh.SshSecurity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -108,7 +111,7 @@ class ProofPassConnectionScreenshotTest {
     private val sshPassword = System.getenv("SSH_TEST_PASSWORD").orEmpty()
     private val kbdPort = System.getenv("SSH_TEST_KBD_PORT").orEmpty().toIntOrNull()
 
-    /** Relays a case put in front of the sshd, closed after it whether it passed or not. */
+    /** Relays a case put in front of the sshd, closed after it, before the app's sessions, whether it passed or not. */
     private val closeables = ArrayList<Closeable>()
 
     @Before
@@ -123,8 +126,10 @@ class ProofPassConnectionScreenshotTest {
 
     @After
     fun tearDown() {
-        graph.close()
+        // A shell channel's close waits up to sshj's 30 s for the peer's reply, which a silent relay
+        // never passes; with the relay cut first the transport reads EOF and the close ends at once.
         closeables.forEach { runCatching { it.close() } }
+        graph.close()
     }
 
     private fun capture(name: String) = compose.captureAudited(File(outDir, "$name.png"))
@@ -229,8 +234,8 @@ class ProofPassConnectionScreenshotTest {
         compose.onNodeWithText("Connect").performClick()
         val session = awaitLive()
         compose.settle(1_200)
-        session.sendText("clear; echo \"\$SSH_CONNECTION\"\n")
-        compose.waitUntil(10_000) { session.emulator.screenText().any { it.trim().endsWith(" $kbdPort") } }
+        session.sendText("clear; echo \"SSH_CONNECTION=\$SSH_CONNECTION\"\n")
+        compose.waitUntil(10_000) { session.emulator.screenText().any { it.trim().let { row -> row.startsWith("SSH_CONNECTION=") && row.endsWith(" $kbdPort") } } }
         compose.settle(800)
         capture("A03-keyboard-interactive-live")
     }
@@ -292,7 +297,8 @@ class ProofPassConnectionScreenshotTest {
     /**
      * The pill with its countdown (spec D4), from a live tab whose server went away: the relay in
      * front of the sshd stops, the link closes under the shell and each try after is refused, so the
-     * waits run 1 s, 2 s, then 4 s, and the frame is taken on the 4. The pill counts that wait down
+     * waits run 1 s, 2 s, then 4 s, read off every value the countdown passes through (each wait
+     * starts where it rises), and the frame is taken on the 4. The pill counts that wait down
      * by the second; the relay starting again lets the try after it in, and the frame says
      * `reconnected` under the drop. The spec writes the pill `retry in 4 s`; the product draws
      * `retry in 4s` (a defect the proof pass records), which the reading here allows either way.
@@ -307,9 +313,14 @@ class ProofPassConnectionScreenshotTest {
         session.sendText("clear; uname -sn\n")
         compose.settle(800)
 
+        val passed = CopyOnWriteArrayList<Int?>()
+        val watch = CoroutineScope(Dispatchers.Unconfined).launch { session.retryIn.collect { passed += it } }
         relay.stop()
         awaitOnScreen(session, "connection lost", 15_000)
         compose.waitUntil(20_000) { session.retryIn.value == 4 }
+        watch.cancel()
+        val waits = passed.filterIndexed { i, seconds -> seconds != null && passed.getOrNull(i - 1).let { it == null || it < seconds } }
+        assertEquals("the waits, off the countdown's values $passed", listOf(1, 2, 4), waits)
         val pill = Regex("Reconnecting \u00B7 retry in (\\d+) ?s")
         val shown = texts().firstNotNullOfOrNull { pill.matchEntire(it) }
         assertTrue("the pill counts down; the texts were ${texts()}", shown != null)

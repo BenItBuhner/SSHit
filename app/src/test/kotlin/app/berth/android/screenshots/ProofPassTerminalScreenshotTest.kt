@@ -139,11 +139,11 @@ import java.util.concurrent.TimeUnit
  * - A41, the Deck's haptics, which no frame shows: what the Deck asks of the platform for a key
  *   tap and Ctrl's latches, as Settings' Haptics level moves from Full to Subtle to Off; the
  *   frames are the taps and the level they were made on.
- * - A76, clipboard auto-clear: a word copied off the screen pastes at once, and 30 s later the
- *   same paste gives nothing.
+ * - A76, clipboard auto-clear: the policy picked in Settings, a word copied off the screen pastes
+ *   at once, and 30 s later the same paste gives nothing.
  *
  * Every case is skipped unless `SSH_TEST_*` is set; the tmux and htop cases also need those tools on
- * the sshd, which the local one has and CI's does not.
+ * the sshd, and are skipped where it has none.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -528,8 +528,10 @@ class ProofPassTerminalScreenshotTest {
     /**
      * Desktop notifications from a program (spec A62): two tabs on the box; the second prints its
      * tty and goes off stage, and the first, on stage, `printf`s an OSC 9 into that tty. The frame
-     * has the `printf` at the prompt and the ring it raised on the other tab; OSC 777 (`notify;title;body`)
-     * and OSC 99 (kitty's) raise it the same way, each for its own reason.
+     * has the `printf` at the prompt and the ring it raised on the other tab, and the switcher then
+     * has both cards, the lit one with the tty on its screen. Its ring seen and out, OSC 777
+     * (`notify;title;body`) lights it again from a cleared prompt, and after that OSC 99 (kitty's),
+     * so each frame's ring is its own `printf`'s.
      */
     @Test
     fun `A62 an OSC 9 printf into another tab's tty lights that tab, and OSC 777 and 99 do the same`() {
@@ -540,32 +542,49 @@ class ProofPassTerminalScreenshotTest {
         val receiver = newTab(box)
         run(receiver, "clear; tty", until = "/dev/pts/")
         val tty = screen(receiver).first { it.trim().startsWith("/dev/pts/") }.trim()
-
-        graph.viewModel.setActive(sender.id)
-        compose.waitUntil(5_000) { sender.onStage && !receiver.onStage }
-        compose.settle(600)
-        clear(sender)
-        // Each printf wraps on a phone's width, so the wait is on the lit tab rather than the echo.
-        start(sender, "printf '\\e]9;%s\\a' 'build finished' > $tty")
-        compose.waitUntil(10_000) { receiver.record.value.needsAttention }
-        awaitScreen(sender, "the prompt after the printf") { rows ->
-            val shown = rows.filter { it.isNotBlank() }
-            shown.size >= 2 && shown.first().contains("printf") && shown.last().trimEnd().endsWith("$")
-        }
-        assertEquals("build finished", receiver.record.value.attentionReason)
-        assertFalse("the tab on stage is not lit", sender.record.value.needsAttention)
         val litTab = hasContentDescription("needs attention", substring = true) and hasContentDescription(", tab 2 of 2", substring = true)
-        compose.waitUntil(5_000) { compose.onAllNodes(litTab).fetchSemanticsNodes().isNotEmpty() }
-        compose.settle(1_200)
-        capture("A62-osc9-printf-ring")
 
-        start(sender, "printf '\\e]777;notify;%s;%s\\a' 'Deploy' 'staging is green' > $tty")
-        compose.waitUntil(10_000) { receiver.record.value.attentionReason == "Deploy" }
-        start(sender, "printf '\\e]99;;%s\\a' 'tests passed' > $tty")
-        compose.waitUntil(10_000) { receiver.record.value.attentionReason == "tests passed" }
-        assertTrue(receiver.record.value.needsAttention)
-        compose.settle(800)
-        capture("A62-osc777-osc99-ring")
+        fun onSender() {
+            graph.viewModel.setActive(sender.id)
+            compose.waitUntil(5_000) { sender.onStage && !receiver.onStage }
+            assertFalse("the receiver is not lit before the printf", receiver.record.value.needsAttention)
+            compose.waitUntil(5_000) { compose.onAllNodes(litTab).fetchSemanticsNodes().isEmpty() }
+            compose.settle(600)
+            clear(sender)
+        }
+
+        fun ring(printf: String, reason: String, frame: String) {
+            // Each printf wraps on a phone's width, so the wait is on the lit tab rather than the echo.
+            start(sender, "$printf > $tty")
+            compose.waitUntil(10_000) { receiver.record.value.needsAttention }
+            awaitScreen(sender, "the prompt after the printf") { rows ->
+                val shown = rows.filter { it.isNotBlank() }
+                shown.size >= 2 && shown.first().contains("printf") && shown.last().trimEnd().endsWith("$")
+            }
+            assertEquals(reason, receiver.record.value.attentionReason)
+            assertFalse("the tab on stage is not lit", sender.record.value.needsAttention)
+            compose.waitUntil(5_000) { compose.onAllNodes(litTab).fetchSemanticsNodes().isNotEmpty() }
+            compose.settle(1_200)
+            capture(frame)
+        }
+
+        onSender()
+        ring("printf '\\e]9;%s\\a' 'build finished'", "build finished", "A62-osc9-printf-ring")
+        compose.onNode(hasContentDescription("open the tab switcher", substring = true)).performClick()
+        val litCard = hasContentDescription("needs attention", substring = true) and hasAnyAncestor(isDialog())
+        compose.waitUntil(5_000) { compose.onAllNodes(litCard).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(1_200)
+        capture("A62-osc9-switcher-tty")
+        compose.onNode(litCard).performClick()
+        compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
+
+        onSender()
+        ring("printf '\\e]777;notify;%s;%s\\a' 'Deploy' 'staging is green'", "Deploy", "A62-osc777-printf-ring")
+        graph.viewModel.setActive(receiver.id)
+        compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
+
+        onSender()
+        ring("printf '\\e]99;;%s\\a' 'tests passed'", "tests passed", "A62-osc99-printf-ring")
     }
 
     // ---- A63, OSC 133 -----------------------------------------------------------------------------
@@ -820,10 +839,11 @@ class ProofPassTerminalScreenshotTest {
     /**
      * The tmux helper (spec A24) and the Deck's tmux layer (A25). A host on Attach or create opens
      * inside `tmux new-session -A -s berth-tmux-box`, its status line at the foot and the Session
-     * layer tmux. The relay in front of the sshd stops and starts, the reconnect attaches again, and
-     * the shell is the one that was there before the drop (the same `$$`), with its screen. The
-     * layer picker then puts the tmux layer on the Deck, and its keys drive tmux: split is the
-     * prefix and `"`, new the prefix and `c`, each seen on the server.
+     * layer tmux. The relay in front of the sshd stops (the marker row on the screen, framed once the
+     * pill is up) and starts, the reconnect attaches again, and the shell is the one that was there
+     * before the drop (the same `$$`), with its screen. The layer picker then puts the tmux layer on
+     * the Deck, and its keys drive tmux: split is the prefix and `"`, new the prefix and `c`, each
+     * seen on the server.
      */
     @Test
     fun `A24 A25 a tmux host keeps its shell through a dropped link, and the tmux layer's keys split and open windows`() {
@@ -845,6 +865,10 @@ class ProofPassTerminalScreenshotTest {
 
         relay.stop()
         compose.waitUntil(15_000) { session.state == SessionState.RECONNECTING }
+        awaitOnScreen(session, "connection lost")
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Reconnecting", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.settle(600)
+        capture("A24-tmux-dropped")
         relay.start()
         compose.waitUntil(45_000) { session.state == SessionState.LIVE }
         awaitOnScreen(session, "shell $pid in $name", 15_000)
@@ -991,19 +1015,25 @@ class ProofPassTerminalScreenshotTest {
     // ---- A76, clipboard auto-clear ------------------------------------------------------------------
 
     /**
-     * Clipboard auto-clear (spec A76, C20): under Clear clipboard after 30 s, a word copied off the
-     * terminal with the selection bar's Copy is what a two-finger-tap paste hands `read` at once,
-     * and the same paste 30 s later hands it nothing, since Berth took its own copy back off the
-     * clipboard. bash's `SECONDS`, zeroed at the copy, stamps each paste.
+     * Clipboard auto-clear (spec A76, C20): under Clear clipboard after 30 s, picked in Settings from
+     * the tab, a word copied off the terminal with the selection bar's Copy is what a
+     * two-finger-tap paste hands `read` at once, and the same paste 30 s later hands it nothing,
+     * since Berth took its own copy back off the clipboard. bash's `SECONDS`, zeroed at the copy,
+     * stamps each paste.
      */
     @Test
     fun `A76 a word copied off the terminal pastes at once and is off the clipboard 30 s later`() {
         assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
-        runBlocking { graph.settings.updateSecuritySettings { it.copy(clipboardClear = ClipboardClear.THIRTY_SECONDS) } }
         val box = testHost("Berth test box")
         mountApp(box)
         graph.security.onActivityResumed()
         val session = newTab(box)
+        val policy = hasText("Clear clipboard") and hasClickAction()
+        val clearAfter = { runBlocking { graph.settings.securitySettings.first().clipboardClear } }
+        assertEquals("off until picked", ClipboardClear.OFF, clearAfter())
+        inSettings("A76-settings-clear-clipboard", policy, hasText("After 30 seconds") and hasAnyAncestor(isPopup()), done = { clearAfter() == ClipboardClear.THIRTY_SECONDS }) {
+            compose.onNode(policy).assertTextContains("After 30 seconds")
+        }
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clear(session)
         session.sendText("p() { read -r x; echo \"pasted \$SECONDS s after the copy: [\$x]\"; }\n")
@@ -1020,6 +1050,8 @@ class ProofPassTerminalScreenshotTest {
         compose.mainClock.advanceTimeBy(700)
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Copy")).fetchSemanticsNodes().isNotEmpty() }
         canvas.performTouchInput { up() }
+        compose.settle(400)
+        capture("A76-copy-selection")
         compose.onNodeWithText("Copy").performClick()
         waitForText("Copied")
         assertEquals("berthclip4721", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
