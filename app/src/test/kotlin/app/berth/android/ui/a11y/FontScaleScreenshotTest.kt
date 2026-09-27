@@ -53,6 +53,7 @@ import app.berth.android.ui.stage.DeckKeyTag
 import app.berth.android.ui.stage.SessionSheet
 import app.berth.android.ui.stage.StageScreen
 import app.berth.android.ui.tabs.ShellTabActions
+import app.berth.android.ui.tabs.TabSwitcher
 import app.berth.android.ui.tabs.TabUiState
 import app.berth.android.ui.theme.BerthTheme
 import app.berth.domain.model.AuthMethod
@@ -162,6 +163,20 @@ class FontScaleScreenshotTest {
         compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(DeckKeyTag)).fetchSemanticsNodes().isNotEmpty() }
         capture("stage-font-scale-2x")
         compose.assertDeckHintsClearOfLabels()
+    }
+
+    /** The switcher at 2x: each card's title and caption at the 1.3x cap, and its frame at the terminal's own 1x. */
+    @Test
+    fun `tab switcher at 2x`() {
+        StageFixture.seed(graph)
+        graph.sessions.setActive("s-homelab")
+        themed {
+            val actions = remember { ShellTabActions(graph.viewModel, TabUiState(), onActivated = {}) }
+            StageScreen(graph.viewModel, graph.sessions.get("s-homelab"), actions, onOpenDrawer = {}, onOpenSessionSheet = {}, onEditHost = {})
+            TabSwitcher(graph.viewModel, actions, onDismiss = {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasContentDescription("Frame of", substring = true)).fetchSemanticsNodes().size == 3 }
+        capture("tab-switcher-font-scale-2x")
     }
 
     @Test
