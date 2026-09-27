@@ -338,10 +338,20 @@ class ProofPassTerminalScreenshotTest {
     /** Sends [command] without waiting on its echo, which may wrap; the caller waits on what it does. */
     private fun start(session: TerminalSession, command: String) = session.sendText("$command\n")
 
-    /** Clears the screen and waits for the prompt to stand alone on it. */
+    /**
+     * Clears the screen and waits for the prompt to stand alone on it. A screen that is a lone prompt
+     * already (a new tab's) reads the same before the clear as after it, and a line typed while
+     * `clear` still runs is echoed by the tty above the prompt; so that screen gets a second prompt
+     * first, and the wait can then pass only once the clear has run and bash is reading again.
+     */
     private fun clear(session: TerminalSession) {
+        val cleared = { rows: List<String> -> rows.count { it.isNotBlank() } == 1 && rows.first().trimEnd().endsWith("$") }
+        if (cleared(screen(session))) {
+            session.sendText("\n")
+            awaitScreen(session, "a second prompt") { rows -> !cleared(rows) }
+        }
         session.sendText("clear\n")
-        awaitScreen(session, "a cleared screen") { rows -> rows.count { it.isNotBlank() } == 1 && rows.first().trimEnd().endsWith("$") }
+        awaitScreen(session, "a cleared screen", condition = cleared)
     }
 
     private val canvas get() = compose.onNodeWithTag(TerminalTag)
