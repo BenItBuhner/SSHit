@@ -42,8 +42,9 @@ import kotlin.concurrent.thread
  * has noticed: the manager against the sshd through a relay that drops every byte both ways. Close
  * and Detach run on the main thread, and a shell's channel close, or a remote forward's cancel,
  * waits for a reply such a link never carries, sshj's 30 s. The tab goes as the call returns,
- * within a second, and the connection closes behind it (spec C3, Closing); a local forward's port
- * is free before the call returns, so the next tab can bind it. Skipped unless `SSH_TEST_*` is set.
+ * within a second, and the connection closes behind it (spec C3, Closing); a local forward's
+ * listener closes before the call returns, its port free a moment later rather than after the
+ * connection's grace, so the next tab can bind it. Skipped unless `SSH_TEST_*` is set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -91,7 +92,7 @@ class SilentLinkCloseTest {
         proxy.swallowToClient = true
         onMainThread("Close") { graph.sessions.close(session.id) }
         assertEquals(SessionState.CLOSED, session.state)
-        assertTrue("the tab is gone as the Close returns", graph.sessions.sessions.value.none { it.id == session.id })
+        assertTrue("the tab is gone as the Close returns", graph.sessions.tab(session.id) == null)
         await("the socket to close behind the tab", CLOSED_BEHIND_MS) { proxy.openLinks == 0 }
     }
 
@@ -111,7 +112,7 @@ class SilentLinkCloseTest {
     }
 
     @Test
-    fun `a remote forward over a link gone silent is cancelled behind the Close, and a local one frees its port before the Close returns`() {
+    fun `a remote forward over a link gone silent is cancelled behind the Close, and a local one frees its port at once`() {
         val localPort = freePort()
         val remotePort = freePort()
         val local = Tunnel("t-local", box.id, TunnelType.LOCAL, "127.0.0.1", localPort, "127.0.0.1", freePort(), enabled = true)
@@ -127,8 +128,8 @@ class SilentLinkCloseTest {
         proxy.swallowToServer = true
         proxy.swallowToClient = true
         onMainThread("Close") { graph.sessions.close(session.id) }
-        assertTrue("the local forward's port is free as the Close returns", refused(localPort))
-        assertTrue("the statuses are cleared", graph.sessions.tunnelStatuses.value.isEmpty())
+        await("the local forward's port to be free", LOCAL_FREED_MS) { refused(localPort) }
+        await("the statuses to clear") { graph.sessions.tunnelStatuses.value.isEmpty() }
         await("the socket to close behind the tab", CLOSED_BEHIND_MS) { proxy.openLinks == 0 }
         await("the server to stop listening on the remote forward's port") { refused(remotePort) }
     }
@@ -199,5 +200,8 @@ class SilentLinkCloseTest {
 
         /** The channels' grace, then the disconnect's, and slack: the socket is shut well inside the 30 s reply wait. */
         const val CLOSED_BEHIND_MS = 2 * SshConnection.CLOSE_GRACE_MS + 3_000
+
+        /** The listener's socket is released once its accepting thread wakes; a port held until the channels' grace had run would miss this. */
+        const val LOCAL_FREED_MS = SshConnection.CLOSE_GRACE_MS / 2
     }
 }
