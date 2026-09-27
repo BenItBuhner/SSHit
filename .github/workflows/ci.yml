@@ -49,8 +49,12 @@ jobs:
       # environment and nowhere else; every module's test task forwards those variables (see app/build.gradle.kts).
       # Both variants' unit tests run: testDebugUnitTest and testReleaseUnitTest for the Android modules, test for
       # the JVM ones. Sourcing the script leaves the shell's options as they were, which the step checks first.
+      # htop and tmux are what the live terminal flows run on the server, installed here rather than taken from the
+      # runner image: a flow whose tool is missing skips itself or draws the shell's complaint, and the job passes.
       - name: Run the suite against the live sshds
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y htop tmux
           options="$- $(shopt -po pipefail || true)"
           source .github/scripts/test-sshd.sh
           [ "$options" = "$- $(shopt -po pipefail || true)" ] || { echo "::error::sourcing test-sshd.sh changed the shell's options"; exit 1; }
