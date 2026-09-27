@@ -11,11 +11,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -23,6 +25,7 @@ import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isPopup
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -163,11 +166,22 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         assertEquals("the preview's ribbon is Compact's 28, the Stage's own", 28f, mockRibbonDp(), 1f)
     }
 
-    /** The ribbon of the editor's Stage in miniature, from the top of the preview to twice the centre of its title, which the row centres. */
+    /**
+     * The ribbon of the editor's Stage in miniature, read from its pixels, since the preview is one
+     * description to a reader and its title no node of its own: down the 2 dp gap between the rail
+     * glyph's 44 dp box and the swatch, from the preview's top, the ribbon's fill runs until the
+     * terminal's background begins.
+     */
     private fun mockRibbonDp(): Float {
         val preview = compose.onNodeWithContentDescription("Interface preview").fetchSemanticsNode().boundsInRoot
-        val title = compose.onNode(hasText("homelab") and hasAnyAncestor(hasContentDescription("Interface preview"))).fetchSemanticsNode().boundsInRoot
-        return ((title.center.y - preview.top) * 2).inDp()
+        val pixels = compose.onAllNodes(isRoot())[0].captureToImage().toPixelMap()
+        val px = compose.density.density
+        val x = (preview.left + (4 + 44 + 1) * px).roundToInt()
+        val top = preview.top.roundToInt()
+        val fill = pixels[x, top + px.roundToInt()]
+        var y = top + px.roundToInt()
+        while (y < preview.bottom && pixels[x, y] == fill) y++
+        return (y - top).toFloat().inDp()
     }
 
     // ---- the Stage's chrome ------------------------------------------------------------------------

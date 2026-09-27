@@ -255,7 +255,7 @@ fun Deck(
                 haptics = haptics,
                 height = rowHeight,
                 settings = settings,
-                grip = { Grip(accent = predictiveText, echoOff = echoOff, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress) },
+                grip = { Grip(accent = predictiveText, echoOff = echoOff, onTap = onGripTap, onSwipeDown = onGripSwipeDown, onDragUp = onGripDragUp, onLongPress = onGripLongPress, act = editing == null) },
                 // A layer step leaves the F-strip where it is, in either row: the strip belongs to the
                 // key whose hold raised it and that hold closes it, and a strip that fell with the
                 // step would drop a row of Deck under the finger and reflow the terminal (#20 review).
@@ -290,6 +290,7 @@ fun Deck(
                     editing = null,
                     snippets = snippets,
                     nubMark = null,
+                    silentKeys = editing != null,
                 )
             }
         }
@@ -438,7 +439,9 @@ private val KeyMaxWidth = 120.dp
 /**
  * One row of the Deck: grip or its spacer, the layer's slots, then the layer key, or on a Deck of
  * one layer (nothing to cycle) the Deck editor key in its place ([DeckEditorKey]). A swipe across
- * a key steps this row's layer (spec D2), the way its layer key's tap and swipe do.
+ * a key steps this row's layer (spec D2), the way its layer key's tap and swipe do. [silentKeys] is
+ * the Deck editor's second row, which the editor does not edit and whose keys send nothing there:
+ * its keys say nothing to a reader, and its layer key still steps it.
  */
 @Composable
 private fun DeckRow(
@@ -459,6 +462,7 @@ private fun DeckRow(
     editing: DeckEditing?,
     snippets: List<Snippet>,
     nubMark: (@Composable () -> Unit)?,
+    silentKeys: Boolean = false,
 ) {
     val c = Berth.colors
     val patterns = rememberDeckHaptics(haptics)
@@ -476,7 +480,7 @@ private fun DeckRow(
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(targets.grip).fillMaxHeight()) { grip?.invoke() }
             Row(
-                Modifier.weight(1f).fillMaxHeight(),
+                Modifier.weight(1f).fillMaxHeight().then(if (silentKeys) Modifier.clearAndSetSemantics {} else Modifier),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -744,10 +748,12 @@ private fun Modifier.editableSlot(
  * that fires swallows the release, and a finger that has moved past the slop is a swipe in the
  * making, never a hold. The pill is `accent` while the tab has predictive text on ([accent]), and
  * a 4 dp dot stands over it while the shell is not echoing ([echoOff], spec C2: a password prompt,
- * whose typing the command history leaves out); a reader hears both as the grip's state.
+ * whose typing the command history leaves out); a reader hears both as the grip's state. A grip
+ * that does not [act] (the Deck editor's preview, where it opens nothing) is the pill alone: no
+ * focus, no gesture and nothing for a reader, the preview's description standing for it.
  */
 @Composable
-private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit) {
+private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDown: () -> Unit, onDragUp: () -> Unit, onLongPress: () -> Unit, act: Boolean = true) {
     val c = Berth.colors
     val interaction = remember { MutableInteractionSource() }
     // The grip has no fill to step up, so the keyboard's focus colours the mark itself.
@@ -760,8 +766,9 @@ private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDo
     Box(
         Modifier
             .fillMaxSize()
-            .keyPressable(enabled = true, interactionSource = interaction, onPress = onTap)
-            .pointerInput(Unit) {
+            .keyPressable(enabled = act, interactionSource = interaction, onPress = onTap)
+            .pointerInput(act) {
+                if (!act) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     val slop = viewConfiguration.touchSlop
@@ -798,18 +805,19 @@ private fun Grip(accent: Boolean, echoOff: Boolean, onTap: () -> Unit, onSwipeDo
                     }
                 }
             }
-            .testTag(DeckKeyTag)
             // A button that opens the session sheet; the swipe and the hold are its actions.
-            .semantics {
-                contentDescription = "Grip, opens the session sheet"
-                gripState(accent, echoOff)?.let { stateDescription = it }
-                role = Role.Button
-                onClick { onTap(); true }
-                customActions = listOf(
-                    CustomAccessibilityAction("Hide the keyboard") { onSwipeDown(); true },
-                    CustomAccessibilityAction("Jump to the tab that needs you") { onLongPress(); true },
-                )
-            },
+            .then(
+                if (!act) Modifier else Modifier.testTag(DeckKeyTag).semantics {
+                    contentDescription = "Grip, opens the session sheet"
+                    gripState(accent, echoOff)?.let { stateDescription = it }
+                    role = Role.Button
+                    onClick { onTap(); true }
+                    customActions = listOf(
+                        CustomAccessibilityAction("Hide the keyboard") { onSwipeDown(); true },
+                        CustomAccessibilityAction("Jump to the tab that needs you") { onLongPress(); true },
+                    )
+                },
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Box(
