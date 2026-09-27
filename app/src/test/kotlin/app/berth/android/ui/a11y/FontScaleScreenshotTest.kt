@@ -165,7 +165,11 @@ class FontScaleScreenshotTest {
         compose.assertDeckHintsClearOfLabels()
     }
 
-    /** The switcher at 2x: each card's title and caption at the 1.3x cap, and its frame at the terminal's own 1x. */
+    /**
+     * The switcher at 2x, its three cards up: the capture audits the sheet and the Stage under it,
+     * with each card's title and caption at the 1.3x cap. The frames are a record only: each is fitted
+     * to 40 columns whatever its paints' scale, so the picture cannot show the terminal's.
+     */
     @Test
     fun `tab switcher at 2x`() {
         StageFixture.seed(graph)

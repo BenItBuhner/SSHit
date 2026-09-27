@@ -179,7 +179,7 @@ class ThumbnailCostTest {
     /** Bytes the calling thread allocates for one run of [block] after a warm-up: the least of several windows of runs. */
     private fun perDraw(block: () -> Unit): Long {
         val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
-        val id = Thread.currentThread().id
+        val id = Thread.currentThread().threadId()
         repeat(WARMUP) { block() }
         return (0 until WINDOWS).minOf {
             val before = threads.getThreadAllocatedBytes(id)
