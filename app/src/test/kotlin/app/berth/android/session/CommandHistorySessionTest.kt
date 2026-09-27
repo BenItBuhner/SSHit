@@ -93,6 +93,54 @@ class CommandHistorySessionTest {
     }
 
     @Test
+    fun `a slow echo, landing late and in pieces, is still recorded`() = runTest {
+        val s = session()
+        s.emulator.write(PROMPT)
+        s.sendText("uptime\n")
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertTrue(s.texts().isEmpty())
+        s.emulator.write("upt")
+        advanceTimeBy(300)
+        runCurrent()
+        assertTrue(s.texts().isEmpty())
+        s.emulator.write("ime\r\n 20:00:01 up 3 days\r\n$PROMPT")
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(listOf("uptime"), s.texts())
+    }
+
+    @Test
+    fun `a line never echoed stays out when its row is drawn over once the cursor has left it`() = runTest {
+        val s = session()
+        s.emulator.write("Password: ")
+        s.sendText("hunter2\n")
+        advanceTimeBy(400)
+        runCurrent()
+        s.emulator.write("\r\n$PROMPT")
+        advanceTimeBy(100)
+        runCurrent()
+        // Cleared and drawn from the top within the deadline: the typed text is on the row now, and is not its echo.
+        s.emulator.write("\u001b[H\u001b[2Jhunter2: command not found\r\n$PROMPT")
+        advanceTimeBy(15_000)
+        runCurrent()
+        assertTrue(s.texts().isEmpty())
+    }
+
+    @Test
+    fun `an echo that lands long after the deadline is not waited for`() = runTest {
+        val s = session()
+        s.emulator.write(PROMPT)
+        s.sendText("uptime\n")
+        advanceTimeBy(30_000)
+        runCurrent()
+        s.emulator.write("uptime\r\n")
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(s.texts().isEmpty())
+    }
+
+    @Test
     fun `a line that is never echoed records nothing, so a password stays out`() = runTest {
         val s = session()
         s.emulator.write("Password: ")
