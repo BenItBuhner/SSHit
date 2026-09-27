@@ -3,7 +3,6 @@ package app.berth.android.ui.settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -213,7 +212,7 @@ private fun NoticeList(onOpen: (ShippedNotice) -> Unit) {
  * drop to the header for a frame and rise again with the text (A9's content height, reached once).
  */
 @Composable
-private fun ColumnScope.LicenceText(notice: ShippedNotice, held: Dp, onBack: () -> Unit) {
+private fun LicenceText(notice: ShippedNotice, held: Dp, onBack: () -> Unit) {
     val c = Berth.colors
     val context = LocalContext.current
     val paragraphs by produceState<List<String>?>(null, notice) {
