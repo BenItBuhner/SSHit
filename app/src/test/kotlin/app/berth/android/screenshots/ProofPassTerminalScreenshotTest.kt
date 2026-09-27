@@ -544,12 +544,20 @@ class ProofPassTerminalScreenshotTest {
         val tty = screen(receiver).first { it.trim().startsWith("/dev/pts/") }.trim()
         val litTab = hasContentDescription("needs attention", substring = true) and hasContentDescription(", tab 2 of 2", substring = true)
 
+        // Each move of the stage is given a moment, as a user's is: a tab body's first frame marks its
+        // tab on stage itself, so a move made before that frame lands leaves the tab it left marked on
+        // stage, where no printf lights it.
+        fun seenOnStage() {
+            compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
+            compose.settle(600)
+        }
+
         fun onSender() {
             graph.viewModel.setActive(sender.id)
-            compose.waitUntil(5_000) { sender.onStage && !receiver.onStage }
-            assertFalse("the receiver is not lit before the printf", receiver.record.value.needsAttention)
             compose.waitUntil(5_000) { compose.onAllNodes(litTab).fetchSemanticsNodes().isEmpty() }
             compose.settle(600)
+            assertTrue("the sender alone is on stage", sender.onStage && !receiver.onStage)
+            assertFalse("the receiver is not lit before the printf", receiver.record.value.needsAttention)
             clear(sender)
         }
 
@@ -576,12 +584,12 @@ class ProofPassTerminalScreenshotTest {
         compose.settle(1_200)
         capture("A62-osc9-switcher-tty")
         compose.onNode(litCard).performClick()
-        compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
+        seenOnStage()
 
         onSender()
         ring("printf '\\e]777;notify;%s;%s\\a' 'Deploy' 'staging is green'", "Deploy", "A62-osc777-printf-ring")
         graph.viewModel.setActive(receiver.id)
-        compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
+        seenOnStage()
 
         onSender()
         ring("printf '\\e]99;;%s\\a' 'tests passed'", "tests passed", "A62-osc99-printf-ring")
