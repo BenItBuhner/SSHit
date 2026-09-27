@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -23,10 +24,12 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -265,6 +268,40 @@ class SshIntegrationTest {
             assertEquals(user, connection.exec("printf %s \"\$USER\""))
         }
         assertEquals(listOf(listOf<Any>("", "Berth test server: keyboard-interactive login through PAM", "Password: ", false)), asked)
+    }
+
+    @Test
+    fun `closing while a password prompt waits on the user ends the wait, and the login fails`() = runBlocking {
+        closeWhileAsking(port) { ask -> SshAuth.Password { ask() } }
+    }
+
+    @Test
+    fun `closing while a keyboard-interactive prompt waits on the user ends the wait, and the login fails`() = runBlocking {
+        assumeTrue("set SSH_TEST_KBD_PORT to a keyboard-interactive sshd to run", kbdPort != null)
+        closeWhileAsking(kbdPort!!) { ask -> SshAuth.KeyboardInteractive { _, _, _, _ -> ask() } }
+    }
+
+    /**
+     * Logs in to [port] with the method [auth] makes around an answer that waits on the user until
+     * it is released, and closes from another thread while it waits: the close returns without the
+     * answer and the login fails. The answer is released at the end either way, so a close that
+     * waits for it fails the test instead of hanging it.
+     */
+    private suspend fun closeWhileAsking(port: Int, auth: (ask: () -> CharArray?) -> SshAuth) = coroutineScope {
+        val asking = CompletableDeferred<Unit>()
+        val answer = CountDownLatch(1)
+        val endpoint = SshEndpoint(host = host, port = port, user = user, auth = listOf(auth { asking.complete(Unit); answer.await(); null }))
+        val connection = SshConnection(endpoint, AcceptAllHostKeys)
+        val login = async(Dispatchers.IO) { runCatching { connection.connect() } }
+        try {
+            withTimeout(15_000) { asking.await() }
+            val closer = thread { connection.close() }
+            closer.join(5_000)
+            assertFalse(closer.isAlive, "close waited for the user's answer")
+            assertTrue(withTimeout(5_000) { login.await() }.isFailure)
+        } finally {
+            answer.countDown()
+        }
     }
 
     @Test

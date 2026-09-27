@@ -39,6 +39,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,6 +55,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.io.path.createTempDirectory
 
 /**
@@ -602,6 +604,38 @@ class SessionLifecycleTest {
 
     // ---- fixture ---------------------------------------------------------------------------------
 
+    /**
+     * The notification's Detach runs on the main thread (SessionNotifier's service). A tab whose
+     * login waits on its password sheet detaches at once and takes the sheet down, rather than
+     * wait for an answer the blocked main thread would never let the user give. Should the detach
+     * wait anyway, the sheet is cancelled after 10 s, so the test fails instead of hanging.
+     */
+    @Test
+    fun `detaching a tab whose login waits on its password sheet returns at once and takes the sheet down`() {
+        val sshHost = System.getenv("SSH_TEST_HOST").orEmpty()
+        assumeTrue("SSH_TEST_HOST not set", sshHost.isNotBlank())
+        val box = Host(
+            id = "ask-box", name = "ask box", color = SwatchColor.MOSS, monogram = "A", address = sshHost,
+            port = System.getenv("SSH_TEST_PORT").orEmpty().toIntOrNull() ?: 22, user = System.getenv("SSH_TEST_USER").orEmpty(),
+            auth = AuthMethod.AskEachTime, createdAt = 0L,
+        )
+        runBlocking { graph.hosts.upsert(box) }
+        val tab = runBlocking { graph.sessions.open(box) }
+        await("the host key prompt", timeoutMs = 20_000) { graph.prompts.current.value is Prompt.TrustHostKey }
+        (graph.prompts.current.value as Prompt.TrustHostKey).trust()
+        await("the password sheet", timeoutMs = 20_000) { graph.prompts.current.value is Prompt.Password }
+        val sheet = graph.prompts.current.value as Prompt.Password
+        val rescue = thread(isDaemon = true) { runCatching { Thread.sleep(10_000); sheet.cancel() } }
+
+        val started = System.nanoTime()
+        graph.sessions.detach(tab.id)
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+        rescue.interrupt()
+        assertTrue("the detach waited $tookMs ms for the sheet's answer", tookMs < 5_000)
+        await("the sheet taken down") { graph.prompts.current.value == null }
+        assertEquals(SessionState.DETACHED, tab.state)
+    }
+
     private fun seed(
         aState: SessionState = SessionState.DETACHED,
         aLayer: PersistenceLayer = PersistenceLayer.LOCAL_FRAME,
@@ -708,8 +742,8 @@ class SessionLifecycleTest {
         List(d.readInt()) { d.readUTF() }
     }
 
-    private fun await(what: String, condition: () -> Boolean) = runBlocking {
-        val deadline = System.currentTimeMillis() + 5_000
+    private fun await(what: String, timeoutMs: Long = 5_000, condition: () -> Boolean) = runBlocking {
+        val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (condition()) return@runBlocking
             delay(20)

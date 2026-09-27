@@ -216,6 +216,12 @@ class SshConnection(
     /** Set by [close]; a connect still running ends at its next stage rather than open a login nobody holds. */
     @Volatile private var closed = false
 
+    /** Guards [askingUser], and orders it against [closed] so a question asked as [close] runs is either interrupted or never asked. */
+    private val askLock = Any()
+
+    /** The thread waiting in [askUser] for the user's answer, if one is. */
+    private var askingUser: Thread? = null
+
     /** Invoked from sshj's transport thread when the connection drops for any reason. */
     var onDisconnected: ((SshError.Disconnected) -> Unit)? = null
 
@@ -401,6 +407,7 @@ class SshConnection(
         if (ep.auth.isEmpty()) throw SshError.AuthenticationFailed(ep.user, null)
         val failures = ArrayDeque<UserAuthException>()
         for (auth in ep.auth) {
+            if (closed) throw SshError.Disconnected("closed")
             val method = auth.toSshj()
             method.setLoggerFactory(c.transport.config.loggerFactory)
             try {
@@ -415,12 +422,36 @@ class SshConnection(
     private fun SshAuth.toSshj(): AuthMethod = when (this) {
         is SshAuth.Password -> AuthPassword(object : PasswordFinder {
             override fun reqPassword(resource: Resource<*>?): CharArray =
-                password() ?: throw UserAuthException("Password entry cancelled")
+                askUser { password() } ?: throw UserAuthException("Password entry cancelled")
 
             override fun shouldRetry(resource: Resource<*>?): Boolean = false
         })
         is SshAuth.PublicKey -> signer?.let { SignerAuthPublickey(keyProvider, it) } ?: AuthPublickey(keyProvider)
-        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(KeyboardInteractiveProvider(respond))
+        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(
+            KeyboardInteractiveProvider { name, instruction, prompt, echo -> askUser { respond(name, instruction, prompt, echo) } },
+        )
+    }
+
+    /**
+     * Runs [ask], which may wait on the user (a password sheet, a keyboard-interactive prompt),
+     * where [close] can end the wait. sshj asks for a password holding the login's lock, and for a
+     * keyboard-interactive answer on its transport thread holding the same lock, and disconnecting
+     * takes that lock: a close that waited for the answer would hang, on the main thread with the
+     * sheet that could answer it. [close] interrupts the wait instead, and the login fails.
+     */
+    private fun <T> askUser(ask: () -> T): T {
+        synchronized(askLock) {
+            if (closed) throw UserAuthException("Connection closed")
+            askingUser = Thread.currentThread()
+        }
+        try {
+            return ask()
+        } catch (e: Exception) {
+            if (closed) throw UserAuthException("Connection closed", e)
+            throw e
+        } finally {
+            synchronized(askLock) { askingUser = null }
+        }
     }
 
     /**
@@ -583,7 +614,10 @@ class SshConnection(
     }
 
     override fun close() {
-        closed = true
+        synchronized(askLock) {
+            closed = true
+            askingUser?.interrupt()
+        }
         closeQuietly()
         if (_state.value !is SshConnectionState.Disconnected) {
             _state.value = SshConnectionState.Disconnected("closed", null)
