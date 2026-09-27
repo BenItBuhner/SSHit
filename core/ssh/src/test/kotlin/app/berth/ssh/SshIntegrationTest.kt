@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -678,6 +679,65 @@ class SshIntegrationTest {
             assertTrue(took < 2_500, "the close took $took ms with a 500 ms grace")
             assertTrue(writerEnded.await(2_000, TimeUnit.MILLISECONDS), "the stuck writer should end once its socket is closed")
             assertFalse(connection.isConnected)
+        }
+    }
+
+    /**
+     * A close during a login through two hops ends the target's wait for its greeting, and the
+     * connect then tears down too, on its own thread, beside the close's. Each disconnect on the
+     * close's thread is slowed, so the two teardowns overlap as they would over a real link, where
+     * a hop's disconnect writes through the hop before it. Each client is disconnected once, by
+     * whichever teardown takes it, and nothing reaches the default handler, which on Android ends
+     * the process and every session in it.
+     */
+    @Test
+    fun `a close racing a login through two hops disconnects each client once and throws nothing uncaught`() = runBlocking {
+        val secondHop = targetBeyondJump()
+        val rounds = 10
+        val silent = ServerSocket(0, 50, InetAddress.getLoopbackAddress()).apply { soTimeout = 10_000 }
+        val uncaught = CopyOnWriteArrayList<String>()
+        val handler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e -> uncaught += "${t.name}: $e" }
+        val failures = ArrayList<String>()
+        try {
+            repeat(rounds) { round ->
+                val made = CopyOnWriteArrayList<CountingClient>()
+                val target = SshEndpoint(host = "127.0.0.1", port = silent.localPort, user = user, auth = listOf(SshAuth.Password { password.toCharArray() }))
+                val connection = SshConnection(target, AcceptAllHostKeys, jumpHosts = listOf(SshHop(passwordEndpoint(), AcceptAllHostKeys), SshHop(secondHop, AcceptAllHostKeys)))
+                connection.clientFactory = { config -> CountingClient(config, slowOn = "berth-disconnect").also { made += it } }
+                val attempt = async(Dispatchers.IO) { runCatching { connection.connect() } }
+                // The target is reached through both hops and never greets, so the connect waits on it with both hops logged in.
+                val greeted = withContext(Dispatchers.IO) { silent.accept() }
+                delay(round * 3L)
+                val before = uncaught.size
+                val closing = connection.closeInBackground()
+                val outcome = withTimeout(10_000) { attempt.await() }
+                withContext(Dispatchers.IO) { closing.join(10_000) }
+                greeted.close()
+                val problems = buildList {
+                    if (closing.isAlive) add("the close was still running")
+                    outcome.exceptionOrNull().let { if (it !is SshError) add("the connect ended with $it, not an SshError") }
+                    uncaught.drop(before).forEach { add("uncaught on $it") }
+                    val counts = made.map { it.disconnects.get() }
+                    if (counts != listOf(1, 1, 1)) add("disconnects per client, the hops then the target: $counts")
+                }
+                if (problems.isNotEmpty()) failures += "round ${round + 1}: ${problems.joinToString("; ")}"
+            }
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(handler)
+            silent.close()
+        }
+        assertTrue(failures.isEmpty(), "${failures.size} of $rounds rounds failed:\n${failures.joinToString("\n")}")
+    }
+
+    /** A client that counts its disconnects and, on a thread named [slowOn]..., waits 40 ms before each. */
+    private class CountingClient(config: DefaultConfig, private val slowOn: String) : SSHClient(config) {
+        val disconnects = AtomicInteger()
+
+        override fun disconnect() {
+            disconnects.incrementAndGet()
+            if (Thread.currentThread().name.startsWith(slowOn)) Thread.sleep(40)
+            super.disconnect()
         }
     }
 

@@ -204,7 +204,7 @@ class SshConnection(
     private val _state = MutableStateFlow<SshConnectionState>(SshConnectionState.Idle)
     val state: StateFlow<SshConnectionState> = _state.asStateFlow()
 
-    private var client: SSHClient? = null
+    @Volatile private var client: SSHClient? = null
     private val hops = ArrayList<SSHClient>()
 
     /**
@@ -213,6 +213,13 @@ class SshConnection(
      * greeting (or a slow target) does not keep its socket past the tab that wanted it.
      */
     @Volatile private var connecting: SSHClient? = null
+
+    /**
+     * Guards [hops], and every move of a client into or out of [connecting], [hops] and [client].
+     * A close ends the connect in flight, and the connect then tears down too, on its own thread:
+     * each client goes to whichever of the two takes it first, so it is disconnected once.
+     */
+    private val clientsLock = Any()
 
     /** Set by [close]; a connect still running ends at its next stage rather than open a login nobody holds. */
     @Volatile private var closed = false
@@ -274,11 +281,10 @@ class SshConnection(
                     connectClient(hopClient, ep, previous)
                     authenticate(hopClient, ep)
                 } catch (e: Throwable) {
-                    runCatching { hopClient.disconnect() }
+                    if (release(hopClient)) runCatching { hopClient.disconnect() }
                     throw SshError.JumpHopFailed(index, jumpHosts.size, ep.host, ep.port, ep.user, e.toSshError(ep))
                 }
-                hops += hopClient
-                connecting = null
+                settle(hopClient) { hops += hopClient }
                 previous = hopClient
             }
             _state.value = SshConnectionState.Connecting
@@ -292,10 +298,7 @@ class SshConnection(
                 _state.value = SshConnectionState.Disconnected(text, error)
                 onDisconnected?.invoke(error)
             }
-            client = target
-            connecting = null
-            // Closed while the login was finishing: the catch drops what was made instead of leaving it up.
-            if (closed) throw SshError.Disconnected("closed")
+            settle(target) { client = target }
             _state.value = SshConnectionState.Connected
         } catch (e: Throwable) {
             closeQuietly()
@@ -306,10 +309,25 @@ class SshConnection(
     }
 
     /** Registers [c] as the client in flight; after a [close] the attempt ends here, before the client opens anything. */
-    private fun begin(c: SSHClient): SSHClient {
-        connecting = c
+    private fun begin(c: SSHClient): SSHClient = synchronized(clientsLock) {
         if (closed) throw SshError.Disconnected("closed")
-        return c
+        connecting = c
+        c
+    }
+
+    /**
+     * Moves [c], logged in, from in flight to where [hold] keeps it. Closed while its login was
+     * finishing, the attempt ends here instead, and [c] goes to whichever teardown takes it.
+     */
+    private fun settle(c: SSHClient, hold: () -> Unit) = synchronized(clientsLock) {
+        if (closed) throw SshError.Disconnected("closed")
+        hold()
+        connecting = null
+    }
+
+    /** Takes [c] back from in flight for the connect's own cleanup; false once a close has taken it to disconnect. */
+    private fun release(c: SSHClient): Boolean = synchronized(clientsLock) {
+        (connecting === c).also { if (it) connecting = null }
     }
 
     private fun Throwable.toSshError(ep: SshEndpoint): SshError = when (this) {
@@ -635,6 +653,8 @@ class SshConnection(
      * then the transport is disconnected, which ends any wait still pending. A disconnect that
      * cannot write either (a writer stuck on a full send buffer holds sshj's write lock) has as
      * long again before the sockets are closed under it. A connect in flight ends as with [close].
+     * Nothing either thread meets on the way down reaches the default handler, which on Android
+     * ends the process and every session in it.
      */
     fun closeInBackground(first: List<Closeable> = emptyList(), graceMillis: Long = CLOSE_GRACE_MS): Thread {
         val live = isConnected
@@ -643,28 +663,34 @@ class SshConnection(
             askingUser?.interrupt()
         }
         return thread(isDaemon = true, name = "berth-close-${endpoint.host}") {
-            val sockets = runCatching { (listOfNotNull(client, connecting) + hops.toList()).mapNotNull { it.socket } }.getOrDefault(emptyList())
-            val channels = thread(isDaemon = true, name = "berth-close-channels-${endpoint.host}") { first.forEach { runCatching { it.close() } } }
-            if (live) channels.join(graceMillis)
-            val disconnect = thread(isDaemon = true, name = "berth-disconnect-${endpoint.host}") { close() }
-            disconnect.join(graceMillis)
-            if (disconnect.isAlive) sockets.forEach { runCatching { it.close() } }
+            runCatching {
+                val sockets = runCatching { synchronized(clientsLock) { (listOfNotNull(client, connecting) + hops).mapNotNull { it.socket } } }.getOrDefault(emptyList())
+                val channels = thread(isDaemon = true, name = "berth-close-channels-${endpoint.host}") { first.forEach { runCatching { it.close() } } }
+                if (live) channels.join(graceMillis)
+                val disconnect = thread(isDaemon = true, name = "berth-disconnect-${endpoint.host}") { runCatching { close() } }
+                disconnect.join(graceMillis)
+                if (disconnect.isAlive) sockets.forEach { runCatching { it.close() } }
+            }
         }
     }
 
     private fun closeQuietly() {
-        agent?.close()
-        agent = null
-        client?.let { c ->
+        val forwarded: SshAgent?
+        val taken: List<SSHClient>
+        synchronized(clientsLock) {
+            forwarded = agent
+            // The in-flight client's streams closing ends the blocked greeting or login on the connecting thread; the hops go last made first.
+            taken = listOfNotNull(client, connecting) + hops.reversed()
+            agent = null
+            client = null
+            connecting = null
+            hops.clear()
+        }
+        forwarded?.let { runCatching { it.close() } }
+        for (c in taken) {
             runCatching { c.transport.setDisconnectListener(null) }
             runCatching { c.disconnect() }
         }
-        client = null
-        // Closing the in-flight client's streams ends the blocked greeting or login on the connecting thread.
-        connecting?.let { c -> runCatching { c.disconnect() } }
-        connecting = null
-        hops.asReversed().forEach { runCatching { it.disconnect() } }
-        hops.clear()
     }
 
     companion object {
