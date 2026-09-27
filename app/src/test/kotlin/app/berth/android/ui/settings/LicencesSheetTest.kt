@@ -103,17 +103,17 @@ class LicencesSheetTest {
         try {
             compose.onNode(hasText(sshj) and inSheet).performClick()
             // The frames with the text's header up and its paragraphs not yet in: the ones it loads in.
+            // The read is a worker's, on the wall clock, so no count of frames is sure to outlast it.
             val loading = ArrayList<Int>()
-            var frame = 0
-            while (frame < 60) {
+            val deadline = System.nanoTime() + 10_000_000_000L
+            while (System.nanoTime() < deadline) {
                 compose.mainClock.advanceTimeByFrame()
-                frame++
                 if (textShown()) break
                 if (compose.onAllNodes(back).fetchSemanticsNodes().isNotEmpty()) loading += sheetHeight()
             }
-            assertTrue("the text landed within $frame frames", textShown())
+            assertTrue("the text landed within 10 s", textShown())
             assertTrue("the header stood a frame or more before the text landed, so the sheet was read while it loaded", loading.isNotEmpty())
-            assertTrue("the sheet stood the list's $list px in every frame the text loaded in: $loading", loading.all { it >= list - 1 })
+            assertTrue("the sheet stood the list's $list px in every frame the text loaded in: ${loading.size} frames at ${loading.distinct()} px", loading.all { it >= list - 1 })
         } finally {
             compose.mainClock.autoAdvance = true
         }
