@@ -246,7 +246,9 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
     }
 
     /**
-     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane). With
+     * The panes' headers on a tablet (spec C23: a header of the strip's height over each pane, its ×
+     * only where it stands 40). Comfortable's strip keeps its 40 dp row with a status bar over it and
+     * without one, and the panes' headers stand 40 with it, the focused one's × on it both ways. With
      * no status bar to lend the strip Compact's step, the skin's strip stands whole under Compact, a
      * 40 dp row of 32 dp tabs under the 4 dp band, and the panes' headers stay 40 with its row, the
      * focused one's × on it. Under a status bar the strip steps to 28 and a pane's header with it,
@@ -263,6 +265,14 @@ class DensityScreenshotTest(private val systemFontScale: Float) {
         capture("density-panes-comfortable")
         assertEquals(40f, paneHeaderDp(), 0.5f)
         assertEquals("the focused pane's × on Comfortable's 40", 1, closesInHeader())
+
+        statusBar(24)
+        capture("density-panes-comfortable-status-bar")
+        assertEquals("under a status bar Comfortable's strip keeps its 40", 40f, stripRowDp(), 1f)
+        assertEquals("and the panes' headers with it", 40f, paneHeaderDp(), 0.5f)
+        assertLinesWhole("the Comfortable panes' headers under a status bar", panes)
+        assertEquals("the × on a header that stands 40", 1, closesInHeader())
+        statusBar(0)
 
         setDensity(Density.COMPACT)
         capture("density-panes-compact")
