@@ -74,21 +74,9 @@ import kotlin.concurrent.thread
  * - A23, network-change probing: the relay goes silent and the network under the app changes; the
  *   probe finds the socket dead in two seconds and the marker says the network changed.
  *
- * Every case is skipped unless `SSH_TEST_*` is set; A3 also needs `SSH_TEST_KBD_PORT`, an sshd that
- * CI does not run. One is made on a workstation like this, as root, with the account password PAM
- * checks being the test user's `SSH_TEST_PASSWORD`:
- *
- * ```
- * ln -s /usr/sbin/sshd /usr/local/sbin/sshd-berth-kbd        # PAM's service name is the binary's
- * printf '%s\n' 'auth required pam_echo.so Berth test server: keyboard-interactive login through PAM' \
- *   '@include common-auth' '@include common-account' 'session required pam_unix.so' > /etc/pam.d/sshd-berth-kbd
- * mkdir -p /etc/ssh/sshd_kbd && printf '%s\n' 'Port 2225' 'ListenAddress 127.0.0.1' \
- *   'HostKey /etc/ssh/ssh_host_ed25519_key' 'PasswordAuthentication no' 'PubkeyAuthentication no' \
- *   'KbdInteractiveAuthentication yes' 'AuthenticationMethods keyboard-interactive' 'UsePAM yes' \
- *   'PidFile /tmp/sshd_kbd.pid' > /etc/ssh/sshd_kbd/sshd_config
- * /usr/local/sbin/sshd-berth-kbd -f /etc/ssh/sshd_kbd/sshd_config
- * export SSH_TEST_KBD_PORT=2225
- * ```
+ * Every case is skipped unless `SSH_TEST_*` is set; A3 also needs `SSH_TEST_KBD_PORT`, the sshd on
+ * 127.0.0.1:2225 that logs in by keyboard-interactive alone through PAM. `.github/scripts/test-sshd.sh`
+ * starts it with the other three and exports its port, in CI and on a workstation alike.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -210,10 +198,10 @@ class ProofPassConnectionScreenshotTest {
 
     /**
      * The password saved for the host is sent first and turned down, since the server takes no
-     * `password` method; the keyboard-interactive method follows and the sheet carries PAM's own
-     * `Password: ` as its caption, which Berth's own ask for a password has none of. The pam_echo line
-     * the server sends ahead of it, in a request of its own with no prompt, is not in the sheet: the
-     * provider keeps the last request's instruction only (a defect the proof pass records).
+     * `password` method; the keyboard-interactive method follows and the sheet carries the server's
+     * words as its caption, which Berth's own ask for a password has none of: the pam_echo line PAM
+     * sends ahead of its `Password: `, in a request of its own with no prompt. The `Password: ` itself
+     * is the field's label.
      */
     @Test
     fun `A03 keyboard-interactive puts the server's challenge in the sheet, and its answer logs in`() {
@@ -224,8 +212,9 @@ class ProofPassConnectionScreenshotTest {
         compose.waitUntil(30_000) { graph.prompts.current.value is Prompt.Password }
         val prompt = graph.prompts.current.value as Prompt.Password
         assertEquals("the challenge is the server's", "Password: ", prompt.serverPrompt)
+        assertEquals("the server's line before it", "Berth test server: keyboard-interactive login through PAM", prompt.instruction)
         waitForText("Password for ${box.userAtHost}")
-        waitForText("Password: ")
+        waitForText("Berth test server: keyboard-interactive login through PAM")
         compose.onNode(hasText(":$kbdPort", substring = true)).assertExists()
         compose.settle(600)
         capture("A03-keyboard-interactive")
@@ -246,15 +235,9 @@ class ProofPassConnectionScreenshotTest {
      * A keepalive of 2 s (what an imported `ServerAliveInterval 2` gives; the host editor's own
      * choices start at 15 s, which takes the same count over 90 s) behind a relay that stops passing
      * bytes both ways while both sockets stay open, so nothing but the keepalive can tell. Five
-     * unanswered keep-alives later the transport should give up with the keep-alive named, the
-     * marker row saying so and the pill taking over while the reconnect waits on the relay.
-     *
-     * It does not today: `SshConnection.connectClient` sets sshj's keep-alive interval after
-     * `connect`, and sshj starts its keep-alive thread in `SSHClient.onConnect` only when the
-     * interval is already set, so no keep-alive is ever sent. The case waits the keepalive's count
-     * and a margin, takes the frame as it stands (the tab still Live over a dead socket, or the drop
-     * once the keepalive runs), and is skipped with the defect named while no drop comes, so the
-     * frame is made and the gate holds until the keepalive is fixed, when the case asserts the rest.
+     * unanswered keep-alives later the transport gives up with the keep-alive named, the marker row
+     * saying so and the pill taking over while the reconnect waits on the relay; the relay passing
+     * bytes again lets the reconnect in.
      */
     @Test
     fun `A21 the keepalive finds a socket that went silent and the marker names it`() {
@@ -270,16 +253,7 @@ class ProofPassConnectionScreenshotTest {
         proxy.swallowToServer = true
         proxy.swallowToClient = true
         val lost = "connection lost: Did not receive any keep-alive response for ${5 * keepalive} seconds"
-        val found = runCatching { compose.waitUntil((6 * keepalive + 8) * 1_000L) { onScreen(session, lost) } }.isSuccess
-        if (!found) {
-            compose.settle(600)
-            capture("A21-keepalive-silent-socket")
-            assumeTrue(
-                "Defect: SshConnection.connectClient sets the keep-alive interval after sshj's connect, so its keep-alive thread " +
-                    "never starts; ${6 * keepalive + 8} s after the socket went silent with a ${keepalive} s keepalive the tab is still ${session.state}",
-                false,
-            )
-        }
+        awaitOnScreen(session, lost, (6 * keepalive + 8) * 1_000L)
         compose.waitUntil(5_000) { session.state == SessionState.RECONNECTING }
         compose.settle(600)
         assertTrue("the pill says Reconnecting; the texts were ${texts()}", texts().any { it.startsWith("Reconnecting") })
@@ -300,8 +274,7 @@ class ProofPassConnectionScreenshotTest {
      * waits run 1 s, 2 s, then 4 s, read off every value the countdown passes through (each wait
      * starts where it rises), and the frame is taken on the 4. The pill counts that wait down
      * by the second; the relay starting again lets the try after it in, and the frame says
-     * `reconnected` under the drop. The spec writes the pill `retry in 4 s`; the product draws
-     * `retry in 4s` (a defect the proof pass records), which the reading here allows either way.
+     * `reconnected` under the drop. The pill reads `retry in 4 s`, as the spec writes it.
      */
     @Test
     fun `A22 the Reconnecting pill counts down to the next try while the server is down`() {
@@ -321,7 +294,7 @@ class ProofPassConnectionScreenshotTest {
         watch.cancel()
         val waits = passed.filterIndexed { i, seconds -> seconds != null && passed.getOrNull(i - 1).let { it == null || it < seconds } }
         assertEquals("the waits, off the countdown's values $passed", listOf(1, 2, 4), waits)
-        val pill = Regex("Reconnecting \u00B7 retry in (\\d+) ?s")
+        val pill = Regex("Reconnecting \u00B7 retry in (\\d+) s")
         val shown = texts().firstNotNullOfOrNull { pill.matchEntire(it) }
         assertTrue("the pill counts down; the texts were ${texts()}", shown != null)
         capture("A22-reconnecting-countdown")
