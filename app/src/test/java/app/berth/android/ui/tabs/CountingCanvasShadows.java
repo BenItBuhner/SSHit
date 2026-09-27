@@ -2,6 +2,8 @@ package app.berth.android.ui.tabs;
 
 import static org.robolectric.util.reflector.Reflector.reflector;
 
+import java.util.HashSet;
+import java.util.Set;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.shadows.ShadowNativeBaseCanvas;
@@ -32,12 +34,15 @@ public final class CountingCanvasShadows {
     public static long recordedGlyphs;
     /** Bitmaps recorded into display lists. */
     public static long recordedBitmaps;
+    /** The native paints glyphs were drawn or recorded with, one entry per {@link android.graphics.Paint}. */
+    public static final Set<Long> glyphPaints = new HashSet<>();
 
     public static void reset() {
         rasterGlyphs = 0;
         rasterBitmaps = 0;
         recordedGlyphs = 0;
         recordedBitmaps = 0;
+        glyphPaints.clear();
     }
 
     @Implements(className = "android.graphics.BaseCanvas", isInAndroidSdk = false, callNativeMethodsByDefault = true, minSdk = 35)
@@ -45,24 +50,28 @@ public final class CountingCanvasShadows {
         @Implementation(minSdk = 35)
         protected static void nDrawText(long canvas, char[] text, int index, int count, float x, float y, int flags, long paint) {
             rasterGlyphs += count;
+            glyphPaints.add(paint);
             reflector(RasterNatives.class).nDrawText(canvas, text, index, count, x, y, flags, paint);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawText(long canvas, String text, int start, int end, float x, float y, int flags, long paint) {
             rasterGlyphs += end - start;
+            glyphPaints.add(paint);
             reflector(RasterNatives.class).nDrawText(canvas, text, start, end, x, y, flags, paint);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawTextRun(long canvas, char[] text, int start, int count, int contextStart, int contextCount, float x, float y, boolean rtl, long paint, long measured) {
             rasterGlyphs += count;
+            glyphPaints.add(paint);
             reflector(RasterNatives.class).nDrawTextRun(canvas, text, start, count, contextStart, contextCount, x, y, rtl, paint, measured);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawTextRun(long canvas, String text, int start, int end, int contextStart, int contextEnd, float x, float y, boolean rtl, long paint) {
             rasterGlyphs += end - start;
+            glyphPaints.add(paint);
             reflector(RasterNatives.class).nDrawTextRun(canvas, text, start, end, contextStart, contextEnd, x, y, rtl, paint);
         }
 
@@ -78,24 +87,28 @@ public final class CountingCanvasShadows {
         @Implementation(minSdk = 35)
         protected static void nDrawText(long canvas, char[] text, int index, int count, float x, float y, int flags, long paint) {
             recordedGlyphs += count;
+            glyphPaints.add(paint);
             reflector(RecordingNatives.class).nDrawText(canvas, text, index, count, x, y, flags, paint);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawText(long canvas, String text, int start, int end, float x, float y, int flags, long paint) {
             recordedGlyphs += end - start;
+            glyphPaints.add(paint);
             reflector(RecordingNatives.class).nDrawText(canvas, text, start, end, x, y, flags, paint);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawTextRun(long canvas, char[] text, int start, int count, int contextStart, int contextCount, float x, float y, boolean rtl, long paint, long measured) {
             recordedGlyphs += count;
+            glyphPaints.add(paint);
             reflector(RecordingNatives.class).nDrawTextRun(canvas, text, start, count, contextStart, contextCount, x, y, rtl, paint, measured);
         }
 
         @Implementation(minSdk = 35)
         protected static void nDrawTextRun(long canvas, String text, int start, int end, int contextStart, int contextEnd, float x, float y, boolean rtl, long paint) {
             recordedGlyphs += end - start;
+            glyphPaints.add(paint);
             reflector(RecordingNatives.class).nDrawTextRun(canvas, text, start, end, contextStart, contextEnd, x, y, rtl, paint);
         }
 
