@@ -1,5 +1,6 @@
 package app.berth.ssh
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -15,11 +16,14 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.Closeable
 import java.io.DataInputStream
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -473,6 +477,109 @@ class SshIntegrationTest {
             SshConnection(endpoint, AcceptAllHostKeys).use { it.connect() }
         }
         assertTrue(error.isTransientSshFailure())
+    }
+
+    /**
+     * The test sshd sends nothing of its own to an idle login (no `ClientAliveInterval`), so what
+     * the client writes on one is its keepalive: once a second at 1 s, nothing at 0.
+     */
+    @Test
+    fun `an idle login sends a keepalive every interval, and none with the keepalive off`() = runBlocking {
+        suspend fun writesWhileIdle(keepaliveSeconds: Int, idleMillis: Long): Int = Relay(host, port).use { relay ->
+            SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = keepaliveSeconds), AcceptAllHostKeys).use { connection ->
+                connection.connect()
+                delay(300)
+                val before = relay.writesUp.get()
+                delay(idleMillis)
+                assertTrue(connection.isConnected)
+                relay.writesUp.get() - before
+            }
+        }
+        val every = writesWhileIdle(keepaliveSeconds = 1, idleMillis = 4_500)
+        assertTrue(every >= 3, "an idle 4.5 s under a 1 s keepalive carried $every writes from the client")
+        assertEquals(0, writesWhileIdle(keepaliveSeconds = 0, idleMillis = 2_500), "a login with the keepalive off writes nothing while idle")
+    }
+
+    @Test
+    fun `a jump host keeps its own login alive on the link to it`() = runBlocking {
+        val target = targetBeyondJump()
+        Relay(host, port).use { relay ->
+            val hop = passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 1)
+            SshConnection(target.copy(keepaliveSeconds = 0), AcceptAllHostKeys, jumpHosts = listOf(SshHop(hop, AcceptAllHostKeys))).use { connection ->
+                connection.connect()
+                delay(300)
+                val before = relay.writesUp.get()
+                delay(4_500)
+                assertTrue(connection.isConnected)
+                val writes = relay.writesUp.get() - before
+                assertTrue(writes >= 3, "an idle 4.5 s under the hop's 1 s keepalive, the target's off, carried $writes writes to the hop")
+            }
+        }
+    }
+
+    /** sshj's keepalive gives up after five requests go unanswered and drops the transport as lost. */
+    @Test
+    fun `a login whose link goes silent is dropped once its keepalives go unanswered`() = runBlocking {
+        Relay(host, port).use { relay ->
+            val connection = SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 1), AcceptAllHostKeys)
+            val dropped = CompletableDeferred<SshError.Disconnected>()
+            connection.onDisconnected = { dropped.complete(it) }
+            connection.use {
+                it.connect()
+                relay.silent = true
+                val error = withTimeout(15_000) { dropped.await() }
+                assertTrue(error.message!!.contains("keep-alive response"), error.message!!)
+                // sshj tells the listener before it marks its transport closed.
+                withTimeout(2_000) { while (connection.isConnected) delay(20) }
+                val state = connection.state.value
+                assertTrue(state is SshConnectionState.Disconnected && state.error === error, "state was $state")
+                assertTrue(error.isTransientSshFailure(), "a lost link is one the reconnect loop retries")
+            }
+        }
+    }
+
+    /**
+     * A TCP relay to the sshd that counts the client's writes and can go [silent]: from then on
+     * it reads both ways and passes nothing on, a path that lost the network with both sockets
+     * still open, so only a keepalive can tell.
+     */
+    private class Relay(host: String, port: Int) : Closeable {
+        private val listener = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        private val sockets = CopyOnWriteArrayList<Socket>()
+        val port: Int get() = listener.localPort
+        val writesUp = AtomicInteger()
+        @Volatile var silent = false
+
+        init {
+            thread(isDaemon = true) {
+                runCatching {
+                    val client = listener.accept().also { sockets += it }
+                    val server = Socket(host, port).also { sockets += it }
+                    thread(isDaemon = true) { pump(client, server, writesUp) }
+                    pump(server, client, null)
+                }
+            }
+        }
+
+        private fun pump(from: Socket, to: Socket, writes: AtomicInteger?) = runCatching {
+            val input = from.getInputStream()
+            val output = to.getOutputStream()
+            val buffer = ByteArray(32 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                writes?.incrementAndGet()
+                if (!silent) {
+                    output.write(buffer, 0, n)
+                    output.flush()
+                }
+            }
+        }
+
+        override fun close() {
+            listener.close()
+            sockets.forEach { runCatching { it.close() } }
+        }
     }
 
     /** Counters are bumped on the pump threads a moment after the bytes land, so a check waits for them. */

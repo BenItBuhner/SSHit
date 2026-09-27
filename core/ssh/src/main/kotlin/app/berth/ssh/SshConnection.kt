@@ -366,6 +366,8 @@ class SshConnection(
     }
 
     private fun connectClient(c: SSHClient, ep: SshEndpoint, via: SSHClient?) {
+        // sshj starts the keep-alive thread inside connect, and only if the interval is set by then: set after, it is never sent.
+        c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
         c.connectOrCauseOfDeath {
             when {
                 via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
@@ -374,7 +376,6 @@ class SshConnection(
             }
         }
         if (ep.compression) c.useCompression()
-        c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
     }
 
     private fun resolve(ep: SshEndpoint): InetAddress {
