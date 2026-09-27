@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# The three sshds the test suite's live cases run against, and the SSH_TEST_* variables that point the tests at them:
+# The four sshds the test suite's live cases run against, and the SSH_TEST_* variables that point the tests at them:
 # the target on 127.0.0.1:2222, the jump host on 127.0.0.1:2223 that the ProxyJump chain and Tunnels cases log
-# in through on the way to it (SSH_TEST_JUMP_PORT), and on 127.0.0.1:2224 the target's twin that refuses agent
-# forwarding, as a server with AllowAgentForwarding no does (SSH_TEST_NO_AGENT_PORT). Source this from the step that
+# in through on the way to it (SSH_TEST_JUMP_PORT), on 127.0.0.1:2224 the target's twin that refuses agent
+# forwarding, as a server with AllowAgentForwarding no does (SSH_TEST_NO_AGENT_PORT), and on 127.0.0.1:2225 one that
+# logs in by keyboard-interactive alone through PAM (SSH_TEST_KBD_PORT). Source this from the step that
 # runs Gradle: it exports the variables into the caller's shell, and the test account's password exists only there
 # and in the sshd's shadow entry, set through chpasswd and never written to a file, a log or the step's output. The
-# first two are the pair the repository's build notes describe for a workstation (the twin's one test skips without
-# it): password and public-key authentication, the sftp subsystem, TCP forwarding for the tunnel tests, one account
-# on all three, and the jump host with host keys of its own so a hop's trust-on-first-use is its own decision.
+# first two are the pair the repository's build notes describe for a workstation (the twin's and the keyboard-interactive
+# server's tests skip without them): password and public-key authentication, the sftp subsystem, TCP forwarding for
+# the tunnel tests, one account on all four, and the jump host with host keys of its own so a hop's trust-on-first-use
+# is its own decision.
 #
 # Sourced, the script runs itself again in a child bash and takes back only the exports, as lines on a descriptor
 # of their own and never through a file. The caller's shell keeps its own options, where this script's
@@ -26,6 +28,7 @@ user="${SSH_TEST_ACCOUNT:-berth}"
 port=2222
 jump_port=2223
 no_agent_port=2224
+kbd_port=2225
 keys="${RUNNER_TEMP:-/tmp}/berth-test-keys"
 
 if [ ! -x /usr/sbin/sshd ]; then
@@ -105,6 +108,33 @@ start_instance /etc/ssh/sshd_jump /tmp/sshd_jump.pid
 write_config /etc/ssh/sshd_noagent "$no_agent_port" /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_rsa_key /tmp/sshd_noagent.pid no
 start_instance /etc/ssh/sshd_noagent /tmp/sshd_noagent.pid
 
+# The keyboard-interactive server: no password or key method, only PAM's conversation, which opens with a pam_echo
+# line the server sends as a request of its own with no prompts, then asks "Password: " for the account's password.
+# PAM names the service after the binary, so this sshd runs as a link of its own name with a stack of its own, and
+# the system's sshd stack is left as it was.
+[ -e /usr/local/sbin/sshd-berth-kbd ] || sudo ln -s /usr/sbin/sshd /usr/local/sbin/sshd-berth-kbd
+printf '%s\n' 'auth required pam_echo.so Berth test server: keyboard-interactive login through PAM' \
+    '@include common-auth' '@include common-account' 'session required pam_unix.so' | sudo tee /etc/pam.d/sshd-berth-kbd >/dev/null
+sudo mkdir -p /etc/ssh/sshd_kbd
+sudo tee /etc/ssh/sshd_kbd/sshd_config >/dev/null <<EOF
+Port $kbd_port
+ListenAddress 127.0.0.1
+HostKey /etc/ssh/ssh_host_ed25519_key
+PasswordAuthentication no
+PubkeyAuthentication no
+KbdInteractiveAuthentication yes
+AuthenticationMethods keyboard-interactive
+UsePAM yes
+PermitRootLogin no
+PrintLastLog no
+PidFile /tmp/sshd_kbd.pid
+LogLevel VERBOSE
+MaxStartups 100
+EOF
+if ! { [ -f /tmp/sshd_kbd.pid ] && sudo kill -0 "$(cat /tmp/sshd_kbd.pid)" 2>/dev/null; }; then
+    sudo /usr/local/sbin/sshd-berth-kbd -f /etc/ssh/sshd_kbd/sshd_config
+fi
+
 # Up, and answering the key, before any test asks; a server that is not is a failed step, not a skipped suite.
 ssh_check() {
     ssh -p "$1" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
@@ -118,19 +148,31 @@ done
 ssh -o ProxyCommand="ssh -p $jump_port -W %h:%p -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $keys/ed25519 $user@127.0.0.1" \
     -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     -i "$keys/ed25519" "$user@127.0.0.1" true
-echo "test sshd listening on 127.0.0.1:$port, jump host on 127.0.0.1:$jump_port and no-agent twin on 127.0.0.1:$no_agent_port for $user"
+# The keyboard-interactive server takes no key, so it logs in the way its tests do, answering PAM's prompt with the
+# account's password: an askpass helper reads the answer from this one command's environment, never from a file.
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$BERTH_KBD_ANSWER"' > "$keys/kbd-askpass"
+chmod 700 "$keys/kbd-askpass"
+kbd_check() {
+    BERTH_KBD_ANSWER="$password" SSH_ASKPASS="$keys/kbd-askpass" SSH_ASKPASS_REQUIRE=force \
+        ssh -p "$kbd_port" -o PreferredAuthentications=keyboard-interactive -o NumberOfPasswordPrompts=1 \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$user@127.0.0.1" true </dev/null
+}
+for _ in $(seq 1 50); do kbd_check 2>/dev/null && break; sleep 0.2; done
+kbd_check
+echo "test sshd listening on 127.0.0.1:$port, jump host on 127.0.0.1:$jump_port, no-agent twin on 127.0.0.1:$no_agent_port and keyboard-interactive server on 127.0.0.1:$kbd_port for $user"
 
 export SSH_TEST_HOST=127.0.0.1
 export SSH_TEST_PORT="$port"
 export SSH_TEST_JUMP_PORT="$jump_port"
 export SSH_TEST_NO_AGENT_PORT="$no_agent_port"
+export SSH_TEST_KBD_PORT="$kbd_port"
 export SSH_TEST_USER="$user"
 export SSH_TEST_PASSWORD="$password"
 export SSH_TEST_KEY_FILE="$keys/ed25519"
 export SSH_TEST_P256_KEY_FILE="$keys/p256"
 
 if [ "${1:-}" = "--exports-fd" ]; then
-    for name in SSH_TEST_HOST SSH_TEST_PORT SSH_TEST_JUMP_PORT SSH_TEST_NO_AGENT_PORT SSH_TEST_USER SSH_TEST_PASSWORD SSH_TEST_KEY_FILE SSH_TEST_P256_KEY_FILE; do
+    for name in SSH_TEST_HOST SSH_TEST_PORT SSH_TEST_JUMP_PORT SSH_TEST_NO_AGENT_PORT SSH_TEST_KBD_PORT SSH_TEST_USER SSH_TEST_PASSWORD SSH_TEST_KEY_FILE SSH_TEST_P256_KEY_FILE; do
         printf 'export %s=%q\n' "$name" "${!name}"
     done >&"$2"
 fi

@@ -35,7 +35,9 @@ import kotlin.test.assertTrue
  * `SSH_TEST_HOST`, `SSH_TEST_PORT`, `SSH_TEST_USER`, `SSH_TEST_PASSWORD`, and optionally
  * `SSH_TEST_KEY_FILE` (an unencrypted private key authorised for that user). The jump chain
  * tests need a second sshd on `SSH_TEST_JUMP_PORT` (same user and password, its own host keys):
- * the first instance is the hop, the second the target reached through it.
+ * the first instance is the hop, the second the target reached through it. The keyboard-interactive
+ * case needs `SSH_TEST_KBD_PORT`, an sshd that takes that method alone through PAM with a pam_echo
+ * line ahead of the password (`.github/scripts/test-sshd.sh` makes all of them).
  */
 class SshIntegrationTest {
     private val host = System.getenv("SSH_TEST_HOST").orEmpty()
@@ -44,6 +46,7 @@ class SshIntegrationTest {
     private val password = System.getenv("SSH_TEST_PASSWORD").orEmpty()
     private val keyFile = System.getenv("SSH_TEST_KEY_FILE").orEmpty()
     private val jumpPort = System.getenv("SSH_TEST_JUMP_PORT").orEmpty().toIntOrNull()
+    private val kbdPort = System.getenv("SSH_TEST_KBD_PORT").orEmpty().toIntOrNull()
 
     @Before
     fun requireServer() {
@@ -243,6 +246,25 @@ class SshIntegrationTest {
             connection.connect()
             assertEquals(user, connection.exec("printf %s \"\$USER\""))
         }
+    }
+
+    /**
+     * PAM sends its pam_echo line in a request with no prompt, then "Password: " in the next: the
+     * line reaches that prompt as its instruction, and the request with none is answered with none.
+     */
+    @Test
+    fun `keyboard-interactive carries a request with no prompt's instruction to the next prompt, and logs in`() = runBlocking {
+        assumeTrue("set SSH_TEST_KBD_PORT to a keyboard-interactive sshd to run", kbdPort != null)
+        val asked = ArrayList<List<Any>>()
+        val endpoint = SshEndpoint(
+            host = host, port = kbdPort!!, user = user,
+            auth = listOf(SshAuth.KeyboardInteractive { name, instruction, prompt, echo -> asked += listOf(name, instruction, prompt, echo); password.toCharArray() }),
+        )
+        SshConnection(endpoint, AcceptAllHostKeys).use { connection ->
+            connection.connect()
+            assertEquals(user, connection.exec("printf %s \"\$USER\""))
+        }
+        assertEquals(listOf(listOf<Any>("", "Berth test server: keyboard-interactive login through PAM", "Password: ", false)), asked)
     }
 
     @Test

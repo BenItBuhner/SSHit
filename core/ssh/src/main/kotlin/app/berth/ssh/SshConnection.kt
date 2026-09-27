@@ -51,8 +51,12 @@ sealed interface SshAuth {
      */
     class PublicKey(val keyProvider: KeyProvider, val signer: SshSigner? = null, val agentKey: AgentKey? = null) : SshAuth
 
-    /** [respond] receives each server prompt and whether the answer should echo; null cancels. */
-    class KeyboardInteractive(val respond: (instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
+    /**
+     * [respond] receives each server prompt and whether the answer should echo, with the name and
+     * instruction of the request that carried it and of every request with no prompt the server
+     * sent since the last one that had some ([KeyboardInteractiveProvider]); null cancels.
+     */
+    class KeyboardInteractive(val respond: (name: String, instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
 }
 
 data class SshEndpoint(
@@ -416,18 +420,7 @@ class SshConnection(
             override fun shouldRetry(resource: Resource<*>?): Boolean = false
         })
         is SshAuth.PublicKey -> signer?.let { SignerAuthPublickey(keyProvider, it) } ?: AuthPublickey(keyProvider)
-        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(object : ChallengeResponseProvider {
-            private var instruction = ""
-            override fun getSubmethods(): List<String> = emptyList()
-            override fun init(resource: Resource<*>?, name: String?, instruction: String?) {
-                this.instruction = instruction ?: ""
-            }
-
-            override fun getResponse(prompt: String, echo: Boolean): CharArray =
-                respond(instruction, prompt, echo) ?: throw UserAuthException("Prompt cancelled")
-
-            override fun shouldRetry(): Boolean = false
-        })
+        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(KeyboardInteractiveProvider(respond))
     }
 
     /**
@@ -616,6 +609,40 @@ class SshConnection(
         /** The global request [probe] sends: what OpenSSH's client sends for `ServerAliveInterval`, answered by every server. */
         const val PROBE_REQUEST = "keepalive@openssh.com"
     }
+}
+
+/**
+ * sshj's side of keyboard-interactive for [respond]. Each request's name and instruction come to
+ * [init] and its prompts one at a time to [getResponse]; a request with no prompts gets no call
+ * there and is answered with no responses, so its text is held for the next prompt. PAM sends a
+ * pam_echo line that way, in a request of its own ahead of the one that asks for the password.
+ * Once a prompt has been asked, the next request's text starts afresh.
+ */
+internal class KeyboardInteractiveProvider(
+    private val respond: (name: String, instruction: String, prompt: String, echo: Boolean) -> CharArray?,
+) : ChallengeResponseProvider {
+    private val names = ArrayList<String>()
+    private val instructions = ArrayList<String>()
+    private var asked = false
+
+    override fun getSubmethods(): List<String> = emptyList()
+
+    override fun init(resource: Resource<*>?, name: String?, instruction: String?) {
+        if (asked) {
+            names.clear()
+            instructions.clear()
+            asked = false
+        }
+        name?.trimEnd()?.takeIf { it.isNotEmpty() }?.let { names += it }
+        instruction?.trimEnd()?.takeIf { it.isNotEmpty() }?.let { instructions += it }
+    }
+
+    override fun getResponse(prompt: String, echo: Boolean): CharArray {
+        asked = true
+        return respond(names.joinToString("\n"), instructions.joinToString("\n"), prompt, echo) ?: throw UserAuthException("Prompt cancelled")
+    }
+
+    override fun shouldRetry(): Boolean = false
 }
 
 /**

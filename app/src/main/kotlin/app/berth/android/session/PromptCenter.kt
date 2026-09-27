@@ -162,6 +162,8 @@ sealed interface Prompt {
         override val host: Host,
         /** Server-provided prompt for keyboard-interactive, or null for a plain password. */
         val serverPrompt: String?,
+        /** The keyboard-interactive request's name and instruction, the server's words above its prompt; null for none. */
+        val name: String?,
         val instruction: String?,
         internal val answer: CompletableDeferred<CharArray?>,
     ) : Prompt {
@@ -261,8 +263,8 @@ class PromptCenter @Inject constructor() {
         ask { Prompt.PinnedKeyRefused(host, request, pinned, it, via) }
     }
 
-    suspend fun password(host: Host, serverPrompt: String? = null, instruction: String? = null): CharArray? =
-        ask { Prompt.Password(host, serverPrompt, instruction, it) }
+    suspend fun password(host: Host, serverPrompt: String? = null, name: String? = null, instruction: String? = null): CharArray? =
+        ask { Prompt.Password(host, serverPrompt, name, instruction, it) }
 
     suspend fun passphrase(host: Host, identityName: String): CharArray? =
         ask { Prompt.Passphrase(host, identityName, it) }

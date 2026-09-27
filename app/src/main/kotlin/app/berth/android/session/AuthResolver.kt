@@ -28,8 +28,8 @@ class AuthResolver @Inject constructor(
     private val prompts: PromptCenter,
 ) {
     suspend fun resolve(host: Host): List<SshAuth> {
-        val interactive = SshAuth.KeyboardInteractive { instruction, prompt, _ ->
-            runBlocking { prompts.password(host, serverPrompt = prompt, instruction = instruction.ifBlank { null }) }
+        val interactive = SshAuth.KeyboardInteractive { name, instruction, prompt, _ ->
+            runBlocking { prompts.password(host, serverPrompt = prompt, name = name.ifBlank { null }, instruction = instruction.ifBlank { null }) }
         }
         return when (val auth = host.auth) {
             is AuthMethod.Key -> {
