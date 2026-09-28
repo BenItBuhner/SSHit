@@ -650,9 +650,12 @@ class SshConnection(
      * a link gone silent without a FIN neither reply comes, so a caller on the main thread would
      * sit out the whole of it. [first] (the shell, remote forwards) closes on a thread of its own
      * and has [graceMillis] to finish while the login still looks up, none once it is known dead;
-     * then the transport is disconnected, which ends any wait still pending. A disconnect that
-     * cannot write either (a writer stuck on a full send buffer holds sshj's write lock) has as
-     * long again before the sockets are closed under it. A connect in flight ends as with [close].
+     * then the transport is disconnected, which ends the reply waits already begun. A disconnect
+     * that cannot write either (a writer stuck on a full send buffer holds sshj's write lock) has
+     * as long again before the sockets are closed under it. A cancel that [first]'s thread sends
+     * as the disconnect's error wakes it is written before sshj registers the wait for its reply,
+     * so that error misses it, and the reply never comes; that thread is interrupted once the
+     * disconnect is over, which ends the wait. A connect in flight ends as with [close].
      * Nothing either thread meets on the way down reaches the default handler, which on Android
      * ends the process and every session in it.
      */
@@ -670,6 +673,7 @@ class SshConnection(
                 val disconnect = thread(isDaemon = true, name = "berth-disconnect-${endpoint.host}") { runCatching { close() } }
                 disconnect.join(graceMillis)
                 if (disconnect.isAlive) sockets.forEach { runCatching { it.close() } }
+                channels.interrupt()
             }
         }
     }

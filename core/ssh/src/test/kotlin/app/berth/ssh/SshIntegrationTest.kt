@@ -22,6 +22,8 @@ import org.junit.Test
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.File
+import java.io.FilterOutputStream
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -683,6 +685,41 @@ class SshIntegrationTest {
     }
 
     /**
+     * The disconnect's error wakes the shell's close, and the channels' thread goes on to cancel the
+     * remote forward. sshj writes that request before it registers the wait for its reply, so a
+     * cancel written before the disconnect has closed the socket waits the transport's 30 s for a
+     * reply the error has already gone past. Over a real link that is a few closes in forty; here
+     * the disconnect's socket close waits for the cancel's write, so it is every one.
+     */
+    @Test
+    fun `a remote forward's cancel written as the disconnect runs is gone within the grace of the close`() = runBlocking {
+        Relay(host, port).use { relay ->
+            val cancelling = CountDownLatch(1)
+            val sockets = CancelBeforeClose(cancelling)
+            val connection = SshConnection(passwordEndpoint(onPort = relay.port).copy(host = "127.0.0.1", keepaliveSeconds = 0), AcceptAllHostKeys)
+            connection.clientFactory = { config -> SSHClient(config).apply { socketFactory = sockets } }
+            connection.connect()
+            val shell = connection.openShell(80, 24)
+            val forward = connection.startRemoteForward("127.0.0.1", 0, "127.0.0.1", 9)
+            relay.silent = true
+            val before = channelsThreads().size
+            val grace = 1_000L
+            val closing = connection.closeInBackground(listOf(shell, Closeable { cancelling.countDown(); forward.close() }), graceMillis = grace)
+            withContext(Dispatchers.IO) { closing.join(5_000) }
+            assertFalse(closing.isAlive, "the close was still running")
+            assertEquals(0L, sockets.cancelSent.count, "the cancel should be written while the disconnect holds its socket open")
+            val deadline = System.nanoTime() + grace * 1_000_000
+            while (channelsThreads().size > before && System.nanoTime() < deadline) delay(20)
+            val left = channelsThreads()
+            assertTrue(
+                left.size <= before,
+                "${left.size - before} of the close's channels' threads still alive $grace ms after it ended, at " +
+                    left.joinToString(" | ") { t -> t.stackTrace.take(6).joinToString(" < ") } + "; sshj waits 30 s for the cancel's reply",
+            )
+        }
+    }
+
+    /**
      * A close during a login through two hops ends the target's wait for its greeting, and the
      * connect then tears down too, on its own thread, beside the close's. Each disconnect on the
      * close's thread is slowed, so the two teardowns overlap as they would over a real link, where
@@ -739,6 +776,40 @@ class SshIntegrationTest {
             if (Thread.currentThread().name.startsWith(slowOn)) Thread.sleep(40)
             super.disconnect()
         }
+    }
+
+    private fun channelsThreads() = Thread.getAllStackTraces().keys.filter { it.isAlive && it.name.startsWith("berth-close-channels-") }
+
+    /**
+     * Sockets whose close on the disconnect's thread waits, up to 5 s, for a write from the close's
+     * channels' thread once [cancelling] has opened: the remote forward's cancel, into a socket still open.
+     */
+    private class CancelBeforeClose(private val cancelling: CountDownLatch) : SocketFactory() {
+        val cancelSent = CountDownLatch(1)
+
+        private inner class Held : Socket() {
+            override fun getOutputStream(): OutputStream = Watched(super.getOutputStream())
+
+            override fun close() {
+                if (Thread.currentThread().name.startsWith("berth-disconnect-")) cancelSent.await(5, TimeUnit.SECONDS)
+                super.close()
+            }
+        }
+
+        private inner class Watched(stream: OutputStream) : FilterOutputStream(stream) {
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                out.write(b, off, len)
+                if (cancelling.count == 0L && Thread.currentThread().name.startsWith("berth-close-channels-")) cancelSent.countDown()
+            }
+        }
+
+        override fun createSocket(): Socket = Held()
+        override fun createSocket(host: String, port: Int): Socket = createSocket().apply { connect(InetSocketAddress(host, port)) }
+        override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+            createSocket().apply { bind(InetSocketAddress(localHost, localPort)); connect(InetSocketAddress(host, port)) }
+        override fun createSocket(host: InetAddress, port: Int): Socket = createSocket().apply { connect(InetSocketAddress(host, port)) }
+        override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+            createSocket().apply { bind(InetSocketAddress(localAddress, localPort)); connect(InetSocketAddress(address, port)) }
     }
 
     /** Sockets whose send buffer is [bytes], so a stalled path fills it within a small write. */
