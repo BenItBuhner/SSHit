@@ -28,8 +28,9 @@ import app.berth.android.ui.theme.Berth
  * reader told `Next layer`. So the trailing key is the Deck editor outright: the pencil, a tap or
  * Enter opens it, and there are no layer actions to announce. The compact Deck under a hardware
  * keyboard is one layer; a layout the user has cut to one is another. Where there is no editor to
- * open (the editor's own preview, the layout previews) the key stands disabled rather than absent,
- * so the row's keys measure as the Stage's do.
+ * open (the editor's own preview, the layout previews) the key stands drawn rather than absent,
+ * so the row's keys measure as the Stage's do, and is nothing more: no touch, no focus, and no
+ * button for a reader to be told of, the preview's description standing for it.
  */
 @Composable
 internal fun DeckEditorKey(
@@ -47,14 +48,17 @@ internal fun DeckEditorKey(
     val opens = enabled && onOpen != null
     Box(
         modifier
-            .testTag(DeckKeyTag)
-            .semantics { contentDescription = "Deck editor" }
             // A clickable outright: the touch is a tap and nothing else, so Enter, Space and the
             // D-pad's centre come with it, and the reader hears one button with one activation.
-            .clickable(enabled = opens, interactionSource = interaction, indication = null, role = Role.Button) {
-                patterns.keyTap()
-                onOpen?.invoke()
-            }
+            .then(
+                if (onOpen == null) Modifier else Modifier
+                    .testTag(DeckKeyTag)
+                    .semantics { contentDescription = "Deck editor" }
+                    .clickable(enabled = opens, interactionSource = interaction, indication = null, role = Role.Button) {
+                        patterns.keyTap()
+                        onOpen()
+                    },
+            )
             .keyFace(if (pressed) c.surface4 else if (focused) c.surface3 else c.surface2, end = faceEnd),
         contentAlignment = Alignment.Center,
     ) {

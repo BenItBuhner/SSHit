@@ -65,11 +65,6 @@ class BatteryExplainerTest {
 
     @After
     fun tearDown() {
-        if (::proxy.isInitialized) {
-            // Bytes flow again before the close, else sshj waits its 30 s for a channel-close reply that cannot arrive.
-            proxy.swallowToServer = false
-            proxy.swallowToClient = false
-        }
         bg.cancel()
         if (::graph.isInitialized) graph.close()
         if (::proxy.isInitialized) proxy.close()

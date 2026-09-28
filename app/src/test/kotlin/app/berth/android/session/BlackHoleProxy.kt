@@ -33,6 +33,9 @@ class BlackHoleProxy(private val targetHost: String, private val targetPort: Int
     /** How many connections have been relayed, ever; a reconnect is one more. */
     val connections: Int get() = links.size
 
+    /** How many relayed connections are still open; one the client closed, or [cutAll] cut, is not. */
+    val openLinks: Int get() = links.count { it.isOpen }
+
     init {
         thread(name = "black-hole-accept", isDaemon = true) {
             while (!server.isClosed) {
@@ -55,12 +58,16 @@ class BlackHoleProxy(private val targetHost: String, private val targetPort: Int
     }
 
     private inner class Link(private val client: Socket, private val upstream: Socket) {
+        @Volatile var isOpen = true
+            private set
+
         init {
             pump("black-hole-up", client, upstream) { swallowToServer }
             pump("black-hole-down", upstream, client) { swallowToClient }
         }
 
         fun close() {
+            isOpen = false
             runCatching { client.close() }
             runCatching { upstream.close() }
         }

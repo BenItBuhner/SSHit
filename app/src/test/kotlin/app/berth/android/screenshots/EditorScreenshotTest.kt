@@ -341,7 +341,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText(codicons).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Weather Icons \u00B7 https://github.com/erikflowers/weather-icons \u00B7 2.0.10 (1.100) \u00B7 OFL 1.1").performScrollTo()
         capture("settings-licence-table$suffix")
-        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo()
@@ -355,7 +355,7 @@ class EditorScreenshotTest {
         compose.onNodeWithText("From github.com/hierynomus/sshj at v0.40.0: LICENSE and NOTICE").assertIsDisplayed()
         capture("settings-licence-sshj$suffix")
         compose.onNodeWithText("sshj - SSHv2 library for Java", substring = true).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
 
         val platform = listOf(
@@ -371,14 +371,14 @@ class EditorScreenshotTest {
         compose.onNodeWithText(SHARED_APACHE).performClick()
         val origins = "From github.com/google/dagger at dagger-2.60.1: LICENSE.txt; github.com/jspecify/jspecify at v1.0.0: LICENSE;"
         // The origin line is there from the first frame; the text is read off the main thread, and until it lands the
-        // sheet stands at the header's height, so the frame waits for the text's own heading.
+        // sheet holds the list's height with nothing under the origin, so the frame waits for the text's own heading.
         val terms = "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION"
         compose.waitUntil(5_000) { compose.onAllNodesWithText(terms, substring = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(origins, substring = true).assertIsDisplayed()
         capture("settings-licence-apache-shared$suffix")
         compose.assertNoTextCut("the shared Apache text$suffix")
         compose.assertNoBrokenWords("the shared Apache text$suffix")
-        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
 
         // Kotlin's NOTICE follows its licence in the one text, as sshj's does.
@@ -389,7 +389,7 @@ class EditorScreenshotTest {
         capture("settings-licence-kotlin-notice$suffix")
         compose.assertNoTextCut("Kotlin's licence and NOTICE$suffix")
         compose.assertNoBrokenWords("Kotlin's licence and NOTICE$suffix")
-        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
 
         compose.onNodeWithText("Public Suffix List, for link captions").performScrollTo().performClick()
@@ -400,7 +400,7 @@ class EditorScreenshotTest {
         warranty.performScrollTo()
         capture("settings-licence-disclaimer$suffix")
         warranty.assertIsDisplayed()
-        compose.onNodeWithContentDescription("Back to Licences").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Back to Licences").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("What Berth ships that came under terms of its own").fetchSemanticsNodes().isNotEmpty() }
     }
 

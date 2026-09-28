@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -18,7 +19,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.berth.android.ui.components.BerthIcon
 import app.berth.android.ui.components.BerthIcons
@@ -148,24 +152,33 @@ internal val SHIPPED_NOTICES: List<Pair<String, List<ShippedNotice>>> = listOf(
 /**
  * Settings › About › Licences: a content-height sheet listing what Berth ships under terms of its
  * own, one row each with those terms beneath; a row with a shipped text opens it in place, and the
- * back action or Back returns to the list. A credit with no text is a row without an action.
+ * back action or Back returns to the list where it was left. A credit with no text is a row
+ * without an action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LicencesSheet(onDismiss: () -> Unit) {
     var reading by remember { mutableStateOf<ShippedNotice?>(null) }
+    val listScroll = rememberScrollState()
+    var listHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
     BerthSheet(onDismiss = onDismiss) {
         BackHandler(enabled = reading != null) { reading = null }
         val open = reading
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (open == null) NoticeList(onOpen = { reading = it }) else LicenceText(open, onBack = { reading = null })
+        if (open == null) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { listHeight = with(density) { it.height.toDp() } }
+                    .verticalScroll(listScroll)
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                NoticeList(onOpen = { reading = it })
+            }
+        } else {
+            LicenceText(open, held = listHeight, onBack = { reading = null })
         }
     }
 }
@@ -192,8 +205,14 @@ private fun NoticeList(onOpen: (ShippedNotice) -> Unit) {
     }
 }
 
+/**
+ * A shipped text under its header, which stands while the text scrolls beneath it, so the back
+ * action is always in view however long the licence. The text opens at its top. It is read off
+ * the main thread, and until it lands the sheet stands at the list's height [held] rather than
+ * drop to the header for a frame and rise again with the text (A9's content height, reached once).
+ */
 @Composable
-private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
+private fun LicenceText(notice: ShippedNotice, held: Dp, onBack: () -> Unit) {
     val c = Berth.colors
     val context = LocalContext.current
     val paragraphs by produceState<List<String>?>(null, notice) {
@@ -201,12 +220,28 @@ private fun LicenceText(notice: ShippedNotice, onBack: () -> Unit) {
             notice.files.flatMap { file -> licenceParagraphs(context.assets.open("licenses/$file").bufferedReader().use { it.readText() }) }
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconAction(onClick = onBack, description = "Back to Licences") { BerthIcon(BerthIcons.back) }
-        Column(Modifier.padding(start = 4.dp)) { SheetTitle(notice.name, notice.terms) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (paragraphs == null) held else 0.dp)
+            .padding(horizontal = 20.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconAction(onClick = onBack, description = "Back to Licences") { BerthIcon(BerthIcons.back) }
+            Column(Modifier.padding(start = 4.dp)) { SheetTitle(notice.name, notice.terms) }
+        }
+        Column(
+            Modifier
+                .weight(1f, fill = false)
+                .padding(top = 12.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (notice.origin != null) Text("From ${notice.origin}", style = BerthType.caption, color = c.text2)
+            for (p in paragraphs.orEmpty()) Text(p, style = BerthType.body, color = c.text2)
+        }
     }
-    if (notice.origin != null) Text("From ${notice.origin}", style = BerthType.caption, color = c.text2)
-    for (p in paragraphs.orEmpty()) Text(p, style = BerthType.body, color = c.text2)
 }
 
 /**

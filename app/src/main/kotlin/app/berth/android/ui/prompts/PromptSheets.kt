@@ -73,7 +73,7 @@ fun PromptHost(prompts: PromptCenter, onOpenKnownHosts: () -> Unit = {}) {
         is Prompt.PinnedKeyRefused -> PinnedKeyRefusedSheet(p, onOpenKnownHosts)
         is Prompt.Password -> SecretSheet(
             title = "Password for ${p.host.userAtHost}",
-            caption = p.instruction ?: p.serverPrompt,
+            caption = listOfNotNull(p.name, p.instruction).joinToString("\n").ifEmpty { p.serverPrompt },
             fieldLabel = p.serverPrompt?.trimEnd(':', ' ') ?: "Password",
             onSubmit = { p.submit(it.toCharArray()) },
             onCancel = p::cancel,

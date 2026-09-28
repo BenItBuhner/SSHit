@@ -784,6 +784,14 @@ class BerthScreenshotTest {
         (graph.prompts.current.value as Prompt.Password).cancel()
         compose.waitUntil(5_000) { graph.prompts.current.value == null }
 
+        // A keyboard-interactive request: its name and instruction are the caption, its prompt the field's label.
+        bg.launch { graph.prompts.password(homelab, serverPrompt = "Verification code: ", name = "Two-step sign-in", instruction = "Enter the six-digit code from your authenticator app.") }
+        compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.Password }
+        compose.onNodeWithText("Two-step sign-in\nEnter the six-digit code from your authenticator app.").assertExists()
+        capture("prompt-password-keyboard-interactive")
+        (graph.prompts.current.value as Prompt.Password).cancel()
+        compose.waitUntil(5_000) { graph.prompts.current.value == null }
+
         bg.launch { graph.prompts.passphrase(host, "laptop ed25519") }
         compose.waitUntil(5_000) { graph.prompts.current.value is Prompt.Passphrase }
         capture("prompt-passphrase")

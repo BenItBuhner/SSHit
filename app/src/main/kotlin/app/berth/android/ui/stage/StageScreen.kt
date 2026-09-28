@@ -1045,7 +1045,7 @@ internal fun StatePill(
     val (text, actions) = when (state) {
         // Spec D4: "Connecting…" over the dimmed previous frame, no actions until the connect resolves.
         SessionState.CONNECTING, SessionState.IDLE -> "Connecting$hop\u2026" to emptyList()
-        SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in ${seconds}s" else "Reconnecting$hop\u2026") to listOf("Detach" to onDetach)
+        SessionState.RECONNECTING -> (if (seconds != null) "Reconnecting \u00B7 retry in $seconds s" else "Reconnecting$hop\u2026") to listOf("Detach" to onDetach)
         else -> "Detached \u00B7 ${ageText(lastLiveAt, clock)}" to listOf("Reconnect" to onReconnect, "Close" to onClose)
     }
     // The row is the target's height inside the same 60 dp; the pill's 12 dp over the Deck is the

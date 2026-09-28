@@ -459,9 +459,10 @@ class TerminalSession(
      * Enter without shell marks: the typed line is checked against the row the cursor is on. Typed
      * key by key, the echo is already there and the command is recorded at once, before it can
      * clear the screen; sent in one write with its Enter (a snippet, a test), the echo has not
-     * landed yet, so the check runs again after a moment. The row is kept as a buffer row plus the
-     * lines dropped, which output does not move; a resize re-wraps history, and then the line is
-     * simply not found.
+     * landed yet, so the check runs again every [ECHO_POLL_MS] until it matches, the cursor has left
+     * the line (the echo is over, and a row redrawn later is not the echo: a password stays out),
+     * or [ECHO_DEADLINE_MS] has passed. The row is kept as a buffer row plus the lines dropped,
+     * which output does not move; a resize re-wraps history, and then the line is simply not found.
      */
     private fun commitTyped() {
         val pending = typedLine.commit() ?: return
@@ -475,13 +476,20 @@ class TerminalSession(
             return
         }
         scope.launch {
-            delay(ECHO_GRACE_MS)
-            val line = synchronized(emulator.lock) {
-                val row = (stable - emulator.linesDropped).toInt()
-                if (emulator.isAlternateScreen || row < 0 || row >= emulator.bufferRows) return@launch
-                TerminalText.extract(emulator.grid, TerminalText.snapToLine(emulator.grid, CellPos(row, 0)))
+            repeat((ECHO_DEADLINE_MS / ECHO_POLL_MS).toInt()) {
+                delay(ECHO_POLL_MS)
+                val (line, over) = synchronized(emulator.lock) {
+                    val row = (stable - emulator.linesDropped).toInt()
+                    if (emulator.isAlternateScreen || row < 0 || row >= emulator.bufferRows) return@launch
+                    val range = TerminalText.snapToLine(emulator.grid, CellPos(row, 0))
+                    TerminalText.extract(emulator.grid, range) to (emulator.scrollbackSize + emulator.cursorY > range.end.row)
+                }
+                pending.resolve(line)?.let {
+                    recordCommand(it)
+                    return@launch
+                }
+                if (over) return@launch
             }
-            pending.resolve(line)?.let { recordCommand(it) }
         }
     }
 
@@ -610,12 +618,23 @@ class TerminalSession(
         tunnelRetry.update { it + 1 }
     }
 
-    private fun closeTunnels() {
+    /**
+     * Stops every tunnel and returns the remote forwards' handles unclosed. A local or dynamic
+     * forward's listener holds a device port, so it closes here, and closing one waits on nothing;
+     * a remote forward's close asks the server to stop listening and waits for the answer, so it
+     * goes to the connection's close in the background ([SshConnection.closeInBackground]).
+     */
+    private fun releaseTunnels(): List<ForwardHandle> {
+        val remote = ArrayList<ForwardHandle>()
         synchronized(slots) {
-            slots.values.forEach { slot -> slot.handle?.let { runCatching(it::close) } }
+            for (slot in slots.values) {
+                val handle = slot.handle ?: continue
+                if (slot.tunnel.type == TunnelType.REMOTE) remote += handle else runCatching(handle::close)
+            }
             slots.clear()
         }
         _tunnels.value = emptyMap()
+        return remote
     }
 
     private fun tunnelError(tunnel: Tunnel, e: Throwable): String {
@@ -940,13 +959,17 @@ class TerminalSession(
 
     private fun Throwable.rootSshError(): Throwable = if (this is SshError.JumpHopFailed) reason else this
 
+    /**
+     * Drops the connection without waiting on it: Close and Detach call this on the main thread,
+     * and closing the shell over a link gone silent waits on a reply that never comes. Forward
+     * listeners give back their device ports before this returns, so the next attempt can bind them.
+     */
     private fun teardownConnection() {
-        // Forward listeners hold device ports; release them before the next attempt binds again.
-        closeTunnels()
-        shell?.let { runCatching { it.close() } }
+        val remote = releaseTunnels()
+        val sh = shell
         shell = null
         echo.ended()
-        connection?.let { c -> c.onDisconnected = null; runCatching { c.close() } }
+        connection?.let { c -> c.onDisconnected = null; c.closeInBackground(listOfNotNull(sh) + remote) }
         connection = null
     }
 
@@ -1396,8 +1419,11 @@ class TerminalSession(
         private const val FRAME_VERSION_TEXT_ONLY = 1
         private const val MAX_FRAME_LINE = 4096
 
-        /** How long a typed command's echo may take to land before it is checked against the screen. */
-        private const val ECHO_GRACE_MS = 200L
+        /** How often a typed command whose echo has not landed is checked against the screen again. */
+        private const val ECHO_POLL_MS = 50L
+
+        /** How long a typed command's echo may take to land, over a slow link, before it is given up. */
+        private const val ECHO_DEADLINE_MS = 10_000L
         private val LINE_BREAKS = charArrayOf('\r', '\n')
     }
 }

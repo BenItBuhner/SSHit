@@ -419,7 +419,7 @@ tasks.withType<Test>().configureEach {
     // P-256 key the Keystore stand-in signs with (its public half in the test user's authorized_keys)
     // the second sshd a jump chain goes through (SSH_TEST_JUMP_PORT), and the third that refuses agent
     // forwarding (SSH_TEST_NO_AGENT_PORT), and a fourth that logs in by keyboard-interactive alone
-    // (SSH_TEST_KBD_PORT, set where one is configured; CI has none). Each is an input of the
+    // through PAM (SSH_TEST_KBD_PORT). Each is an input of the
     // task as well as its environment: a run without them skips every live test, and with the build
     // cache on that result must not stand in for a run with them (the key differs, so it cannot).
     // The password's presence is the input, not its value, so no secret goes into a cache key.

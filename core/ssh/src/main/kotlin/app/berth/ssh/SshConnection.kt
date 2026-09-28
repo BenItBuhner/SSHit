@@ -37,6 +37,7 @@ import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /** Ways to prove who we are, tried in order. Secrets are pulled lazily so prompts can happen late. */
 sealed interface SshAuth {
@@ -51,8 +52,12 @@ sealed interface SshAuth {
      */
     class PublicKey(val keyProvider: KeyProvider, val signer: SshSigner? = null, val agentKey: AgentKey? = null) : SshAuth
 
-    /** [respond] receives each server prompt and whether the answer should echo; null cancels. */
-    class KeyboardInteractive(val respond: (instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
+    /**
+     * [respond] receives each server prompt and whether the answer should echo, with the name and
+     * instruction of the request that carried it and of every request with no prompt the server
+     * sent since the last one that had some ([KeyboardInteractiveProvider]); null cancels.
+     */
+    class KeyboardInteractive(val respond: (name: String, instruction: String, prompt: String, echo: Boolean) -> CharArray?) : SshAuth
 }
 
 data class SshEndpoint(
@@ -199,7 +204,7 @@ class SshConnection(
     private val _state = MutableStateFlow<SshConnectionState>(SshConnectionState.Idle)
     val state: StateFlow<SshConnectionState> = _state.asStateFlow()
 
-    private var client: SSHClient? = null
+    @Volatile private var client: SSHClient? = null
     private val hops = ArrayList<SSHClient>()
 
     /**
@@ -209,8 +214,21 @@ class SshConnection(
      */
     @Volatile private var connecting: SSHClient? = null
 
+    /**
+     * Guards [hops], and every move of a client into or out of [connecting], [hops] and [client].
+     * A close ends the connect in flight, and the connect then tears down too, on its own thread:
+     * each client goes to whichever of the two takes it first, so it is disconnected once.
+     */
+    private val clientsLock = Any()
+
     /** Set by [close]; a connect still running ends at its next stage rather than open a login nobody holds. */
     @Volatile private var closed = false
+
+    /** Guards [askingUser], and orders it against [closed] so a question asked as [close] runs is either interrupted or never asked. */
+    private val askLock = Any()
+
+    /** The thread waiting in [askUser] for the user's answer, if one is. */
+    private var askingUser: Thread? = null
 
     /** Invoked from sshj's transport thread when the connection drops for any reason. */
     var onDisconnected: ((SshError.Disconnected) -> Unit)? = null
@@ -263,11 +281,10 @@ class SshConnection(
                     connectClient(hopClient, ep, previous)
                     authenticate(hopClient, ep)
                 } catch (e: Throwable) {
-                    runCatching { hopClient.disconnect() }
+                    if (release(hopClient)) runCatching { hopClient.disconnect() }
                     throw SshError.JumpHopFailed(index, jumpHosts.size, ep.host, ep.port, ep.user, e.toSshError(ep))
                 }
-                hops += hopClient
-                connecting = null
+                settle(hopClient) { hops += hopClient }
                 previous = hopClient
             }
             _state.value = SshConnectionState.Connecting
@@ -281,10 +298,7 @@ class SshConnection(
                 _state.value = SshConnectionState.Disconnected(text, error)
                 onDisconnected?.invoke(error)
             }
-            client = target
-            connecting = null
-            // Closed while the login was finishing: the catch drops what was made instead of leaving it up.
-            if (closed) throw SshError.Disconnected("closed")
+            settle(target) { client = target }
             _state.value = SshConnectionState.Connected
         } catch (e: Throwable) {
             closeQuietly()
@@ -295,10 +309,25 @@ class SshConnection(
     }
 
     /** Registers [c] as the client in flight; after a [close] the attempt ends here, before the client opens anything. */
-    private fun begin(c: SSHClient): SSHClient {
-        connecting = c
+    private fun begin(c: SSHClient): SSHClient = synchronized(clientsLock) {
         if (closed) throw SshError.Disconnected("closed")
-        return c
+        connecting = c
+        c
+    }
+
+    /**
+     * Moves [c], logged in, from in flight to where [hold] keeps it. Closed while its login was
+     * finishing, the attempt ends here instead, and [c] goes to whichever teardown takes it.
+     */
+    private fun settle(c: SSHClient, hold: () -> Unit) = synchronized(clientsLock) {
+        if (closed) throw SshError.Disconnected("closed")
+        hold()
+        connecting = null
+    }
+
+    /** Takes [c] back from in flight for the connect's own cleanup; false once a close has taken it to disconnect. */
+    private fun release(c: SSHClient): Boolean = synchronized(clientsLock) {
+        (connecting === c).also { if (it) connecting = null }
     }
 
     private fun Throwable.toSshError(ep: SshEndpoint): SshError = when (this) {
@@ -366,6 +395,8 @@ class SshConnection(
     }
 
     private fun connectClient(c: SSHClient, ep: SshEndpoint, via: SSHClient?) {
+        // sshj starts the keep-alive thread inside connect, and only if the interval is set by then: set after, it is never sent.
+        c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
         c.connectOrCauseOfDeath {
             when {
                 via != null -> c.connectVia(via.newDirectConnection(ep.host, ep.port))
@@ -374,7 +405,6 @@ class SshConnection(
             }
         }
         if (ep.compression) c.useCompression()
-        c.connection.keepAlive.keepAliveInterval = ep.keepaliveSeconds.coerceAtLeast(0)
     }
 
     private fun resolve(ep: SshEndpoint): InetAddress {
@@ -396,6 +426,7 @@ class SshConnection(
         if (ep.auth.isEmpty()) throw SshError.AuthenticationFailed(ep.user, null)
         val failures = ArrayDeque<UserAuthException>()
         for (auth in ep.auth) {
+            if (closed) throw SshError.Disconnected("closed")
             val method = auth.toSshj()
             method.setLoggerFactory(c.transport.config.loggerFactory)
             try {
@@ -410,23 +441,36 @@ class SshConnection(
     private fun SshAuth.toSshj(): AuthMethod = when (this) {
         is SshAuth.Password -> AuthPassword(object : PasswordFinder {
             override fun reqPassword(resource: Resource<*>?): CharArray =
-                password() ?: throw UserAuthException("Password entry cancelled")
+                askUser { password() } ?: throw UserAuthException("Password entry cancelled")
 
             override fun shouldRetry(resource: Resource<*>?): Boolean = false
         })
         is SshAuth.PublicKey -> signer?.let { SignerAuthPublickey(keyProvider, it) } ?: AuthPublickey(keyProvider)
-        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(object : ChallengeResponseProvider {
-            private var instruction = ""
-            override fun getSubmethods(): List<String> = emptyList()
-            override fun init(resource: Resource<*>?, name: String?, instruction: String?) {
-                this.instruction = instruction ?: ""
-            }
+        is SshAuth.KeyboardInteractive -> AuthKeyboardInteractive(
+            KeyboardInteractiveProvider { name, instruction, prompt, echo -> askUser { respond(name, instruction, prompt, echo) } },
+        )
+    }
 
-            override fun getResponse(prompt: String, echo: Boolean): CharArray =
-                respond(instruction, prompt, echo) ?: throw UserAuthException("Prompt cancelled")
-
-            override fun shouldRetry(): Boolean = false
-        })
+    /**
+     * Runs [ask], which may wait on the user (a password sheet, a keyboard-interactive prompt),
+     * where [close] can end the wait. sshj asks for a password holding the login's lock, and for a
+     * keyboard-interactive answer on its transport thread holding the same lock, and disconnecting
+     * takes that lock: a close that waited for the answer would hang, on the main thread with the
+     * sheet that could answer it. [close] interrupts the wait instead, and the login fails.
+     */
+    private fun <T> askUser(ask: () -> T): T {
+        synchronized(askLock) {
+            if (closed) throw UserAuthException("Connection closed")
+            askingUser = Thread.currentThread()
+        }
+        try {
+            return ask()
+        } catch (e: Exception) {
+            if (closed) throw UserAuthException("Connection closed", e)
+            throw e
+        } finally {
+            synchronized(askLock) { askingUser = null }
+        }
     }
 
     /**
@@ -589,32 +633,107 @@ class SshConnection(
     }
 
     override fun close() {
-        closed = true
+        synchronized(askLock) {
+            closed = true
+            askingUser?.interrupt()
+        }
         closeQuietly()
         if (_state.value !is SshConnectionState.Disconnected) {
             _state.value = SshConnectionState.Disconnected("closed", null)
         }
     }
 
+    /**
+     * [close], on a thread of its own, closing [first] ahead of it; returns that thread at once.
+     * sshj's channel close sends CHANNEL_CLOSE and waits for the server's reply as long as the
+     * transport's timeout, 30 s, and a remote forward's cancel waits as long for its answer. Over
+     * a link gone silent without a FIN neither reply comes, so a caller on the main thread would
+     * sit out the whole of it. [first] (the shell, remote forwards) closes on a thread of its own
+     * and has [graceMillis] to finish while the login still looks up, none once it is known dead;
+     * then the transport is disconnected, which ends any wait still pending. A disconnect that
+     * cannot write either (a writer stuck on a full send buffer holds sshj's write lock) has as
+     * long again before the sockets are closed under it. A connect in flight ends as with [close].
+     * Nothing either thread meets on the way down reaches the default handler, which on Android
+     * ends the process and every session in it.
+     */
+    fun closeInBackground(first: List<Closeable> = emptyList(), graceMillis: Long = CLOSE_GRACE_MS): Thread {
+        val live = isConnected
+        synchronized(askLock) {
+            closed = true
+            askingUser?.interrupt()
+        }
+        return thread(isDaemon = true, name = "berth-close-${endpoint.host}") {
+            runCatching {
+                val sockets = runCatching { synchronized(clientsLock) { (listOfNotNull(client, connecting) + hops).mapNotNull { it.socket } } }.getOrDefault(emptyList())
+                val channels = thread(isDaemon = true, name = "berth-close-channels-${endpoint.host}") { first.forEach { runCatching { it.close() } } }
+                if (live) channels.join(graceMillis)
+                val disconnect = thread(isDaemon = true, name = "berth-disconnect-${endpoint.host}") { runCatching { close() } }
+                disconnect.join(graceMillis)
+                if (disconnect.isAlive) sockets.forEach { runCatching { it.close() } }
+            }
+        }
+    }
+
     private fun closeQuietly() {
-        agent?.close()
-        agent = null
-        client?.let { c ->
+        val forwarded: SshAgent?
+        val taken: List<SSHClient>
+        synchronized(clientsLock) {
+            forwarded = agent
+            // The in-flight client's streams closing ends the blocked greeting or login on the connecting thread; the hops go last made first.
+            taken = listOfNotNull(client, connecting) + hops.reversed()
+            agent = null
+            client = null
+            connecting = null
+            hops.clear()
+        }
+        forwarded?.let { runCatching { it.close() } }
+        for (c in taken) {
             runCatching { c.transport.setDisconnectListener(null) }
             runCatching { c.disconnect() }
         }
-        client = null
-        // Closing the in-flight client's streams ends the blocked greeting or login on the connecting thread.
-        connecting?.let { c -> runCatching { c.disconnect() } }
-        connecting = null
-        hops.asReversed().forEach { runCatching { it.disconnect() } }
-        hops.clear()
     }
 
     companion object {
         /** The global request [probe] sends: what OpenSSH's client sends for `ServerAliveInterval`, answered by every server. */
         const val PROBE_REQUEST = "keepalive@openssh.com"
+
+        /** How long [closeInBackground] lets a live login's channels close, and then its disconnect run, before going on without them. */
+        const val CLOSE_GRACE_MS = 2_000L
     }
+}
+
+/**
+ * sshj's side of keyboard-interactive for [respond]. Each request's name and instruction come to
+ * [init] and its prompts one at a time to [getResponse]; a request with no prompts gets no call
+ * there and is answered with no responses, so its text is held for the next prompt. PAM sends a
+ * pam_echo line that way, in a request of its own ahead of the one that asks for the password.
+ * Once a prompt has been asked, the next request's text starts afresh.
+ */
+internal class KeyboardInteractiveProvider(
+    private val respond: (name: String, instruction: String, prompt: String, echo: Boolean) -> CharArray?,
+) : ChallengeResponseProvider {
+    private val names = ArrayList<String>()
+    private val instructions = ArrayList<String>()
+    private var asked = false
+
+    override fun getSubmethods(): List<String> = emptyList()
+
+    override fun init(resource: Resource<*>?, name: String?, instruction: String?) {
+        if (asked) {
+            names.clear()
+            instructions.clear()
+            asked = false
+        }
+        name?.trimEnd()?.takeIf { it.isNotEmpty() }?.let { names += it }
+        instruction?.trimEnd()?.takeIf { it.isNotEmpty() }?.let { instructions += it }
+    }
+
+    override fun getResponse(prompt: String, echo: Boolean): CharArray {
+        asked = true
+        return respond(names.joinToString("\n"), instructions.joinToString("\n"), prompt, echo) ?: throw UserAuthException("Prompt cancelled")
+    }
+
+    override fun shouldRetry(): Boolean = false
 }
 
 /**
