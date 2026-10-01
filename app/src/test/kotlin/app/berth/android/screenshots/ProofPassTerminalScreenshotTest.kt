@@ -554,9 +554,8 @@ class ProofPassTerminalScreenshotTest {
         val tty = screen(receiver).first { it.trim().startsWith("/dev/pts/") }.trim()
         val litTab = hasContentDescription("needs attention", substring = true) and hasContentDescription(", tab 2 of 2", substring = true)
 
-        // Each move of the stage is given a moment, as a user's is: a tab body's first frame marks its
-        // tab on stage itself, so a move made before that frame lands leaves the tab it left marked on
-        // stage, where no printf lights it.
+        // Each move of the stage is given a moment, as a user's is, so each frame shows the stage
+        // settled on the tab it moved to: that tab's body drawn and the strip's ring cleared.
         fun seenOnStage() {
             compose.waitUntil(5_000) { receiver.onStage && !receiver.record.value.needsAttention }
             compose.settle(600)
