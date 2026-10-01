@@ -382,7 +382,7 @@ class TerminalEmulator(
                 val (sx, sy) = mainBuffer.resizeReflow(c, r, saved.x, saved.y, TermColor.COLOR_DEFAULT)
                 saved.x = sx
                 saved.y = sy
-                val shift = altBuffer.resizeNoReflow(c, r, cursorY, TermColor.COLOR_DEFAULT, keepInScrollback = false)
+                val shift = altBuffer.resizeNoReflow(c, r, cursorY, TermColor.COLOR_DEFAULT, keepInScrollback = false, belowCursorFirst = true)
                 cursorY = (cursorY - shift).coerceIn(0, r - 1)
                 cursorX = cursorX.coerceIn(0, c - 1)
             } else {

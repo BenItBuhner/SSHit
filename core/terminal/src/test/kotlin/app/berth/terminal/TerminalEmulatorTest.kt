@@ -607,6 +607,40 @@ class TerminalEmulatorTest {
     }
 
     @Test
+    fun `an alternate screen's shrink takes the rows under the cursor first, blank or not`() {
+        val (t, _) = term(cols = 20, rows = 47)
+        t.write("\u001b[?1049h")
+        t.write("row zero\r\nrow one\r\nrow two\r\nrow three")
+        t.write("\u001b[47;1H[berth] 0:bash")
+        t.write("\u001b[5;1H")
+        t.resize(20, 43)
+        assertEquals(listOf("row zero", "row one", "row two", "row three"), t.screenText().take(4))
+        assertEquals(4, t.cursorY)
+    }
+
+    @Test
+    fun `an alternate screen's shrink keeps a marker directly above a cursor at the foot`() {
+        val (t, _) = term(cols = 20, rows = 47)
+        t.write("\u001b[?1049h")
+        t.write("\u001b[44;1Hmarker one\r\nmarker two")
+        t.write("\u001b[47;1H[berth] 0:bash")
+        t.write("\u001b[46;1H")
+        t.resize(20, 43)
+        val rows = t.screenText()
+        assertEquals("marker one", rows[t.cursorY - 2])
+        assertEquals("marker two", rows[t.cursorY - 1])
+    }
+
+    @Test
+    fun `the main screen's shrink keeps a written last row and sends the top rows to scrollback`() {
+        val (t, _) = term(cols = 5, rows = 4)
+        t.write("a\r\nb\u001b[4;1Hd\u001b[2;2H")
+        t.resize(5, 2)
+        assertEquals(listOf("", "d"), t.screenText())
+        assertEquals(2, t.scrollbackSize)
+    }
+
+    @Test
     fun `resize reflows soft wrapped lines`() {
         val (t, _) = term(cols = 10, rows = 4)
         t.write("abcdefghijklmno\r\nxyz")

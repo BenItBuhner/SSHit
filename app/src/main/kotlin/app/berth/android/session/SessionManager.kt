@@ -546,7 +546,9 @@ class SessionManager @Inject constructor(
     /**
      * Under [stageLock]: the active tab is on stage, and so is the companion while the panes show
      * (spec C23: two tabs in view, neither raises attention); every other tab is off it, and none
-     * is while the stage is dark.
+     * is while the stage is dark. Only the manager writes the flag or marks a tab seen for coming
+     * into view: a tab's body composes a frame or more after the stage moved, and a write from it
+     * would put back on stage the tab the user just left, or clear a ring raised after it left.
      */
     private fun refreshStage() {
         val (active, split) = _stage.value
