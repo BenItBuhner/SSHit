@@ -96,13 +96,14 @@ class ScreenBuffer(cols: Int, rows: Int, maxScrollback: Int) {
      * Resizes the grid without reflowing text. Returns the number of rows the cursor must move up by.
      *
      * A shrink takes rows from under the cursor first and then off the top, where they are pushed
-     * into scrollback (or dropped when [keepInScrollback] is false or scrollback is disabled). With
-     * [belowCursorFirst] every row under the cursor goes before any row comes off the top, blank or
-     * not, so the cursor's row and everything above it stay, as xterm's shrink does: the
-     * alternate screen's rule, where a row off the top is lost and a dead link never repaints it
-     * (spec D4: the frame is frozen while the link is down). Without it only blank rows under the
-     * cursor go first: the main screen's rule, where a row off the top is kept in scrollback and
-     * a written row off the bottom would be lost.
+     * into scrollback (or dropped when [keepInScrollback] is false or scrollback is disabled).
+     * With [belowCursorFirst], the rule for the alternate screen while it is up, every row under
+     * the cursor goes before any row comes off the top, blank or not, so the cursor's row and
+     * everything above it stay, as xterm's shrink does: a row off the top of the alternate screen
+     * is lost, and a dead link never repaints it (spec D4: the frame is frozen while the link is
+     * down). Without it only blank rows under the cursor go first: the rule for the main screen,
+     * where a row off the top is kept in scrollback and a written row off the bottom would be
+     * lost, and for the alternate buffer resized while the main screen is up.
      */
     fun resizeNoReflow(
         newCols: Int,
