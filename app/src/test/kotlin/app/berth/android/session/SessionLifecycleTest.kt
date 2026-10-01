@@ -294,6 +294,23 @@ class SessionLifecycleTest {
     }
 
     @Test
+    fun `rings from before the process died are cleared as the strip comes back, so the restored tab in view carries none`() {
+        seed()
+        runBlocking {
+            for (id in listOf("s-a", "s-b")) {
+                graph.sessionRecords.upsert(graph.sessionRecords.items.value.first { it.id == id }.copy(needsAttention = true, attentionReason = "Bell"))
+            }
+        }
+        // The activity is up as the manager is built, so the return can land before the strip has loaded.
+        graph.process.start()
+        restore()
+        val active = graph.sessions.get("s-a")!!
+        assertTrue(active.onStage)
+        assertFalse("the restored tab in view carries no ring", active.record.value.needsAttention)
+        assertFalse("nor does the tab beside it", graph.sessions.get("s-b")!!.record.value.needsAttention)
+    }
+
+    @Test
     fun `attention while the app is on screen stays on the strip`() {
         grantNotifications()
         seed()

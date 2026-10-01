@@ -739,11 +739,7 @@ private fun StageBody(
         )
     }
 
-    LaunchedEffect(session.id) {
-        session.onStage = true
-        session.markSeen()
-        viewport.scrollOffset = 0
-    }
+    LaunchedEffect(session.id) { viewport.scrollOffset = 0 }
     // Settings › Terminal reaches the emulator here for the cursor the user chose, which stands
     // until the program on the other end asks for its own (DECSCUSR); the session holds its own
     // history cap (SessionEnvironment.scrollbackLinesFor), on stage or not.

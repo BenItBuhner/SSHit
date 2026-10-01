@@ -72,11 +72,6 @@ fun TunnelsTabBody(vm: AppViewModel, session: TerminalSession, onEditHost: (Stri
     val clock = trafficClock(running = live)
     var editor by remember { mutableStateOf<TunnelEditorTarget?>(null) }
 
-    LaunchedEffect(session.id) {
-        session.onStage = true
-        session.markSeen()
-    }
-
     Column(modifier) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (mine.isEmpty()) {
