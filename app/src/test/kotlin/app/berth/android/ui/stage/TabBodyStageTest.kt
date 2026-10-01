@@ -47,7 +47,7 @@ import java.io.DataOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * A tab's body neither stages its tab nor marks it seen (spec C2 and C21: a bell on stage is
+ * A tab's body neither stages its tab nor marks it seen (spec C2 and C3: a bell on stage is
  * haptic only, off stage it lights the ring, and the ring clears when the tab becomes active).
  * The manager does both under its lock as the stage moves. A body's first frame can land after
  * the stage has moved on, two moves within one frame being the way it happens, and the Stage then
