@@ -28,6 +28,7 @@ import app.berth.domain.model.InterfaceTheme
 import app.berth.domain.model.TerminalFont
 import app.berth.domain.model.TerminalTheme
 import app.berth.terminal.TerminalKey
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -95,6 +96,7 @@ class CaptureWaitsForTerminalTest {
      * pixel for pixel: the wait comes before the picture, not only before the audit after it. Once
      * nothing is pending the screen is photographed again, on the same clock, to compare.
      */
+    @OptIn(ExperimentalRoborazziApi::class)
     private fun assertCaptureHoldsTheSettledScreen(name: String) {
         assertNull("a terminal canvas is still pending after '$name'", TerminalCanvasPending.pending())
         captureScreenRoboImage(File(outDir, "$name-settled.png").path)

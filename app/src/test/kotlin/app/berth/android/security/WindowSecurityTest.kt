@@ -23,12 +23,14 @@ import org.robolectric.util.ReflectionHelpers
  * Activity's window, as MainActivity and LockActivity call it with each settings value. On sets
  * `FLAG_SECURE` and off clears it. From Android 13 the app lock alone leaves the window capturable
  * and takes the task's Recents screenshot away instead, and Block screenshots takes both. Before
- * 13 there is no such switch, so the lock alone sets `FLAG_SECURE`; that branch runs here with
- * `Build.VERSION.SDK_INT` set to 12L's on this runtime, since [WindowSecurity] reads it at each call.
+ * 13 there is no such switch, so the lock alone sets `FLAG_SECURE`. Both sides of that boundary run
+ * here with `Build.VERSION.SDK_INT` set on this runtime, to 12L's and to 13's, since [WindowSecurity]
+ * reads it at each call.
  *
- * Recents' black preview is a phone's to show. MainActivity's own collector is not run: the activity
- * composes AppRoot through Hilt's view models, so it cannot start without the app's whole graph,
- * and its `applyWindowSecurity` hands each settings value to [WindowSecurity.apply] as it comes.
+ * Recents' black preview is a phone's to show. Neither caller's collector is run. MainActivity
+ * composes AppRoot through Hilt's view models, so it cannot start without the app's whole graph; its
+ * `applyWindowSecurity` hands each new settings value to [WindowSecurity.apply] and skips a repeat,
+ * and its splash waits for the first. LockActivity's collector hands each value straight over.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -81,6 +83,20 @@ class WindowSecurityTest {
         WindowSecurity.apply(activity, SecuritySettings())
         assertFalse(secure())
         assertEquals(listOf(false, false, true), activity.recents)
+    }
+
+    @Test
+    fun `on Android 13 itself the lock alone leaves the window capturable and takes its Recents screenshot`() {
+        val sdk = Build.VERSION.SDK_INT
+        ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", Build.VERSION_CODES.TIRAMISU)
+        try {
+            assertFalse("13 has the Recents switch", WindowSecurity.lockForcesSecure)
+            WindowSecurity.apply(activity, SecuritySettings(appLock = true))
+            assertFalse("the lock alone does not block screenshots on 13", secure())
+            assertEquals(listOf(false), activity.recents)
+        } finally {
+            ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", sdk)
+        }
     }
 
     @Test

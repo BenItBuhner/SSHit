@@ -702,18 +702,18 @@ class SshIntegrationTest {
             val shell = connection.openShell(80, 24)
             val forward = connection.startRemoteForward("127.0.0.1", 0, "127.0.0.1", 9)
             relay.silent = true
-            val before = channelsThreads().size
+            val before = channelsThreads().toSet()
             val grace = 1_000L
             val closing = connection.closeInBackground(listOf(shell, Closeable { cancelling.countDown(); forward.close() }), graceMillis = grace)
             withContext(Dispatchers.IO) { closing.join(5_000) }
             assertFalse(closing.isAlive, "the close was still running")
             assertEquals(0L, sockets.cancelSent.count, "the cancel should be written while the disconnect holds its socket open")
             val deadline = System.nanoTime() + grace * 1_000_000
-            while (channelsThreads().size > before && System.nanoTime() < deadline) delay(20)
-            val left = channelsThreads()
+            while ((channelsThreads() - before).isNotEmpty() && System.nanoTime() < deadline) delay(20)
+            val left = channelsThreads() - before
             assertTrue(
-                left.size <= before,
-                "${left.size - before} of the close's channels' threads still alive $grace ms after it ended, at " +
+                left.isEmpty(),
+                "${left.size} of the close's channels' threads still alive $grace ms after it ended, at " +
                     left.joinToString(" | ") { t -> t.stackTrace.take(6).joinToString(" < ") } + "; sshj waits 30 s for the cancel's reply",
             )
         }

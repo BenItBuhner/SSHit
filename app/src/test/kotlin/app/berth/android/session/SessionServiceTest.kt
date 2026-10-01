@@ -108,6 +108,15 @@ class SessionServiceTest {
         }
     }
 
+    /** Steps the main looper for [ms], for a command that should come to nothing. */
+    private fun idleFor(ms: Long) {
+        val end = System.nanoTime() + ms * 1_000_000
+        while (System.nanoTime() < end) {
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(20)
+        }
+    }
+
     /** The service as the system runs it for [intent]: created, then handed the command as [startId]. */
     private fun run(intent: Intent, startId: Int): ServiceController<SessionService> =
         Robolectric.buildService(SessionService::class.java, intent).create().startCommand(0, startId).also { services += it }
@@ -166,7 +175,12 @@ class SessionServiceTest {
         await("the last detach's stop") { "stop" in asked }
         assertEquals("one stop, the last thing asked: $asked", listOf("stop"), asked.dropWhile { it == "start" })
         assertEquals(0, graph.notifier.summary.value.active)
-        assertFalse("the manager stops a foreground service; it does not stop itself on the action", shadow.isStoppedBySelf)
+        // Nothing is connected and the stop is asked, yet the service is foreground until the system destroys it,
+        // so an action that reaches it now leaves the stop to the manager.
+        val late = Intent(app, SessionService::class.java).setAction(SessionNotifier.ACTION_DETACH).putExtra(SessionNotifier.EXTRA_TAB_ID, "gone")
+        service.get().onStartCommand(late, 0, 3)
+        idleFor(1_000)
+        assertFalse("the manager stops a foreground service; it does not stop itself on an action", shadow.isStoppedBySelf)
         service.destroy()
         assertTrue(shadow.isForegroundStopped)
         assertTrue(shadow.notificationShouldRemoved)
