@@ -858,10 +858,11 @@ class ProofPassTerminalScreenshotTest {
      * The tmux helper (spec A24) and the Deck's tmux layer (A25). A host on Attach or create opens
      * inside `tmux new-session -A -s berth-tmux-box`, its status line at the foot and the Session
      * layer tmux. The relay in front of the sshd stops (the marker row on the screen, framed once the
-     * pill is up) and starts, the reconnect attaches again, and the shell is the one that was there
-     * before the drop (the same `$$`), with its screen. The layer picker then puts the tmux layer on
-     * the Deck, and its keys drive tmux: split is the prefix and `"`, new the prefix and `c`, each
-     * seen on the server.
+     * pill is up, its band's shrink having kept the marker and the shell's line above it: a dead
+     * link never repaints them) and starts, the reconnect attaches again, and the shell is the one
+     * that was there before the drop (the same `$$`), with its screen. The layer picker then puts
+     * the tmux layer on the Deck, and its keys drive tmux: split is the prefix and `"`, new the
+     * prefix and `c`, each seen on the server.
      */
     @Test
     fun `A24 A25 a tmux host keeps its shell through a dropped link, and the tmux layer's keys split and open windows`() {
@@ -881,11 +882,20 @@ class ProofPassTerminalScreenshotTest {
         compose.settle(600)
         capture("A24-tmux-attached")
 
+        val rowsLive = screen(session).size
         relay.stop()
         compose.waitUntil(15_000) { session.state == SessionState.RECONNECTING }
         awaitOnScreen(session, "connection lost")
         compose.waitUntil(5_000) { compose.onAllNodes(hasText("Reconnecting", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) { screen(session).size < rowsLive }
         compose.settle(600)
+        val dropped = screen(session)
+        val shellRow = dropped.indexOfFirst { it.contains("shell $pid in $name") }
+        val markerRow = dropped.indexOfFirst { it.contains("connection lost") }
+        assertTrue(
+            "the pill's band leaves the shell's line and the marker under it on screen; the screen was ${dropped.filter { it.isNotBlank() }}",
+            shellRow >= 0 && markerRow > shellRow,
+        )
         capture("A24-tmux-dropped")
         relay.start()
         compose.waitUntil(45_000) { session.state == SessionState.LIVE }
