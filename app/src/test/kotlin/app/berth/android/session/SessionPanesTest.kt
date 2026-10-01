@@ -198,6 +198,16 @@ class SessionPanesTest {
     }
 
     @Test
+    fun `a lit tab dropped on a pane is seen as it comes into view, with no tab body composed`() {
+        val pihole = graph.sessions.get("s-pihole")!!
+        pihole.emulator.write("\u0007")
+        await("pi-hole's bell lit it off stage") { pihole.record.value.needsAttention }
+        graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
+        assertTrue(pihole.onStage)
+        assertFalse("in view now, so seen", pihole.record.value.needsAttention)
+    }
+
+    @Test
     fun `closing the focused pane's tab hands the keys to the companion and the Stage is one pane again`() {
         graph.sessions.placeInPane("s-pihole", PaneSide.RIGHT)
         graph.sessions.setPanesShown(true)
